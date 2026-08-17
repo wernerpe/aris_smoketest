@@ -1,0 +1,25 @@
+[project]
+name = "aris_sixarm"
+version = "0.1.0"
+description = "Motion analysis & planning for the Aris Kindt six-arm drawing installation"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "meshcat",
+    "trimesh",
+    "fast-simplification",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["aris_sixarm*"]
