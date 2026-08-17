@@ -11,7 +11,7 @@ import meshcat.geometry as g
 import meshcat.transformations as tf
 from matplotlib import cm
 
-from ..atlas import load, strict_go
+from ..atlas import load, strict_go, QCOL
 from ..fleet import FLEET, SHEET, H_INV_DEFAULT
 from ..frames import tip_pos
 from ..metrics import GATE_MARGIN, GATE_SIGMA
@@ -38,6 +38,11 @@ height:10px;border-radius:3px;margin:2px 0"></div>
 <span>0.14 = gate</span><span>&ge;0.25</span></div>
 <b>f_max</b> layer &mdash; max sustainable downward force from &tau;-limits via
 J&#7488;n (same colormap, 0&ndash;100 N).<br>
+<b>redundancy</b> layer &mdash; widest contiguous q7 self-motion corridor (0&ndash;3 rad,
+same colormap): bright = many interchangeable configurations (easy strokes &amp;
+redundancy resolution), dark = pinched, single-option cells.<br>
+<b>tilt_needed</b> layer &mdash; grey = perpendicular pen reaches; orange = needed
+lean &le;15&deg;; red = &gt;15&deg;.<br>
 <hr style="margin:6px 0">
 Arms shown in a real drawing pose (atlas IK solution, pen tip on paper;
 pen = TCP+0.110 m). Toggle layers: Open Controls &rarr; Scene.
@@ -58,7 +63,7 @@ def _drawing_pose(a, go, bx, by):
     cand = a[go]
     r = np.hypot(cand[:, 0] - bx, cand[:, 1] - by)
     row = cand[np.argmax(cand[:, 2] - 0.6 * np.abs(r - 0.5))]
-    return row[:2], row[7:14]
+    return row[:2], row[QCOL:QCOL + 7]
 
 
 def build(out_dir, html_path, h_inv=H_INV_DEFAULT):
@@ -104,11 +109,20 @@ def build(out_dir, html_path, h_inv=H_INV_DEFAULT):
         sm = np.clip((a[:, 3] - 0.05) / 0.20, 0, 1)
         _cloud(vis, f"sigma_min/{name}", xyz, cm.viridis(sm)[:, :3])
         _cloud(vis, f"f_max/{name}", xyz, cm.viridis(np.clip(a[:, 4] / 100, 0, 1))[:, :3])
+        # redundancy: widest contiguous q7 corridor (rad) — many options vs pinched
+        _cloud(vis, f"redundancy/{name}",
+               xyz, cm.viridis(np.clip(a[:, 7] / 3.0, 0, 1))[:, :3])
+        # tilt: grey = perpendicular pen, warm = lean was required
+        tilt = a[:, 8]
+        tc = np.full((len(a), 3), 0.75)
+        tc[tilt > 0] = [1.0, 0.55, 0.1]
+        tc[tilt > 16] = [0.85, 0.1, 0.1]
+        _cloud(vis, f"tilt_needed/{name}", xyz, tc)
         for x, y in a[go][:, :2]:
             grid_go.setdefault((round(x, 3), round(y, 3)), []).append(aid)
 
-    vis["sigma_min"].set_property("visible", False)
-    vis["f_max"].set_property("visible", False)
+    for layer in ("sigma_min", "f_max", "redundancy", "tilt_needed"):
+        vis[layer].set_property("visible", False)
 
     n_sheet = int(SHEET[0] / 0.02 + 1) * int(SHEET[1] / 0.02 + 1)
     counts = np.array([len(v) for v in grid_go.values()])
