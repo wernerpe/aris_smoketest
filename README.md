@@ -16,6 +16,8 @@ aris_sixarm/
   metrics.py       joint margin, pen-tip Jacobian, sigma_min, f_max
   atlas.py         reachability sweep over the paper plane
   planner.py       single-arm stroke planner: ladder-graph DP over (s x q7 x branch)
+  pwl.py           the same strokes as a piecewise-linear q7(s): IK sheets,
+                   clearance in the (s, q7) band, RDP knots, IK back-out
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
@@ -55,6 +57,13 @@ docs/
   reachable s* — the natural cut for reallocation / pen-up transit.
   `scripts/demo_stroke.py` shows both (rim arc planned end to end where greedy
   dies at s=0.015; under-base line split at s*=0.370).
+- **PWL in (s, q7)** (`pwl.py`, `scripts/demo_pwl.py`): plan the redundancy as a
+  polyline q7(s) *before* solving for joints — label IK sheets by continuity,
+  maximin-σ with a clearance tie-break down the middle of the band, simplify to
+  knots that a case-consistent IK chase certifies, then back out joints by
+  re-solving IK at 5 mm (never interpolating q). The 1.56 m rim arc becomes
+  **2 knots** instead of 131 steps, at higher σ_min and 7× less joint travel;
+  see `docs/REDUNDANCY.md`.
 
 ## Writing demo — "ARIS"
 
@@ -90,7 +99,9 @@ Gaps: the band between the four inverted arms, and the sheet corners.
 
 1. ✅ reachability + controllability atlas
 2. ✅ single-arm stroke planner: ladder-graph DP over (s × q7 × branch), maximin-σ
-   objective, disconnect → split point (`planner.py`, `scripts/demo_stroke.py`)
+   objective, disconnect → split point (`planner.py`, `scripts/demo_stroke.py`);
+   ✅ compact restatement of the same plan as a piecewise-linear q7(s) on one IK
+   sheet, back-solved to joints (`pwl.py`, `scripts/demo_pwl.py`)
 3. ▶ allocation: image plane → per-arm strokes, splitting at region boundaries /
    overlap handoff, RRT for the pen-up transits between planned strokes
    (`letters.py` + `writing.py` do the fixed-assignment case: one letter per

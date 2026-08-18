@@ -81,6 +81,64 @@ Per stroke, after allocation to an arm:
    `k_nullspace` spring pulls toward the planned q — the plan IS the redundancy
    resolution; the controller just tracks it compliantly.
 
+## PWL in (s, q7) — planning the band before the joints (`pwl.py`)
+
+The DP above answers "which configuration at each of the 131 steps?". The same
+stroke can be planned one level up, as a *shape in the redundancy space*, and
+only then turned into joints.
+
+- **The band is terrain.** Pin the tip to the paper and the leftover freedom is
+  q7 (× branch). Plot q7 against arc length s: the feasible set is a 2-D band
+  whose height is σ_min and whose holes are gate failures. A plan is a curve
+  q7(s) crossing it — and because the pen must advance monotonically in s, that
+  curve is a **function**, not a general path. That is the whole reason this
+  works: a function of s can be simplified; a 7-D trajectory cannot.
+- **Sheets = connected components** of the (s × q7 × branch) lattice under the
+  DP's own edge test (grid neighbours with ‖Δq‖∞ ≤ 0.35). Each sheet flattens
+  to plain 2-D fields (σ, margin, representative q) — the branch axis
+  disappears, without ever labelling branches. The rim arc splits into 38
+  components, two of them spanning all of s (474 and 467 nodes — the
+  elbow-up/elbow-down pair); the lattice DP ran entirely on the larger one.
+  **Sheet extents alone locate a split**: on the under-base stroke the sheets
+  reach s ≤ 0.370 and s ≥ 0.636, so the dead zone is read off the decomposition
+  before any search runs (the DP's own answer is s\* = 0.370).
+- **Clearance = singularity avoidance stated in the band.** A chamfer distance
+  transform (scipy is not installed; two-pass numpy) gives the distance from
+  each free cell to the nearest hole or joint-limit wall — the q7 rows outside
+  the grid are walls, the s ends are not. The dense DP keeps the project's
+  maximin-σ objective as its primary and uses clearance as the tie-break, so
+  among equally controllable paths it picks the one down the middle of the
+  corridor. That middle is what leaves room to straighten the path.
+- **Simplification is corridor-checked, then IK-certified.** RDP on the dense
+  q7(s) (deviation measured vertically, in q7 grid indices — a perpendicular
+  distance would mix metres with radians) proposes chords; each candidate is
+  screened on the grid and then **chased with `ik.solve_cc` at the lattice's own
+  s resolution**, requiring a case-consistent solution, continuity and both
+  gates at every sample. The grid is a 48-sample *sampling* of q7 and certifies
+  nothing between its nodes, so the acceptance test is the real kinematics.
+  Result: the 1.56 m rim arc is **2 knots** instead of 131 steps, the R bowl
+  **6**. Do not zero-fill holes when interpolating the fields — that silently
+  demands half a cell of clearance everywhere and hands back the staircase
+  (36 knots instead of 2).
+- **Backing out joints is a re-solve, never an interpolation.** `backout()`
+  reads q7(s) off the polyline at 5 mm and re-solves the case-consistent IK at
+  every sample from the sheet's node at s = 0. Interpolating *q* between plan
+  points is the `writing.densify` pitfall: one q7 index is a null-space
+  self-motion (q1/q3 counter-rotate, the tip barely moves), those
+  configurations are not collinear in joint space, and a straight line between
+  them leaves the constraint manifold — 7.7 mm off the paper in the ARIS demo.
+  Only the *redundancy parameter* may be interpolated, never the configuration
+  it indexes. Measured on the backed-out paths: tip error ≤ 2e-12 m, zero
+  `solve_cc` fallbacks, and σ/margin at or above the lattice DP's (rim arc
+  0.196/0.153 vs 0.195/0.150) — with **7× less joint travel** (5.4 rad vs 38.3),
+  because the DP spends its ±0.35 rad continuity budget staircasing between q7
+  indices and a straight segment cannot.
+
+The 2-knot rim arc is the point of the exercise: the redundancy decision for a
+1.56 m stroke is "start at q7 = −1.45, end at +0.82, linear in between", which
+is small enough to log, diff, hand to a controller, or re-time — and it is
+*more* controllable than the 131-step schedule it replaces.
+
 ## Open questions
 
 - Cross-arm coordination: two arms in the 10% overlap band must also resolve

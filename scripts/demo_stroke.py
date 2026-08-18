@@ -24,39 +24,9 @@ from aris_sixarm.fleet import FLEET, SHEET  # noqa: E402
 from aris_sixarm.frames import tip_pos  # noqa: E402
 
 ROOT = Path(__file__).parents[1]
-BORDER = 0.02
 spec = FLEET[31]
 bx, by = spec.xy
-
-
-def clip_to_sheet(pts, border=BORDER):
-    """Keep the LONGEST CONTIGUOUS in-sheet run.
-
-    A plain boolean mask would concatenate the disjoint in-sheet pieces of a
-    curve into one polyline, silently inserting a straight chord across the
-    off-sheet gap. For this arc that phantom chord dives from the r = 0.66 rim
-    to r = 0.30 straight under the base — a genuinely unplannable dead zone
-    that has nothing to do with the stroke being asked for.
-    """
-    m = ((pts[:, 0] > border) & (pts[:, 0] < SHEET[0] - border)
-         & (pts[:, 1] > border) & (pts[:, 1] < SHEET[1] - border))
-    runs, i = [], 0
-    while i < len(m):
-        if m[i]:
-            j = i
-            while j < len(m) and m[j]:
-                j += 1
-            runs.append((i, j))
-            i = j
-        else:
-            i += 1
-    if not runs:
-        return pts[:0]
-    i0, i1 = max(runs, key=lambda r: r[1] - r[0])
-    if len(runs) > 1:
-        print(f"  clip: {len(runs)} in-sheet runs {[b - a for a, b in runs]}, "
-              f"keeping the longest ({i1 - i0} pts)")
-    return pts[i0:i1]
+clip_to_sheet = planner.clip_to_sheet     # longest contiguous in-sheet run
 
 
 # Stroke A: long rim arc, clipped to the sheet

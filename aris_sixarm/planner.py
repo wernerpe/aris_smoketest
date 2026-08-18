@@ -57,6 +57,39 @@ def resample(points, ds=0.01):
     return np.column_stack([np.interp(s, t, p[:, 0]), np.interp(s, t, p[:, 1])]), s / L
 
 
+def clip_to_sheet(pts, border=0.02, verbose=True):
+    """Keep the LONGEST CONTIGUOUS in-sheet run of a polyline.
+
+    A plain boolean mask would concatenate the disjoint in-sheet pieces of a
+    curve into one polyline, silently inserting a straight chord across the
+    off-sheet gap. For a rim arc around an inverted arm that phantom chord
+    dives from the r = 0.66 rim to r = 0.30 straight under the base — a
+    genuinely unplannable dead zone that has nothing to do with the stroke
+    being asked for.
+    """
+    from .fleet import SHEET
+    pts = np.asarray(pts, float)
+    m = ((pts[:, 0] > border) & (pts[:, 0] < SHEET[0] - border)
+         & (pts[:, 1] > border) & (pts[:, 1] < SHEET[1] - border))
+    runs, i = [], 0
+    while i < len(m):
+        if m[i]:
+            j = i
+            while j < len(m) and m[j]:
+                j += 1
+            runs.append((i, j))
+            i = j
+        else:
+            i += 1
+    if not runs:
+        return pts[:0]
+    i0, i1 = max(runs, key=lambda r: r[1] - r[0])
+    if len(runs) > 1 and verbose:
+        print(f"  clip: {len(runs)} in-sheet runs {[b - a for a, b in runs]}, "
+              f"keeping the longest ({i1 - i0} pts)")
+    return pts[i0:i1]
+
+
 def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
                   clearance=True):
     """IK + gate the whole (s x q7 x branch) lattice for a vertical pen.
