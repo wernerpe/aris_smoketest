@@ -15,6 +15,7 @@ aris_sixarm/
   ik.py            analytic IK wrapper (He/Liu solver via wernerpe bindings; FR3-filtered)
   metrics.py       joint margin, pen-tip Jacobian, sigma_min, f_max
   atlas.py         reachability sweep over the paper plane
+  planner.py       single-arm stroke planner: ladder-graph DP over (s x q7 x branch)
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
@@ -37,6 +38,24 @@ docs/
   external-wrench estimate near singularities, so low σ_min = force-blind. Torque
   capacity (`f_max`) is ≥ 72 N everywhere GO; materials need ≤ 14 N.
 
+## Planner
+
+- **Lattice**: over a resampled stroke the fiber at each arc-length step is
+  (q7 × IK branch) — every analytic-IK solution with margin ≥ 0.15 and
+  σ_min ≥ 0.08 that clears paper and boom. Edges join consecutive steps within
+  ±1 q7 index and ‖Δq‖∞ ≤ 0.35 rad, so the graph is a DAG in s and one DP sweep
+  is globally optimal (the lookahead diffIK lacks).
+- **No yaw axis**: with the pen vertical, R = rotz(yaw)·rotx(π) puts joint 7 on
+  the pen axis, so (yaw+δ, q7+δ) is the *same* arm — a (yaw × q7) grid aliases
+  into diagonal bands a ±1-index window cannot follow. yaw is pinned to 0.
+- **Objective** `maximin_sigma` (default) maximizes the *worst* σ_min along the
+  whole path (ties → least ‖Δq‖²): one force-blind step ruins a stroke, so the
+  bottleneck matters, not the average. `additive` keeps the weighted-sum variant.
+- **Splits**: when the band disconnects the forward pass reports the farthest
+  reachable s* — the natural cut for reallocation / pen-up transit.
+  `scripts/demo_stroke.py` shows both (rim arc planned end to end where greedy
+  dies at s=0.015; under-base line split at s*=0.370).
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm
@@ -46,7 +65,7 @@ Gaps: the band between the four inverted arms, and the sheet corners.
 ## Roadmap
 
 1. ✅ reachability + controllability atlas
-2. ▶ stroke planner: target line on the image plane → arm allocation (splitting at
-   region boundaries / overlap handoff) → per-arm joint paths (q7-corridor
-   continuity via `solve_ik_cc` branch chasing) → force-capable execution
-3. redundancy resolution along strokes (nullspace posture, branch selection)
+2. ✅ single-arm stroke planner: ladder-graph DP over (s × q7 × branch), maximin-σ
+   objective, disconnect → split point (`planner.py`, `scripts/demo_stroke.py`)
+3. ▶ allocation: image plane → per-arm strokes, splitting at region boundaries /
+   overlap handoff, RRT for the pen-up transits between planned strokes
