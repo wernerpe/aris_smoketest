@@ -19,7 +19,13 @@ _IK_PATH = os.environ.get(
     "ARIS_FRANKA_IK_PATH",
     "/home/franka/aris_project/franka_analytical_ik/franka_analytical_ik")
 sys.path.insert(0, _IK_PATH)
-import _franka_ik as _IK  # noqa: E402
+try:
+    # local build tree (system python3.12: _franka_ik.cpython-312-*.so)
+    import _franka_ik as _IK  # noqa: E402
+except ImportError:
+    # installed wheel (e.g. the pydrake venv on python3.10, where the cp312
+    # extension above is invisible). Same C++ solver, same raw entry points.
+    from franka_analytical_ik import _franka_ik as _IK  # noqa: E402
 
 Q7_GRID = np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, 16)
 

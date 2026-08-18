@@ -56,6 +56,30 @@ docs/
   `scripts/demo_stroke.py` shows both (rim arc planned end to end where greedy
   dies at s=0.015; under-base line split at s*=0.370).
 
+## Writing demo — "ARIS"
+
+`letters.py` holds polyline letterforms (A R I S, 6 strokes total, single
+width); `writing.py` plans every stroke with the DP planner, adds the pen-up
+transits and time-indexes the whole word; `scripts/aris_writing_demo.py`
+renders it in drake + meshcat to `out/aris_writing.html` (self-contained, with
+drake's playback controls) and `scripts/aris_letters_png.py` draws the layout.
+
+- **Placement is reach-limited.** The inverted arms only reach r ≈ 0.72 m on
+  the paper, so R and I had to be nudged 0.10 m back toward their bases; the
+  fleet's front/back base rows then put those letters on different baselines.
+  The nudge search (±0.15 m along the base→centre ray, then a 0.30 m fallback
+  height) is automatic and reported.
+- **Transits are a PLACEHOLDER, not a plan**: lift 0.06 m, linear joint
+  interpolation, descend. No collision reasoning — roadmap item 3 still wants
+  the RRT.
+- **Animation ≠ planned steps.** The DP spends its ±0.35 rad continuity budget
+  on q7 self-motion (q1/q3 counter-rotate, the tip barely moves). Those
+  configurations are not collinear in joint space, so interpolating them for
+  frames threw the tip 7.7 mm off the paper. `writing.densify()` re-solves the
+  case-consistent IK along each segment, which puts it back to 0.19 mm.
+- Run the demo with the pydrake venv python (the system python3 has no drake);
+  `ik.py` falls back to the installed `franka_analytical_ik` wheel there.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm
@@ -69,3 +93,5 @@ Gaps: the band between the four inverted arms, and the sheet corners.
    objective, disconnect → split point (`planner.py`, `scripts/demo_stroke.py`)
 3. ▶ allocation: image plane → per-arm strokes, splitting at region boundaries /
    overlap handoff, RRT for the pen-up transits between planned strokes
+   (`letters.py` + `writing.py` do the fixed-assignment case: one letter per
+   arm, sequential, straight-line joint transits — no handoff, no RRT yet)
