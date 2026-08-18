@@ -61,7 +61,7 @@ def _q7_window(valid_row):
     return best * _DQ7
 
 
-def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets):
+def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets, pen_ext=PEN_EXT):
     """-> (margin, sigma_min, f_max, n_sol, valid_frac, q7_window, tilt_deg, q)
     or None."""
     tip_w = np.array([x, y, 0.0])
@@ -74,7 +74,7 @@ def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets):
         for i, (tilt_deg, R_w) in enumerate(cand):
             T_w = np.eye(4)
             T_w[:3, :3] = R_w
-            T_w[:3, 3] = tip_w - PEN_EXT * R_w[:, 2]
+            T_w[:3, 3] = tip_w - pen_ext * R_w[:, 2]
             T_b = Twb_inv @ T_w
             T16 = T_b  # ik.solve flattens
             for j, q7 in enumerate(ik.Q7_GRID):
@@ -96,7 +96,7 @@ def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets):
                 rb = np.hypot(pts[:, 0], pts[:, 1])
                 if np.any((pts[:, 2] < -0.02) & (rb < 0.12)):
                     continue
-            J = tip_jacobian(q)
+            J = tip_jacobian(q, pen_ext=pen_ext)
             vf = float(valid.mean())
             qw = float(max(_q7_window(row) for row in valid))
             return (m, sigma_min(J), f_max(J, press_b), n_sol, vf, qw,
@@ -105,7 +105,7 @@ def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets):
 
 
 def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
-              tilt_max_deg=15.0):
+              tilt_max_deg=15.0, pen_ext=PEN_EXT):
     spec = FLEET[arm_id]
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
@@ -117,7 +117,7 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
         for x in np.arange(0.0, SHEET[0] + 1e-9, grid):
             if (x - bx) ** 2 + (y - by) ** 2 > rmax ** 2:
                 continue
-            r = solve_cell(x, y, Twb, Twb_inv, spec.mount, spec.q_seed, cand_sets)
+            r = solve_cell(x, y, Twb, Twb_inv, spec.mount, spec.q_seed, cand_sets, pen_ext)
             if r is not None:
                 rows.append([x, y, *r[:7], *r[7]])
     arr = np.array(rows) if rows else np.zeros((0, len(COLUMNS)))
@@ -125,7 +125,7 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out, data=arr, columns=np.array(COLUMNS), arm_id=arm_id,
                         mount=spec.mount, base=Twb, grid=grid, h_inv=h_inv,
-                        tilt_max_deg=tilt_max_deg)
+                        tilt_max_deg=tilt_max_deg, pen_ext=pen_ext)
     go = strict_go(arr)
     print(f"arm {arm_id} ({spec.name}): {len(arr)} reachable, "
           f"{int(go.sum())} strict-GO, tilt<={tilt_max_deg:.0f}deg, "

@@ -71,10 +71,10 @@ def fk(q, tcp=TCP_D):
     return T, np.array(pts)
 
 
-def tip_pos(q):
+def tip_pos(q, pen_ext=PEN_EXT):
     """Pen tip position in link0."""
     T, _ = fk(q)
-    return T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, PEN_EXT])
+    return T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
 
 
 def joint_margin(q):

@@ -18,11 +18,12 @@ def main():
     ap.add_argument("--h-inv", type=float, default=H_INV_DEFAULT)
     ap.add_argument("--grid", type=float, default=0.02)
     ap.add_argument("--tilt", type=float, default=15.0, help="max pen lean (deg)")
+    ap.add_argument("--pen", type=float, default=0.110, help="pen tip below TCP (m)")
     ap.add_argument("--out", default=str(Path(__file__).parents[1] / "out"))
     a = ap.parse_args()
     arms = a.arms or list(FLEET)
     fn = partial(sweep_arm, out_dir=a.out, grid=a.grid, h_inv=a.h_inv,
-                 tilt_max_deg=a.tilt)
+                 tilt_max_deg=a.tilt, pen_ext=a.pen)
     if len(arms) > 1:
         with mp.Pool(min(6, len(arms))) as pool:
             arrs = pool.map(fn, arms)

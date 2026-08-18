@@ -12,19 +12,19 @@ guarantee at the last Nm.
 """
 import numpy as np
 
-from .frames import TAU_MAX, tip_pos
+from .frames import TAU_MAX, tip_pos, PEN_EXT
 
 GATE_MARGIN = 0.30   # rad, strict joint-limit comfort (IKA)
 GATE_SIGMA = 0.14    # sigma_min force-sensing floor (ika_plan dual mask)
 
 
-def tip_jacobian(q, eps=1e-5):
+def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT):
     """3x7 position Jacobian of the pen tip (central finite differences)."""
     J = np.zeros((3, 7))
     for j in range(7):
         dq = np.zeros(7)
         dq[j] = eps
-        J[:, j] = (tip_pos(q + dq) - tip_pos(q - dq)) / (2 * eps)
+        J[:, j] = (tip_pos(q + dq, pen_ext) - tip_pos(q - dq, pen_ext)) / (2 * eps)
     return J
 
 
