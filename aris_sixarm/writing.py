@@ -435,7 +435,8 @@ def exit_time(q_exit, q_hover_exit, q_home, qd_frac=QD_FRAC):
             _dq_time(q_hover_exit, q_home, qd_frac, T_HOME_F))
 
 
-def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT):
+def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT,
+                    pen_ext=PEN_EXT):
     """`lifted_config`, retrying at lower heights. -> (q, height_used).
 
     Near the edge of an arm's reach the 6 cm hover has no IK solution with the
@@ -445,7 +446,7 @@ def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_
     which the report says out loud rather than hiding).
     """
     for z in heights:
-        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv)
+        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext)
         if q is not None:
             return np.asarray(q, float), float(z)
     return np.asarray(q_ref, float), 0.0
@@ -453,12 +454,18 @@ def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_
 
 def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
                 h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
-                verbose=False):
+                pen_ext=PEN_EXT, verbose=False):
     """One arm's frozen nominal timeline from its allocated segments.
 
     `segs` are `allocate.allocate`'s programme entries, already in the order the
     arm will draw them; each carries the certified `plan` whose dense `qs`/`pts`
     are the joint trajectory and the curve it was certified against.
+
+    `pen_ext` is THIS ARM's pen, and it has to be the pen the segments were
+    certified with: the densifier re-solves IK at intermediate Cartesian points
+    (tip = TCP + pen_ext along tool z) and the hover poses are IK too, so a
+    default pen here against a 300 mm plan would silently re-plan the transit
+    for a tool the arm is not holding.
 
     -> dict(t, q, seg, u, phases, ink, duration, lifts, dense_tip_err)
        t     (K,)    waypoint times, strictly increasing
@@ -488,10 +495,10 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     for k, s in enumerate(segs):
         qs = np.asarray(s["plan"]["qs"], float)
         pts = np.asarray(s["plan"]["pts"], float)
-        qd, ud, fb = densify(qs, pts, spec, h_inv)
+        qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext)
         ref = np.column_stack([np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 0]),
                                np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 1])])
-        err = tip_error_pts(qd, ref, spec, h_inv)
+        err = tip_error_pts(qd, ref, spec, h_inv, pen_ext)
         worst = max(worst, err)
         dense.append(dict(qd=qd, ud=ud, pts=pts, fallbacks=fb, tip_err=err,
                           length=float(s["length"])))
@@ -500,7 +507,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                   f"{s['length']:.3f} m, tip_err={err:.2e} m"
                   + (f", {fb} IK fallbacks" if fb else ""))
 
-    q_lift0, z0 = lifted_or_lower(spec, dense[0]["qd"][0], dense[0]["pts"][0], h_inv=h_inv)
+    q_lift0, z0 = lifted_or_lower(spec, dense[0]["qd"][0], dense[0]["pts"][0],
+                                  h_inv=h_inv, pen_ext=pen_ext)
     lifts.append(z0)
     add(0.0, spec.q_seed)
     t_home, t_down = enter_time(spec.q_seed, q_lift0, dense[0]["qd"][0], qd_frac)
@@ -529,7 +537,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         draw_len += D["length"]
 
         nxt = dense[k + 1] if k + 1 < len(dense) else None
-        q_end, z1 = lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv)
+        q_end, z1 = lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,
+                                    pen_ext=pen_ext)
         lifts.append(z1)
         t0 = t
         if nxt is None:
@@ -539,7 +548,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
             t += t_home
             add(t, spec.q_seed)
         else:
-            q_next, z2 = lifted_or_lower(spec, nxt["qd"][0], nxt["pts"][0], h_inv=h_inv)
+            q_next, z2 = lifted_or_lower(spec, nxt["qd"][0], nxt["pts"][0], h_inv=h_inv,
+                                         pen_ext=pen_ext)
             lifts.append(z2)
             hop = float(np.linalg.norm(nxt["pts"][0] - D["pts"][-1]))
             transit_len += hop

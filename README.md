@@ -373,6 +373,15 @@ spans dashed.
 overlap. Inverted arms are annular at strict level; 15° tilt rescues the centers.
 Gaps: the band between the four inverted arms, and the sheet corners.
 
+**Whole-logo run (2026-08-19).** A 1.2969 × 0.9905 m CSAIL at offset
+(+0.100, +0.050) m, drawn in TWO PASSES with a human pen swap between them and
+one pen length per arm (arm 2 = 300 mm, arms 31/71/97 = 200 mm): **99.2139 % of
+11.567 traced metres certified**, one 0.091 m span left empty at the centre of
+the four inverted bases. 49 segments, both phases signed off by `scene_check`
+(86.2 mm minimum clearance against an 80 mm margin), 1843 frames at 12 fps.
+`docs/DEAD_SPANS.md` has the recipe and what each knob was worth; the pipeline is
+`csail_schedule.py --two-pass --pens 2:300,31:200,71:200,97:200 --min-coverage 0.99`.
+
 ## Roadmap
 
 1. ✅ reachability + controllability atlas

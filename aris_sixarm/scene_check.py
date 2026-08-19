@@ -105,12 +105,26 @@ def pair_clearance(Pi, Pj):
     return d.reshape(d.shape[:-2] + (-1,)).min(-1)
 
 
+def pen_len(pen_ext, arm):
+    """This arm's pen, whether `pen_ext` is one length or {arm_id: length}."""
+    if isinstance(pen_ext, dict):
+        return float(pen_ext.get(arm, PEN_EXT))
+    return float(pen_ext)
+
+
 def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                    pen_ext=PEN_EXT, sub=2, progress=None, verbose=True):
     """Verify a merged timeline. -> report dict (`ok` gates the animation).
 
     `qtraj` is {arm_id: (M,7)} exactly as it will be played back; `sub` sets how
     many extra samples are interpolated between two scheduled steps.
+
+    `pen_ext` may be a single length or {arm_id: length}.  The pen is a capsule
+    of the arm and the last 30 cm of its geometry, so an arm carrying a 300 mm
+    pen checked at 110 mm is checked as a shorter robot than the one that runs:
+    the clearance this module reports would be about a machine that does not
+    exist.  It is also the length the per-segment validator re-derives the pen
+    tip with, and that has to be the length the segment was certified at.
     """
     arms = sorted(qtraj)
     M = len(next(iter(qtraj.values())))
@@ -126,8 +140,8 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
             fine[a] = Q
     F = len(next(iter(fine.values())))
 
-    P = {a: np.array([_chain(q, FLEET[a], h_inv, pen_ext) for q in fine[a]])
-         for a in arms}
+    P = {a: np.array([_chain(q, FLEET[a], h_inv, pen_len(pen_ext, a))
+                      for q in fine[a]]) for a in arms}
     stepd = {a: np.concatenate([[0.0], np.linalg.norm(np.diff(P[a], axis=0),
                                                       axis=2).max(1)]) for a in arms}
 
@@ -162,7 +176,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                 rep = validate_plan(np.asarray(pl["pts"], float), FLEET[a],
                                     np.asarray(pl["qs"], float),
                                     times=np.asarray(pl["times"], float),
-                                    h_inv=None, pen_ext=pen_ext)
+                                    h_inv=None, pen_ext=pen_len(pen_ext, a))
                 seg_bad += 0 if rep["ok"] else 1
                 seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
 
@@ -172,6 +186,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
                                               per_pair.items()},
                joint_margin=lim, monotone=bool(mono), n_frames=M, n_fine=F,
+               pens={int(a): pen_len(pen_ext, a) for a in arms},
                n_segments=len(seg_reports), segments_failed=int(seg_bad),
                segments=seg_reports)
     if verbose:

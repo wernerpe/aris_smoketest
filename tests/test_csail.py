@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import allocate, coordination, scene_check, trace   # noqa: E402
 from aris_sixarm.allocate import Interval            # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET           # noqa: E402
+from aris_sixarm.validate import validate_plan       # noqa: E402
 
 
 def _bar(mask, r0, r1, c0, c1):
@@ -222,6 +223,120 @@ def test_capsule_distance_agrees_with_the_independent_one():
     d = coordination.seg_seg_dist(np.array([0.0, 0, 0]), np.array([1.0, 0, 0]),
                                   np.array([0.5, -1, 0.5]), np.array([0.5, 1, 0.5]))
     assert abs(float(d) - 0.5) < 1e-12
+
+
+def test_a_parked_arm_is_an_obstacle_for_everyone():
+    """An arm that draws nothing still stands in the workspace.
+
+    Priority used to be "most motion first", and an arm is only ever checked
+    against the arms scheduled BEFORE it — so an idle arm, having zero motion,
+    sorted last and appeared in nobody's collision image.  Harmless while the
+    idle arms are at the edge of the rig; wrong the moment a two-pass run parks
+    a middle arm through a whole phase.  Parked arms must therefore be
+    scheduled first and appear in every moving arm's image.
+    """
+    q0 = np.asarray(FLEET[31].q_seed, float)
+    moving = np.linspace(q0, q0 + 0.25, 40)
+    paths = {31: coordination.ArmPath(31, moving, 0.02),
+             97: coordination.ArmPath(97, q0[None, :], 0.02),
+             71: coordination.ArmPath(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
+    res = coordination.coordinate(paths, verbose=False)
+    assert not paths[97].moves and paths[31].moves
+    assert res["order"][0] == 97, \
+        f"parked arm should be scheduled first, order is {res['order']}"
+    for mover in (31, 71):
+        assert (mover, 97) in res["free"], \
+            f"arm {mover} was never checked against the parked arm 97"
+    # the parked arm's own schedule is the constant it has to be
+    assert np.all(res["progress"][97] == 0)
+
+
+def test_capsule_length_follows_the_pen():
+    """The conductor's last capsule IS the pen, so its length has to be the
+    arm's real one.
+
+    An arm holding 300 mm reaches 190 mm further along the tool axis than the
+    same arm holding 110 mm, and every clearance the conductor computes is
+    about that endpoint.  Building the collision model at a default length
+    while the planner used another is the one way a per-arm pen can pass every
+    plan-level check and still schedule a collision.
+    """
+    q = np.repeat(np.asarray(FLEET[31].q_seed, float)[None, :], 3, axis=0)
+    short = coordination.ArmPath(31, q, 0.01, pen_ext=0.110)
+    long_ = coordination.ArmPath(31, q, 0.01, pen_ext=0.300)
+    # capsule index -1 is (chain point 8 -> pen tip); its far end is B[-1]
+    tip_s, tip_l = short.B[0][-1], long_.B[0][-1]
+    assert abs(float(np.linalg.norm(tip_l - tip_s)) - 0.190) < 1e-6, \
+        f"pen tip moved {float(np.linalg.norm(tip_l - tip_s)):.4f} m, want 0.190"
+    # the rest of the chain is untouched: only the pen changed
+    assert np.allclose(short.A, long_.A) and np.allclose(short.B[:, :-1],
+                                                         long_.B[:, :-1])
+    # and `arm_paths` hands each arm its own, defaulting the ones it is not told
+    # (arm 97 sits at a different base, so it is compared against its OWN
+    # default-pen path, not against arm 31's)
+    paths = coordination.arm_paths({31: q, 97: q}, 0.01, pens={31: 0.300})
+    assert np.allclose(paths[31].B[0][-1], tip_l)
+    assert np.allclose(paths[97].B[0][-1],
+                       coordination.ArmPath(97, q, 0.01, pen_ext=0.110).B[0][-1])
+    # scene_check reads the same mapping, scalar or per-arm
+    assert scene_check.pen_len(0.2, 31) == 0.2
+    assert scene_check.pen_len({31: 0.300}, 31) == 0.300
+    assert scene_check.pen_len({31: 0.300}, 97) == 0.110
+
+
+def test_allocation_plans_and_validates_with_the_arm_s_own_pen():
+    """A segment certified with a 300 mm pen is not a segment for a 110 mm one.
+
+    `allocate` is asked for a fleet in which arm 31 holds 300 mm; the shipped
+    plan has to carry that pen all the way to the independent validator, so the
+    same joints re-validated against the DEFAULT pen must fail — if they passed,
+    `pen_ext` would not actually be reaching `validate_plan` and the certificate
+    would be about the wrong tool.
+    """
+    pts = np.column_stack([np.linspace(1.20, 1.34, 15), np.full(15, 1.12)])
+    strokes = [dict(pts=pts, color="grey", kind="outline", id=0)]
+    res = allocate.allocate(strokes, arms=[31], pens={31: 0.300},
+                            colors={31: "grey"}, verbose=False)
+    assert res["pens"][31] == 0.300
+    segs = res["programs"][31]
+    assert segs, "arm 31 should reach this stroke"
+    plan = segs[0]["plan"]
+    right = validate_plan(np.asarray(plan["pts"], float), FLEET[31],
+                          np.asarray(plan["qs"], float), pen_ext=0.300)
+    wrong = validate_plan(np.asarray(plan["pts"], float), FLEET[31],
+                          np.asarray(plan["qs"], float), pen_ext=0.110)
+    assert right["ok"], "the plan does not validate at the pen it was planned with"
+    assert not wrong["ok"], "pen_ext is not reaching the validator"
+    # and the per-arm option dict is what carries it
+    assert allocate.pen_opts(None, {31: 0.300}, 31)["pen_ext"] == 0.300
+    assert "pen_ext" not in allocate.pen_opts(None, {31: 0.300}, 97)
+    assert allocate.pen_of({31: 0.300}, 97) == 0.110
+
+
+def test_gap_tolerance_is_the_one_leftover_uses():
+    """Covering with a 25 mm tolerance and reporting with a 2 mm one is how a
+    run claims 100 % with a centimetre of bare paper in it.
+
+    `cover_all`'s gaps and `leftover`'s must be the same question asked twice,
+    so a cover that leaves a 10 mm hole has to SAY it leaves a 10 mm hole.
+    """
+    pts = np.column_stack([np.linspace(0.0, 1.0, 101), np.zeros(101)])
+    strokes = [dict(pts=pts, color="grey", kind="outline", id=0)]
+    ivmap = {0: [Interval(0.0, 0.40, 13), Interval(0.41, 1.0, 17)]}   # 10 mm hole
+    colors = {13: "grey", 17: "grey"}
+    cov = allocate.cover_all(strokes, ivmap, colors)
+    assert abs(cov["dropped_len"] - 0.01) < 1e-9, \
+        f"a 10 mm hole was reported as {cov['dropped_len']:.4f} m"
+    # the old conflation: tolerate MIN_SEG and the same hole vanishes
+    loose = allocate.cover_all(strokes, ivmap, colors,
+                              gap_tol=allocate.MIN_SEG_M)
+    assert loose["dropped_len"] == 0.0
+    # and `leftover`, which works off the SHIPPED programmes, agrees with the
+    # strict one rather than the loose one
+    progs = {13: [dict(stroke_id=0, s_range=(0.0, 0.40))],
+             17: [dict(stroke_id=0, s_range=(0.41, 1.0))]}
+    assert abs(sum(d["length"] for d in allocate.leftover(strokes, progs))
+               - 0.01) < 1e-9
 
 
 def test_pause_schedule_is_monotone_and_avoids_the_blocked_cells():

@@ -52,7 +52,7 @@ import time
 import numpy as np
 
 from .fleet import H_INV_DEFAULT
-from .frames import QD_MAX
+from .frames import PEN_EXT, QD_MAX
 from .writing import (QD_FRAC, T_HOME_F, T_LIFT_F, T_LOWER_F, T_TRAVEL_MIN,
                       TRANSIT_SPEED, dq_time_many, lifted_or_lower)
 
@@ -71,7 +71,7 @@ def _row_time(Q0, Q1, frac, tmin):
     return np.maximum(tmin, (d / (QD_MAX * max(frac, 1e-6))).max(axis=-1))
 
 
-def endpoints(spec, segs, h_inv=H_INV_DEFAULT):
+def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
     """The two ends of every segment, with their hover poses.
 
     -> dict(q (n,2,7), xy (n,2,2), hover (n,2,7), z (n,2), n)
@@ -90,13 +90,14 @@ def endpoints(spec, segs, h_inv=H_INV_DEFAULT):
         pts = np.asarray(s["plan"]["pts"], float)
         for e, k in ((0, 0), (1, -1)):
             q[i, e], xy[i, e] = qs[k], pts[k]
-            h, zz = lifted_or_lower(spec, qs[k], pts[k], h_inv=h_inv)
+            h, zz = lifted_or_lower(spec, qs[k], pts[k], h_inv=h_inv,
+                                    pen_ext=pen_ext)
             hov[i, e], z[i, e] = h, zz
     return dict(q=q, xy=xy, hover=hov, z=z, n=n)
 
 
 def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-                h_inv=H_INV_DEFAULT, ends=None):
+                h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT):
     """Every transit time an ordering could possibly pay. -> (2n+1, 2n+1).
 
     Node `2i + d` is segment i drawn forward (d = 0) or backward (d = 1); node
@@ -109,7 +110,7 @@ def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
     keeps a few hundred segments per arm affordable: the local search then only
     ever looks costs up.
     """
-    ends = endpoints(spec, segs, h_inv) if ends is None else ends
+    ends = endpoints(spec, segs, h_inv, pen_ext) if ends is None else ends
     n = ends["n"]
     N = 2 * n
     if n == 0:

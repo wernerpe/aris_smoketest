@@ -29,3 +29,72 @@ Two verdicts, because neither dominates. **Atlas** = pointwise at the strict gat
 **Gate caveat, checked.** Atlas-strict over-calls dead, and in both directions. Probing the worst point of each dead span with `plan_stroke` on a 5 cm stroke: span 5 at (2.391, 0.604) — dead under *every* atlas — returns **ok** for arm 97 at 110 mm (margin 0.193, σ 0.238), so the 0.30 gate condemned it, not reach; span 0 at (1.719, 0.979) returns **ok** for arm 2 at 300 mm (margin 0.360). But spans 9 and 10 return `split / start_infeasible, s* = 0` for **all 18 arm × pen combinations** — zero IK solutions even at permissive gates. Those are genuinely unreachable at this base layout. Conversely the atlas is *optimistic* on span 1 (96 % of points GO at 300 mm, only 73 % walkable), so the two verdicts are complements, not a bound and a refinement.
 
 Figure `out/dead_spans_analysis.png`, numbers `out/dead_spans_analysis.json`. Inherited caveats: `h_inv = 1.00` (the rig measured 0.924 — a lower mount shrinks every annulus), yaw-invariant per-arm disks, no arm-vs-arm collision reasoning.
+
+---
+
+## Resolution (2026-08-19): 1.297 m of CSAIL, 99.21 % of it certified
+
+The 2.22 m was never one problem, and the three knobs this study named but did
+not turn — a pen length **per arm**, a pen swap **between passes**, and a
+placement search scored on **certified metres** instead of on the atlas — take
+the piece from 86.3 % of 16.15 m to **99.2139 % of 11.567 m**: one 0.091 m span
+left empty instead of thirteen totalling 2.222 m.
+
+**The recipe.** Logo 1.2969 x 0.9908 m (53.8 % of the margin-limited size),
+centred at (1.904, 1.031) m — offset (+0.100, +0.050) m from the sheet centre.
+Two passes with a human pen swap between them. Pens: **arm 2 = 300 mm, arms 31 /
+71 / 97 = 200 mm**, floor arms 13 / 17 = 110 mm and idle (they reach none of
+this logo, at any pen). Phase 1 lays 4.064 m of grey, phase 2 lays 7.503 m of
+orange, and all four inverted arms draw in both — which is not incidental, see
+below.
+
+| knob | what it was worth |
+|---|---|
+| pen swap between passes | the 0.767 m this study called "a real two-colour conflict" is gone. One pen per arm is a constraint WITHIN a pass, not across one; each phase is an independent single-colour problem with all six arms available. Single-pass tops out at **94.8 %** at any size we could certify — two passes are not a convenience here, they are the difference between 95 % and 99 % |
+| per-arm pen length | arm 2 wants 300 mm (it works the waist), arms 31 / 71 / 97 want 200 mm. Uniform 110 mm loses ~1.5 pp, uniform 300 mm loses more: a long pen grows the under-base hole from 0.17 m to 0.26 m |
+| placement | the under-base holes are 0.17–0.26 m across at the planner's own gates and the logo has whitespace. +100 mm right and +50 mm up is where the holes fall in it |
+
+**The atlas was the wrong oracle, and by a lot.** `allocate.reach_fraction`
+scored the old placements off the 2 cm reachability atlas; on candidates it
+called 100 % reachable the allocator certified 67–86 %. A cell the pen can
+stand on is not a stroke the redundancy band can be walked along. Replacing it
+with a **planner-signed** field — a 5 cm test stroke at every cell of a 5 mm
+grid, in three orientations, accepted only if `plan_stroke` returns `ok` —
+costs 1.3 M plan calls (≈ 190 s on 30 cores) and predicts the certified answer
+to about a centimetre. Measured annuli, per pen:
+
+| mount | 110 mm | 200 mm | 300 mm |
+|---|---|---|---|
+| inverted (2, 31, 71, 97) | 0.17–0.72 m | 0.17–0.76 m | 0.26–0.79 m |
+| floor (13, 17) | 0.19–0.80 m | 0.30–0.80 m | 0.25–0.79 m |
+
+**What is still dead.** One span, 0.091 m of orange at ≈ (1.78, 0.96): the
+centre of the four inverted bases, where four annuli of outer radius 0.72–0.79 m
+fail to meet across a 1.001 x 1.280 m rectangle (the centre is 0.813 m from
+every base). No pen closes it — 300 mm reaches 0.79 m — and no placement of a
+logo this size keeps ink out of it. It is the same waist the study found, now
+reduced from 0.269 m to 0.091 m and localised to a lens roughly 0.11 x 0.08 m.
+
+**100 % is reachable and not runnable.** At 1.2656 m with arm 71 on a 300 mm
+pen, allocation certifies **every metre** — 11.287 m, zero dropped. The
+conductor refuses the result: arm 71's 300 mm pen sweeps within the 80 mm
+margin of arm 97 standing at its ready pose, and no schedule fixes a conflict
+with something that is not moving. So the last 0.79 % of ink costs 2.5 % of logo
+width (5.0 % of its area) AND a timeline that will not run: 1.297 m at 99.21 %
+is the better trade in both directions, not a compromise in one.
+
+**A simpler rig is 0.18 pp behind.** At the same 1.2969 m and the same offset,
+putting **all four inverted arms on one 200 mm pen** certifies 99.0387 % — still
+over the bar, with one pen length instead of two among the arms that draw. It is
+not the pick only because coverage outranks simplicity at equal size, and it has
+not been through the conductor; if the rig would rather stock one pen length,
+that is the run to certify next.
+
+**The independent checker earned its keep twice.** Building this exposed two
+conductor bugs that every previous run had hidden, both caught by
+`scene_check` disagreeing with `coordination` rather than by inspection:
+parked arms sorted last in the priority order and so appeared in *nobody's*
+collision image, and the reachability DP validated an arm only until it
+*arrived*, leaving its resting pose unchecked against arms still moving. Both
+are fixed, both have regression tests, and the second is why phase 1 now pays
+90.6 s of pauses where it used to pay 4.

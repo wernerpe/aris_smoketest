@@ -29,18 +29,23 @@ schedule) and makes the coordination problem small enough to solve exactly.
             1-Lipschitz in point displacement), so nothing can pass through
             anything between two samples.
 
-  SCHEDULE  Priority = longest programme first.  The busiest arm runs its
-            nominal clock untouched; each next arm gets the earliest-arrival
-            monotone schedule that stays in free cells against every arm
-            already scheduled.  That is a reachability DP over
-            (progress index x time), which is exact for the "advance or wait"
-            move set — no local heuristic, no iteration to convergence, and it
-            reports infeasibility instead of shipping an unsafe timeline.
+  SCHEDULE  Parked arms first (they are obstacles, and their schedule is a
+            constant), then the moving arms longest-programme-first.  Each arm
+            gets the earliest-arrival monotone schedule that stays in free
+            cells against every arm already scheduled — which, because the
+            parked ones come first, means against every arm in the rig.  That
+            is a reachability DP over (progress index x time), exact for the
+            "advance or wait" move set — no local heuristic, no iteration to
+            convergence, and it reports infeasibility instead of shipping an
+            unsafe timeline.  A conflict with a PARKED arm is reported rather
+            than scheduled around, because waiting cannot resolve one.
 
-  NOT v1    No re-ordering, no re-timing of a stroke, no path change, no
-            deadlock recovery beyond priority order, and no dynamics.  A pause
-            here is instantaneous in the animation's kinematic playback; a real
-            run needs the acceleration-limited version of the same schedule.
+  NOT v1    No re-timing of a stroke, no path change, and no dynamics.  The
+            only recovery from a deadlock is re-ordering the priorities and
+            trying again (`retry_orders`), which resolves an ordering deadlock
+            and cannot resolve a geometric one.  A pause here is instantaneous
+            in the animation's kinematic playback; a real run needs the
+            acceleration-limited version of the same schedule.
 """
 import numpy as np
 
@@ -123,6 +128,20 @@ class ArmPath:
         self.motion = float(self.step.sum())
 
 
+def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None):
+    """{arm: (N,7)} -> {arm: ArmPath}, each built with THAT ARM's pen.
+
+    The pen is the last capsule of the chain, so the length is geometry and not
+    bookkeeping: conducting a fleet in which arm 31 carries 300 mm against a
+    110 mm capsule would schedule 19 cm of the arm out of the collision image
+    entirely.  `pens` is {arm_id: metres}; an arm it does not name keeps
+    `frames.PEN_EXT`.
+    """
+    pens = pens or {}
+    return {a: ArmPath(a, q, dt, h_inv, float(pens.get(a, PEN_EXT)))
+            for a, q in q_by_arm.items()}
+
+
 def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000):
     """(Ni, Nj) capsule-to-capsule clearance, CLIPPED at `cap`.
 
@@ -182,6 +201,13 @@ def _dp(free_ab, prog_hi, n, horizon):
     for b, F in free_ab.items():
         ok &= F[:, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
     okf = np.vstack([ok, ok[-1:]])                # index n-1 sits in cell n-2
+    # AN ARM THAT HAS FINISHED HAS NOT LEFT.  Arrival is not the end of the
+    # arm's participation: it then stands at the last sample of its path for
+    # the rest of the run while other arms are still moving, and the earliest
+    # arrival is only safe if that resting pose stays clear too.  Requiring the
+    # suffix of the last row is what makes "arrives at m_end" mean "is safe
+    # from 0 to the horizon" rather than "is safe until it stops".
+    rest = np.logical_and.accumulate(okf[n - 1, ::-1])[::-1]
     reach = np.zeros((n, M), bool)
     reach[0, 0] = True
     for m in range(1, M):
@@ -189,9 +215,9 @@ def _dp(free_ab, prog_hi, n, horizon):
         col = av.copy()
         col[1:] |= av[:-1]
         reach[:, m] = col
-        if reach[n - 1, m]:
+        if reach[n - 1, m] and rest[m]:
             break
-    hits = np.flatnonzero(reach[n - 1])
+    hits = np.flatnonzero(reach[n - 1] & rest)
     if not len(hits):
         return None, None
     m_end = int(hits[0])
@@ -209,51 +235,105 @@ def _dp(free_ab, prog_hi, n, horizon):
     return prog, m_end
 
 
+def _schedule(paths, moving, static, cells, prog0, M, dt, verbose=False):
+    """One priority order, scheduled. -> (prog, finish) or (None, failing arm)."""
+    prog, finish = dict(prog0), {}
+    for k, a in enumerate(moving):
+        fab = {b: cells(a, b) for b in static + moving[:k]}
+        P, m_end = _dp(fab, prog, paths[a].n, M)
+        if P is None:
+            return None, a
+        prog[a] = P
+        finish[a] = m_end * dt
+    return (prog, finish), None
+
+
 def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
-               horizon_mult=3.0, verbose=True):
+               horizon_mult=3.0, retry_orders=True, verbose=True):
     """Frozen paths -> a merged, pause-scheduled timeline.
 
-    -> dict(progress {arm: (M,) index}, order, pauses, finish, duration,
-            free, margin, M, dt)
+    -> dict(progress {arm: (M,) index}, order, moving, parked, pauses, finish,
+            duration, free, margin, M, dt, attempts).  `free[(a, b)]` is the
+    collision image the schedule for `a` was built against, kept so a caller (or
+    a test) can check WHICH pairs were considered rather than trusting that they
+    were.
+
+    PRIORITY IS A CHOICE, AND A BAD ONE IS RECOVERABLE.  Every arm after the
+    first is conducted around arms whose schedules are already fixed, so an arm
+    late in the order can find that the earlier ones are never simultaneously
+    out of its way — a deadlock of the ordering, not of the geometry.  The
+    error message used to say "try a different priority order"; `retry_orders`
+    makes the conductor take its own advice, promoting the arm that failed to
+    the front and trying again, up to once per moving arm.  Promotion is the
+    right move because the arm at the front is the one nobody has to avoid.
+    The collision images are computed once per pair and reused across attempts,
+    so a retry costs a DP and not a re-derivation of the geometry.
     """
     margin = float(safety + calib)
     dt = next(iter(paths.values())).dt
-    order = sorted(paths, key=lambda a: (-paths[a].motion, a))
+    # A PARKED ARM IS AN OBSTACLE, NOT A NON-PARTICIPANT.  Priority used to be
+    # "most motion first", which put every idle arm at the BACK of the queue —
+    # and since an arm is only ever checked against the arms scheduled BEFORE
+    # it, an arm that draws nothing ended up in nobody's collision image at
+    # all.  That is harmless while the idle arms sit at the edge of the rig and
+    # wrong the moment one of them is parked in the middle of the sheet, which
+    # is exactly what a two-pass run does (an arm that draws only orange stands
+    # still through the whole grey phase).  Static arms are therefore scheduled
+    # FIRST, at zero cost: their "schedule" is a constant, and every moving arm
+    # is then conducted around them.
+    static = [a for a in paths if not paths[a].moves]
+    moving = sorted([a for a in paths if paths[a].moves],
+                    key=lambda a: (-paths[a].motion, a))
+    order = static + moving
     nom = {a: (paths[a].n - 1) * dt for a in paths}
     M = int(np.ceil(max(nom.values()) * horizon_mult / dt)) + 64
 
-    free, prog, finish = {}, {}, {}
-    for k, a in enumerate(order):
-        pa = paths[a]
-        if not pa.moves:
-            prog[a] = np.zeros(M, int)
-            finish[a] = 0.0
-            continue
-        if k == 0:
-            prog[a] = np.minimum(np.arange(M), pa.n - 1)
-            finish[a] = nom[a]
-            if verbose:
-                print(f"  arm {a:>2}: priority 1, {pa.n} steps, "
-                      f"{nom[a]:.1f} s nominal, no pauses (busiest arm)")
-            continue
-        fab = {}
-        for b in order[:k]:
-            if not paths[b].moves and not pa.moves:
-                continue
-            fab[b] = free_cells(pa, paths[b], margin, sweep)
-            free[(a, b)] = fab[b]
-        P, m_end = _dp(fab, prog, pa.n, M)
-        if P is None:
-            raise RuntimeError(
-                f"arm {a} has no monotone pause schedule inside {M * dt:.0f} s; "
-                "v1 does not re-order or re-route — try a different priority "
-                "order, or a placement that keeps the arms further apart")
-        prog[a] = P
-        finish[a] = m_end * dt
+    free = {}
+
+    def cells(a, b):
+        if (a, b) not in free:
+            free[(a, b)] = free_cells(paths[a], paths[b], margin, sweep)
+        return free[(a, b)]
+
+    prog0 = {a: np.zeros(M, int) for a in static}
+    attempts, res, failed = [], None, None
+    for _ in range(len(moving) + 1 if retry_orders else 1):
+        attempts.append(list(moving))
+        res, failed = _schedule(paths, moving, static, cells, prog0, M, dt)
+        if res is not None:
+            break
+        if not retry_orders or moving[0] == failed:
+            break
         if verbose:
-            print(f"  arm {a:>2}: priority {k + 1}, {pa.n} steps, {nom[a]:.1f} s "
-                  f"nominal -> {finish[a]:.1f} s scheduled "
-                  f"(+{finish[a] - nom[a]:.1f} s of pauses)")
+            print(f"  arm {failed} deadlocked at priority "
+                  f"{moving.index(failed) + 1}; promoting it to the front and "
+                  "re-conducting")
+        moving = [failed] + [a for a in moving if a != failed]
+    if res is None:
+        a = failed
+        blocked = [b for b in static + moving if b != a and not cells(a, b).any()]
+        raise RuntimeError(
+            f"arm {a} has no monotone pause schedule inside {M * dt:.0f} s"
+            + (f"; its path is never clear of arm{'s' if len(blocked) > 1 else ''} "
+               f"{', '.join(str(b) for b in blocked)}, which no amount of "
+               "waiting can fix" if blocked else
+               f"; {len(attempts)} priority orders were tried")
+            + "; v1 does not re-route — try a placement that keeps the arms "
+            "further apart")
+    prog, finish = res
+    for a in static:
+        finish[a] = 0.0
+    order = static + moving
+    if verbose:
+        for k, a in enumerate(moving):
+            note = ("no pauses (busiest arm)" if finish[a] <= nom[a] + 1e-9
+                    else f"+{finish[a] - nom[a]:.1f} s of pauses")
+            print(f"  arm {a:>2}: priority {k + 1} of {len(moving)} moving "
+                  f"({len(static)} parked arms are obstacles for all of them), "
+                  f"{paths[a].n} steps, {nom[a]:.1f} s nominal -> {finish[a]:.1f} s "
+                  f"scheduled ({note})")
+        if len(attempts) > 1:
+            print(f"  ({len(attempts)} priority orders tried before one worked)")
 
     pauses = {a: float(finish[a] - nom[a]) for a in paths if paths[a].moves}
     duration = float(max(finish.values()))
@@ -261,7 +341,8 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
     return dict(progress={a: prog[a][:m_last] for a in paths}, order=order,
                 pauses=pauses, finish=finish, nominal=nom, duration=duration,
                 margin=margin, safety=float(safety), calib=float(calib),
-                sweep=float(sweep), M=m_last, dt=float(dt),
+                sweep=float(sweep), M=m_last, dt=float(dt), free=free,
+                moving=moving, parked=static, attempts=len(attempts),
                 pause_total=float(sum(pauses.values())))
 
 
@@ -272,11 +353,14 @@ def report(res, paths):
            f"sweep slack {res['sweep']:.2f} x step, dt {res['dt']:.4f} s"]
     out.append(f"{'arm':>5} {'prio':>5} {'steps':>7} {'nominal':>9} "
                f"{'scheduled':>10} {'pause':>8}")
-    for k, a in enumerate(res["order"]):
+    k = 0
+    for a in res["order"]:
         if not paths[a].moves:
-            out.append(f"{a:>5} {'-':>5} {paths[a].n:>7} {'idle (draws nothing)':>29}")
+            out.append(f"{a:>5} {'-':>5} {paths[a].n:>7} "
+                       f"{'parked (draws nothing, still an obstacle)':>41}")
             continue
-        out.append(f"{a:>5} {k + 1:>5} {paths[a].n:>7} {res['nominal'][a]:>8.1f}s "
+        k += 1
+        out.append(f"{a:>5} {k:>5} {paths[a].n:>7} {res['nominal'][a]:>8.1f}s "
                    f"{res['finish'][a]:>9.1f}s {res['pauses'][a]:>7.1f}s")
     out.append(f"merged timeline {res['duration']:.1f} s, "
                f"{res['pause_total']:.1f} s of pauses inserted in total")

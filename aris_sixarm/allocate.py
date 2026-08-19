@@ -6,22 +6,34 @@ length `s_star` up to which it could.  That makes reach a *measured* quantity
 rather than a modelled one, and this module is the consumer that contract was
 written for.
 
-  PROBE      For each (stroke, arm) up to three plan calls buy the arm's
-             feasible s-intervals on that stroke: forward gives [0, s*],
-             the reversed stroke gives [1-s*_rev, 1] (direction matters — the
-             DP walks the redundancy band from wherever it starts), and one
-             more call on the largest remaining gap finds an interval in the
-             middle.  Everything a probe returns is certified; nothing here
-             extrapolates a plan.
+  PROBE      For each (stroke, arm) a few plan calls buy the arm's feasible
+             s-intervals on that stroke: forward gives [0, s*], the reversed
+             stroke gives [1-s*_rev, 1] (direction matters — the DP walks the
+             redundancy band from wherever it starts), and every probe after
+             those two takes the largest remaining gap and plans it, each way
+             round, until the budget runs out.  Everything a probe returns is
+             certified; nothing here extrapolates a plan.  Each arm is probed
+             with ITS OWN pen (`pens`, see `pen_opts`) — a fleet holding three
+             different pen lengths is three different reach envelopes.
   PARTITION  Each arm carries ONE pen for the whole piece, so a grey stroke
              can only be covered by grey arms.  With four active arms there
              are 2^4 - 2 = 14 non-trivial colour partitions, so the choice is
              made by enumeration rather than by heuristic: minimise dropped
-             length, then the spread of per-arm drawing length.
+             length, then the spread of per-arm drawing length.  `colors=`
+             fixes the partition instead, which is what a TWO-PASS piece needs:
+             the constraint is one pen per arm per PHASE, and a run that stops
+             for a human to swap the pens is two single-colour problems in
+             which every arm is available for both.
   COVER      Per stroke, greedy interval covering over the intervals of the
              arms with the right pen — which is optimal for "fewest pieces",
              i.e. fewest pen-up handoffs in the middle of a line.  Ties go to
-             the least-loaded arm.  Whatever the intervals do not cover is
+             the least-loaded arm.
+  REPAIR     The cover's own gaps are the first statement of what is missing in
+             the terms that matter — the UNION of the arms carrying the right
+             ink — and `probe_stroke` never saw them, because it only ever knew
+             one arm's coverage.  So each hole is offered back to every arm of
+             that colour, both ways round, in a window widened to something
+             `plan_stroke` will accept.  Whatever still will not certify is
              DROPPED and reported; nothing is moved to make it fit.
   CUT        A handoff is placed in the MIDDLE of the overlap between the two
              intervals, not at either edge, and both segments are grown by
@@ -89,12 +101,51 @@ def active_arms(active_override=None):
                          f"{sorted(unknown)}")
     return [aid for aid in FLEET if aid in set(want)]
 
+def pen_opts(opts, pens, arm):
+    """`opts` with THIS ARM's pen length substituted. -> a fresh dict.
+
+    `pen_ext` is a plumbing parameter of `stroke_api.plan_stroke` all the way
+    down (lattice, dense certification, independent validator), so a fleet in
+    which arm 31 holds a 300 mm pen and arm 97 a 110 mm one is not a new
+    planner — it is a different `opts` per arm.  `pens` is {arm_id: metres};
+    an arm it does not name keeps whatever `opts` said (i.e. `frames.PEN_EXT`).
+
+    Everything downstream of a probe MUST be given the same dict: a segment
+    certified with a 300 mm pen and re-planned with a 110 mm one is a different
+    stroke for a different tool, and the second plan's certificate would be
+    about a robot that is not the one drawing.
+    """
+    o = dict(opts or {})
+    if pens and arm in pens:
+        o["pen_ext"] = float(pens[arm])
+    return o
+
+
+def pen_of(pens, arm, default=None):
+    """The pen length arm `arm` is holding, in metres."""
+    from .frames import PEN_EXT
+    if pens and arm in pens:
+        return float(pens[arm])
+    return float(PEN_EXT if default is None else default)
+
+
 EPS_S = 1e-6
 SEQUENCER = "opt"        # "opt" = minimum transit time; "nn" = the old xy chain
 OVERLAP_M = 0.004        # m of ink each side of a handoff cut
 BACKOFF_M = 0.006        # m to give up per failed clean re-plan
 MIN_SEG_M = 0.025        # m; a shorter piece is not worth a pen-up
+GAP_TOL_M = 0.002        # m; below this a hole in the ink is not a hole
 PREFILTER_R = 0.05       # m; atlas cell distance that still counts as maybe
+
+# MIN_SEG and GAP_TOL are not the same number and used to be conflated.  What
+# the fleet will be ASKED TO DRAW has a floor (a 5 mm pen-down between two
+# pen-ups is not a segment); what counts as LEFT EMPTY does not get to inherit
+# that floor, because `leftover` — the function that decides what nobody drew —
+# has always reported every hole longer than 2 mm.  Covering with a 25 mm gap
+# tolerance and reporting with a 2 mm one is how a run reaches "100 %" with
+# 1 cm of bare paper in it.  So the two floors are separate: gaps are chased
+# down to GAP_TOL, and a gap too short to plan is chased by WIDENING the probe
+# window into ink its neighbours already cover, not by giving up on it.
 
 
 @dataclass
@@ -120,13 +171,23 @@ def _certified_span(res):
     return 0.0, st
 
 
-def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M):
+def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M,
+                 gap_tol=GAP_TOL_M):
     """Up to `max_probes` plan calls -> (intervals, stats) for one (stroke, arm).
 
     Intervals are in the stroke's own normalised arc length and carry the
     direction they were certified in, because a plan is a walk through the
     redundancy band and the band is not symmetric: an arm can often draw the
     last 60 % of a line end-to-start that it cannot reach start-to-end.
+
+    The first two probes are the whole stroke each way round; every probe after
+    that takes the LARGEST REMAINING GAP and plans it — forward, and if that
+    does not carry the gap to its far end, backward as well.  A partial result
+    shrinks the gap rather than closing it, so the next probe picks up where
+    this one stopped and the budget walks along a stroke that is reachable in
+    pieces.  Three probes reproduce the original behaviour exactly; the budget
+    only ever buys more certified interval, never a weaker certificate, because
+    every interval here is a span some `plan_stroke` call returned as planned.
     """
     pts = np.asarray(pts, float)
     L = polyline_length(pts)
@@ -157,21 +218,40 @@ def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M):
             iv.append(Interval(1.0 - sr, 1.0, spec.arm_id, -1, "rev"))
         hi = 1.0 - float(rr.get("s_resume") or 0.0)
 
-    gaps = [g for g in uncovered(iv, min_gap=min_seg / max(L, 1e-9))
-            if min(g[1], hi) - max(g[0], lo) > min_seg / max(L, 1e-9)]
-    if max_probes >= 3 and gaps and (lo > 0 or hi < 1 or iv):
-        # (with no interval and no resume hint the third probe would just
-        # repeat the first one on the same polyline)
-        a, b = max(gaps, key=lambda g: min(g[1], hi) - max(g[0], lo))
-        a, b = max(a, lo), min(b, hi)
+    if not (lo > 0 or hi < 1 or iv):
+        # with no interval and no resume hint a gap probe would just repeat the
+        # first one on the same polyline
+        return iv, stats
+    eps = min_seg / max(L, 1e-9)
+    tried = set()
+    while stats["probes"] < max_probes:
+        gaps = [(max(g[0], lo), min(g[1], hi)) for g in uncovered(iv, min_gap=eps)]
+        gaps = [g for g in gaps if (g[1] - g[0]) * L >= min_seg
+                and (round(g[0], 6), round(g[1], 6)) not in tried]
+        if not gaps:
+            break
+        a, b = max(gaps, key=lambda g: g[1] - g[0])
+        tried.add((round(a, 6), round(b, 6)))
         sub = truncate_polyline(pts, a, b)
-        if len(sub) >= 2 and polyline_length(sub) >= min_seg:
-            r3 = plan_stroke(sub, spec, opts)
-            stats["probes"] += 1
-            stats["statuses"].append(r3["status"])
-            s3, st3 = _certified_span(r3)
-            if st3 in ("ok", "split") and s3 * (b - a) * L >= min_seg:
-                iv.append(Interval(a, a + s3 * (b - a), spec.arm_id, +1, "gap"))
+        if len(sub) < 2 or polyline_length(sub) < min_seg:
+            continue
+        w = b - a
+        r3 = plan_stroke(sub, spec, opts)
+        stats["probes"] += 1
+        stats["statuses"].append(r3["status"])
+        s3, st3 = _certified_span(r3)
+        if st3 in ("ok", "split") and s3 * w * L >= min_seg:
+            iv.append(Interval(a, a + s3 * w, spec.arm_id, +1, "gap"))
+        if s3 >= 1.0 - EPS_S or stats["probes"] >= max_probes:
+            continue
+        # the gap's far end is still open: the band may be walkable from that
+        # side even though it is not from this one
+        r4 = plan_stroke(sub[::-1], spec, opts)
+        stats["probes"] += 1
+        stats["statuses"].append(r4["status"])
+        s4, st4 = _certified_span(r4)
+        if st4 in ("ok", "split") and s4 * w * L >= min_seg:
+            iv.append(Interval(b - s4 * w, b, spec.arm_id, -1, "gap_rev"))
     return iv, stats
 
 
@@ -271,14 +351,20 @@ def partitions(arms, nontrivial=True):
     return out
 
 
-def cover_all(strokes, ivmap, colors, min_seg=MIN_SEG_M):
-    """Cover every stroke using only arms whose pen matches -> dict of results."""
+def cover_all(strokes, ivmap, colors, min_seg=MIN_SEG_M, gap_tol=GAP_TOL_M):
+    """Cover every stroke using only arms whose pen matches -> dict of results.
+
+    The frontier is chased to `gap_tol`, not to `min_seg`: what is left empty is
+    measured the way `leftover` measures it, so this function's `dropped_len`
+    and the shipped programme's disagree only by what the clean re-plan gives
+    back, and never by an accounting convention.
+    """
     load = {a: 0.0 for a in colors}
     per_stroke, dropped = [], []
     for st in strokes:
         L = polyline_length(st["pts"])
         ivs = [v for v in ivmap.get(st["id"], []) if colors.get(v.arm) == st["color"]]
-        min_gap = min_seg / max(L, 1e-9)
+        min_gap = gap_tol / max(L, 1e-9)
         chosen, gaps = greedy_cover(ivs, load, min_gap=min_gap)
         for v in chosen:
             load[v.arm] += (v.s1 - v.s0) * L
@@ -290,12 +376,106 @@ def cover_all(strokes, ivmap, colors, min_seg=MIN_SEG_M):
                 cuts=int(sum(max(len(p["chosen"]) - 1, 0) for p in per_stroke)))
 
 
-def best_partition(strokes, ivmap, arms=None, min_seg=MIN_SEG_M):
+REPAIR_BUDGET = 600      # plan calls the repair pass may spend on one problem
+
+
+def repair_gaps(strokes, ivmap, colors, cover, specs, aopts, min_seg=MIN_SEG_M,
+                gap_tol=GAP_TOL_M, rounds=3, min_len=0.02,
+                budget=REPAIR_BUDGET, verbose=False):
+    """Ask every eligible arm about exactly the spans the cover could not fill.
+
+    `probe_stroke` is myopic in the way a per-(stroke, arm) routine has to be:
+    it walks the gaps in ONE ARM'S OWN coverage, and the gap that matters is a
+    gap in the UNION of the arms that carry the right ink.  Those are different
+    sets, and the second one is only known after `cover_all` has run.  So this
+    is the pass that closes the loop: take the cover's own gap list, and for
+    each hole offer it to every arm of that colour, both ways round.
+
+    Two things make it find ink the first pass could not:
+
+      WIDENING  a hole shorter than `plan_stroke`'s `min_length` is not a
+                stroke anybody can be asked to plan, so the WINDOW is grown
+                symmetrically into ink the neighbours already cover.  Refusing
+                to grow it is why a 10 mm hole used to be uncloseable by an arm
+                that reaches straight over it — the last 10 mm of a 16 m logo
+                is exactly the distance between 99.9 % and 100 %.
+      DIRECTION every window is offered forwards and backwards, because the DP
+                walks the redundancy band from wherever it starts and the band
+                is not symmetric.
+
+    Everything appended to `ivmap` is a span some `plan_stroke` call returned as
+    planned; this pass adds no metre the planner did not certify.  Iterated
+    until a round adds nothing, `rounds` is spent, or `budget` plan calls are:
+    a placement with fifty holes is a placement to reject, not one to spend an
+    unbounded search on, and the budget keeps a sweep over thousands of
+    candidates from being priced by its worst member.  Holes are taken LARGEST
+    FIRST so a budget that runs out has been spent on the metres that matter.
+    -> (cover, n_probes).
+    """
+    by_id = {st["id"]: st for st in strokes}
+    n_probe, added_total = 0, 0
+    for _ in range(max(int(rounds), 0)):
+        holes = [(ps["stroke"], a, b) for ps in cover["per_stroke"]
+                 for a, b in ps["gaps"]]
+        holes.sort(key=lambda h: -(h[2] - h[1]) * polyline_length(h[0]["pts"]))
+        if not holes:
+            break
+        added = 0
+        for st, a, b in holes:
+            if n_probe >= budget:
+                break
+            L = polyline_length(st["pts"])
+            need = max(min_seg, 2.0 * min_len) / max(L, 1e-9)
+            if b - a < need:
+                pad = 0.5 * (need - (b - a))
+                a, b = max(0.0, a - pad), min(1.0, b + pad)
+                if b - a < need:                  # ran into an end of the stroke
+                    a, b = ((0.0, min(1.0, need)) if a <= 0.0
+                            else (max(0.0, 1.0 - need), 1.0))
+            sub = truncate_polyline(st["pts"], a, b)
+            if len(sub) < 2 or polyline_length(sub) < min_len:
+                continue
+            w, frac = b - a, 0.0
+            for arm in specs:
+                if colors.get(arm) != st["color"] or n_probe >= budget:
+                    continue
+                for pts_dir, sign in ((sub, +1), (sub[::-1], -1)):
+                    r = plan_stroke(pts_dir, specs[arm], aopts[arm])
+                    n_probe += 1
+                    frac, status = _certified_span(r)
+                    if status not in ("ok", "split") or frac * w * L < min_seg:
+                        continue
+                    iv = (Interval(a, a + frac * w, arm, +1, "repair") if sign > 0
+                          else Interval(b - frac * w, b, arm, -1, "repair_rev"))
+                    ivmap.setdefault(st["id"], []).append(iv)
+                    added += 1
+                    if frac >= 1.0 - EPS_S:
+                        break
+                if frac_covers(ivmap.get(st["id"], []), a, b):
+                    break
+        if verbose:
+            print(f"  repair: {len(holes)} holes, {added} certified spans added")
+        added_total += added
+        if not added:
+            break
+        cover = cover_all(strokes, ivmap, colors, min_seg, gap_tol)
+    cover["repair_probes"] = n_probe
+    cover["repair_added"] = added_total
+    return cover, n_probe
+
+
+def frac_covers(intervals, a, b, tol=EPS_S):
+    """Do these intervals already cover [a, b] with no hole?"""
+    return not uncovered([v for v in intervals], lo=a, hi=b, min_gap=tol)
+
+
+def best_partition(strokes, ivmap, arms=None, min_seg=MIN_SEG_M,
+                   gap_tol=GAP_TOL_M):
     """Enumerate the 2^n - 2 partitions -> (best colors, best cover, table)."""
     arms = arms or ACTIVE
     table = []
     for colors in partitions(arms):
-        c = cover_all(strokes, ivmap, colors, min_seg)
+        c = cover_all(strokes, ivmap, colors, min_seg, gap_tol)
         loads = [c["load"][a] for a in arms]
         spread = float(max(loads) - min(loads))
         table.append(dict(colors=colors, cover=c, dropped=c["dropped_len"],
@@ -405,8 +585,8 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
                     cost=0.0, baseline_cost=0.0, n_reversed=0, n_refused=0,
                     wall=0.0)
     seq_opts = dict(seq_opts or {})
-    mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv")
-           if k in seq_opts}
+    mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv",
+                                    "pen_ext") if k in seq_opts}
     exact = seq_opts.get("exact_max_n", sequence.EXACT_MAX_N)
     budget = seq_opts.get("budget", sequence.TIME_BUDGET)
 
@@ -510,14 +690,23 @@ def atlas_cells(arms, atlas_dir):
     The atlas is a 2 cm sweep of the paper; a cell counts if the pen reached it
     PERPENDICULAR (tilt 0 — the planner never leans the pen) with the planner's
     own permissive joint margin.
+
+    `atlas_dir` may be ONE directory (every arm read from it) or a mapping
+    {arm_id: directory}, which is what a per-arm pen assignment needs: the
+    atlas is swept for a particular pen length, so an arm holding a 300 mm pen
+    must be prefiltered against the 300 mm sweep and not the 110 mm one.
     """
     if atlas_dir is None:
         return None
     from .atlas import load
+    per_arm = atlas_dir if isinstance(atlas_dir, dict) else None
     grids = {}
     for a in arms:
+        d = per_arm.get(a) if per_arm is not None else atlas_dir
+        if d is None:
+            return None
         try:
-            arr, meta = load(atlas_dir, a)
+            arr, meta = load(d, a)
         except Exception:
             return None
         g = float(meta["grid"])
@@ -612,13 +801,29 @@ def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
 
 def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None,
-             sequencer=SEQUENCER, seq_opts=None):
+             sequencer=SEQUENCER, seq_opts=None, pens=None, colors=None,
+             max_probes=3, gap_tol=GAP_TOL_M, repair_rounds=3,
+             repair_budget=REPAIR_BUDGET):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
     which of the fleet's arms count as active for THIS run without touching the
     registry, so a hypothetical "all six arms up" run and the real four-arm rig
     come out of the same entry point.
+
+    `pens` is {arm_id: pen length in metres}: every plan call this function
+    makes for that arm — probe, clean re-plan, and the sequencer's hover poses —
+    is made with that pen (see `pen_opts`).  It is recorded in the result so a
+    downstream stage cannot freeze a timeline for the wrong tool.
+
+    `colors` FIXES the colour partition instead of enumerating it.  One pen per
+    arm is a constraint WITHIN a drawing phase, not across phases: if the piece
+    is drawn grey first and orange after a human swaps the pens, each phase is
+    an independent single-colour sub-problem in which every arm is available,
+    and the caller expresses that by calling this twice with
+    `colors={a: "grey"}` and `colors={a: "orange"}` over the two stroke
+    subsets.  Left None, the 2^n - 2 partitions are enumerated as before, which
+    is the single-pass answer.
 
     `sequencer` picks how each arm's segments are ordered: "opt" (the default;
     `sequence.solve` — minimum transit TIME over orders and directions,
@@ -630,6 +835,11 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         raise ValueError("pass arms= or active_override=, not both")
     arms = list(arms) if arms is not None else active_arms(active_override)
     specs = {a: FLEET[a] for a in arms}
+    if pens is not None:
+        unknown = set(pens) - set(FLEET)
+        if unknown:
+            raise ValueError(f"pens names arms not in the fleet: {sorted(unknown)}")
+    aopts = {a: pen_opts(opts, pens, a) for a in arms}
     t0 = time.time()
     pre = prefilter(strokes, arms, atlas_dir)
     t_pre = time.time() - t0
@@ -643,7 +853,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                 probe_stats.append(dict(arm=a, probes=0, statuses=["prefiltered"],
                                         stroke=st["id"]))
                 continue
-            v, s = probe_stroke(st["pts"], specs[a], opts, min_seg=min_seg)
+            v, s = probe_stroke(st["pts"], specs[a], aopts[a],
+                                max_probes=max_probes, min_seg=min_seg,
+                                gap_tol=gap_tol)
             s["stroke"] = st["id"]
             probe_stats.append(s)
             ivs += v
@@ -655,7 +867,25 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                      or "no arm"))
     t_probe = time.time() - t1
 
-    colors, cover, table = best_partition(strokes, ivmap, arms, min_seg)
+    if colors is None:
+        colors, cover, table = best_partition(strokes, ivmap, arms, min_seg,
+                                              gap_tol)
+    else:
+        missing = [a for a in arms if a not in colors]
+        if missing:
+            raise ValueError(f"colors does not give arms {missing} a pen")
+        colors = {a: colors[a] for a in arms}
+        cover = cover_all(strokes, ivmap, colors, min_seg, gap_tol)
+        table = []
+
+    # the colours are fixed now, so the holes are finally known in the terms
+    # that matter — the union of the arms carrying the right ink
+    t_rep = time.time()
+    cover, n_repair = repair_gaps(strokes, ivmap, colors, cover, specs, aopts,
+                                  min_seg, gap_tol, rounds=repair_rounds,
+                                  min_len=float((opts or {}).get("min_length", 0.02)),
+                                  budget=repair_budget, verbose=verbose)
+    t_repair = time.time() - t_rep
 
     # ---- clean re-plans -------------------------------------------------
     t2 = time.time()
@@ -664,8 +894,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     for ps in cover["per_stroke"]:
         st, L = ps["stroke"], ps["L"]
         for span in place_cuts(ps["chosen"], L, overlap):
-            plan, sp = replan_segment(st["pts"], span, specs[span["arm"]], opts,
-                                      min_seg=min_seg)
+            plan, sp = replan_segment(st["pts"], span, specs[span["arm"]],
+                                      aopts[span["arm"]], min_seg=min_seg)
             n_replan += sp["replans"]
             if plan is None:
                 continue
@@ -677,15 +907,18 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                 length=float(polyline_length(pts)), plan=plan))
     t_replan = time.time() - t2
 
-    dropped = leftover(strokes, programs)
+    dropped = leftover(strokes, programs, gap_tol)
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
-               sequencer=sequencer,
-               timing=dict(prefilter=t_pre, probe=t_probe, replan=t_replan))
+               sequencer=sequencer, pens={a: pen_of(pens, a) for a in arms},
+               timing=dict(prefilter=t_pre, probe=t_probe, repair=t_repair,
+                           replan=t_replan))
     t3 = time.time()
     out["sequence"], out["transit"], out["transit_time"] = {}, {}, {}
     for a in arms:
-        seq = sequence_arm(programs[a], specs[a], sequencer, opts, seq_opts)
+        sq = dict(seq_opts or {})
+        sq["pen_ext"] = out["pens"][a]
+        seq = sequence_arm(programs[a], specs[a], sequencer, aopts[a], sq)
         out["programs"][a] = seq.pop("programme")
         out["sequence"][a] = seq
         out["transit"][a] = transit_metres(out["programs"][a], FLEET[a].xy)
@@ -696,7 +929,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out["drawn_len"] = float(sum(s["length"] for a in arms
                                  for s in out["programs"][a]))
     out["dropped_len"] = float(sum(d["length"] for d in dropped))
-    out["n_probes"] = int(sum(p["probes"] for p in probe_stats))
+    out["n_probes"] = int(sum(p["probes"] for p in probe_stats)) + n_repair
+    out["n_repair_probes"] = int(n_repair)
+    out["n_repair_spans"] = int(cover.get("repair_added", 0))
     out["n_replans"] = n_replan
     return out
 
@@ -709,7 +944,7 @@ def report(res, strokes):
                  f"drawn {res['drawn_len']:.2f} m   "
                  f"dropped {res['dropped_len']:.2f} m "
                  f"({100 * res['dropped_len'] / max(tot, 1e-9):.1f} %)")
-    lines.append(f"{'arm':>5} {'pen':>7} {'segs':>5} {'metres':>8} "
+    lines.append(f"{'arm':>5} {'pen':>7} {'mm':>4} {'segs':>5} {'metres':>8} "
                  f"{'strokes':>8} {'cuts':>5} {'transit':>8} {'transit_s':>10} "
                  f"{'was':>8} {'rev':>4}")
     for a in res["arms"]:
@@ -717,7 +952,8 @@ def report(res, strokes):
         ids = {s["stroke_id"] for s in segs}
         cuts = len(segs) - len(ids)
         q = res["sequence"][a]
-        lines.append(f"{a:>5} {res['colors'][a]:>7} {len(segs):>5} "
+        lines.append(f"{a:>5} {res['colors'][a]:>7} "
+                     f"{1000 * res['pens'][a]:>4.0f} {len(segs):>5} "
                      f"{sum(s['length'] for s in segs):>8.2f} {len(ids):>8} "
                      f"{cuts:>5} {res['transit'][a]:>8.2f} "
                      f"{res['transit_time'][a]:>9.1f}s {q['baseline_cost']:>7.1f}s "
@@ -738,7 +974,10 @@ def report(res, strokes):
     st = [p for p in res["probe_stats"]]
     lines.append(f"probes {res['n_probes']} over {len(st)} (stroke, arm) pairs, "
                  f"{sum(1 for p in st if p['probes'] == 0)} prefiltered; "
-                 f"clean re-plans {res['n_replans']}")
+                 f"clean re-plans {res['n_replans']}; "
+                 f"gap repair offered {res.get('n_repair_probes', 0)} windows to "
+                 f"the arms and got {res.get('n_repair_spans', 0)} certified "
+                 "spans back")
     pieces = {}
     for a in res["arms"]:
         for s in res["programs"][a]:
@@ -760,6 +999,7 @@ def report(res, strokes):
             + ("   <- top" if iy == 2 else "   <- bottom" if iy == 0 else ""))
     t = res["timing"]
     lines.append(f"time  prefilter {t['prefilter']:.1f} s  probe {t['probe']:.1f} s"
+                 f"  repair {t.get('repair', 0.0):.1f} s"
                  f"  replan {t['replan']:.1f} s  sequence {t['sequence']:.1f} s"
                  f"  total {t['total']:.1f} s")
     return lines
