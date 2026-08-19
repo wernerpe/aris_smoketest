@@ -22,12 +22,16 @@ aris_sixarm/
                    q7(s)), certified by IK chase with window bisection
   pacing.py        TOPP-lite: constant tip speed, slowed only where a joint
                    velocity limit would be hit  (frames.QD_MAX, from the FR3 URDF)
+  stroke_api.py    THE entry point: plan_stroke() -> ok | split | degenerate | bug
+  validate.py      independent re-derivation of every invariant from raw outputs
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
   make_scene.py    build out/reach_atlas.html (static meshcat + legend)
+  fuzz_planner.py  seeded parallel fuzz campaign + atlas cross-check
 tests/
   test_gates.py    real-touchdown validation gates (run these after ANY kinematics change)
+  test_planner_robustness.py   regressions distilled from the fuzz campaign
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
 ```
@@ -68,6 +72,29 @@ docs/
   re-solving IK at 5 mm (never interpolating q). The 1.56 m rim arc becomes
   **2 knots** instead of 131 steps, at higher σ_min and 7× less joint travel;
   see `docs/REDUNDANCY.md`.
+
+## Reliability
+
+- **Certified-or-split contract** (`stroke_api.plan_stroke`, the single entry
+  point): every call returns `ok` (dense joints + clock + a passed validation
+  report), `split` (`s_star` = the arc length actually *certified*, `head` = the
+  certified plan for it, `s_reach` = where the band gives out), `degenerate`, or
+  `bug` — it never raises, and a plan that fails its own validator is a `bug`.
+- **Independent validator** (`validate.py`): re-derives tip-on-curve < 2 mm,
+  margin ≥ 0.15, σ_min ≥ 0.10, ‖Δq‖∞ ≤ 0.35, paper/boom clearance and
+  |dq/dt| ≤ `QD_MAX` from `frames.fk` and the raw joint samples — no planner
+  bookkeeping is trusted, and it returns violations rather than raising.
+- **Fuzz** (`scripts/fuzz_planner.py`, seeded, multiprocessing): 900 strokes
+  (6 arms × 6 generators × inside/straddle/wild) in ~60 s. Two clean runs:
+  591/190/119 and 563/213/124 ok/split/degenerate, **0 bugs**, 0 validator
+  rejections, 0 nondeterminism (10 % replanned and compared bitwise), every
+  split's head re-planned from scratch, atlas strict-GO plan rate 100 %.
+- **Bugs it found**: the analytic IK *clamps* at the workspace boundary —
+  q2 = 0.0 exactly, NaN-free, inside all limits, for a pose it misses by 2 cm —
+  so every solution is now FK-verified in `ik.py`; and the fixed-step resample
+  left the last < 1 lattice step of every stroke outside the lattice, planned on
+  faith (`stroke_api` now fits a whole number of steps into the length).
+- Regressions live in `tests/test_planner_robustness.py` (16 tests, ~13 s).
 
 ## Writing demo — "ARIS"
 

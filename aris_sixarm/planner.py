@@ -57,7 +57,7 @@ def resample(points, ds=0.01):
     return np.column_stack([np.interp(s, t, p[:, 0]), np.interp(s, t, p[:, 1])]), s / L
 
 
-def clip_to_sheet(pts, border=0.02, verbose=True):
+def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False):
     """Keep the LONGEST CONTIGUOUS in-sheet run of a polyline.
 
     A plain boolean mask would concatenate the disjoint in-sheet pieces of a
@@ -66,6 +66,10 @@ def clip_to_sheet(pts, border=0.02, verbose=True):
     dives from the r = 0.66 rim to r = 0.30 straight under the base — a
     genuinely unplannable dead zone that has nothing to do with the stroke
     being asked for.
+
+    `return_slice` additionally hands back the `slice` that was kept, so a
+    caller can say WHERE in the original stroke its plan starts and ends
+    (stroke_api reports it as `clip_s`).
     """
     from .fleet import SHEET
     pts = np.asarray(pts, float)
@@ -82,12 +86,12 @@ def clip_to_sheet(pts, border=0.02, verbose=True):
         else:
             i += 1
     if not runs:
-        return pts[:0]
+        return (pts[:0], slice(0, 0)) if return_slice else pts[:0]
     i0, i1 = max(runs, key=lambda r: r[1] - r[0])
     if len(runs) > 1 and verbose:
         print(f"  clip: {len(runs)} in-sheet runs {[b - a for a, b in runs]}, "
               f"keeping the longest ({i1 - i0} pts)")
-    return pts[i0:i1]
+    return (pts[i0:i1], slice(i0, i1)) if return_slice else pts[i0:i1]
 
 
 def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
