@@ -40,6 +40,7 @@ import numpy as np
 from . import ik, planner
 from .frames import PEN_EXT, joint_margin, rotx, tip_pos
 from .metrics import sigma_min as _sigma_min, tip_jacobian
+from .pacing import dq_ds
 
 SIGMA_GATE = 0.10        # band gate, sigma_min (above planner.HARD_SIGMA = 0.08)
 MARGIN_GATE = 0.15       # band gate, joint margin (rad)
@@ -47,6 +48,112 @@ W_CLEARANCE = 1.0        # tie-break pull toward the middle of the corridor
 W_TRAVEL = 0.25          # tie-break pull toward fewer q7 index steps
 RDP_EPS = 1.0            # simplification tolerance, q7 GRID INDICES
 _SIGMA_Q = planner._SIGMA_Q      # bottleneck quantum, shared with the lattice DP
+
+
+# --------------------------------------------------------------------------
+# 0. the certification chase — one implementation, three callers
+# --------------------------------------------------------------------------
+def arc_length(points):
+    """Total polyline length in METRES.
+
+    Normalised s is the right coordinate to plan in and the wrong one to move
+    in: every velocity statement downstream (pacing.py) needs the stroke's real
+    scale back, so it is carried alongside s rather than recovered later.
+    """
+    p = np.asarray(points, float)
+    return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
+
+
+def pen_down_poses(pts_xy, Twb_inv, pen_ext):
+    """(M,4,4) base-frame hand-TCP poses for a pen-down stroke.
+
+    The pen convention lives here and nowhere else: R = rotx(pi) points tool z
+    straight down with yaw 0 (planner.py explains why yaw is not a free axis),
+    and the tip sits `pen_ext` beyond the TCP along that z — so the TCP is
+    `pen_ext` ABOVE the paper point it is drawing.
+    """
+    p = np.asarray(pts_xy, float)
+    R = rotx(np.pi)
+    T = np.tile(np.eye(4), (len(p), 1, 1))
+    T[:, :3, :3] = R
+    T[:, :3, 3] = np.column_stack([p[:, 0], p[:, 1], np.zeros(len(p))]) \
+        - pen_ext * R[:, 2]
+    return np.asarray(Twb_inv, float) @ T
+
+
+def chase_cc(poses, q7, q_seed, pen_ext=PEN_EXT, margin_gate=None,
+             sigma_gate=None, jump_gate=None, fallback=False):
+    """Walk a stroke with case-consistent IK.  THE feasibility test of the
+    project: search on the grid, certify against the real kinematics.
+
+    Given the stroke's poses (M,4,4), a commanded q7 per sample and a seed
+    configuration, `ik.solve_cc` is chased sample to sample — the same branch
+    throughout, each solve seeded with the previous configuration.  sigma_min
+    and the joint margin are computed for every sample that is accepted.
+
+    Each of the three gates is enforced only when its value is not None;
+    otherwise it is merely measured.  That single switch is the whole
+    difference between the module's callers:
+
+      * `Corridor._chase_ok` (segment screening) passes all three and wants the
+        early exit — an infeasible candidate segment should cost as little as
+        possible;
+      * `backout()` passes none and never gives up early: it reports what the
+        plan actually does, including a fallback to a full `ik.solve` when the
+        case-consistent solve dies (`fallback=True`);
+      * `smooth.certify` passes all three, so a completed walk IS the
+        certificate and its `qs` are the deliverable — no second pass.
+
+    Returns dict: ok (walked every sample), n, qs (n,7), sigmas, margins,
+    max_step (rad, ||dq||_inf), fallbacks, fails, stop ("ok"/"seed"/"no_ik"/
+    "jump"/"margin"/"sigma"), stop_index.
+    """
+    poses = np.asarray(poses, float)
+    q7 = np.atleast_1d(np.asarray(q7, float))
+    q_prev = np.asarray(q_seed, float)
+    M = len(poses)
+    out = dict(ok=False, n=0, qs=np.zeros((0, 7)), sigmas=np.zeros(0),
+               margins=np.zeros(0), max_step=0.0, fallbacks=0, fails=0,
+               stop="seed", stop_index=0)
+    if q_prev.shape != (7,) or not np.all(np.isfinite(q_prev)):
+        return out
+
+    qs, sig, mar = [], [], []
+    fallbacks = fails = 0
+    stop, stop_i, max_step = "ok", M, 0.0
+    for n in range(M):
+        q = ik.solve_cc(poses[n], float(q7[n]), q_prev)
+        if q is None and fallback:
+            cand = ik.solve(poses[n], float(q7[n]), q_prev)
+            if cand:
+                q = min(cand, key=lambda c: np.max(np.abs(c - q_prev)))
+                fallbacks += 1
+        if q is None:
+            fails, stop, stop_i = fails + 1, "no_ik", n
+            break
+        if n:
+            step = float(np.max(np.abs(q - q_prev)))
+            if jump_gate is not None and step > jump_gate:
+                stop, stop_i = "jump", n
+                break
+            max_step = max(max_step, step)
+        m = joint_margin(q)
+        if margin_gate is not None and m < margin_gate:
+            stop, stop_i = "margin", n
+            break
+        s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext))
+        if sigma_gate is not None and s < sigma_gate:
+            stop, stop_i = "sigma", n
+            break
+        qs.append(q)
+        mar.append(m)
+        sig.append(s)
+        q_prev = q
+    out.update(ok=bool(len(qs) == M), n=len(qs),
+               qs=np.array(qs) if qs else np.zeros((0, 7)),
+               sigmas=np.array(sig), margins=np.array(mar), max_step=max_step,
+               fallbacks=fallbacks, fails=fails, stop=stop, stop_index=stop_i)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -333,16 +440,9 @@ class Corridor:
         self.sigma_gate, self.margin_gate, self.jump = sigma_gate, margin_gate, jump
         self.exact, self.calls, self.samples = exact, 0, 0
         self.pen_ext, self.pts = lat["pen_ext"], lat["pts"]
-        self._Twb_inv = np.linalg.inv(lat["Twb"])
-        self._R = rotx(np.pi)                  # pen straight down, yaw 0
+        self._poses = pen_down_poses(lat["pts"], np.linalg.inv(lat["Twb"]),
+                                     lat["pen_ext"])
         self._jidx = np.arange(free.shape[1])
-
-    def _pose(self, i):
-        T = np.eye(4)
-        T[:3, :3] = self._R
-        T[:3, 3] = np.array([self.pts[i, 0], self.pts[i, 1], 0.0]) \
-            - self.pen_ext * self._R[:, 2]
-        return self._Twb_inv @ T
 
     def _grid_ok(self, ii, jf):
         Nq = self.free.shape[1]
@@ -358,19 +458,11 @@ class Corridor:
         q = self.sheet["Q"][ii[0], int(round(j_start))]
         if not np.all(np.isfinite(q)):
             return False
-        q7 = np.interp(jf, self._jidx, self.q7s)
         self.calls += 1
         self.samples += len(ii)
-        for n, i in enumerate(ii):
-            qn = ik.solve_cc(self._pose(i), q7[n], q)
-            if qn is None or (n and np.max(np.abs(qn - q)) > self.jump):
-                return False
-            if joint_margin(qn) < self.margin_gate:
-                return False
-            if _sigma_min(tip_jacobian(qn, pen_ext=self.pen_ext)) < self.sigma_gate:
-                return False
-            q = qn
-        return True
+        return chase_cc(self._poses[ii], np.interp(jf, self._jidx, self.q7s), q,
+                        pen_ext=self.pen_ext, margin_gate=self.margin_gate,
+                        sigma_gate=self.sigma_gate, jump_gate=self.jump)["ok"]
 
     def __call__(self, i0, j0, i1, j1):
         if i1 <= i0:
@@ -513,24 +605,49 @@ def backout(stroke_pts, spec, knots, lat=None, ds=0.005, sheet=None, q_seed=None
 
     Returns dict: ok, qs (M,7), pts (M,2), s (M,), q7 (M,), sigmas, margins,
     tip_err (max, m), max_step (rad), fallbacks, fails, min_sigma, mean_sigma,
-    min_margin.
+    min_margin, arc_len (m) and ds (m) — the last two are what turns the
+    normalised plan back into something that can be timed (pacing.py).
+    """
+    setup = stroke_setup(stroke_pts, spec,
+                         lambda t: np.interp(t, np.asarray(knots, float)[:, 0],
+                                             np.asarray(knots, float)[:, 1]),
+                         lat=lat, ds=ds, sheet=sheet, q_seed=q_seed,
+                         h_inv=h_inv, pen_ext=pen_ext)
+    if setup["q_seed"] is None:
+        return dict(ok=False, fails=len(setup["pts"]), fallbacks=0, cut_index=-1)
+    ch = chase_cc(setup["poses"], setup["q7"], setup["q_seed"],
+                  pen_ext=setup["pen_ext"], fallback=True)
+    if not ch["n"]:
+        return dict(ok=False, fails=ch["fails"], fallbacks=ch["fallbacks"],
+                    cut_index=-1)
+    return chase_report(ch, setup, jump=jump)
+
+
+def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
+                 q_seed=None, h_inv=None, pen_ext=None):
+    """Everything a chase needs before it can take its first step.
+
+    Resamples the stroke at `ds` METRES, reads the redundancy plan off
+    `q7_of_s` (anything callable on the normalised arc-length array — a raw
+    polyline via np.interp, or smooth.py's corner-rounded curve), builds the
+    base-frame poses, and picks the seed configuration at s = 0: the sheet's
+    own node nearest the commanded q7 if a sheet was handed in, otherwise the
+    most comfortable branch the full IK offers there.
+
+    The seed is the one genuinely stateful choice in the whole pipeline — a
+    case-consistent chase never changes branch, so whichever branch this picks
+    is the branch the entire stroke is drawn on.
+
+    Returns dict: pts, s, q7, poses, Twb, pen_ext, ds, arc_len, q_seed
+    (q_seed None when no branch exists at s = 0).
     """
     from .fleet import H_INV_DEFAULT
     Twb = lat["Twb"] if lat is not None else spec.T_world_base(
         H_INV_DEFAULT if h_inv is None else h_inv)
     pen_ext = (lat["pen_ext"] if lat is not None else PEN_EXT) if pen_ext is None else pen_ext
-    Twb_inv = np.linalg.inv(Twb)
     pts, s = planner.resample(stroke_pts, ds)
-    knots = np.asarray(knots, float)
-    q7 = np.interp(s, knots[:, 0], knots[:, 1])
-
-    R_w = rotx(np.pi)                       # pen straight down, yaw 0 (planner.py)
-    T_w = np.eye(4)
-    T_w[:3, :3] = R_w
-
-    def pose(p):
-        T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - pen_ext * R_w[:, 2]
-        return Twb_inv @ T_w
+    q7 = np.atleast_1d(np.asarray(q7_of_s(s), float))
+    poses = pen_down_poses(pts, np.linalg.inv(Twb), pen_ext)
 
     if q_seed is None and sheet is not None and lat is not None:
         j0 = int(np.argmin(np.abs(lat["q7s"] - q7[0])))
@@ -539,39 +656,38 @@ def backout(stroke_pts, spec, knots, lat=None, ds=0.005, sheet=None, q_seed=None
             j0 = int(row[np.argmin(np.abs(row - j0))])
             q_seed = sheet["Q"][0, j0]
     if q_seed is None:                      # no sheet handed in: best branch at s=0
-        cand = ik.solve(pose(pts[0]), q7[0], spec.q_seed)
-        if not cand:
-            return dict(ok=False, fails=len(pts), fallbacks=0, cut_index=-1)
-        q_seed = max(cand, key=joint_margin)
+        cand = ik.solve(poses[0], q7[0], spec.q_seed)
+        q_seed = max(cand, key=joint_margin) if cand else None
+    return dict(pts=pts, s=s, q7=q7, poses=poses, Twb=Twb, pen_ext=pen_ext,
+                ds=ds, arc_len=arc_length(stroke_pts), q_seed=q_seed)
 
-    qs, fallbacks, fails = [], 0, 0
-    q_prev = np.asarray(q_seed, float)
-    for i, p in enumerate(pts):
-        T_b = pose(p)
-        q = ik.solve_cc(T_b, q7[i], q_prev)
-        if q is None:
-            cand = ik.solve(T_b, q7[i], q_prev)
-            if not cand:
-                fails += 1
-                break
-            q = min(cand, key=lambda c: np.max(np.abs(c - q_prev)))
-            fallbacks += 1
-        qs.append(q)
-        q_prev = q
-    if not qs:
-        return dict(ok=False, fails=fails, fallbacks=fallbacks, cut_index=-1)
-    qs = np.array(qs)
-    n = len(qs)
+
+def chase_report(ch, setup, jump=planner.JUMP_THRESH):
+    """Package a finished chase the way the rest of the project consumes it.
+
+    Tip error is measured against the COMMANDED stroke points in world, which
+    is the only check that catches a plan that quietly left the paper; the
+    gates come straight off the chase, and dq/ds restores the metre scale so
+    the result can be handed to pacing.py.  `backout` and `smooth.certify`
+    share this so a smoothed path and the polyline it was rounded from are
+    measured by literally the same code, never by two similar-looking ones.
+    """
+    qs, n = ch["qs"], ch["n"]
+    pts, Twb, pen_ext = setup["pts"], setup["Twb"], setup["pen_ext"]
     tip = np.array([Twb[:3, :3] @ tip_pos(q, pen_ext) + Twb[:3, 3] for q in qs])
-    exy = np.linalg.norm(tip[:, :2] - pts[:n], axis=1)
-    err = np.hypot(exy, tip[:, 2])
-    sig = np.array([_sigma_min(tip_jacobian(q, pen_ext=pen_ext)) for q in qs])
-    mar = np.array([joint_margin(q) for q in qs])
+    err = np.hypot(np.linalg.norm(tip[:, :2] - pts[:n], axis=1), tip[:, 2])
+    sig, mar = ch["sigmas"], ch["margins"]
     dq = np.abs(np.diff(qs, axis=0))
-    return dict(ok=bool(n == len(pts)), qs=qs, pts=pts[:n], s=s[:n], q7=q7[:n],
-                sigmas=sig, margins=mar, tip_errs=err, tip_err=float(err.max()),
+    dqds = dq_ds(qs, setup["arc_len"], ds_m=setup["ds"])
+    return dict(ok=bool(n == len(pts)), qs=qs, pts=pts[:n], s=setup["s"][:n],
+                q7=setup["q7"][:n], sigmas=sig, margins=mar, tip_errs=err,
+                tip_err=float(err.max()),
                 max_step=float(dq.max()) if len(dq) else 0.0,
-                sum_travel=float(dq.sum()), fallbacks=fallbacks, fails=fails,
+                sum_travel=float(dq.sum()), fallbacks=ch["fallbacks"],
+                fails=ch["fails"], arc_len=setup["arc_len"], ds=setup["ds"],
+                dqds=dqds, max_dqds=float(np.abs(dqds).max()),
+                max_dqds_jump=float(np.abs(np.diff(dqds, axis=0)).max())
+                if len(dqds) > 1 else 0.0,
                 min_sigma=float(sig.min()), mean_sigma=float(sig.mean()),
                 min_margin=float(mar.min()), cut_index=n - 1,
                 continuous=bool(len(dq) == 0 or dq.max() <= jump))

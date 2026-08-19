@@ -81,7 +81,8 @@ Per stroke, after allocation to an arm:
    `k_nullspace` spring pulls toward the planned q — the plan IS the redundancy
    resolution; the controller just tracks it compliantly.
 
-## PWL in (s, q7) — planning the band before the joints (`pwl.py`)
+## PWL in (s, q7) — planning the band before the joints (`pwl.py`, then
+`smooth.py` and `pacing.py`)
 
 The DP above answers "which configuration at each of the 131 steps?". The same
 stroke can be planned one level up, as a *shape in the redundancy space*, and
@@ -133,6 +134,46 @@ only then turned into joints.
   0.196/0.153 vs 0.195/0.150) — with **7× less joint travel** (5.4 rad vs 38.3),
   because the DP spends its ±0.35 rad continuity budget staircasing between q7
   indices and a straight segment cannot.
+
+- **Smoothing = rounding the graph's corners, not fitting a spline**
+  (`smooth.py`). Each interior knot becomes a quadratic Bézier over a symmetric
+  window in s, the segments between windows untouched. Because q7(s) is a
+  *graph over s*, monotone-s survives rounding with nothing to enforce; and with
+  the window symmetric the Bézier's s-component is exactly linear, so q7 stays a
+  closed-form quadratic **in s** and dq7/ds interpolates linearly between the two
+  segment slopes — rounding can never make |dq7/ds| bigger, only take the step
+  out of it. A global spline would be C2 but would dissolve the straight
+  segments and put the whole stroke back up for re-certification.
+- **Certified by the same chase, with a known-valid fallback.** The curve is
+  sampled at 5 mm and chased with the identical `ik.solve_cc` helper the
+  corridor screening and `backout` use (σ ≥ 0.10, margin ≥ 0.15, ‖Δq‖∞ ≤ 0.35).
+  A failure at s\* is charged to the blend whose window contains it and *that
+  window alone* is halved, converging on the sharp knot `plan_pwl` already
+  certified — so the bisection terminates by construction. Outside the windows
+  the curve is q7-identical to the polyline on the same branch, so a failure
+  there is not the rounding's doing and is reported, not iterated on. R bowl:
+  4 corners, windows ±0.018 in s, **none shrunk**, σ unchanged at 0.1792, margin
+  0.187 → 0.190, tip error 2.1e-12 m, and the worst corner's step in dq/ds down
+  3.3× (4.90 → 1.49 rad/m per sample). The rim arc is 2 knots — no interior
+  corner — so smoothing is the identity there, which is the answer, not a gap.
+- **Still no RRT inside a stroke, and the timing agrees.** Monotone s is
+  *time-like*: the plan is a graph over it, so smoothing and re-timing both
+  collapse to 1-D problems on a scalar function. Sampling stays reserved for the
+  **pen-up transits** (genuinely 7-D, non-monotone, obstacle-dominated) and later
+  for **coupled multi-arm** strokes, where two arms carry independent s, the
+  space stops being layered by a single s, and staying out of each other's way
+  in time makes it a state-time-space problem — the one place a tree earns what
+  a DP cannot give.
+- **Pacing = TOPP-lite** (`pacing.py`). q̇ = (dq/ds)·v is linear in tip speed, so
+  with velocity limits alone the feasible set at each s is [0, v_i],
+  v_i = safety·min_j(q̇_max_j / |dq_j/ds|) — pointwise, uncoupled, one pass, no
+  switching-point search. Command min(v_draw, v_i), integrate ds/v. q̇_max is the
+  URDF's ([2.62]×4, 5.26, 4.18, 5.26 rad/s), not the MoveIt config's (Panda
+  values). At 20 mm/s nothing slows: peak q̇ is 1.2 % of limit on the rim arc,
+  7.2 % on the R bowl, and the joints only bind above 1.30 and 0.22 m/s (65× and
+  11× the drawing speed). Acceleration and torque limits are v2 — those really
+  do couple neighbouring s and need the forward/backward integration this pass
+  deliberately omits.
 
 The 2-knot rim arc is the point of the exercise: the redundancy decision for a
 1.56 m stroke is "start at q7 = −1.45, end at +0.82, linear in between", which

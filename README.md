@@ -18,6 +18,10 @@ aris_sixarm/
   planner.py       single-arm stroke planner: ladder-graph DP over (s x q7 x branch)
   pwl.py           the same strokes as a piecewise-linear q7(s): IK sheets,
                    clearance in the (s, q7) band, RDP knots, IK back-out
+  smooth.py        C1 corner-rounding of that polyline (Bézier blends on the graph
+                   q7(s)), certified by IK chase with window bisection
+  pacing.py        TOPP-lite: constant tip speed, slowed only where a joint
+                   velocity limit would be hit  (frames.QD_MAX, from the FR3 URDF)
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
@@ -102,6 +106,8 @@ Gaps: the band between the four inverted arms, and the sheet corners.
    objective, disconnect → split point (`planner.py`, `scripts/demo_stroke.py`);
    ✅ compact restatement of the same plan as a piecewise-linear q7(s) on one IK
    sheet, back-solved to joints (`pwl.py`, `scripts/demo_pwl.py`)
+   ✅ C1 corner-rounded q7(s) + TOPP-lite pacing on top of it, both certified by
+   the same IK chase (`smooth.py`, `pacing.py`, `scripts/demo_smooth.py`)
 3. ▶ allocation: image plane → per-arm strokes, splitting at region boundaries /
    overlap handoff, RRT for the pen-up transits between planned strokes
    (`letters.py` + `writing.py` do the fixed-assignment case: one letter per

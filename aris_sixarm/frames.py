@@ -15,6 +15,20 @@ import numpy as np
 FR3_MIN = np.array([-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159])
 FR3_MAX = np.array([2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159])
 TAU_MAX = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0])  # Nm
+# rad/s. SOURCE: the FR3 URDF (my_ros2_ws/src/fr3/fr3.urdf, expanded from
+# franka_description via operator_franka_patches/fr3.urdf.xacro) — <limit
+# velocity=...> on fr3_joint1..7.  Independently confirmed by libfranka's own
+# rate limiter (franka_ros2_ws/src/libfranka/include/franka/rate_limiting.h:122
+# saturates at exactly these values), so it is the firmware's number too.
+# The URDF wins over the datasheet figures this was first drafted with
+# ([2.0, 1.0, 1.5, 1.25, 3.0, 1.5, 3.0]), which were uniformly stricter.
+# NOT the MoveIt config (fr3_moveit_config/config/joint_limits.yaml: 2.175 x4,
+# 2.61 x3) — those are Panda values copied wholesale, a different robot.
+# CAVEAT: libfranka enforces a POSITION-dependent envelope (min of this flat cap
+# and a sqrt braking curve near each joint stop), so the flat cap is only
+# available away from the limits.  We keep margin >= 0.15 rad everywhere and
+# pace at safety = 0.8, which stays inside the braking curve by a wide margin.
+QD_MAX = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
 
 Q_READY_FLOOR = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
 # measured on arm 31, Desk fine-adjust 2026-05-29 — standard inverted seed
