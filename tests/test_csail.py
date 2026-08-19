@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from aris_sixarm import allocate, trace              # noqa: E402
+from aris_sixarm import allocate, coordination, scene_check, trace   # noqa: E402
 from aris_sixarm.allocate import Interval            # noqa: E402
-from aris_sixarm.fleet import SHEET                  # noqa: E402
+from aris_sixarm.fleet import FLEET, SHEET           # noqa: E402
 
 
 def _bar(mask, r0, r1, c0, c1):
@@ -151,6 +151,96 @@ def test_best_partition_follows_the_drops():
     assert colors[13] == "grey" and colors[31] == "orange"
     assert cover["dropped_len"] < 1e-9
     assert table[0]["dropped"] <= table[-1]["dropped"]
+
+
+def test_active_override_does_not_touch_the_registry():
+    """A what-if fleet is an ARGUMENT, never an edit to fleet.FLEET.
+
+    The registry's `active` flags are the record of which arms are up today;
+    an "all six arms" study that flipped them would silently change what every
+    other caller in the process means by "the fleet".
+    """
+    before = {a: s.active for a, s in FLEET.items()}
+    assert allocate.active_arms() == allocate.ACTIVE == [13, 17, 31, 97]
+    assert allocate.active_arms("all") == [13, 17, 31, 2, 71, 97]     # registry order
+    assert allocate.active_arms([97, 13]) == [13, 97]                 # order normalised
+    assert allocate.active_arms({2: True}) == [13, 17, 31, 2, 97]     # patch one flag
+    assert allocate.active_arms({13: False, 71: True}) == [17, 31, 71, 97]
+    assert {a: s.active for a, s in FLEET.items()} == before, "the registry moved"
+
+    for bad in ("some", [13, 999], {42: True}):
+        try:
+            allocate.active_arms(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"active_override={bad!r} should have been rejected")
+
+    # the entry point refuses the ambiguous call rather than picking a winner
+    try:
+        allocate.allocate([], arms=[13], active_override="all")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("arms= and active_override= together must raise")
+
+
+def test_active_override_reaches_the_partition_enumeration():
+    """Six arms means 62 pen partitions, and the allocation must use all six."""
+    assert len(allocate.partitions(allocate.active_arms("all"))) == 62
+    strokes = [dict(id=0, color="grey", kind="outline",
+                    pts=np.array([[0.0, 0.0], [1.0, 0.0]])),
+               dict(id=1, color="orange", kind="outline",
+                    pts=np.array([[0.0, 1.0], [1.0, 1.0]]))]
+    ivmap = {0: [Interval(0.0, 1.0, 71)], 1: [Interval(0.0, 1.0, 2)]}
+    arms = allocate.active_arms("all")
+    colors, cover, table = allocate.best_partition(strokes, ivmap, arms)
+    # only the two parked arms can cover anything, so the partition has to give
+    # them the two different pens — which the four-arm fleet cannot do at all
+    assert colors[71] == "grey" and colors[2] == "orange"
+    assert cover["dropped_len"] < 1e-9
+    assert allocate.best_partition(strokes, ivmap, allocate.ACTIVE)[1]["dropped_len"] > 1.9
+
+
+def test_capsule_distance_agrees_with_the_independent_one():
+    """`coordination` and `scene_check` derive segment distance differently.
+
+    That is the entire value of the second implementation, so it is worth a test
+    that they cannot silently drift apart — including the degenerate cases
+    (parallel, touching, one segment a point) each derivation handles in its own
+    branch.
+    """
+    rng = np.random.default_rng(7)
+    P = rng.normal(size=(400, 4, 3))
+    P[:50, 1] = P[:50, 0]                       # first segment degenerate
+    P[50:100, 3] = P[50:100, 2]                 # second segment degenerate
+    P[100:150, 2:] = P[100:150, :2] + np.array([0.3, 0.0, 0.0])   # parallel
+    a = coordination.seg_seg_dist(P[:, 0], P[:, 1], P[:, 2], P[:, 3])
+    b = scene_check.segment_distance(P[:, 0], P[:, 1], P[:, 2], P[:, 3])
+    assert np.max(np.abs(a - b)) < 1e-9, f"max disagreement {np.max(np.abs(a - b)):.2e}"
+    # and both are right on a case with a known answer: two skew unit segments
+    # 0.5 apart along z
+    d = coordination.seg_seg_dist(np.array([0.0, 0, 0]), np.array([1.0, 0, 0]),
+                                  np.array([0.5, -1, 0.5]), np.array([0.5, 1, 0.5]))
+    assert abs(float(d) - 0.5) < 1e-12
+
+
+def test_pause_schedule_is_monotone_and_avoids_the_blocked_cells():
+    """The DP must wait rather than walk through an unsafe cell, and never
+    reverse.  A hand-built image: arm B is a wall across the middle of A's
+    progress until B has gone past its own halfway point."""
+    nA, nB = 40, 30
+    free = np.ones((nA - 1, nB - 1), bool)
+    free[10:20, :15] = False                   # A may not be at 10..19 while B < 15
+    prog_b = np.minimum(np.arange(200), nB - 1)
+    P, m_end = coordination._dp({"B": free}, {"B": prog_b}, nA, 200)
+    assert P is not None, "a feasible wait-then-go schedule was not found"
+    d = np.diff(P)
+    assert np.all(d >= 0) and np.all(d <= 1), "progress must advance by 0 or 1"
+    assert P[0] == 0 and P[m_end] == nA - 1
+    for m in range(m_end):
+        assert free[min(P[m], nA - 2), min(prog_b[m], nB - 2)], \
+            f"scheduled into a blocked cell at step {m}"
+    assert m_end > nA - 1, "the blockage should have cost at least one pause"
 
 
 if __name__ == "__main__":

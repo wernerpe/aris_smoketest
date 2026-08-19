@@ -32,7 +32,10 @@ from aris_sixarm import allocate, trace      # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
-PEN = {"grey": "#7f8184", "orange": "#c8651b"}
+# the logo's own two inks, straight off the source image (trace.GREY_RGB /
+# trace.ORANGE_RGB); one of them is what each arm's pen is filled with
+PEN = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
+       "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
 
 
 def _hex(rgb):
@@ -65,20 +68,24 @@ def allocation_png(res, strokes, path):
                     solid_capstyle="round", solid_joinstyle="round")
             ax.plot(p[0, 0], p[0, 1], "o", color=c, ms=4.5, mec="white",
                     mew=0.9, zorder=5)
+    # filled = used by THIS run; "(parked)" = the registry says it is down today
     for aid, spec in FLEET.items():
+        used = aid in res["arms"]
         ax.plot(*spec.xy, marker="o" if spec.mount == "floor" else "s", ms=14,
-                mfc=spec.color if spec.active else "white", mec=spec.color,
+                mfc=spec.color if used else "white", mec=spec.color,
                 mew=2.2, zorder=6, clip_on=False)
-        ax.annotate(str(aid), spec.xy, color="white" if spec.active else spec.color,
+        ax.annotate(str(aid), spec.xy, color="white" if used else spec.color,
                     fontsize=7.5, fontweight="bold", ha="center", va="center",
                     zorder=7, clip_on=False)
-        if not spec.active:
-            ax.annotate("parked", (spec.xy[0], spec.xy[1] - 0.13), color=spec.color,
+        note = ("" if spec.active else "(parked)") if used else "not in this run"
+        if note:
+            ax.annotate(note, (spec.xy[0], spec.xy[1] - 0.13), color=spec.color,
                         fontsize=7, ha="center", va="top", alpha=0.7, zorder=7,
                         clip_on=False)
 
     tot, drp = res["total_len"], res["dropped_len"]
     handles, labels = [], []
+    n_arms = len(res["arms"])
     for aid in res["arms"]:
         segs = res["programs"][aid]
         ids = {s["stroke_id"] for s in segs}
@@ -95,11 +102,50 @@ def allocation_png(res, strokes, path):
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.015),
               ncol=2, fontsize=9, framealpha=0.94, borderpad=0.8,
               labelspacing=0.5, columnspacing=2.0)
-    ax.set_title("CSAIL logo — allocation to the four active arms "
+    ax.set_title(f"CSAIL logo — allocation to {n_arms} arms "
                  f"({res['drawn_len']:.2f} m drawn of {tot:.2f} m traced); "
                  "colour = arm, dashed = nobody reaches it", fontsize=11.5)
     fig.tight_layout()
     fig.savefig(path, dpi=135)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+def final_png(res, strokes, path, title=None):
+    """The end state: the paper as it looks when every arm has stopped.
+
+    Ink is drawn in the PEN colour (the logo's own grey/orange), not the arm
+    colour, because that is what is on the paper; what nobody reached stays a
+    dashed ghost so the holes are visible rather than merely absent.
+    """
+    fig, ax = plt.subplots(figsize=(13.0, 7.6))
+    sheet_axes(ax)
+    for d in res["dropped"]:
+        p = np.asarray(d["pts"], float)
+        ax.plot(p[:, 0], p[:, 1], ls=(0, (4, 4)), color="#cfcfcf", lw=1.8, zorder=2)
+    drawn = {"grey": 0.0, "orange": 0.0}
+    for aid in res["arms"]:
+        for s in res["programs"][aid]:
+            p = s["pts"]
+            drawn[s["color"]] += s["length"]
+            ax.plot(p[:, 0], p[:, 1], "-", color=PEN[s["color"]], lw=3.6, zorder=4,
+                    solid_capstyle="round", solid_joinstyle="round")
+    tot, drp = res["total_len"], res["dropped_len"]
+    handles = [Line2D([], [], color=PEN["grey"], lw=4),
+               Line2D([], [], color=PEN["orange"], lw=4),
+               Line2D([], [], color="#cfcfcf", lw=1.8, ls=(0, (4, 4)))]
+    labels = [f"grey ink #{PEN['grey'][1:]} — {drawn['grey']:.2f} m",
+              f"orange ink #{PEN['orange'][1:]} — {drawn['orange']:.2f} m",
+              f"left empty — {drp:.2f} m, {100 * drp / max(tot, 1e-9):.1f} % of "
+              f"{tot:.2f} m traced, {len(res['dropped'])} spans"]
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02),
+              ncol=3, fontsize=9.5, framealpha=0.94, borderpad=0.7)
+    ax.set_title(title or ("CSAIL logo — the paper when the arms stop "
+                           f"({res['drawn_len']:.2f} m of {tot:.2f} m traced, "
+                           f"{100 * res['drawn_len'] / max(tot, 1e-9):.1f} %)"),
+                 fontsize=12)
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
     plt.close(fig)
 
 
@@ -115,10 +161,10 @@ border:1px solid #bbb;border-radius:8px;padding:10px 14px;font:12px/1.55 sans-se
 <hr style="margin:6px 0">
 %(nstroke)d traced strokes, %(nseg)d certified segments, %(ncut)d handoff cuts.
 Each arm carries ONE pen colour for the whole piece; the grey/orange split of
-the four arms is the best of the 14 non-trivial partitions.
+the %(narm)d arms is the best of the %(npart)d non-trivial partitions.
 Arms are posed mid-stroke on a segment of their own program (pen tip on the
-paper, pen = TCP + 0.110 m).  Arms 2 and 71 are parked.<br>
-Single-arm-sequential: no multi-arm timing, transits not planned.
+paper, pen = TCP + 0.110 m).<br>
+%(note)s
 </div>
 """
 
@@ -194,10 +240,18 @@ def scene_html(res, strokes, path, h_inv=H_INV_DEFAULT):
     n_seg = sum(len(res["programs"][a]) for a in res["arms"])
     n_cut = n_seg - sum(len({s["stroke_id"] for s in res["programs"][a]})
                         for a in res["arms"])
+    parked = [a for a in res["arms"] if not FLEET[a].active]
     html = vis.static_html().replace("</body>", LEGEND % dict(
         rows="<br>".join(rows), drop=res["dropped_len"], tot=res["total_len"],
         dropf=100 * res["dropped_len"] / max(res["total_len"], 1e-9),
-        nstroke=len(strokes), nseg=n_seg, ncut=n_cut) + "</body>")
+        nstroke=len(strokes), nseg=n_seg, ncut=n_cut, narm=len(res["arms"]),
+        npart=(1 << len(res["arms"])) - 2,
+        note=("Single-arm-sequential: no multi-arm timing, transits not planned."
+              if not parked else
+              f"HYPOTHETICAL FLEET: arm{'s' if len(parked) > 1 else ''} "
+              f"{', '.join(str(a) for a in parked)} "
+              f"{'are' if len(parked) > 1 else 'is'} parked in the registry and "
+              "brought up for this run only.")) + "</body>")
     open(path, "w").write(html)
     return len(html)
 
@@ -206,7 +260,9 @@ def scene_html(res, strokes, path, h_inv=H_INV_DEFAULT):
 def program_json(res, strokes, info, path):
     doc = dict(
         sheet=list(SHEET), h_inv=H_INV_DEFAULT,
-        logo={k: float(v) for k, v in info.items()},
+        logo={k: ([float(x) for x in v] if isinstance(v, (tuple, list))
+                  else v if isinstance(v, bool) else float(v))
+              for k, v in info.items()},
         colors={str(a): res["colors"][a] for a in res["arms"]},
         totals=dict(traced_m=res["total_len"], drawn_m=res["drawn_len"],
                     dropped_m=res["dropped_len"],
@@ -243,37 +299,80 @@ def program_json(res, strokes, info, path):
     return doc
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser()
+def add_args(ap):
+    """The trace + placement + fleet arguments, shared with the demo scripts."""
     ap.add_argument("--image", default=str(ROOT / "assets/csail/csail_old_med.gif"))
     ap.add_argument("--margin", type=float, default=0.06)
     ap.add_argument("--out", default=str(ROOT / "out"))
-    ap.add_argument("--no-scene", action="store_true")
+    ap.add_argument("--arms", default=None,
+                    help="'all', or e.g. '13,31,97' — a HYPOTHETICAL fleet state "
+                         "for this run (default: the registry's active flags)")
+    ap.add_argument("--placement", default=None,
+                    help="csail_placement_*.json from scripts/csail_place.py")
+    ap.add_argument("--target-width", type=float, default=None)
+    ap.add_argument("--offset", type=float, nargs=2, default=None, metavar=("DX", "DY"))
     ap.add_argument("--no-prefilter", action="store_true")
+    return ap
+
+
+def _override(arms_arg):
+    if arms_arg is None:
+        return None
+    return arms_arg if arms_arg == "all" else [int(x) for x in arms_arg.split(",")]
+
+
+def run_allocation(a, verbose=False):
+    """Trace -> place -> allocate, exactly as the demo scripts need it.
+
+    One code path for the allocation PNG/JSON and for the animation, so the
+    programme that gets scheduled is the programme that gets reported.
+    """
+    tw, off = a.target_width, a.offset
+    if a.placement:
+        doc = json.loads(Path(a.placement).read_text())["chosen"]
+        tw = tw if tw is not None else doc["target_width"]
+        off = off if off is not None else doc["offset"]
+    t0 = time.time()
+    px, _ = trace.trace_logo(a.image)
+    strokes, info = trace.to_sheet(px, SHEET, margin=a.margin, target_width=tw,
+                                   offset=tuple(off or (0.0, 0.0)))
+    if not info["fits"]:
+        raise SystemExit(f"placement does not fit the sheet: {info}")
+    print(f"traced {len(strokes)} strokes, {trace.total_length(strokes):.2f} m, "
+          f"logo {info['logo_w']:.3f} x {info['logo_h']:.3f} m at "
+          f"({info['center'][0]:.3f}, {info['center'][1]:.3f})  ({time.time() - t0:.2f} s)")
+    res = allocate.allocate(strokes, opts=None, verbose=verbose,
+                            active_override=_override(a.arms),
+                            atlas_dir=None if a.no_prefilter else str(Path(a.out)))
+    return res, strokes, info
+
+
+def main(argv=None):
+    ap = add_args(argparse.ArgumentParser())
+    ap.add_argument("--tag", default="", help="output-name suffix, e.g. _6arm")
+    ap.add_argument("--final", default=None, help="also write the end-state still here")
+    ap.add_argument("--no-scene", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    px, _ = trace.trace_logo(a.image)
-    strokes, info = trace.to_sheet(px, SHEET, margin=a.margin)
-    t_trace = time.time() - t0
-    print(f"traced {len(strokes)} strokes, {trace.total_length(strokes):.2f} m, "
-          f"logo {info['logo_w']:.2f} x {info['logo_h']:.2f} m  ({t_trace:.2f} s)")
-
-    res = allocate.allocate(strokes, opts=None, verbose=a.verbose,
-                            atlas_dir=None if a.no_prefilter else str(out))
+    res, strokes, info = run_allocation(a, verbose=a.verbose)
     print()
     for line in allocate.report(res, strokes):
         print(line)
 
     t1 = time.time()
-    program_json(res, strokes, info, out / "csail_program.json")
-    allocation_png(res, strokes, out / "csail_allocation.png")
-    n = scene_html(res, strokes, out / "csail_scene.html") if not a.no_scene else 0
-    print(f"\nwrote {out}/csail_program.json, {out}/csail_allocation.png"
-          + (f", {out}/csail_scene.html ({n / 1e6:.1f} MB)" if n else "")
+    program_json(res, strokes, info, out / f"csail_program{a.tag}.json")
+    allocation_png(res, strokes, out / f"csail_allocation{a.tag}.png")
+    if a.final:
+        final_png(res, strokes, a.final)
+    n = scene_html(res, strokes, out / f"csail_scene{a.tag}.html") \
+        if not a.no_scene else 0
+    print(f"\nwrote {out}/csail_program{a.tag}.json, {out}/csail_allocation{a.tag}.png"
+          + (f", {a.final}" if a.final else "")
+          + (f", {out}/csail_scene{a.tag}.html ({n / 1e6:.1f} MB)" if n else "")
           + f"  ({time.time() - t1:.1f} s)")
     print(f"PIPELINE WALL CLOCK {time.time() - t0:.1f} s")
     return res

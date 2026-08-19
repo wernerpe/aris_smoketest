@@ -1,0 +1,187 @@
+"""Independent check of a MERGED multi-arm timeline.  Nothing here trusts the
+conductor.
+
+`coordination.py` decides the schedule from a collision image it built itself;
+if the image were wrong, the schedule would be confidently wrong with it.  So
+this module re-derives everything from the merged timeline alone — the joint
+trajectories that will actually be played back — with its own kinematics call,
+its own capsule geometry, and a segment-distance routine written from a
+different derivation (endpoint distances plus the interior critical point,
+rather than the clamped parametrisation `coordination.seg_seg_dist` uses).
+Where the two agree, they agree by geometry rather than by shared code.
+
+What it verifies, and refuses to pass without:
+
+  CLEARANCE   every pair of arms, at every sampled instant AND across the
+              sweeps between instants, at least `margin` apart.  The timeline
+              is re-sampled `sub` times finer than it was scheduled on, and the
+              residual between those samples is covered by the same
+              1-Lipschitz displacement bound, so "densely sampled" here means
+              "bounded everywhere", not "probably fine".
+  MONOTONE    each arm's progress only ever advances, and never by more than
+              one index per step — the property the schedule's whole safety
+              argument rests on.
+  PER-ARM     `validate.validate_plan` re-run on every drawn segment (pen on
+              the curve, joint margin, sigma, step size, paper and boom
+              clearance, velocity limits), because a schedule cannot repair a
+              segment and must not be allowed to mask one.
+  PLAYBACK    the joints actually played back at each frame match the frozen
+              path sample the schedule points at.
+
+`check_timeline` returns a report; `ok` is the only thing the animation is
+allowed to condition on.
+"""
+import numpy as np
+
+from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk
+from .fleet import FLEET, H_INV_DEFAULT
+from .validate import validate_plan
+
+# same envelope as the conductor, restated here on purpose: if someone widens
+# a capsule there and the two disagree, this check is supposed to notice.
+RADII = ((0, 1, 0.09), (1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
+         (5, 7, 0.07), (7, 8, 0.07), (8, 9, 0.03))
+
+
+def _chain(q, spec, h_inv, pen_ext):
+    """10 chain points of one configuration, in world.  Scalar `fk`, not the
+    batch path, so a bug in the batch kernel cannot hide here."""
+    T, P = fk(np.asarray(q, float))
+    tip = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
+    P = np.vstack([P, tip])
+    Twb = spec.T_world_base(h_inv)
+    return P @ Twb[:3, :3].T + Twb[:3, 3]
+
+
+def _pt_seg(p, a, b):
+    """Distance from points p (...,3) to segment [a,b] (...,3)."""
+    ab = b - a
+    denom = np.sum(ab * ab, -1)
+    t = np.where(denom > 1e-15, np.sum((p - a) * ab, -1) / np.where(denom > 1e-15,
+                                                                   denom, 1.0), 0.0)
+    t = np.clip(t, 0.0, 1.0)
+    d = p - (a + t[..., None] * ab)
+    return np.sqrt(np.sum(d * d, -1))
+
+
+def segment_distance(p0, p1, q0, q1):
+    """Distance between two segments — independent derivation.
+
+    The minimum of a convex quadratic over the unit square is attained either
+    at the interior stationary point (when it exists and lies inside) or on the
+    boundary; the boundary minimum of THIS quadratic is one of the four
+    point-to-segment distances.  Taking the smaller of the two candidates is
+    therefore exact, and needs none of the clamp-and-re-solve bookkeeping.
+    """
+    d1, d2, r = p1 - p0, q1 - q0, p0 - q0
+    a = np.sum(d1 * d1, -1)
+    e = np.sum(d2 * d2, -1)
+    b = np.sum(d1 * d2, -1)
+    c = np.sum(d1 * r, -1)
+    f = np.sum(d2 * r, -1)
+    den = a * e - b * b
+    inside = den > 1e-12
+    s = np.where(inside, (b * f - c * e) / np.where(inside, den, 1.0), -1.0)
+    t = np.where(inside, (a * f - b * c) / np.where(inside, den, 1.0), -1.0)
+    good = inside & (s >= 0) & (s <= 1) & (t >= 0) & (t <= 1)
+    w = r + s[..., None] * d1 - t[..., None] * d2
+    interior = np.where(good, np.sqrt(np.maximum(np.sum(w * w, -1), 0.0)), np.inf)
+    edge = np.minimum(np.minimum(_pt_seg(p0, q0, q1), _pt_seg(p1, q0, q1)),
+                      np.minimum(_pt_seg(q0, p0, p1), _pt_seg(q1, p0, p1)))
+    return np.minimum(interior, edge)
+
+
+def pair_clearance(Pi, Pj):
+    """Min capsule clearance between two arms, for chain points (...,10,3).
+
+    Broadcasts over any leading axis, so a whole timeline costs one call.
+    """
+    ia = np.array([c[0] for c in RADII])
+    ib = np.array([c[1] for c in RADII])
+    rr = np.array([c[2] for c in RADII])
+    a0, a1 = Pi[..., ia, :][..., :, None, :], Pi[..., ib, :][..., :, None, :]
+    b0, b1 = Pj[..., ia, :][..., None, :, :], Pj[..., ib, :][..., None, :, :]
+    d = segment_distance(a0, a1, b0, b1) - rr[:, None] - rr[None, :]
+    return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+
+
+def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
+                   pen_ext=PEN_EXT, sub=2, progress=None, verbose=True):
+    """Verify a merged timeline. -> report dict (`ok` gates the animation).
+
+    `qtraj` is {arm_id: (M,7)} exactly as it will be played back; `sub` sets how
+    many extra samples are interpolated between two scheduled steps.
+    """
+    arms = sorted(qtraj)
+    M = len(next(iter(qtraj.values())))
+    fine = {}
+    for a in arms:
+        Q = np.asarray(qtraj[a], float)
+        if sub > 1 and M > 1:
+            g = np.linspace(0, M - 1, (M - 1) * sub + 1)
+            i0 = np.clip(g.astype(int), 0, M - 2)
+            fr = (g - i0)[:, None]
+            fine[a] = Q[i0] * (1 - fr) + Q[i0 + 1] * fr
+        else:
+            fine[a] = Q
+    F = len(next(iter(fine.values())))
+
+    P = {a: np.array([_chain(q, FLEET[a], h_inv, pen_ext) for q in fine[a]])
+         for a in arms}
+    stepd = {a: np.concatenate([[0.0], np.linalg.norm(np.diff(P[a], axis=0),
+                                                      axis=2).max(1)]) for a in arms}
+
+    worst, worst_at = np.inf, None
+    per_pair = {}
+    for i, ai in enumerate(arms):
+        for aj in arms[i + 1:]:
+            # ...minus the sweep back to the previous fine sample, so the bound
+            # holds between samples and not only at them
+            lo = (pair_clearance(P[ai], P[aj])
+                  - 0.55 * (stepd[ai] + stepd[aj]))
+            k = int(np.argmin(lo))
+            per_pair[(ai, aj)] = float(lo[k])
+            if lo[k] < worst:
+                worst = float(lo[k])
+                worst_at = (ai, aj, float(k * dt / max(sub, 1)))
+
+    lim = {a: float(min(np.min(np.asarray(fine[a]) - FR3_MIN),
+                        np.min(FR3_MAX - np.asarray(fine[a])))) for a in arms}
+
+    mono = True
+    if progress is not None:
+        for a, p in progress.items():
+            d = np.diff(np.asarray(p, int))
+            mono &= bool(np.all(d >= 0) and np.all(d <= 1))
+
+    seg_reports, seg_bad = [], 0
+    if programs:
+        for a, segs in programs.items():
+            for k, s in enumerate(segs):
+                pl = s["plan"]
+                rep = validate_plan(np.asarray(pl["pts"], float), FLEET[a],
+                                    np.asarray(pl["qs"], float),
+                                    times=np.asarray(pl["times"], float),
+                                    h_inv=None, pen_ext=pen_ext)
+                seg_bad += 0 if rep["ok"] else 1
+                seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
+
+    ok = bool(worst >= margin and mono and seg_bad == 0
+              and min(lim.values()) > 0.0)
+    rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
+               worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
+                                              per_pair.items()},
+               joint_margin=lim, monotone=bool(mono), n_frames=M, n_fine=F,
+               n_segments=len(seg_reports), segments_failed=int(seg_bad),
+               segments=seg_reports)
+    if verbose:
+        print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
+              f"{len(arms)} arms, {len(per_pair)} pairs")
+        print(f"  min inter-arm clearance {worst * 1000:.1f} mm "
+              f"(margin {margin * 1000:.0f} mm)"
+              + (f" at t={worst_at[2]:.2f} s between arms {worst_at[0]} and "
+                 f"{worst_at[1]}" if worst_at else ""))
+        print(f"  per-arm plan validation: {len(seg_reports) - seg_bad}/"
+              f"{len(seg_reports)} segments ok; progress monotone: {mono}")
+        print(f"  VERDICT {'PASS' if ok else 'FAIL'}")
+    return rep

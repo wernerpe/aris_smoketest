@@ -46,6 +46,45 @@ from .stroke_api import plan_stroke, polyline_length, truncate_polyline
 ACTIVE = [aid for aid, s in FLEET.items() if s.active]
 COLORS = ("grey", "orange")
 
+
+def active_arms(active_override=None):
+    """Which arms this run may use -> list of arm ids, in registry order.
+
+    `fleet.FLEET`'s `active` flags are a record of TODAY'S RIG (arms 2 and 71
+    are parked), so a what-if run must not rewrite them.  `active_override` is
+    that what-if, applied on top of the registry and nowhere else:
+
+      None              the registry's own flags (the real fleet)
+      "all"             every arm in the fleet, parked or not
+      iterable of ids   exactly those arms
+      {arm_id: bool}    the registry flags with those entries patched
+
+    Raises on an id the fleet does not contain, because silently allocating to
+    five arms when six were asked for is the kind of thing that only shows up
+    in a coverage number nobody re-derives.
+    """
+    if active_override is None:
+        return list(ACTIVE)
+    if isinstance(active_override, str):
+        if active_override != "all":
+            raise ValueError(f"active_override={active_override!r}; want 'all', "
+                             "a list of arm ids, or a {arm_id: bool} mapping")
+        return list(FLEET)
+    if isinstance(active_override, dict):
+        flags = {aid: s.active for aid, s in FLEET.items()}
+        unknown = set(active_override) - set(FLEET)
+        if unknown:
+            raise ValueError(f"active_override names arms not in the fleet: "
+                             f"{sorted(unknown)}")
+        flags.update({a: bool(v) for a, v in active_override.items()})
+        return [aid for aid in FLEET if flags[aid]]
+    want = list(active_override)
+    unknown = set(want) - set(FLEET)
+    if unknown:
+        raise ValueError(f"active_override names arms not in the fleet: "
+                         f"{sorted(unknown)}")
+    return [aid for aid in FLEET if aid in set(want)]
+
 EPS_S = 1e-6
 OVERLAP_M = 0.004        # m of ink each side of a handoff cut
 BACKOFF_M = 0.006        # m to give up per failed clean re-plan
@@ -215,8 +254,8 @@ def partitions(arms, nontrivial=True):
     """All ways to give each arm one pen colour -> list of {arm: "grey"|"orange"}.
 
     2^n assignments; with `nontrivial` the two that leave a colour with no arm
-    (and therefore drop every stroke of that colour) are dropped, leaving 14
-    for the four active arms.
+    (and therefore drop every stroke of that colour) are dropped, leaving
+    2^n - 2: 14 for the four arms of today's rig, 62 for all six.
     """
     out = []
     for bits in range(1 << len(arms)):
@@ -247,7 +286,7 @@ def cover_all(strokes, ivmap, colors, min_seg=MIN_SEG_M):
 
 
 def best_partition(strokes, ivmap, arms=None, min_seg=MIN_SEG_M):
-    """Enumerate the 14 partitions -> (best colors, best cover, ranking table)."""
+    """Enumerate the 2^n - 2 partitions -> (best colors, best cover, table)."""
     arms = arms or ACTIVE
     table = []
     for colors in partitions(arms):
@@ -376,16 +415,13 @@ def where(dropped, sheet, nx=3, ny=3):
 # ===========================================================================
 # 7. the whole allocation
 # ===========================================================================
-def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
-    """-> {(stroke_id, arm): True} where the atlas says probing is worth it.
+def atlas_cells(arms, atlas_dir):
+    """-> {arm: (grid_m, {(ix, iy)})}, or None if any arm's atlas is missing.
 
-    The atlas is a 2 cm sweep of the paper; a cell counts if the pen reached
-    it PERPENDICULAR (tilt 0 — the planner never leans the pen) with the
-    planner's own permissive joint margin.  A stroke with no such cell near
-    any of its points cannot be planned, so the probe is skipped.  Absent an
-    atlas everything is probed.
+    The atlas is a 2 cm sweep of the paper; a cell counts if the pen reached it
+    PERPENDICULAR (tilt 0 — the planner never leans the pen) with the planner's
+    own permissive joint margin.
     """
-    ok = {}
     if atlas_dir is None:
         return None
     from .atlas import load
@@ -399,6 +435,75 @@ def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
         rows = arr[(arr[:, 8] <= 0.0) & (arr[:, 2] >= 0.15)]
         grids[a] = (g, {(int(round(x / g)), int(round(y / g)))
                         for x, y in rows[:, :2]})
+    return grids
+
+
+def _densify_xy(pts, ds=0.02):
+    p = np.asarray(pts, float)
+    seg = np.linalg.norm(np.diff(p, axis=0), axis=1)
+    t = np.concatenate([[0], np.cumsum(seg)])
+    if t[-1] <= 0:
+        return p[:1], np.zeros(1)
+    s = np.arange(0, t[-1], ds)
+    d = np.column_stack([np.interp(s, t, p[:, 0]), np.interp(s, t, p[:, 1])])
+    d = np.vstack([d, p[-1]])
+    w = np.full(len(d), ds)
+    w[-1] = t[-1] - (len(d) - 1) * ds + ds
+    return d, np.maximum(w, 0.0)
+
+
+def reach_fraction(strokes, grids, radius=PREFILTER_R, ds=0.02):
+    """Length-weighted fraction of the strokes within `radius` of a reachable
+    atlas cell of ANY arm in `grids`.
+
+    A CHEAP UPPER BOUND on coverage, not a coverage: the atlas says the pen can
+    stand on that cell, not that a whole stroke through it can be planned as one
+    certified walk of the redundancy band.  Good enough to RANK placements
+    (hundreds of them, in the time one real allocation takes), which is all the
+    placement search asks of it — the winner is then allocated for real.
+    """
+    k = int(np.ceil(radius / 0.02))
+    every = sorted(set().union(*(c for _, c in grids.values())) if grids else ())
+    if not every:
+        return 0.0
+    ij = np.array(every)
+    grown = np.zeros((ij[:, 0].max() + 2 * k + 2, ij[:, 1].max() + 2 * k + 2), bool)
+    grown[ij[:, 0] + k, ij[:, 1] + k] = True
+    for _ in range(k):                       # dilate by k cells (Chebyshev)
+        grown[1:] |= grown[:-1].copy()
+        grown[:-1] |= grown[1:].copy()
+        grown[:, 1:] |= grown[:, :-1].copy()
+        grown[:, :-1] |= grown[:, 1:].copy()
+    g = next(iter(grids.values()))[0]
+    tot = cov = 0.0
+    for st in strokes:
+        d, w = _densify_xy(st["pts"], ds)
+        ii = np.round(d[:, 0] / g).astype(int) + k
+        jj = np.round(d[:, 1] / g).astype(int) + k
+        ok = ((ii >= 0) & (jj >= 0) & (ii < grown.shape[0]) & (jj < grown.shape[1]))
+        ok[ok] &= grown[ii[ok], jj[ok]]
+        tot += float(w.sum())
+        cov += float(w[ok].sum())
+    return cov / max(tot, 1e-9)
+
+
+def _pad_to(m, shape):
+    out = np.zeros(shape, bool)
+    s = tuple(slice(0, min(a, b)) for a, b in zip(m.shape, shape))
+    out[s] = m[s]
+    return out
+
+
+def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
+    """-> {(stroke_id, arm): True} where the atlas says probing is worth it.
+
+    A stroke with no reachable cell near any of its points cannot be planned by
+    that arm, so the probe is skipped.  Absent an atlas everything is probed.
+    """
+    grids = atlas_cells(arms, atlas_dir)
+    if grids is None:
+        return None
+    ok = {}
     k = int(np.ceil(radius / 0.02))
     for st in strokes:
         p = st["pts"]
@@ -417,9 +522,17 @@ def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
 
 
 def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
-             min_seg=MIN_SEG_M, overlap=OVERLAP_M):
-    """Strokes -> per-arm certified programs + the dropped list.  See module docs."""
-    arms = arms or ACTIVE
+             min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None):
+    """Strokes -> per-arm certified programs + the dropped list.  See module docs.
+
+    `arms` names the arms outright; `active_override` (see `active_arms`) says
+    which of the fleet's arms count as active for THIS run without touching the
+    registry, so a hypothetical "all six arms up" run and the real four-arm rig
+    come out of the same entry point.
+    """
+    if arms is not None and active_override is not None:
+        raise ValueError("pass arms= or active_override=, not both")
+    arms = list(arms) if arms is not None else active_arms(active_override)
     specs = {a: FLEET[a] for a in arms}
     t0 = time.time()
     pre = prefilter(strokes, arms, atlas_dir)

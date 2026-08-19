@@ -23,7 +23,8 @@ import numpy as np
 
 from . import ik, letters, planner
 from .fleet import FLEET, H_INV_DEFAULT
-from .frames import FR3_MIN, FR3_MAX, PEN_EXT, joint_margin, rotx, tip_pos
+from .frames import (FR3_MIN, FR3_MAX, PEN_EXT, QD_MAX, joint_margin, rotx,
+                     tip_pos)
 
 DS = 0.01               # stroke resampling step, m
 DRAW_SPEED = 0.08       # m/s along a stroke
@@ -330,6 +331,186 @@ def build_schedule(plan, fps=FPS, draw_speed=DRAW_SPEED, h_inv=H_INV_DEFAULT,
         print(f"schedule: {duration:.2f} s, {nT} frames @ {fps:g} fps, "
               f"{len(ink)} ink chunks")
     return dict(t=ts, q=q, ink=ink, duration=duration, phases=phases, fps=fps)
+
+
+# ==========================================================================
+# concurrent fleet programmes: one FROZEN timeline per arm
+# ==========================================================================
+# The word "ARIS" above is written one letter at a time by one arm at a time.
+# A whole logo allocated to six arms is not: every arm has its own programme
+# and they all run at once.  What follows builds ONE arm's timeline — entry
+# lift, its segments in the allocator's nearest-neighbour order, a pen-up
+# transit between each pair, exit lift — as a frozen path with a nominal clock.
+#
+# FROZEN is the operative word: `coordination.py` may only stretch this clock
+# (insert pauses), never re-order the segments or re-route a transit, so the
+# certified per-segment plans stay exactly what `stroke_api` certified.
+DRAW_SPEED_FLEET = 0.12     # m/s along a stroke, the concurrent default
+TRANSIT_SPEED = 0.80        # m/s of pen-tip travel between strokes
+T_LIFT_F, T_LOWER_F = 0.20, 0.20
+T_TRAVEL_MIN = 0.25
+T_HOME_F = 1.20             # ready pose <-> first/last lifted pose
+QD_FRAC = 0.30              # fraction of the FR3 joint-velocity limit a
+#   PEN-UP move is allowed to use.  This is not decoration: a transit is a
+#   straight line in joint space, so "1.2 seconds from the ready pose to the
+#   paper" asks joint 1 for several rad/s and throws the elbow across a metre
+#   of workspace between two animation frames.  The conductor bounds what can
+#   happen BETWEEN two samples by the distance the bodies move, so an
+#   unpaced transit does not just look wrong, it costs real clearance —
+#   every millimetre of per-step motion is a millimetre off the margin.
+#   Drawing is paced by `draw_speed` and then stretched, by the same rule, if
+#   the redundancy resolution asks a joint to move faster than this.
+
+
+def _dq_time(q0, q1, frac=QD_FRAC, tmin=0.0):
+    """Shortest time a straight joint-space move may take. -> seconds."""
+    d = np.abs(np.asarray(q1, float) - np.asarray(q0, float))
+    return float(max(tmin, np.max(d / (QD_MAX * max(frac, 1e-6)))))
+
+
+def _draw_time(qd, ud, dur, frac=QD_FRAC):
+    """`dur` stretched until no joint exceeds `frac` of its velocity limit."""
+    du = np.diff(np.asarray(ud, float))
+    dq = np.abs(np.diff(np.asarray(qd, float), axis=0))
+    need = dq / (QD_MAX * max(frac, 1e-6)) / np.maximum(du, 1e-12)[:, None]
+    return float(max(dur, need.max() if need.size else 0.0))
+
+
+def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT):
+    """`lifted_config`, retrying at lower heights. -> (q, height_used).
+
+    Near the edge of an arm's reach the 6 cm hover has no IK solution with the
+    margin we insist on even though the stroke's endpoint does; dropping the
+    hover is strictly better than dropping the transit.  A last resort of "do
+    not lift at all" keeps the timeline well-formed (the pen scuffs the paper,
+    which the report says out loud rather than hiding).
+    """
+    for z in heights:
+        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv)
+        if q is not None:
+            return np.asarray(q, float), float(z)
+    return np.asarray(q_ref, float), 0.0
+
+
+def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
+                h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
+                verbose=False):
+    """One arm's frozen nominal timeline from its allocated segments.
+
+    `segs` are `allocate.allocate`'s programme entries, already in the order the
+    arm will draw them; each carries the certified `plan` whose dense `qs`/`pts`
+    are the joint trajectory and the curve it was certified against.
+
+    -> dict(t, q, seg, u, phases, ink, duration, lifts, dense_tip_err)
+       t     (K,)    waypoint times, strictly increasing
+       q     (K,7)   waypoint joints
+       seg   (K,)    index into `segs` while drawing, -1 while not
+       u     (K,)    normalised arc position within that segment
+       ink   list of (t_visible, chunk_xyz (M,3))
+    """
+    t, T, Q, S, U = 0.0, [], [], [], []
+    ink, phases, lifts, worst = [], [], [], 0.0
+
+    def add(tt, q, s=-1, u=0.0):
+        T.append(float(tt))
+        Q.append(np.asarray(q, float))
+        S.append(int(s))
+        U.append(float(u))
+
+    if not segs:                                  # an arm that reaches nothing
+        add(0.0, spec.q_seed)
+        add(1.0, spec.q_seed)
+        return dict(t=np.array(T), q=np.array(Q), seg=np.array(S), u=np.array(U),
+                    phases=[], ink=[], duration=0.0, lifts=[], dense_tip_err=0.0,
+                    draw_len=0.0, transit_len=0.0)
+
+    dense = []
+    for k, s in enumerate(segs):
+        qs = np.asarray(s["plan"]["qs"], float)
+        pts = np.asarray(s["plan"]["pts"], float)
+        qd, ud, fb = densify(qs, pts, spec, h_inv)
+        ref = np.column_stack([np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 0]),
+                               np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 1])])
+        err = tip_error_pts(qd, ref, spec, h_inv)
+        worst = max(worst, err)
+        dense.append(dict(qd=qd, ud=ud, pts=pts, fallbacks=fb, tip_err=err,
+                          length=float(s["length"])))
+        if verbose:
+            print(f"    seg {k}: {len(qs)} -> {len(qd)} samples, "
+                  f"{s['length']:.3f} m, tip_err={err:.2e} m"
+                  + (f", {fb} IK fallbacks" if fb else ""))
+
+    q_lift0, z0 = lifted_or_lower(spec, dense[0]["qd"][0], dense[0]["pts"][0], h_inv=h_inv)
+    lifts.append(z0)
+    add(0.0, spec.q_seed)
+    t += _dq_time(spec.q_seed, q_lift0, qd_frac, T_HOME_F)
+    add(t, q_lift0)
+    t += _dq_time(q_lift0, dense[0]["qd"][0], qd_frac, T_LOWER_F)
+    add(t, dense[0]["qd"][0], 0, 0.0)
+
+    draw_len = transit_len = 0.0
+    for k, D in enumerate(dense):
+        dur = _draw_time(D["qd"], D["ud"], D["length"] / draw_speed, qd_frac)
+        for uu, q in zip(D["ud"][1:], D["qd"][1:]):
+            add(t + uu * dur, q, k, uu)
+        n_ch = int(np.clip(round(D["length"] / ink_chunk), 3, 60))
+        edges = np.linspace(0, len(D["pts"]) - 1, n_ch + 1).astype(int)
+        for c in range(n_ch):
+            i0, i1 = edges[c], edges[c + 1]
+            if i1 <= i0:
+                continue
+            xyz = np.column_stack([D["pts"][i0:i1 + 1],
+                                   np.full(i1 - i0 + 1, INK_Z)])
+            ink.append((float(t + dur * i1 / (len(D["pts"]) - 1)), xyz))
+        phases.append(dict(kind="stroke", seg=k, t0=float(t), t1=float(t + dur)))
+        t += dur
+        draw_len += D["length"]
+
+        nxt = dense[k + 1] if k + 1 < len(dense) else None
+        q_end, z1 = lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv)
+        lifts.append(z1)
+        t0 = t
+        t += _dq_time(D["qd"][-1], q_end, qd_frac, T_LIFT_F)
+        add(t, q_end)
+        if nxt is None:
+            t += _dq_time(q_end, spec.q_seed, qd_frac, T_HOME_F)
+            add(t, spec.q_seed)
+        else:
+            q_next, z2 = lifted_or_lower(spec, nxt["qd"][0], nxt["pts"][0], h_inv=h_inv)
+            lifts.append(z2)
+            hop = float(np.linalg.norm(nxt["pts"][0] - D["pts"][-1]))
+            transit_len += hop
+            t += _dq_time(q_end, q_next, qd_frac,
+                          max(T_TRAVEL_MIN, hop / transit_speed))
+            add(t, q_next)
+            t += _dq_time(q_next, nxt["qd"][0], qd_frac, T_LOWER_F)
+            add(t, nxt["qd"][0], k + 1, 0.0)
+        phases.append(dict(kind="transit", seg=k, t0=float(t0), t1=float(t)))
+
+    T = np.maximum.accumulate(np.asarray(T, float) + 1e-9 * np.arange(len(T)))
+    return dict(t=T, q=np.array(Q), seg=np.array(S), u=np.array(U), phases=phases,
+                ink=ink, duration=float(T[-1]), lifts=lifts, dense_tip_err=worst,
+                draw_len=draw_len, transit_len=transit_len,
+                fallbacks=int(sum(D["fallbacks"] for D in dense)))
+
+
+def uniform_samples(prog, dt):
+    """The frozen timeline on a uniform clock -> dict(q (N,7), seg, u, n).
+
+    The coordination grid and the animation frames both live on this clock, so
+    "progress index" means one unambiguous thing everywhere downstream: a
+    scheduled arm at index p is at `q[p]`, full stop.
+    """
+    T, Q = prog["t"], prog["q"]
+    n = max(int(np.ceil(prog["duration"] / dt)) + 1, 1)
+    ts = np.arange(n) * dt
+    q = np.column_stack([np.interp(ts, T, Q[:, j]) for j in range(7)])
+    i = np.clip(np.searchsorted(T, ts, side="right") - 1, 0, len(T) - 2)
+    same = prog["seg"][i] == prog["seg"][i + 1]
+    f = (ts - T[i]) / np.maximum(T[i + 1] - T[i], 1e-12)
+    seg = np.where(same, prog["seg"][i], -1)
+    u = np.where(same, prog["u"][i] + f * (prog["u"][i + 1] - prog["u"][i]), 0.0)
+    return dict(q=q, seg=seg.astype(int), u=u, n=n, dt=float(dt))
 
 
 # --------------------------------------------------------------------------

@@ -29,7 +29,14 @@ aris_sixarm/
                    boundary contours for solid glyphs  (numpy/PIL only)
   allocate.py      strokes x arms -> certified per-arm programs: interval probing
                    via plan_stroke, pen-colour partition enumeration, greedy
-                   interval cover, mid-overlap handoff cuts, dropped-span report
+                   interval cover, mid-overlap handoff cuts, dropped-span report;
+                   active_override = a hypothetical fleet, never a registry edit
+  coordination.py  CONDUCTOR v1: capsule model, pairwise collision images over
+                   progress indices (swept cells, no tunnelling), priority
+                   pause-scheduling by exact reachability DP.  Only the clock moves.
+  scene_check.py   independent re-derivation of a MERGED multi-arm timeline:
+                   all-pairs clearance incl. between-sample sweeps, monotone
+                   progress, validate_plan per segment.  It has the veto.
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
@@ -37,10 +44,14 @@ scripts/
   fuzz_planner.py  seeded parallel fuzz campaign + atlas cross-check
   csail_trace.py   trace the CSAIL logo -> out/csail_trace.png + masks + strokes.json
   csail_allocate.py  trace + allocate + all three outputs (~3 s end to end)
+  csail_place.py   placement search: scale x translation, atlas proxy then real
+                   allocations, "largest size within 1 pp of the best coverage"
+  csail_schedule.py  allocate -> freeze timelines -> conduct -> validate -> npz
+  csail_drawing_demo.py  drake/meshcat playback of that npz (venv python3.10)
 tests/
   test_gates.py    real-touchdown validation gates (run these after ANY kinematics change)
   test_planner_robustness.py   regressions distilled from the fuzz campaign
-  test_csail.py    tracer + allocator regressions (7 tests, < 0.1 s)
+  test_csail.py    tracer / allocator / conductor regressions (11 tests, < 0.1 s)
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
 ```
@@ -193,6 +204,103 @@ Single-arm-sequential throughout: this is allocation plus a certified plan per
 segment. No multi-arm timing, no inter-arm collision reasoning, and the pen-up
 transits are measured but not planned.
 
+## All six arms, conducted (`csail_place` → `csail_schedule` → `csail_drawing_demo`)
+
+The run above is today's rig. This one is the hypothetical **"all six arms up"**:
+`allocate(..., active_override="all")` — a parameter, never an edit to
+`fleet.FLEET`, whose `active` flags stay the record of which arms are actually
+up (`test_active_override_does_not_touch_the_registry` pins that).
+
+**Placement is worth more than any planner change here.** `csail_place.py`
+scores 7 scales × a ±0.3 m translation grid, first with an atlas proxy
+(`allocate.reach_fraction`, 10 ms) and then — because a real allocation is only
+3 s — with the real thing, 133 of them in 71 s. Best translation per scale:
+
+| scale | width | best offset | drawn |
+|---|---|---|---|
+| 1.00 | 2.41 m | (−0.20, 0.00) | 74.9 % |
+| 0.95 | 2.29 m | (0.00, 0.00) | 76.6 % |
+| 0.90 | 2.17 m | (+0.10, 0.00) | 75.1 % |
+| 0.85 | 2.05 m | (+0.10, −0.10) | 81.9 % |
+| 0.80 | 1.93 m | (+0.30, −0.10) | 81.7 % |
+| **0.75** | **1.81 m** | **(0.00, −0.20)** | **86.3 %** |
+| 0.70 | 1.69 m | (0.00, −0.20) | 85.6 % |
+
+Rule: the largest size within 1 pp of the best coverage anyone achieved → **0.75×,
+1.808 × 1.381 m centred at (1.804, 0.780)**. Six arms at full size already lift
+coverage from 47.9 % to 74.9 %; shrinking to 0.75× buys the rest.
+
+**86.2 % drawn (13.94 m of 16.15 m), 2.22 m left empty in 13 spans.** All of the
+residue is in the lower-middle of the sheet — the bottom two thirds of the
+centre column — where the four inverted annuli still do not meet; the top third
+is now completely covered.
+
+| arm | pen | segments | metres | pause |
+|---|---|---|---|---|
+| 2 R-wall-front | orange | 12 | 4.53 | 17.4 s |
+| 97 R-inv-back | orange | 11 | 4.83 | 0.0 s |
+| 31 L-inv-front | grey | 10 | 2.76 | 4.1 s |
+| 71 L-inv-back | grey | 5 | 1.82 | 1.7 s |
+| 13 front (floor) | grey | 0 | 0.00 | idle |
+| 17 back (floor) | grey | 0 | 0.00 | idle |
+
+**Four arms draw it, not six, and that is geometry.** Arms 13 and 17 are on
+opposite long edges 3.83 m apart with r ≤ 0.81 m; no placement of a 1.8 m logo
+is in reach of both. Pushing the logo +0.7 m to put arm 17 to work costs arm 13
+and 7 points of coverage (78.9 % with five arms drawing). The best coverage wins
+per the search rule, and the two floor arms stand in the scene holding their
+ready pose.
+
+### Conductor v1 (`coordination.py`) — the clock is the only thing that moves
+
+Each arm's timeline is frozen first (`writing.arm_program`): its segments in the
+allocator's order, hover transits between them, entry and exit lifts, densified
+so frame interpolation stays on the curve. The conductor may then only stretch
+that clock.
+
+- **Capsules.** 7 per arm off `frames.fk`'s own chain points, r = 0.09 (links) /
+  0.07 (wrist, hand) / 0.03 (pen). Required clearance = **safety 0.05 m +
+  calib 0.03 m**; the second is not about the arm but about *us* — four base XYs
+  come from a preset file and have never been surveyed. Drop it the day one does.
+- **Swept cells, not sampled points.** Cell (a, b) of a pair's collision image
+  is free iff the *whole* cell is: the smallest of its four corner clearances
+  minus both half-step motions (clearance is 1-Lipschitz in body displacement).
+  Nothing can tunnel between two samples.
+- **Pacing is a clearance budget, not decoration.** The first cut of this ran
+  transits as 1.2 s joint-space lines and moved the elbow **295 mm between two
+  frames** — the sweep slack alone then exceeded the margin four times over and
+  the schedule was infeasible. Capping every move at 60 % of the FR3 joint
+  velocity limit brings it to ≤ 32 mm, and the problem becomes easy.
+- **Schedule.** Priority = busiest arm first; each next arm gets the
+  earliest-arrival monotone schedule (advance or wait) by an exact reachability
+  DP over progress × time. **23.2 s of pauses** in total, arm 97 none.
+
+### The validator has the veto (`scene_check.py`)
+
+Written as a separate code path on purpose — its own kinematics call, its own
+capsule assembly, and a segment-distance routine derived differently from the
+conductor's (interior critical point + four endpoint distances, vs the clamped
+parametrisation). A unit test holds the two to 1e-9 across the degenerate cases
+so they cannot drift apart silently. It re-samples the merged timeline 2× finer,
+bounds the gaps between samples, and re-runs `validate_plan` on all 38 segments.
+
+**Minimum inter-arm clearance over the whole 83 s: 82.5 mm** (margin 80 mm),
+between arms 2 and 97 at t = 53.3 s. 38/38 segments valid, progress monotone,
+**PASS** — and the animation is only rendered from a timeline that passes.
+
+### The animation
+
+`out/csail_drawing.html` — **1995 frames @ 24 fps = 83.1 s**, kinematic playback
+(`SetPositions` + `ForcedPublish`, no simulator, no controller), 567 ink chunks
+revealed progressively in each arm's own pen colour (#666665 / #cb6608, the
+logo's own inks), pen cylinders coloured to match. Pen tip on the commanded
+curve to **0.178 mm** on every drawing frame, checked against drake's own
+kinematics. 40.7 MiB of HTML, **18.3 MiB zipped** (budget 28). Draw speed
+0.15 m/s, transits ≤ 0.8 m/s and joint-velocity-capped.
+
+`out/csail_final.png` is the end state: ink in pen colours, the 13 unreachable
+spans dashed.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm
@@ -215,5 +323,11 @@ Gaps: the band between the four inverted arms, and the sheet corners.
    ✅ image → strokes (`trace.py`) and strokes → certified per-arm programs
    with probe-measured reach intervals, pen-colour partitioning, greedy
    interval cover and mid-overlap handoff cuts (`allocate.py`, the CSAIL run)
-   ▶ still open: the RRT transits, and multi-arm timing/coordination —
-   everything above is single-arm-sequential
+   ✅ multi-arm timing: conductor v1 — capsule model, swept-cell collision
+   images, priority pause-scheduling by exact reachability DP, and an
+   independent merged-timeline validator with a veto (`coordination.py`,
+   `scene_check.py`, `scripts/csail_schedule.py`; six arms, 82.5 mm minimum
+   clearance over 83 s)
+   ▶ still open: the RRT transits (hover moves are still straight joint-space
+   lines), re-ordering/re-routing in the conductor rather than pauses only, and
+   the acceleration-limited version of the schedule — playback is kinematic

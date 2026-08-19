@@ -607,12 +607,18 @@ def trace_logo(path, upscale=UPSCALE, rdp_tol=RDP_TOL, min_px=MIN_PX,
     return out, dbg
 
 
-def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None):
+def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None,
+             offset=(0.0, 0.0)):
     """Pixel strokes -> paper strokes in metres: one uniform scale, centred.
 
     Keeping the aspect ratio is non-negotiable (it is a logo), so the scale is
     whichever of the two sheet dimensions binds first; `target_width` is an
     upper bound, not a target, and the caller is told when it did not bind.
+
+    `offset` (dx, dy) in metres moves the logo off the sheet centre — the knob
+    the placement search turns, together with `target_width`.  It is applied as
+    asked and NOT clamped; `info["fits"]` reports whether the placed logo is
+    still inside the margin, which is the caller's cue to reject the candidate.
     """
     P = np.vstack([s["pts"] for s in strokes_px])
     x0, x1 = P[:, 0].min(), P[:, 0].max()
@@ -622,7 +628,8 @@ def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None):
     scale = min(avail[0] / w, avail[1] / h)
     if target_width is not None:
         scale = min(scale, target_width / w)
-    cx, cy = sheet[0] / 2, sheet[1] / 2
+    cx = sheet[0] / 2 + float(offset[0])
+    cy = sheet[1] / 2 + float(offset[1])
     out = []
     for k, s in enumerate(strokes_px):
         p = np.asarray(s["pts"], float)
@@ -631,8 +638,14 @@ def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None):
         if plen(xy) < min_len:
             continue
         out.append(dict(pts=xy, color=s["color"], kind=s["kind"], id=len(out)))
-    info = dict(scale=scale, logo_w=w * scale, logo_h=h * scale,
-                px_per_m=1.0 / scale, dropped_short=len(strokes_px) - len(out))
+    lw, lh = w * scale, h * scale
+    info = dict(scale=scale, logo_w=lw, logo_h=lh, center=(cx, cy),
+                offset=(float(offset[0]), float(offset[1])),
+                px_per_m=1.0 / scale, dropped_short=len(strokes_px) - len(out),
+                fits=bool(cx - lw / 2 >= margin - 1e-9
+                          and cx + lw / 2 <= sheet[0] - margin + 1e-9
+                          and cy - lh / 2 >= margin - 1e-9
+                          and cy + lh / 2 <= sheet[1] - margin + 1e-9))
     return out, info
 
 
