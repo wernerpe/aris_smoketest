@@ -24,14 +24,23 @@ aris_sixarm/
                    velocity limit would be hit  (frames.QD_MAX, from the FR3 URDF)
   stroke_api.py    THE entry point: plan_stroke() -> ok | split | degenerate | bug
   validate.py      independent re-derivation of every invariant from raw outputs
+  trace.py         raster art -> pen strokes: colour unmixing, Zhang-Suen thinning,
+                   skeleton-graph tracing that continues STRAIGHT THROUGH crossings,
+                   boundary contours for solid glyphs  (numpy/PIL only)
+  allocate.py      strokes x arms -> certified per-arm programs: interval probing
+                   via plan_stroke, pen-colour partition enumeration, greedy
+                   interval cover, mid-overlap handoff cuts, dropped-span report
   viz/             drake-mesh robot model + static meshcat scene builder
 scripts/
   run_atlas.py     sweep all/selected arms  (~35 s for all six)
   make_scene.py    build out/reach_atlas.html (static meshcat + legend)
   fuzz_planner.py  seeded parallel fuzz campaign + atlas cross-check
+  csail_trace.py   trace the CSAIL logo -> out/csail_trace.png + masks + strokes.json
+  csail_allocate.py  trace + allocate + all three outputs (~3 s end to end)
 tests/
   test_gates.py    real-touchdown validation gates (run these after ANY kinematics change)
   test_planner_robustness.py   regressions distilled from the fuzz campaign
+  test_csail.py    tracer + allocator regressions (7 tests, < 0.1 s)
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
 ```
@@ -120,6 +129,70 @@ drake's playback controls) and `scripts/aris_letters_png.py` draws the layout.
 - Run the demo with the pydrake venv python (the system python3 has no drake);
   `ik.py` falls back to the installed `franka_analytical_ik` wheel there.
 
+## CSAIL logo — image to fleet (`trace.py` + `allocate.py`)
+
+`python3 scripts/csail_allocate.py` takes `assets/csail/csail_old_med.gif`
+(212x162) to certified per-arm programs in **3 s wall clock**.
+
+- **Tracing.** Colours are *unmixed*, not thresholded: every pixel is a
+  mixture `white + a_grey*(grey-white) + a_orange*(orange-white)` and the 3x2
+  least-squares solve gives both coverages, so an antialiased orange pixel and
+  a solid light-grey one are separated by hue. Masks upsample 4x, thin by
+  Zhang-Suen, and the skeleton graph is traced with **straight-through
+  junction pairing** — at each node the incident branches are matched by turn
+  angle, so an X crossing leaves as two strokes that pass through each other
+  instead of four stubs. Result: **39 strokes, 21.53 m**, median 0.54 m; the
+  same skeletons cut at every junction give 80 fragments instead of 33 outline
+  strokes. Endpoints facing each other across a gap are re-joined too — the
+  orange art is painted over the grey, so every grey line passing under an
+  orange one is interrupted by exactly one stroke width of white.
+- **The wordmark is not skeletonised.** Solid glyphs are separated from line
+  art per connected component (how much survives 6 erosions: >45 % for a 31 px
+  letterform, 0 % for an 11 px line) and traced as boundary contours on the
+  sub-pixel coverage field, so C S A I L read as letterforms with the A's
+  counter intact.
+- **Size is height-bound.** The mark's 1.309 aspect makes the requested 3.3 m
+  width need 2.52 m of paper height; the sheet has 1.961. Keeping the aspect,
+  the biggest honest logo is **2.411 x 1.841 m**, centred, 0.06 m margin.
+- **Allocation.** Each (stroke, arm) is probed with up to three `plan_stroke`
+  calls — forward, reversed, and one on the largest remaining gap — which buys
+  certified s-intervals; per stroke a greedy interval cover takes the fewest
+  pieces; the pen-colour split of the four arms is chosen by enumerating all
+  **14 non-trivial partitions**. The atlas is a lossless pre-filter here: 72
+  probes instead of 308, same allocation.
+
+**52 % of the logo is left empty, and that is the fleet, not the logo.**
+With arms 2 and 71 parked the four active arms reach only ~59 % of the traced
+path (floor arms 13/17 are mounted off the long edges and reach r <= 0.81 m;
+the inverted pair are annuli of r 0.17-0.72 m around (1.30, 1.63) and
+(2.30, 0.35), leaving a hole through the middle of the sheet). Scaling the
+logo down does not fix it — at 0.55x the reachable fraction is 64 %, barely
+better than 59 % at full size, and shifting it +-0.3 m changes it by <3 points.
+Arm 17 reaches none of it and draws nothing.
+
+| arm | pen | strokes | metres | pieces | transit |
+|---|---|---|---|---|---|
+| 13 front (floor) | grey | 2 | 0.58 | 2 | 1.30 |
+| 17 back (floor) | grey | 0 | 0.00 | 0 | — |
+| 31 L-inv-front | grey | 8 | 3.64 | 9 | 2.61 |
+| 97 R-inv-back | orange | 11 | 6.11 | 13 | 4.14 |
+
+10.33 m drawn of 21.53 m; 32 dropped spans (18 whole strokes). Every shipped
+segment is a re-planned, independently validated `ok` plan (min sigma 0.167,
+tip error ~1e-11 m). Handoff cuts are placed mid-overlap and unit-tested, but
+**no stroke on this input is actually shared between two arms** — with two
+arms parked, no two same-colour arms overlap on any one stroke.
+
+Outputs: `out/csail_trace.png` (traced strokes at sheet scale),
+`out/csail_masks.png` (masks / skeletons / trace over source),
+`out/csail_allocation.png` (coloured by arm, dropped dashed),
+`out/csail_scene.html` (static meshcat, arms posed mid-stroke),
+`out/csail_program.json` (per-arm segments with plan metrics + dropped list).
+
+Single-arm-sequential throughout: this is allocation plus a certified plan per
+segment. No multi-arm timing, no inter-arm collision reasoning, and the pen-up
+transits are measured but not planned.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm
@@ -139,3 +212,8 @@ Gaps: the band between the four inverted arms, and the sheet corners.
    overlap handoff, RRT for the pen-up transits between planned strokes
    (`letters.py` + `writing.py` do the fixed-assignment case: one letter per
    arm, sequential, straight-line joint transits — no handoff, no RRT yet)
+   ✅ image → strokes (`trace.py`) and strokes → certified per-arm programs
+   with probe-measured reach intervals, pen-colour partitioning, greedy
+   interval cover and mid-overlap handoff cuts (`allocate.py`, the CSAIL run)
+   ▶ still open: the RRT transits, and multi-arm timing/coordination —
+   everything above is single-arm-sequential
