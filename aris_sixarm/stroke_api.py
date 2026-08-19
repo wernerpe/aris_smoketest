@@ -387,6 +387,73 @@ def _head_plan(poly, spec, o, depth, s_reach, L):
 
 
 # --------------------------------------------------------------------------
+# direction agnosticism: a certified plan, executed the other way round
+# --------------------------------------------------------------------------
+def reverse_plan(plan, spec=None, opts=None, validate=True):
+    """An "ok" plan, executed end-to-start. -> a new plan dict (never mutates).
+
+    EVERY GATE THIS MODULE CERTIFIES IS SYMMETRIC IN s.  The tip-on-curve
+    error, the joint margin, sigma_min and the paper/boom clearances are
+    pointwise properties of a configuration; continuity (||dq||_inf between
+    neighbours) is a property of an unordered pair.  None of them can tell
+    which way the samples are walked, so reversing the sample order is not a
+    new plan to be re-certified from scratch — it is the same certified set of
+    configurations traversed the other way, and the whole operation is array
+    flipping:
+
+      qs, pts, q7, sigmas, margins, and the input polyline reverse;
+      s and the PWL knots reflect to 1 - s;
+      the corner windows reverse with the corners they belong to.
+
+    THE CLOCK IS THE ONE THING THAT IS RE-DERIVED, not flipped, because it is
+    not a per-sample field but the integral of one: `pacing.pace` divides the
+    step by the speed the joint-velocity limits allow there, so the reversed
+    path gets its times re-integrated from the reversed `qs` rather than
+    inheriting t[-1] - t[::-1].  (The two agree to floating point here, since
+    |dq/ds| is invariant under reversal — which is exactly why re-deriving is
+    cheap insurance rather than a cost.)
+
+    With `spec`, the reversed plan is handed to the INDEPENDENT validator
+    again, so a reversed plan carries a certificate of its own and not an
+    inherited one; the status goes to "bug" if it somehow does not pass.
+    """
+    if plan.get("status") != "ok":
+        raise ValueError(f"only an 'ok' plan can be reversed; got "
+                         f"{plan.get('status')!r}")
+    o = dict(DEFAULTS)
+    o.update(opts or {})
+    out = dict(plan)
+    for k in ("qs", "pts", "sigmas", "margins", "stroke", "q7"):
+        if k in plan:
+            out[k] = np.asarray(plan[k], float)[::-1].copy()
+    out["s"] = 1.0 - np.asarray(plan["s"], float)[::-1]
+    kn = np.asarray(plan["knots"], float)
+    out["knots"] = np.column_stack([1.0 - kn[::-1, 0], kn[::-1, 1]])
+    out["windows"] = np.asarray(plan["windows"], float)[::-1].copy()
+    a, b = plan.get("clip_s", (0.0, 1.0))
+    out["clip_s"] = (1.0 - float(b), 1.0 - float(a))
+
+    qs = out["qs"]
+    ds = float(plan["arc_len"]) / max(len(qs) - 1, 1)
+    pc = pacing.pace(qs, plan["arc_len"], v_draw=o["v_draw"], safety=o["safety"],
+                     ds_m=ds)
+    out.update(times=pc["t"], total_time=float(pc["total_time"]),
+               frac_slowed=float(pc["frac_slowed"]),
+               headroom=float(pc["headroom"]))
+    out["reversed"] = not bool(plan.get("reversed", False))
+    out["notes"] = list(plan.get("notes", [])) + ["reversed (executed end-to-start)"]
+    for k in ("lat", "sheet_obj", "pwl", "smooth", "pace"):
+        out.pop(k, None)                     # debug objects belong to the original
+    if validate and spec is not None:
+        rep = validate_plan(out["pts"], spec, qs, times=out["times"],
+                            h_inv=o["h_inv"], pen_ext=o["pen_ext"])
+        out["validation"] = rep
+        if not rep["ok"]:
+            out.update(status="bug", reason="validation_failed")
+    return out
+
+
+# --------------------------------------------------------------------------
 def plan_summary(r):
     """One terse line for logs."""
     st = r["status"]

@@ -202,7 +202,9 @@ Outputs: `out/csail_trace.png` (traced strokes at sheet scale),
 
 Single-arm-sequential throughout: this is allocation plus a certified plan per
 segment. No multi-arm timing, no inter-arm collision reasoning, and the pen-up
-transits are measured but not planned.
+transits are measured but not planned — their ORDER and their direction are
+chosen for minimum transit time (`sequence.py`, below); the motion between two
+strokes is still a straight joint-space line.
 
 ## All six arms, conducted (`csail_place` → `csail_schedule` → `csail_drawing_demo`)
 
@@ -235,14 +237,14 @@ residue is in the lower-middle of the sheet — the bottom two thirds of the
 centre column — where the four inverted annuli still do not meet; the top third
 is now completely covered.
 
-| arm | pen | segments | metres | pause |
-|---|---|---|---|---|
-| 2 R-wall-front | orange | 12 | 4.53 | 17.4 s |
-| 97 R-inv-back | orange | 11 | 4.83 | 0.0 s |
-| 31 L-inv-front | grey | 10 | 2.76 | 4.1 s |
-| 71 L-inv-back | grey | 5 | 1.82 | 1.7 s |
-| 13 front (floor) | grey | 0 | 0.00 | idle |
-| 17 back (floor) | grey | 0 | 0.00 | idle |
+| arm | pen | segments | metres | pen-up | pause |
+|---|---|---|---|---|---|
+| 2 R-wall-front | orange | 12 | 4.53 | 16.5 s | 0.0 s |
+| 97 R-inv-back | orange | 11 | 4.83 | 14.6 s | 17.5 s |
+| 31 L-inv-front | grey | 10 | 2.76 | 11.4 s | 2.1 s |
+| 71 L-inv-back | grey | 5 | 1.82 | 9.6 s | 13.8 s |
+| 13 front (floor) | grey | 0 | 0.00 | — | idle |
+| 17 back (floor) | grey | 0 | 0.00 | — | idle |
 
 **Four arms draw it, not six, and that is geometry.** Arms 13 and 17 are on
 opposite long edges 3.83 m apart with r ≤ 0.81 m; no placement of a 1.8 m logo
@@ -250,6 +252,44 @@ is in reach of both. Pushing the logo +0.7 m to put arm 17 to work costs arm 13
 and 7 points of coverage (78.9 % with five arms drawing). The best coverage wins
 per the search rule, and the two floor arms stand in the scene holding their
 ready pose.
+
+### Which segment next, and which way round (`sequence.py`)
+
+An arm's segments used to be chained nearest-neighbour in **paper distance**,
+each drawn the way it happened to be certified. The arm pays neither of those.
+It pays a hover transit — lift, joint-interpolate between two hover poses at
+≤ 60 % of the FR3 velocity limits, lower — and that is now computed in exactly
+one place (`writing.transit_time`) which both the frozen timeline and the
+sequencer read. `csail_schedule.py` re-checks the two against each other every
+run and refuses to render if they disagree by more than 1 µs (measured
+disagreement: **1e-14 s**).
+
+- **A certified segment is direction-agnostic.** Every gate `stroke_api`
+  enforces — tip on curve, joint margin, sigma_min, continuity, paper and boom
+  clearance — is a property of a configuration or of an unordered pair of
+  neighbours, so none of them can tell which way s runs.
+  `stroke_api.reverse_plan` is therefore array flipping (`qs`, `pts`, `q7`,
+  sigmas, margins, knots reflected to 1 − s) with the clock re-integrated by
+  `pacing.pace` from the reversed samples — and the reversed plan goes back
+  through the independent validator, so it carries its own certificate rather
+  than inheriting one. **18 of the 38 segments come out drawn backwards**, and
+  no reversal was refused.
+- **Exact, not greedy.** Each segment offers two nodes (forward, backward) of
+  which exactly one must be visited; Held-Karp over (subset × last segment ×
+  last direction) solves it outright — 2¹² × 24 = **98 304 states in 0.04 s**
+  for the busiest arm. The exact ceiling is 16 segments (2.1 M states, 0.76 s).
+- **Above 16, a heuristic on the same matrix** — the full (2n+1)² transit-time
+  matrix is built as array operations, so every improvement move is an O(1)
+  lookup: nearest-neighbour seed, then 2-opt and Or-opt passes whose move set
+  includes direction flips, then double-bridge kicks until a 2 s budget runs
+  out. The 2-opt deltas are written for an ASYMMETRIC cost (reversing a block
+  turns every segment in it round, which need not be free) and carry a prefix
+  sum of the per-edge reversal penalty; a test checks each delta against a full
+  re-evaluation. A synthetic **300-segment** arm: 15 % better than its greedy
+  seed, inside the budget.
+- **Per-arm pen-up time 78.4 s → 52.1 s (−33.6 %)**, and with it the makespan
+  **83.1 s → 64.8 s (−22 %)**. Nothing about the certified plans changed: the
+  same 38 segments, the same 13.94 m, the same validator.
 
 ### Conductor v1 (`coordination.py`) — the clock is the only thing that moves
 
@@ -273,7 +313,13 @@ that clock.
   velocity limit brings it to ≤ 32 mm, and the problem becomes easy.
 - **Schedule.** Priority = busiest arm first; each next arm gets the
   earliest-arrival monotone schedule (advance or wait) by an exact reachability
-  DP over progress × time. **23.2 s of pauses** in total, arm 97 none.
+  DP over progress × time. **33.4 s of pauses** in total, arm 2 — now the
+  busiest — none.
+- **Pauses went UP when the transits came down, and that is not a regression.**
+  Shorter programmes put the arms in the same place at the same time more
+  often, so the conductor has more waiting to do (23.2 s → 33.4 s); the number
+  that matters, the makespan, still fell 83.1 s → 64.8 s. The priority order
+  changed hands with it (arm 97 → arm 2).
 
 ### The validator has the veto (`scene_check.py`)
 
@@ -284,19 +330,39 @@ parametrisation). A unit test holds the two to 1e-9 across the degenerate cases
 so they cannot drift apart silently. It re-samples the merged timeline 2× finer,
 bounds the gaps between samples, and re-runs `validate_plan` on all 38 segments.
 
-**Minimum inter-arm clearance over the whole 83 s: 82.5 mm** (margin 80 mm),
-between arms 2 and 97 at t = 53.3 s. 38/38 segments valid, progress monotone,
+**Minimum inter-arm clearance over the whole 64.8 s: 83.7 mm** (margin 80 mm),
+between arms 2 and 97 at t = 28.4 s. 38/38 segments valid, progress monotone,
 **PASS** — and the animation is only rendered from a timeline that passes.
+(The re-sequenced run re-validates every segment from scratch, reversed ones
+included: the 18 backwards plans are checked here a second time, by a code path
+that has never heard of `sequence.py`.)
 
 ### The animation
 
-`out/csail_drawing.html` — **1995 frames @ 24 fps = 83.1 s**, kinematic playback
+`out/csail_drawing.html` — **1556 frames @ 24 fps = 64.8 s**, kinematic playback
 (`SetPositions` + `ForcedPublish`, no simulator, no controller), 567 ink chunks
 revealed progressively in each arm's own pen colour (#666665 / #cb6608, the
 logo's own inks), pen cylinders coloured to match. Pen tip on the commanded
-curve to **0.178 mm** on every drawing frame, checked against drake's own
-kinematics. 40.7 MiB of HTML, **18.3 MiB zipped** (budget 28). Draw speed
+curve to **0.173 mm** on every drawing frame, checked against drake's own
+kinematics. 37.2 MiB of HTML, **17.8 MiB zipped** (budget 28). Draw speed
 0.15 m/s, transits ≤ 0.8 m/s and joint-velocity-capped.
+
+Reproduce (the last two flags are not defaults — `--qd-frac` is the conductor's
+60 % cap, and it is the sequencer's cost model as well as the timeline's):
+
+```
+python3 scripts/csail_allocate.py --arms all --tag _6arm \
+    --placement out/csail_placement_6arm.json --qd-frac 0.6 --no-scene
+python3 scripts/csail_schedule.py --arms all --tag _6arm \
+    --placement out/csail_placement_6arm.json --draw-speed 0.15 --qd-frac 0.6 \
+    --final out/csail_final.png
+/home/franka/git/franka_manipulation_station/.venv/bin/python \
+    scripts/csail_drawing_demo.py
+```
+
+Add `--sequencer nn` to either of the first two for the old paper-distance
+chain with every segment drawn forward — the same pipeline, the same
+validator, 83.1 s instead of 64.8 s.
 
 `out/csail_final.png` is the end state: ink in pen colours, the 13 unreachable
 spans dashed.
@@ -326,8 +392,12 @@ Gaps: the band between the four inverted arms, and the sheet corners.
    ✅ multi-arm timing: conductor v1 — capsule model, swept-cell collision
    images, priority pause-scheduling by exact reachability DP, and an
    independent merged-timeline validator with a veto (`coordination.py`,
-   `scene_check.py`, `scripts/csail_schedule.py`; six arms, 82.5 mm minimum
-   clearance over 83 s)
+   `scene_check.py`, `scripts/csail_schedule.py`; six arms, 83.7 mm minimum
+   clearance over 65 s)
+   ✅ per-arm sequencing: segments ordered AND turned round to minimise real
+   transit time — exact Held-Karp to 16 segments, NN + 2-opt/Or-opt with
+   direction flips above it (`sequence.py`, `stroke_api.reverse_plan`;
+   −33.6 % pen-up time, −22 % makespan)
    ▶ still open: the RRT transits (hover moves are still straight joint-space
    lines), re-ordering/re-routing in the conductor rather than pauses only, and
    the acceleration-limited version of the schedule — playback is kinematic

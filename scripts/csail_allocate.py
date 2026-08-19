@@ -28,7 +28,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import allocate, trace      # noqa: E402
+from aris_sixarm import allocate, trace, writing   # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
@@ -271,12 +271,23 @@ def program_json(res, strokes, info, path):
                     wall_s=res["timing"]["total"]),
         strokes=[dict(id=s["id"], color=s["color"], kind=s["kind"],
                       length=trace.plen(s["pts"])) for s in strokes],
+        sequencer=res.get("sequencer", "opt"),
+        sequence={str(a): dict(
+            method=q["method"], n=int(q["n"]),
+            order=[int(x) for x in q["order"]], dirs=[int(x) for x in q["dirs"]],
+            transit_s=float(q["cost"]), baseline_transit_s=float(q["baseline_cost"]),
+            n_reversed=int(q["n_reversed"]), n_refused=int(q["n_refused"]),
+            wall_s=float(q["wall"])) for a, q in res["sequence"].items()},
         arms={}, dropped=[])
+    doc["totals"]["transit_s"] = float(sum(res["transit_time"].values()))
+    doc["totals"]["baseline_transit_s"] = float(
+        sum(q["baseline_cost"] for q in res["sequence"].values()))
     for aid in res["arms"]:
         doc["arms"][str(aid)] = [dict(
             stroke_id=int(s["stroke_id"]), seg=i, color=s["color"],
             kind=s["kind"], s_range=[float(x) for x in s["s_range"]],
-            direction=int(s["direction"]), length_m=float(s["length"]),
+            direction=int(s["direction"]),
+            flipped=bool(s.get("flipped", False)), length_m=float(s["length"]),
             n_points=int(len(s["pts"])), plan_ok=s["plan"]["status"] == "ok",
             validated=bool(s["plan"]["validation"]["ok"]),
             n_dense=int(s["plan"]["n_dense"]), n_knots=int(s["plan"]["n_knots"]),
@@ -312,6 +323,18 @@ def add_args(ap):
     ap.add_argument("--target-width", type=float, default=None)
     ap.add_argument("--offset", type=float, nargs=2, default=None, metavar=("DX", "DY"))
     ap.add_argument("--no-prefilter", action="store_true")
+    # these two are the SEQUENCER's cost model as much as the timeline's: the
+    # transit it prices is the transit `writing.arm_program` will lay down, so
+    # they have to be the same numbers in both places (see run_allocation).
+    ap.add_argument("--transit-speed", type=float, default=writing.TRANSIT_SPEED)
+    ap.add_argument("--qd-frac", type=float, default=writing.QD_FRAC,
+                    help="fraction of the FR3 joint-velocity limit any move may use")
+    ap.add_argument("--sequencer", default=allocate.SEQUENCER,
+                    choices=("opt", "nn"),
+                    help="'opt' (default): per-arm order AND per-segment "
+                         "direction chosen to minimise transit TIME, exact to "
+                         "16 segments; 'nn': the old nearest-neighbour chain "
+                         "in paper distance, every segment drawn forward")
     return ap
 
 
@@ -343,6 +366,9 @@ def run_allocation(a, verbose=False):
           f"({info['center'][0]:.3f}, {info['center'][1]:.3f})  ({time.time() - t0:.2f} s)")
     res = allocate.allocate(strokes, opts=None, verbose=verbose,
                             active_override=_override(a.arms),
+                            sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
+                            seq_opts=dict(transit_speed=a.transit_speed,
+                                          qd_frac=a.qd_frac),
                             atlas_dir=None if a.no_prefilter else str(Path(a.out)))
     return res, strokes, info
 

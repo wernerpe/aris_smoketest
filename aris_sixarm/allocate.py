@@ -28,9 +28,11 @@ written for.
              `overlap` metres past it so the ink meets.  Cutting at an edge
              would put the seam exactly where one of the two arms is at the
              end of its certified reach.
-  ORDER      Nearest-neighbour chaining of an arm's segments from its base.
-             A heuristic, and labelled as one: transit motion is roadmap
-             item 3's RRT, not this module's business.
+  ORDER      `sequence.py`: the order AND the direction of every segment,
+             minimising the arm's total pen-up TIME (the real hover transit
+             `writing` will execute, not paper distance).  Exact for up to 16
+             segments.  The transit MOTION is still roadmap item 3's RRT; what
+             is optimised here is the schedule that motion has to fill.
 
 Every chosen segment is re-planned from scratch at the end; a segment whose
 clean re-plan is not "ok" is not shipped as one.
@@ -40,8 +42,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import sequence
 from .fleet import FLEET
-from .stroke_api import plan_stroke, polyline_length, truncate_polyline
+from .stroke_api import (plan_stroke, polyline_length, reverse_plan,
+                         truncate_polyline)
 
 ACTIVE = [aid for aid, s in FLEET.items() if s.active]
 COLORS = ("grey", "orange")
@@ -86,6 +90,7 @@ def active_arms(active_override=None):
     return [aid for aid in FLEET if aid in set(want)]
 
 EPS_S = 1e-6
+SEQUENCER = "opt"        # "opt" = minimum transit time; "nn" = the old xy chain
 OVERLAP_M = 0.004        # m of ink each side of a handoff cut
 BACKOFF_M = 0.006        # m to give up per failed clean re-plan
 MIN_SEG_M = 0.025        # m; a shorter piece is not worth a pen-up
@@ -353,8 +358,13 @@ def replan_segment(pts, span, spec, opts=None, backoff=BACKOFF_M,
 def order_nearest(items, start_xy):
     """Nearest-neighbour chaining from `start_xy` -> (order, transit metres).
 
-    Greedy, no 2-opt, no claim of optimality: pen-up transits are planned by
-    roadmap item 3, and until they are, their length is only an indicator.
+    THE OLD ORDER, kept as the baseline the sequencer is measured against.
+    Greedy in PAPER DISTANCE between one segment's last point and the next
+    one's first, every segment drawn the way it was certified.  Both of those
+    are wrong in the same direction: the arm pays joint-space seconds, not
+    metres of paper, and it may draw a segment either way round (see
+    `sequence.py`).  `--sequencer nn` still selects it, so old and new can be
+    run through the identical downstream pipeline.
     """
     left = list(range(len(items)))
     pos = np.asarray(start_xy, float)
@@ -366,6 +376,85 @@ def order_nearest(items, start_xy):
         order.append(k)
         left.remove(k)
     return order, transit
+
+
+def transit_metres(items, start_xy):
+    """Pen-tip paper distance of an ordered programme, base to last stroke end."""
+    pos = np.asarray(start_xy, float)
+    tot = 0.0
+    for s in items:
+        p = np.asarray(s["pts"], float)
+        tot += float(np.linalg.norm(p[0] - pos))
+        pos = p[-1]
+    return tot
+
+
+def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
+    """One arm's bag of segments -> the programme in the order it will be drawn.
+
+    -> dict(programme, order, dirs, method, cost, baseline_cost, n_reversed,
+            n_refused, n, wall).  `cost` and `baseline_cost` are both transit
+    SECONDS off the same matrix (`sequence.cost_matrix`), which is the point:
+    "the new order saves X %" is then one subtraction inside one model, not a
+    comparison of two different accountings.
+    """
+    n = len(segs)
+    t0 = time.time()
+    if n == 0:
+        return dict(programme=[], order=[], dirs=[], method="empty", n=0,
+                    cost=0.0, baseline_cost=0.0, n_reversed=0, n_refused=0,
+                    wall=0.0)
+    seq_opts = dict(seq_opts or {})
+    mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv")
+           if k in seq_opts}
+    exact = seq_opts.get("exact_max_n", sequence.EXACT_MAX_N)
+    budget = seq_opts.get("budget", sequence.TIME_BUDGET)
+
+    base_order, _ = order_nearest(segs, spec.xy)
+    C = sequence.cost_matrix(spec, segs, **mat)
+    base_cost = sequence.sequence_cost(C, n, base_order, [1] * n)
+    if sequencer in ("nn", "nearest_xy"):
+        r = dict(order=base_order, dirs=[1] * n, method="nearest_xy")
+    elif sequencer in ("opt", "transit"):
+        r = sequence.solve(C, n, exact, budget)
+    else:
+        raise ValueError(f"sequencer={sequencer!r}; want 'opt' or 'nn'")
+
+    prog, dirs, n_rev, n_ref = [], [], 0, 0
+    for k, d in zip(r["order"], r["dirs"]):
+        rev = reverse_segment(segs[k], spec, opts) if d < 0 else None
+        if d < 0 and rev is None:
+            n_ref += 1
+        if rev is None:
+            prog.append(dict(segs[k], flipped=False))
+            dirs.append(1)
+        else:
+            prog.append(rev)
+            dirs.append(-1)
+            n_rev += 1
+    return dict(programme=prog, order=[int(i) for i in r["order"]], dirs=dirs,
+                method=r["method"], n=n, n_reversed=n_rev, n_refused=n_ref,
+                cost=float(sequence.sequence_cost(C, n, r["order"], dirs)),
+                baseline_cost=float(base_cost),
+                nn_cost=float(r.get("nn_cost", float("nan"))),
+                wall=float(time.time() - t0))
+
+
+def reverse_segment(seg, spec, opts=None):
+    """A programme entry drawn the other way round, or None if it will not certify.
+
+    The geometry is flipped (both the drawn polyline and the certified plan);
+    `direction` is the direction the segment is EXECUTED in, so it changes
+    sign, while `s_range` keeps naming the same span of the same stroke.
+    `stroke_api.reverse_plan` re-runs the independent validator, and a plan
+    that somehow does not pass it is refused here rather than shipped — the
+    caller keeps the forward orientation and pays the extra transit.
+    """
+    rev = reverse_plan(seg["plan"], spec, opts)
+    if rev.get("status") != "ok":
+        return None
+    return dict(seg, pts=np.asarray(seg["pts"], float)[::-1].copy(), plan=rev,
+                direction=-int(seg["direction"]), flipped=True)
 
 
 # ===========================================================================
@@ -522,13 +611,20 @@ def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
 
 
 def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
-             min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None):
+             min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None,
+             sequencer=SEQUENCER, seq_opts=None):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
     which of the fleet's arms count as active for THIS run without touching the
     registry, so a hypothetical "all six arms up" run and the real four-arm rig
     come out of the same entry point.
+
+    `sequencer` picks how each arm's segments are ordered: "opt" (the default;
+    `sequence.solve` — minimum transit TIME over orders and directions,
+    exact to 16 segments) or "nn" (the old paper-distance nearest neighbour,
+    kept for comparison).  Either way the chosen order is costed on the same
+    transit-time matrix, so `transit_time` is comparable across both.
     """
     if arms is not None and active_override is not None:
         raise ValueError("pass arms= or active_override=, not both")
@@ -584,13 +680,18 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     dropped = leftover(strokes, programs)
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
-               timing=dict(prefilter=t_pre, probe=t_probe, replan=t_replan,
-                           total=time.time() - t0))
+               sequencer=sequencer,
+               timing=dict(prefilter=t_pre, probe=t_probe, replan=t_replan))
+    t3 = time.time()
+    out["sequence"], out["transit"], out["transit_time"] = {}, {}, {}
     for a in arms:
-        segs = programs[a]
-        order, transit = order_nearest(segs, FLEET[a].xy) if segs else ([], 0.0)
-        out["programs"][a] = [segs[i] for i in order]
-        out.setdefault("transit", {})[a] = transit
+        seq = sequence_arm(programs[a], specs[a], sequencer, opts, seq_opts)
+        out["programs"][a] = seq.pop("programme")
+        out["sequence"][a] = seq
+        out["transit"][a] = transit_metres(out["programs"][a], FLEET[a].xy)
+        out["transit_time"][a] = seq["cost"]
+    out["timing"]["sequence"] = time.time() - t3
+    out["timing"]["total"] = time.time() - t0
     out["total_len"] = float(sum(polyline_length(s["pts"]) for s in strokes))
     out["drawn_len"] = float(sum(s["length"] for a in arms
                                  for s in out["programs"][a]))
@@ -609,14 +710,31 @@ def report(res, strokes):
                  f"dropped {res['dropped_len']:.2f} m "
                  f"({100 * res['dropped_len'] / max(tot, 1e-9):.1f} %)")
     lines.append(f"{'arm':>5} {'pen':>7} {'segs':>5} {'metres':>8} "
-                 f"{'strokes':>8} {'cuts':>5} {'transit':>8}")
+                 f"{'strokes':>8} {'cuts':>5} {'transit':>8} {'transit_s':>10} "
+                 f"{'was':>8} {'rev':>4}")
     for a in res["arms"]:
         segs = res["programs"][a]
         ids = {s["stroke_id"] for s in segs}
         cuts = len(segs) - len(ids)
+        q = res["sequence"][a]
         lines.append(f"{a:>5} {res['colors'][a]:>7} {len(segs):>5} "
                      f"{sum(s['length'] for s in segs):>8.2f} {len(ids):>8} "
-                     f"{cuts:>5} {res['transit'][a]:>8.2f}")
+                     f"{cuts:>5} {res['transit'][a]:>8.2f} "
+                     f"{res['transit_time'][a]:>9.1f}s {q['baseline_cost']:>7.1f}s "
+                     f"{q['n_reversed']:>4}")
+    saved = sum(q["baseline_cost"] for q in res["sequence"].values()) - \
+        sum(res["transit_time"].values())
+    base = sum(q["baseline_cost"] for q in res["sequence"].values())
+    methods = sorted({q["method"] for q in res["sequence"].values() if q["n"]})
+    lines.append(f"sequencer '{res['sequencer']}' [{', '.join(methods) or 'none'}]: "
+                 f"{sum(res['transit_time'].values()):.1f} s of transit vs "
+                 f"{base:.1f} s for the nearest-xy chain "
+                 f"({100 * saved / max(base, 1e-9):.1f} % less), "
+                 f"{sum(q['n_reversed'] for q in res['sequence'].values())} "
+                 f"segments drawn backwards"
+                 + (f", {sum(q['n_refused'] for q in res['sequence'].values())} "
+                    "reversals REFUSED by the validator"
+                    if any(q["n_refused"] for q in res["sequence"].values()) else ""))
     st = [p for p in res["probe_stats"]]
     lines.append(f"probes {res['n_probes']} over {len(st)} (stroke, arm) pairs, "
                  f"{sum(1 for p in st if p['probes'] == 0)} prefiltered; "
@@ -642,5 +760,6 @@ def report(res, strokes):
             + ("   <- top" if iy == 2 else "   <- bottom" if iy == 0 else ""))
     t = res["timing"]
     lines.append(f"time  prefilter {t['prefilter']:.1f} s  probe {t['probe']:.1f} s"
-                 f"  replan {t['replan']:.1f} s  total {t['total']:.1f} s")
+                 f"  replan {t['replan']:.1f} s  sequence {t['sequence']:.1f} s"
+                 f"  total {t['total']:.1f} s")
     return lines

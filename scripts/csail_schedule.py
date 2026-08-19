@@ -10,9 +10,12 @@ as one npz, so `csail_drawing_demo.py` never has to plan anything.
 
 The order of operations is the point:
 
-  1. the allocator's certified per-arm programmes (same call as csail_allocate);
-  2. `writing.arm_program` freezes each arm's path — segments in the
-     allocator's order, hover transits between them, entry and exit lifts;
+  1. the allocator's certified per-arm programmes (same call as csail_allocate),
+     each already sequenced by `sequence.py`: the order AND the direction of
+     every segment chosen to minimise the arm's real pen-up time;
+  2. `writing.arm_program` freezes each arm's path — segments in that order,
+     hover transits between them, entry and exit lifts — and the transit clock
+     it lays down is checked against the cost the sequencer minimised;
   3. `coordination.coordinate` leaves those paths alone and only stretches the
      clock: pauses, priority = busiest arm first;
   4. `scene_check.check_timeline` re-derives the whole merged timeline from
@@ -58,10 +61,28 @@ def build(a):
         progs[aid] = p
         samp[aid] = writing.uniform_samples(p, dt)
         worst_tip = max(worst_tip, p["dense_tip_err"])
+        q = res["sequence"][aid]
         print(f"  arm {aid:>2}: {len(res['programs'][aid]):>2} segments, "
               f"{p['draw_len']:.2f} m drawn + {p['transit_len']:.2f} m transit, "
-              f"{p['duration']:.1f} s nominal, {samp[aid]['n']} steps, "
+              f"{p['duration']:.1f} s nominal "
+              f"({p['draw_s']:.1f} s drawing + {p['transit_s']:.1f} s pen-up; "
+              f"sequencer said {q['cost']:.1f} s, nearest-xy would be "
+              f"{q['baseline_cost']:.1f} s), {samp[aid]['n']} steps, "
               f"densify tip_err {p['dense_tip_err']:.2e} m")
+    # THE SEQUENCER'S MODEL IS THE TIMELINE'S CLOCK, or it optimised a fiction.
+    # Both sides compute lift + travel + lower from the same hover poses with
+    # the same joint-velocity cap, so they must agree to the float — this is
+    # the check that keeps them agreeing when somebody edits one of them.
+    drift = {aid: abs(progs[aid]["transit_s"] - res["sequence"][aid]["cost"])
+             for aid in res["arms"]}
+    worst = max(drift.values()) if drift else 0.0
+    print(f"  sequencer cost model vs frozen timeline: worst disagreement "
+          f"{worst:.2e} s over {len(drift)} arms")
+    if worst > 1e-6:
+        raise SystemExit(f"sequencer priced transits the timeline does not pay: "
+                         + ", ".join(f"arm {a}: {d:.4f} s" for a, d in drift.items()
+                                     if d > 1e-6))
+
     for aid in FLEET:                       # arms not in this run still take up room
         if aid not in samp:
             progs[aid] = writing.arm_program(FLEET[aid], [], verbose=False)
@@ -149,9 +170,8 @@ def main(argv=None):
     ap.add_argument("--subcheck", type=int, default=2,
                     help="scene_check re-sampling factor")
     ap.add_argument("--draw-speed", type=float, default=writing.DRAW_SPEED_FLEET)
-    ap.add_argument("--transit-speed", type=float, default=writing.TRANSIT_SPEED)
-    ap.add_argument("--qd-frac", type=float, default=writing.QD_FRAC,
-                    help="fraction of the FR3 joint-velocity limit any move may use")
+    # --transit-speed and --qd-frac come from add_args: the sequencer prices
+    # its transits with them before this script ever freezes a timeline.
     ap.add_argument("--safety", type=float, default=coordination.SAFETY_M)
     ap.add_argument("--calib", type=float, default=coordination.CALIB_M)
     ap.add_argument("--final", default=None)
@@ -181,6 +201,21 @@ def main(argv=None):
         arm_metres={str(a): float(sum(s["length"] for s in res["programs"][a]))
                     for a in res["arms"]},
         arm_segments={str(a): len(res["programs"][a]) for a in res["arms"]},
+        sequencer=res.get("sequencer", "opt"),
+        # the transit clock three ways: what the arm's frozen timeline actually
+        # spends pen-up, what the sequencer's cost matrix predicted, and what
+        # the old nearest-xy chain would have cost on the same matrix
+        arm_transit_s={str(a): float(progs[a]["transit_s"]) for a in res["arms"]},
+        arm_draw_s={str(a): float(progs[a]["draw_s"]) for a in res["arms"]},
+        arm_nominal_s={str(a): float(progs[a]["duration"]) for a in res["arms"]},
+        arm_transit_predicted_s={str(a): float(res["sequence"][a]["cost"])
+                                 for a in res["arms"]},
+        arm_transit_baseline_s={str(a): float(res["sequence"][a]["baseline_cost"])
+                                for a in res["arms"]},
+        arm_reversed={str(a): int(res["sequence"][a]["n_reversed"])
+                      for a in res["arms"]},
+        arm_sequencer_method={str(a): res["sequence"][a]["method"]
+                              for a in res["arms"]},
         margin=sch["margin"], min_clearance=rep["min_clearance"],
         per_pair=rep["per_pair"], densify_tip_err=max(p["dense_tip_err"]
                                                       for p in progs.values()),

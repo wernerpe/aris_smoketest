@@ -339,8 +339,11 @@ def build_schedule(plan, fps=FPS, draw_speed=DRAW_SPEED, h_inv=H_INV_DEFAULT,
 # The word "ARIS" above is written one letter at a time by one arm at a time.
 # A whole logo allocated to six arms is not: every arm has its own programme
 # and they all run at once.  What follows builds ONE arm's timeline — entry
-# lift, its segments in the allocator's nearest-neighbour order, a pen-up
-# transit between each pair, exit lift — as a frozen path with a nominal clock.
+# lift, its segments in the order and the direction `sequence.py` chose, a
+# pen-up transit between each pair, exit lift — as a frozen path with a nominal
+# clock.  (The transit durations it lays down are `transit_time` below, which
+# is also the cost function the sequencer minimised; `csail_schedule.py` checks
+# the two against each other every run.)
 #
 # FROZEN is the operative word: `coordination.py` may only stretch this clock
 # (insert pauses), never re-order the segments or re-route a transit, so the
@@ -368,12 +371,68 @@ def _dq_time(q0, q1, frac=QD_FRAC, tmin=0.0):
     return float(max(tmin, np.max(d / (QD_MAX * max(frac, 1e-6)))))
 
 
+def dq_time_many(Q0, Q1, frac=QD_FRAC, tmin=0.0):
+    """`_dq_time` for every pair. (A,7) x (B,7) -> (A,B) seconds.
+
+    The same arithmetic as `_dq_time`, done as one array operation because the
+    sequencer (`sequence.py`) needs the whole matrix of "how long from every
+    exit pose to every entry pose" before it can choose an order, and asking
+    for it one pair at a time is what makes a few hundred segments per arm
+    expensive.  `tmin` broadcasts, so the per-pair travel floor (the pen-tip
+    hop at `transit_speed`) goes in as an (A,B) array.
+    """
+    Q0 = np.asarray(Q0, float).reshape(-1, 7)
+    Q1 = np.asarray(Q1, float).reshape(-1, 7)
+    lim = QD_MAX * max(frac, 1e-6)
+    out = np.empty((len(Q0), len(Q1)))
+    rows = max(1, int(4e6 // max(7 * len(Q1), 1)))       # cap the temporary
+    for a0 in range(0, len(Q0), rows):
+        a1 = min(a0 + rows, len(Q0))
+        d = np.abs(Q1[None, :, :] - Q0[a0:a1, None, :]) / lim
+        out[a0:a1] = d.max(axis=-1)
+    return np.maximum(tmin, out)
+
+
 def _draw_time(qd, ud, dur, frac=QD_FRAC):
     """`dur` stretched until no joint exceeds `frac` of its velocity limit."""
     du = np.diff(np.asarray(ud, float))
     dq = np.abs(np.diff(np.asarray(qd, float), axis=0))
     need = dq / (QD_MAX * max(frac, 1e-6)) / np.maximum(du, 1e-12)[:, None]
     return float(max(dur, need.max() if need.size else 0.0))
+
+
+# --------------------------------------------------------------------------
+# what a pen-up costs — ONE definition, used by the timeline and the sequencer
+# --------------------------------------------------------------------------
+# `arm_program` below lays these three moves down as waypoints; `sequence.py`
+# adds them up to decide which segment should follow which.  They have to be
+# the same numbers or the sequencer is optimising a fiction, so they are
+# computed here and nowhere else.
+def transit_time(q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
+                 transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC):
+    """One pen-up transit -> (lift, travel, lower) seconds.
+
+    Lift off the paper at the segment's exit, travel between the two hover
+    poses (never faster than `transit_speed` over the `hop` metres of paper,
+    and never faster than `qd_frac` of the joint velocity limits), lower onto
+    the next segment's entry.
+    """
+    return (_dq_time(q_exit, q_hover_exit, qd_frac, T_LIFT_F),
+            _dq_time(q_hover_exit, q_hover_entry, qd_frac,
+                     max(T_TRAVEL_MIN, hop / max(transit_speed, 1e-9))),
+            _dq_time(q_hover_entry, q_entry, qd_frac, T_LOWER_F))
+
+
+def enter_time(q_home, q_hover_entry, q_entry, qd_frac=QD_FRAC):
+    """Ready pose -> hover -> first segment's entry. -> (home, lower) seconds."""
+    return (_dq_time(q_home, q_hover_entry, qd_frac, T_HOME_F),
+            _dq_time(q_hover_entry, q_entry, qd_frac, T_LOWER_F))
+
+
+def exit_time(q_exit, q_hover_exit, q_home, qd_frac=QD_FRAC):
+    """Last segment's exit -> hover -> ready pose. -> (lift, home) seconds."""
+    return (_dq_time(q_exit, q_hover_exit, qd_frac, T_LIFT_F),
+            _dq_time(q_hover_exit, q_home, qd_frac, T_HOME_F))
 
 
 def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT):
@@ -422,7 +481,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         add(1.0, spec.q_seed)
         return dict(t=np.array(T), q=np.array(Q), seg=np.array(S), u=np.array(U),
                     phases=[], ink=[], duration=0.0, lifts=[], dense_tip_err=0.0,
-                    draw_len=0.0, transit_len=0.0)
+                    draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
+                    fallbacks=0)
 
     dense = []
     for k, s in enumerate(segs):
@@ -443,12 +503,14 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     q_lift0, z0 = lifted_or_lower(spec, dense[0]["qd"][0], dense[0]["pts"][0], h_inv=h_inv)
     lifts.append(z0)
     add(0.0, spec.q_seed)
-    t += _dq_time(spec.q_seed, q_lift0, qd_frac, T_HOME_F)
+    t_home, t_down = enter_time(spec.q_seed, q_lift0, dense[0]["qd"][0], qd_frac)
+    t += t_home
     add(t, q_lift0)
-    t += _dq_time(q_lift0, dense[0]["qd"][0], qd_frac, T_LOWER_F)
+    t += t_down
     add(t, dense[0]["qd"][0], 0, 0.0)
 
     draw_len = transit_len = 0.0
+    transit_s = t_home + t_down
     for k, D in enumerate(dense):
         dur = _draw_time(D["qd"], D["ud"], D["length"] / draw_speed, qd_frac)
         for uu, q in zip(D["ud"][1:], D["qd"][1:]):
@@ -470,27 +532,34 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         q_end, z1 = lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv)
         lifts.append(z1)
         t0 = t
-        t += _dq_time(D["qd"][-1], q_end, qd_frac, T_LIFT_F)
-        add(t, q_end)
         if nxt is None:
-            t += _dq_time(q_end, spec.q_seed, qd_frac, T_HOME_F)
+            t_up, t_home = exit_time(D["qd"][-1], q_end, spec.q_seed, qd_frac)
+            t += t_up
+            add(t, q_end)
+            t += t_home
             add(t, spec.q_seed)
         else:
             q_next, z2 = lifted_or_lower(spec, nxt["qd"][0], nxt["pts"][0], h_inv=h_inv)
             lifts.append(z2)
             hop = float(np.linalg.norm(nxt["pts"][0] - D["pts"][-1]))
             transit_len += hop
-            t += _dq_time(q_end, q_next, qd_frac,
-                          max(T_TRAVEL_MIN, hop / transit_speed))
+            t_up, t_go, t_down = transit_time(D["qd"][-1], q_end, q_next,
+                                              nxt["qd"][0], hop, transit_speed,
+                                              qd_frac)
+            t += t_up
+            add(t, q_end)
+            t += t_go
             add(t, q_next)
-            t += _dq_time(q_next, nxt["qd"][0], qd_frac, T_LOWER_F)
+            t += t_down
             add(t, nxt["qd"][0], k + 1, 0.0)
+        transit_s += t - t0
         phases.append(dict(kind="transit", seg=k, t0=float(t0), t1=float(t)))
 
     T = np.maximum.accumulate(np.asarray(T, float) + 1e-9 * np.arange(len(T)))
     return dict(t=T, q=np.array(Q), seg=np.array(S), u=np.array(U), phases=phases,
                 ink=ink, duration=float(T[-1]), lifts=lifts, dense_tip_err=worst,
                 draw_len=draw_len, transit_len=transit_len,
+                transit_s=float(transit_s), draw_s=float(T[-1] - transit_s),
                 fallbacks=int(sum(D["fallbacks"] for D in dense)))
 
 
