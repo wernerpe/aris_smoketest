@@ -38,8 +38,8 @@ docstring for why that is not a stylistic choice.
 import numpy as np
 
 from . import ik, planner
-from .frames import PEN_EXT, joint_margin, rotx, tip_pos
-from .metrics import sigma_min as _sigma_min, tip_jacobian
+from .frames import PEN_EXT, joint_margin, rotx, tip_pos_many
+from .metrics import sigma_min as _sigma_min, tip_jacobian_many
 from .pacing import dq_ds
 
 SIGMA_GATE = 0.10        # band gate, sigma_min (above planner.HARD_SIGMA = 0.08)
@@ -141,7 +141,10 @@ def chase_cc(poses, q7, q_seed, pen_ext=PEN_EXT, margin_gate=None,
         if margin_gate is not None and m < margin_gate:
             stop, stop_i = "margin", n
             break
-        s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext))
+        # analytic Jacobian: the chase is sequential (each solve is seeded by
+        # the last), so this is the one place a per-sample call still pays —
+        # but it need not be 14 forward kinematics.
+        s = _sigma_min(tip_jacobian_many(q[None], pen_ext=pen_ext)[0])
         if sigma_gate is not None and s < sigma_gate:
             stop, stop_i = "sigma", n
             break
@@ -674,7 +677,7 @@ def chase_report(ch, setup, jump=planner.JUMP_THRESH):
     """
     qs, n = ch["qs"], ch["n"]
     pts, Twb, pen_ext = setup["pts"], setup["Twb"], setup["pen_ext"]
-    tip = np.array([Twb[:3, :3] @ tip_pos(q, pen_ext) + Twb[:3, 3] for q in qs])
+    tip = tip_pos_many(qs, pen_ext) @ Twb[:3, :3].T + Twb[:3, 3]
     err = np.hypot(np.linalg.norm(tip[:, :2] - pts[:n], axis=1), tip[:, 2])
     sig, mar = ch["sigmas"], ch["margins"]
     dq = np.abs(np.diff(qs, axis=0))

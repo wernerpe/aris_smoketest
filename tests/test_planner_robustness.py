@@ -286,6 +286,129 @@ def test_opts_are_not_mutated():
     assert DEFAULTS["ds_dense"] == 0.005
 
 
+# --------------------------------------------------------------------------
+# 7. the batched kinematics — the fast path must BE the old path
+# --------------------------------------------------------------------------
+def _small_lattice_args(spec, stroke, ds=0.01, n_q7=48):
+    pts, _ = planner.resample(stroke, ds)
+    return (pts, spec, None, 0.110, n_q7, True)
+
+
+def test_batched_lattice_matches_the_scalar_path():
+    """The whole point of the rewrite: `_build_lattice_batch` and
+    `_build_lattice_scalar` must produce the SAME lattice, not a similar one.
+
+    The valid mask and the joint values have to agree exactly — they come from
+    the same C++ solver and the same gates, so anything but zero difference is
+    a bug in the vectorisation.  sigma is allowed 1e-8 because the fast path
+    uses the analytic tip Jacobian where the scalar path finite-differences it;
+    the measured gap is ~2e-11, i.e. the finite differences' own truncation
+    error (see test_analytic_tip_jacobian_matches_fd).
+    """
+    for name, spec, stroke in (("floor line", FLOOR, floor_stroke()),
+                               ("inv rim", INV, inv_stroke()),
+                               ("under base", INV, under_base_line())):
+        args = _small_lattice_args(spec, stroke)
+        new = planner._build_lattice_batch(*args)
+        old = planner._build_lattice_scalar(*args)
+        v = old["valid"]
+        assert np.array_equal(new["valid"], v), f"{name}: valid mask differs"
+        assert v.any(), f"{name}: nothing valid — the test proves nothing"
+        assert np.max(np.abs(new["Q"][v] - old["Q"][v])) < 1e-10, name
+        assert np.array_equal(new["margin"], old["margin"]), name
+        assert np.max(np.abs(new["sigma"][v] - old["sigma"][v])) < 1e-8, name
+        # invalid nodes keep their sentinels, so nothing downstream can read a
+        # stale value out of a gap in the band
+        assert np.all(np.isnan(new["Q"][~v])) and np.all(new["sigma"][~v] == -1)
+
+
+def test_scalar_fallback_when_the_extension_has_no_batch():
+    """The station venv runs a cp310 wheel with only the scalar entry points.
+    With the batch functions taken away, the planner must still plan — the same
+    plan — and every wrapper must fall back rather than raise."""
+    q = np.array([plan_floor()["qs"][0], plan_floor()["qs"][-1]])
+
+    class _NoBatch:                     # a stand-in for the older extension
+        solve_ik = staticmethod(ik._IK.solve_ik)
+        solve_ik_cc = staticmethod(ik._IK.solve_ik_cc)
+
+    assert ik.has_batch(), "this build has no batch entry points to hide"
+    real = ik._IK
+    try:
+        ik._IK = _NoBatch()
+        assert not ik.has_batch()
+        T_fb, P_fb = ik.fk_batch(q)
+        J_fb = ik.tip_jacobian_batch(q, pen_ext=0.110)
+        lat_fb = planner.build_lattice(*_small_lattice_args(FLOOR,
+                                                            floor_stroke())[:2],
+                                       pen_ext=0.110)
+        r_fb = plan_stroke(floor_stroke(), FLOOR)
+    finally:
+        ik._IK = real
+    assert ik.has_batch()
+
+    # the fallback path took the scalar route and got the scalar answers
+    T, P = ik.fk_batch(q)
+    assert np.array_equal(T, T_fb) and np.array_equal(P, P_fb)
+    assert np.max(np.abs(ik.tip_jacobian_batch(q, pen_ext=0.110) - J_fb)) < 1e-8
+    lat = planner.build_lattice(*_small_lattice_args(FLOOR, floor_stroke())[:2],
+                                pen_ext=0.110)
+    assert np.array_equal(lat["valid"], lat_fb["valid"])
+    v = lat["valid"]
+    assert np.max(np.abs(lat["Q"][v] - lat_fb["Q"][v])) < 1e-10
+    assert r_fb["status"] == "ok"
+    assert np.max(np.abs(r_fb["qs"] - plan_floor()["qs"])) < 1e-10
+
+
+def test_batched_fk_is_bit_identical_to_frames_fk():
+    """`fk_many` is a C++ transcription of `frames.fk`.  Bit-identical, not
+    close: the lattice gates chain points on a 2 cm threshold, and a plan must
+    not change because a clearance check was vectorised."""
+    from aris_sixarm.frames import FR3_MAX, FR3_MIN, fk_many, tip_pos, tip_pos_many
+    Q = np.random.default_rng(11).uniform(FR3_MIN, FR3_MAX, size=(200, 7))
+    T, P = fk_many(Q)
+    for i, q in enumerate(Q):
+        Tr, Pr = fk(q)
+        assert np.array_equal(T[i], Tr) and np.array_equal(P[i], Pr), i
+    assert np.array_equal(tip_pos_many(Q, 0.110),
+                          np.array([tip_pos(q, 0.110) for q in Q]))
+
+
+def test_analytic_tip_jacobian_matches_fd():
+    """`metrics.tip_jacobian` (central differences) stays the reference; the
+    analytic z_i x (p_tip - p_i) Jacobian the planner actually uses has to
+    agree with it to well inside the gates it feeds."""
+    from aris_sixarm.frames import FR3_MAX, FR3_MIN
+    from aris_sixarm.metrics import (sigma_min, sigma_min_many, tip_jacobian,
+                                     tip_jacobian_many)
+    Q = np.random.default_rng(12).uniform(FR3_MIN, FR3_MAX, size=(100, 7))
+    Jfd = np.array([tip_jacobian(q, pen_ext=0.110) for q in Q])
+    Jan = tip_jacobian_many(Q, pen_ext=0.110)
+    assert np.max(np.abs(Jan - Jfd)) < 1e-8
+    s_fd = np.array([sigma_min(J) for J in Jfd])
+    assert np.max(np.abs(sigma_min_many(Jan) - s_fd)) < 1e-8
+    assert np.array_equal(sigma_min_many(Jfd), s_fd)   # same SVD, same numbers
+
+
+def test_solve_batch_agrees_with_solve():
+    """`ik.solve_batch` is `ik.solve` for a whole array, compacted the same
+    way — the lattice indexes branches by slot, so the order is contractual."""
+    pts, _ = planner.resample(inv_stroke(), 0.02)
+    Twb_inv = np.linalg.inv(INV.T_world_base())
+    poses = pwl.pen_down_poses(pts, Twb_inv, 0.110)
+    q7 = np.full(len(poses), 0.4)
+    Q, valid = ik.solve_batch(poses, q7, INV.q_seed)
+    n_sol = 0
+    for i, T in enumerate(poses):
+        ref = ik.solve(T, q7[i], INV.q_seed)
+        assert int(valid[i].sum()) == len(ref), i
+        for k, q in enumerate(ref):
+            assert np.array_equal(Q[i, k], q), (i, k)
+            n_sol += 1
+        assert np.all(np.isnan(Q[i, len(ref):]))
+    assert n_sol > 50, "the sample found almost no solutions — widen it"
+
+
 if __name__ == "__main__":
     t0 = time.time()
     fails = 0

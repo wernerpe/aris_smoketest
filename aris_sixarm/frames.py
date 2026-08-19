@@ -85,12 +85,54 @@ def fk(q, tcp=TCP_D):
     return T, np.array(pts)
 
 
+def _ext():
+    """The C++ extension, if it carries the batch entry points, else None.
+
+    Imported lazily: `ik` imports THIS module at load time, so the dependency
+    can only ever run the other way at call time.  A station venv on an older
+    wheel simply gets None and the python loops below.
+    """
+    from . import ik                      # lazy: see docstring
+    return ik._IK if ik.has_batch() else None
+
+
+def fk_many(qs, tcp=TCP_D):
+    """`fk` for a whole array. (N,7) -> (T (N,4,4), pts (N,9,3)).
+
+    The C++ chain is a literal transcription of `fk` above and reproduces it
+    BIT for bit (tests/test_planner_robustness.py pins that), so a caller
+    gating on a geometric threshold cannot tell the two apart.
+    """
+    qs = np.ascontiguousarray(np.asarray(qs, float).reshape(-1, 7))
+    ext = _ext()
+    if ext is not None:
+        d = ext.fk_batch(qs, tcp)
+        return d["T"], d["pts"]
+    T = np.empty((len(qs), 4, 4))
+    P = np.empty((len(qs), 9, 3))
+    for i, q in enumerate(qs):
+        T[i], P[i] = fk(q, tcp)
+    return T, P
+
+
 def tip_pos(q, pen_ext=PEN_EXT):
     """Pen tip position in link0."""
     T, _ = fk(q)
     return T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
 
 
+def tip_pos_many(qs, pen_ext=PEN_EXT):
+    """`tip_pos` for a whole array. (N,7) -> (N,3)."""
+    T, _ = fk_many(qs)
+    return T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
+
+
 def joint_margin(q):
     """Worst distance to a joint limit (rad). Strict comfort gate: >= 0.30."""
     return float(np.min(np.minimum(q - FR3_MIN, FR3_MAX - q)))
+
+
+def joint_margin_many(qs):
+    """`joint_margin` for a whole array. (N,7) -> (N,)."""
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    return np.min(np.minimum(qs - FR3_MIN, FR3_MAX - qs), axis=1)

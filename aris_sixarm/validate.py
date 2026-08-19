@@ -20,7 +20,11 @@ the clock) and re-derives every invariant from scratch:
 
 It shares only `frames`/`metrics` with the planner — no planner state, no
 lattice, no sheet.  A plan that passes here is a plan whose invariants hold in
-the kinematics, whatever the pipeline believed about itself.
+the kinematics, whatever the pipeline believed about itself.  The checks are
+run as whole-array operations (`fk_many`, `tip_jacobian_many`) rather than
+sample by sample, which is a change of speed and not of substance: the batched
+FK is bit-identical to `frames.fk`, and the analytic Jacobian agrees with the
+finite-difference reference to ~3e-10 — both pinned by tests.
 
 `validate_plan` NEVER raises: a malformed input or an internal error is a
 violation record (`kind="validator_error"`), because a validator that throws is
@@ -30,9 +34,9 @@ import traceback
 
 import numpy as np
 
-from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, fk, joint_margin,
-                     tip_pos)
-from .metrics import sigma_min as _sigma_min, tip_jacobian
+from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, fk_many,
+                     joint_margin_many, tip_pos_many)
+from .metrics import sigma_min_many as _sigma_min_many, tip_jacobian_many
 
 TIP_TOL = 2e-3           # m, pen tip must stay on the commanded curve
 MARGIN_GATE = 0.15       # rad, joint-limit comfort (planner.HARD_MARGIN)
@@ -118,7 +122,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
         Rwb, twb = Twb[:3, :3], Twb[:3, 3]
 
         # ---- 1. the pen drew the stroke -----------------------------------
-        tip_w = np.array([Rwb @ tip_pos(q, pen_ext) + twb for q in qs])
+        tip_w = tip_pos_many(qs, pen_ext) @ Rwb.T + twb
         if len(pts) == M:
             err = np.hypot(np.linalg.norm(tip_w[:, :2] - pts, axis=1), tip_w[:, 2])
         else:
@@ -138,8 +142,8 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
         for i, j in zip(*np.where(hi > 0)):
             add("joint_limit_high", i, qs[i, j], FR3_MAX[j])
 
-        marg = np.array([joint_margin(q) for q in qs])
-        sig = np.array([_sigma_min(tip_jacobian(q, pen_ext=pen_ext)) for q in qs])
+        marg = joint_margin_many(qs)
+        sig = _sigma_min_many(tip_jacobian_many(qs, pen_ext=pen_ext))
         worst["min_margin"] = float(marg.min())
         worst["min_sigma"] = float(sig.min())
         for i in np.flatnonzero(marg < margin_gate - eps):
@@ -156,20 +160,17 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
 
         # ---- 4. clearance: paper, and the inverted arms' own boom ----------
         if clearance:
-            min_z = np.inf
-            for i, q in enumerate(qs):
-                _, p = fk(q)
-                pw = (Rwb @ p.T).T + twb
-                z = float(pw[1:, 2].min())
-                min_z = min(min_z, z)
-                if z < Z_CLEAR - eps:
-                    add("paper_clearance", i, z, Z_CLEAR)
-                if spec.mount == "inv":
-                    rb = np.hypot(p[:, 0], p[:, 1])
-                    hit = (p[:, 2] < BOOM_Z) & (rb < BOOM_R)
-                    if np.any(hit):
-                        add("boom_keepout", i, float(rb[hit].min()), BOOM_R)
-            worst["min_chain_z"] = float(min_z)
+            _, p = fk_many(qs)                       # (M,9,3) chain points
+            pw = p @ Rwb.T + twb
+            z = pw[:, 1:, 2].min(axis=1)             # lowest link, per sample
+            worst["min_chain_z"] = float(z.min())
+            for i in np.flatnonzero(z < Z_CLEAR - eps):
+                add("paper_clearance", i, z[i], Z_CLEAR)
+            if spec.mount == "inv":
+                rb = np.hypot(p[:, :, 0], p[:, :, 1])
+                hit = (p[:, :, 2] < BOOM_Z) & (rb < BOOM_R)
+                for i in np.flatnonzero(hit.any(axis=1)):
+                    add("boom_keepout", i, float(rb[i][hit[i]].min()), BOOM_R)
 
         # ---- 5. the clock --------------------------------------------------
         if times is not None:

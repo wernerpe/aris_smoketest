@@ -28,8 +28,35 @@ def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT):
     return J
 
 
+def tip_jacobian_many(qs, pen_ext=PEN_EXT):
+    """`tip_jacobian` for a whole array. (N,7) -> (N,3,7).
+
+    Where the extension has the batch entry points this is the ANALYTIC
+    geometric Jacobian, z_i x (p_tip - p_i), not a finite difference — exact,
+    and 14 forward kinematics per configuration cheaper.  The two agree to
+    ~3e-10, i.e. to the central differences' own truncation error, and
+    `tip_jacobian` above stays the reference the fast path is tested against
+    (tests/test_planner_robustness.py::test_analytic_tip_jacobian_matches_fd).
+    """
+    qs = np.ascontiguousarray(np.asarray(qs, float).reshape(-1, 7))
+    from . import ik                       # lazy: ik imports frames, not metrics
+    if ik.has_batch():
+        return ik._IK.tip_jacobian_batch(qs, float(pen_ext))
+    if not len(qs):
+        return np.zeros((0, 3, 7))
+    return np.array([tip_jacobian(q, pen_ext=pen_ext) for q in qs])
+
+
 def sigma_min(J):
     return float(np.linalg.svd(J, compute_uv=False)[-1])
+
+
+def sigma_min_many(Js):
+    """`sigma_min` for a stack of Jacobians. (N,3,7) -> (N,)."""
+    Js = np.asarray(Js, float)
+    if not len(Js):
+        return np.zeros(0)
+    return np.linalg.svd(Js, compute_uv=False)[:, -1]
 
 
 def f_max(J, press_dir_base, cap=100.0):

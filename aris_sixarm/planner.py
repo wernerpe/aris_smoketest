@@ -94,6 +94,18 @@ def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False):
     return (pts[i0:i1], slice(i0, i1)) if return_slice else pts[i0:i1]
 
 
+Z_PAPER = 0.02            # m, chain points must stay this far above the paper
+BOOM_R = 0.12             # m, inverted-mount boom cylinder radius (base frame)
+BOOM_Z = -0.02            # m, below which the boom cylinder is an obstacle
+
+
+def _lattice_setup(spec, h_inv, n_q7):
+    from .fleet import H_INV_DEFAULT
+    Twb = spec.T_world_base(H_INV_DEFAULT if h_inv is None else h_inv)
+    return (Twb, np.linalg.inv(Twb),
+            np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, n_q7))
+
+
 def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
                   clearance=True):
     """IK + gate the whole (s x q7 x branch) lattice for a vertical pen.
@@ -101,13 +113,94 @@ def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
     Returns dict of arrays: Q (Ns,Nq,4,7), valid/margin/sigma (Ns,Nq,4).
     Nodes are kept only if margin >= HARD_MARGIN, sigma_min >= HARD_SIGMA and
     (optionally) the arm clears the paper and its own boom.
+
+    This is THE hot loop of the project — a 1.5 m stroke is ~7500 IK calls, and
+    for years every one of them crossed the pybind boundary on its own, checked
+    its own limits in python, verified its own FK in python, and paid 14 more
+    forward kinematics for a finite-difference Jacobian.  The C++ solver is
+    2-5 us; the scaffolding around it was fifty.  `_build_lattice_batch` does
+    the identical arithmetic in five array operations instead, and
+    `_build_lattice_scalar` below is kept verbatim for extensions that predate
+    the batch entry points (the station's cp310 wheel) — and as the reference
+    the equality test measures the fast path against.
     """
-    from .fleet import H_INV_DEFAULT
-    Twb = spec.T_world_base(H_INV_DEFAULT if h_inv is None else h_inv)
-    Twb_inv = np.linalg.inv(Twb)
-    q7s = np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, n_q7)
+    impl = _build_lattice_batch if ik.has_batch() else _build_lattice_scalar
+    return impl(pts_xy, spec, h_inv, pen_ext, n_q7, clearance)
+
+
+def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
+    """Vectorised `build_lattice`.  Numerically identical to the scalar path.
+
+    The gates are ANDs over independent per-node quantities, so applying them
+    in stages to a shrinking index set gives exactly the mask the nested loop
+    gives — and each stage only pays for the nodes that survived the last one,
+    which is why the clearance FK and the Jacobians are cheap here.
+    """
+    Twb, Twb_inv, q7s = _lattice_setup(spec, h_inv, n_q7)
+    pts = np.asarray(pts_xy, float)
+    Ns = len(pts)
     R_w = rotx(np.pi)                     # pen straight down, yaw fixed (see docstring)
+
+    # (a) every (step, q7) target pose, in one (Ns*Nq, 16) array.  Row order is
+    #     i*Nq + j so a reshape recovers the lattice axes.
+    T_w = np.tile(np.eye(4), (Ns, 1, 1))
+    T_w[:, :3, :3] = R_w
+    T_w[:, :3, 3] = np.column_stack([pts[:, 0], pts[:, 1], np.zeros(Ns)]) \
+        - pen_ext * R_w[:, 2]
+    T_b = Twb_inv @ T_w
+    flat = np.repeat(ik._flat16(T_b), n_q7, axis=0)
+
+    # (b) one solve, FK-verified in C++ and re-filtered against FR3 limits
+    Q, valid = ik.solve_batch(flat, np.tile(q7s, Ns), spec.q_seed)
+    Q = Q.reshape(Ns, n_q7, N_BRANCH, 7)
+    valid = valid.reshape(Ns, n_q7, N_BRANCH)
+
+    shape = (Ns, n_q7, N_BRANCH)
+    idx = np.flatnonzero(valid.reshape(-1))
+    q = Q.reshape(-1, 7)[idx]
+
+    # (c) joint-limit comfort margin
+    m = np.min(np.minimum(q - FR3_MIN, FR3_MAX - q), axis=1)
+    keep = m >= HARD_MARGIN
+    idx, q, m = idx[keep], q[keep], m[keep]
+
+    # (d) clearance: the paper, and the inverted arms' own boom cylinder
+    if clearance and len(idx):
+        _, p = ik.fk_batch(q)                      # (K,9,3) chain points
+        pw = p @ Twb[:3, :3].T + Twb[:3, 3]
+        keep = pw[:, 1:, 2].min(axis=1) >= Z_PAPER
+        if spec.mount == "inv":
+            rb = np.hypot(p[:, :, 0], p[:, :, 1])
+            keep &= ~np.any((p[:, :, 2] < BOOM_Z) & (rb < BOOM_R), axis=1)
+        idx, q, m = idx[keep], q[keep], m[keep]
+
+    # (e) controllability: analytic tip Jacobians, one batched SVD
+    if len(idx):
+        s = np.linalg.svd(ik.tip_jacobian_batch(q, pen_ext=pen_ext),
+                          compute_uv=False)[:, -1]
+        keep = s >= HARD_SIGMA
+        idx, q, m, s = idx[keep], q[keep], m[keep], s[keep]
+    else:
+        s = np.zeros(0)
+
+    Qo = np.full((Ns * n_q7 * N_BRANCH, 7), np.nan)
+    vo = np.zeros(Ns * n_q7 * N_BRANCH, bool)
+    mo = np.full(Ns * n_q7 * N_BRANCH, -1.0)
+    so = np.full(Ns * n_q7 * N_BRANCH, -1.0)
+    Qo[idx], vo[idx], mo[idx], so[idx] = q, True, m, s
+    return dict(Q=Qo.reshape(*shape, 7), valid=vo.reshape(shape),
+                margin=mo.reshape(shape), sigma=so.reshape(shape), q7s=q7s,
+                yaw=0.0, Twb=Twb, pts=pts, pen_ext=pen_ext, spec=spec)
+
+
+def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
+    """The original nested-loop lattice: one pybind crossing and one
+    finite-difference Jacobian per node.  Still the fallback wherever the
+    extension has no batch entry points, and the reference the batched path is
+    tested against (tests/test_planner_robustness.py)."""
+    Twb, Twb_inv, q7s = _lattice_setup(spec, h_inv, n_q7)
     Ns = len(pts_xy)
+    R_w = rotx(np.pi)
     Q = np.full((Ns, n_q7, N_BRANCH, 7), np.nan)
     valid = np.zeros((Ns, n_q7, N_BRANCH), bool)
     marg = np.full((Ns, n_q7, N_BRANCH), -1.0)
@@ -128,11 +221,11 @@ def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
                 if clearance:
                     _, p = fk(q)
                     pw = (Twb[:3, :3] @ p.T).T + Twb[:3, 3]
-                    if np.any(pw[1:, 2] < 0.02):        # 2 cm above the paper
+                    if np.any(pw[1:, 2] < Z_PAPER):     # 2 cm above the paper
                         continue
                     if spec.mount == "inv":             # own boom cylinder
                         rb = np.hypot(p[:, 0], p[:, 1])
-                        if np.any((p[:, 2] < -0.02) & (rb < 0.12)):
+                        if np.any((p[:, 2] < BOOM_Z) & (rb < BOOM_R)):
                             continue
                 s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext))
                 if s < HARD_SIGMA:
