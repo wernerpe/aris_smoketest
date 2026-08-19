@@ -358,6 +358,185 @@ def test_pause_schedule_is_monotone_and_avoids_the_blocked_cells():
     assert m_end > nA - 1, "the blockage should have cost at least one pause"
 
 
+class _StubPath:
+    """The three attributes `_search_priority` and `_schedule` read off a path."""
+
+    def __init__(self, n, dt):
+        self.n, self.dt, self.moves, self.motion = int(n), float(dt), True, float(n)
+
+
+def _random_images(arms, ns, rng, block):
+    """Synthetic collision images, TRANSPOSE-CONSISTENT the way real ones are.
+
+    `free_cells(a, b)` and `free_cells(b, a)` are the same predicate read the
+    two ways round, so a fabricated pair that is not a transpose of itself is
+    not a rig any geometry could produce.  Both ends of every path are kept
+    clear so that every order is feasible and the brute force below has
+    something to compare against at all.
+    """
+    F = {}
+    for i, a in enumerate(arms):
+        for b in arms[i + 1:]:
+            M = rng.random((ns[a] - 1, ns[b] - 1)) > block
+            M[:2, :] = M[-2:, :] = True
+            M[:, :2] = M[:, -2:] = True
+            F[(a, b)], F[(b, a)] = M, M.T.copy()
+    return F
+
+
+def test_priority_search_returns_the_minimum_makespan_order():
+    """The conductor's only free variable, searched instead of guessed.
+
+    Priority decides both feasibility and duration, and "busiest first, promote
+    whoever deadlocks" stops at the first order that works — which on the CSAIL
+    logo's phase 1 was the WORST of the three feasible ones (63.5 s against
+    48.3 s).  Two things are checked here, on synthetic collision images so it
+    is exact and fast: the search returns the true minimum over every
+    permutation (brute-forced with the same `_schedule` the old path used), and
+    it never returns worse than the busiest-first order the heuristic starts
+    from.  A third case does the same on real fleet geometry.
+    """
+    import itertools
+    rng = np.random.default_rng(20260819)
+    strictly_better = 0
+    for trial in range(12):
+        arms = [11, 22, 33]
+        ns = {a: int(rng.integers(14, 34)) for a in arms}
+        dt = 0.05
+        paths = {a: _StubPath(ns[a], dt) for a in arms}
+        F = _random_images(arms, ns, rng, block=rng.uniform(0.15, 0.5))
+        M = int(np.ceil(max(ns.values()) * 3.0)) + 64
+
+        def cells(a, b, F=F):
+            return F[(a, b)]
+
+        brute = {}
+        for order in itertools.permutations(arms):
+            res, _ = coordination._schedule(paths, list(order), [], cells, {},
+                                            M, dt)
+            if res is not None:
+                brute[order] = max(res[1].values())
+        assert brute, f"trial {trial}: no order is feasible, nothing to compare"
+        best, stats = coordination._search_priority(paths, list(arms), [], cells,
+                                                    {}, M, dt)
+        assert best is not None, f"trial {trial}: the search found nothing"
+        want = min(brute.values())
+        assert abs(best["makespan"] - want) < 1e-9, \
+            (f"trial {trial}: search says {best['makespan']:.3f} s, the "
+             f"minimum over {len(brute)} feasible orders is {want:.3f} s")
+        assert tuple(best["order"]) in brute
+        # ...and it is never worse than what busiest-first would have taken
+        heur = tuple(sorted(arms, key=lambda a: (-paths[a].motion, a)))
+        if heur in brute:
+            assert best["makespan"] <= brute[heur] + 1e-9
+            strictly_better += brute[heur] > want + 1e-9
+        assert stats["n_dp"] <= sum(len(list(itertools.permutations(arms, k)))
+                                    for k in range(1, len(arms) + 1))
+    assert strictly_better >= 1, \
+        "no trial where the busiest-first order was beaten: the test is vacuous"
+
+    # real geometry, real ArmPath, both code paths through `coordinate`
+    q0 = np.asarray(FLEET[31].q_seed, float)
+    paths = {31: coordination.ArmPath(31, np.linspace(q0, q0 + 0.25, 40), 0.02),
+             97: coordination.ArmPath(97, q0[None, :], 0.02),
+             71: coordination.ArmPath(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
+    searched = coordination.coordinate(paths, verbose=False)
+    guessed = coordination.coordinate(paths, priority_search=False, verbose=False)
+    assert searched["duration"] <= guessed["duration"] + 1e-9, \
+        (f"the search made it worse: {searched['duration']:.3f} s vs "
+         f"{guessed['duration']:.3f} s")
+    assert searched["search"]["n_permutations"] == 2 and guessed["search"] is None
+    # the deadlock-recovery path is still there and still reachable
+    assert coordination.coordinate(paths, priority_search=False,
+                                   retry_orders=True, verbose=False)["attempts"] >= 1
+
+
+def test_balancing_lowers_the_busiest_arm():
+    """A cover optimal for pen-ups can be terrible for the clock.
+
+    The synthetic instance is the pathological one the CSAIL orange pass is a
+    mild version of: one arm holds every segment and a second arm could draw
+    most of them.  What is asserted is that the pass lowers the maximum load,
+    that it stays inside `options` (segment 0 is pinned and must not move), and
+    that it lands within a stated factor of the true optimum — which is
+    brute-forced here over all 2^n assignments, because a greedy for an NP-hard
+    objective should be measured, not assumed.
+    """
+    import itertools
+    size = [5.0, 4.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0]
+    options = [{0}] + [{0, 1} for _ in size[1:]]      # segment 0 is arm 0's alone
+    owner = [0] * len(size)
+
+    def load_fn(arm, idx):
+        return sum(size[i] for i in idx)
+
+    out, info = allocate.balance_loads(owner, options, load_fn)
+    assert out[0] == 0, "a segment only one arm certifies was moved anyway"
+    for i, (a, o) in enumerate(zip(out, options)):
+        assert a in o, f"segment {i} was given to arm {a}, not in {sorted(o)}"
+    best = min(max(load_fn(0, [i for i, a in enumerate(m) if a == 0]),
+                   load_fn(1, [i for i, a in enumerate(m) if a == 1]))
+               for m in itertools.product(*[sorted(o) for o in options]))
+    assert info["max_before"] == sum(size)
+    assert info["max_after"] < info["max_before"], "the pass did nothing"
+    assert info["max_after"] <= best * 1.2 + 1e-9, \
+        (f"greedy landed at {info['max_after']} against an optimum of {best}")
+    assert info["rounds"] == len(info["moves"]) >= 1
+    # idempotent: a second pass over its own answer finds nothing left to do
+    again, info2 = allocate.balance_loads(out, options, load_fn)
+    assert again == out and info2["rounds"] == 0
+
+
+def test_balancing_cannot_change_what_is_drawn():
+    """Coverage is invariant under the balancer BY CONSTRUCTION, and stays so.
+
+    A move only ever hands a span to an arm that has certified the SAME span at
+    the same endpoints (`replan_same_span` refuses a re-plan that gives back so
+    much as a millimetre), so the set of drawn spans cannot change — which is
+    what makes "does load balancing cost coverage" a question with a
+    structural answer rather than a measured one.  Checked twice: the pure pass
+    refuses an assignment it was not offered, and a real two-arm allocation
+    draws exactly the same ink with the pass on and off.
+    """
+    try:
+        allocate.balance_loads([7], [{3, 5}], lambda a, i: 0.0)
+        raise AssertionError("an owner outside its own options was accepted")
+    except ValueError:
+        pass
+
+    ys = (1.631, 1.700, 1.560)          # three strokes arms 31 and 71 both reach
+    strokes = [dict(pts=np.column_stack([np.linspace(1.74, 1.87, 14),
+                                         np.full(14, y)]),
+                    color="grey", kind="outline", id=i) for i, y in enumerate(ys)]
+    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+              colors={31: "grey", 71: "grey"}, verbose=False)
+    raw = allocate.allocate(strokes, balance=False, **kw)
+    bal = allocate.allocate(strokes, balance=True, **kw)
+
+    def spans(r):
+        return sorted((s["stroke_id"], round(min(s["s_range"]), 9),
+                       round(max(s["s_range"]), 9))
+                      for a in r["arms"] for s in r["programs"][a])
+
+    assert bal["balance"]["n_movable"] >= 2, \
+        "no segment had an alternative arm: the test proves nothing"
+    assert bal["balance"]["rounds"] >= 1, "the balancer never moved anything"
+    assert spans(raw) == spans(bal), "the balancer changed WHICH ink is drawn"
+    assert abs(raw["dropped_len"] - bal["dropped_len"]) < 1e-12
+    assert abs(raw["drawn_len"] - bal["drawn_len"]) < 1e-9
+    assert bal["balance"]["max_after"] < bal["balance"]["max_before"], \
+        "the busiest arm did not get lighter"
+    # ...and every segment is still drawn by an arm that certified it: re-plan
+    # the shipped geometry for its new owner and it must come back "ok"
+    from aris_sixarm.stroke_api import plan_stroke
+    for a in bal["arms"]:
+        for s in bal["programs"][a]:
+            r = plan_stroke(np.asarray(s["pts"], float), FLEET[a],
+                            {"pen_ext": bal["pens"][a]})
+            assert r["status"] == "ok", \
+                f"arm {a} cannot certify the segment it was given: {r['status']}"
+
+
 if __name__ == "__main__":
     t0 = time.time()
     fails = 0

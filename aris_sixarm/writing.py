@@ -401,6 +401,34 @@ def _draw_time(qd, ud, dur, frac=QD_FRAC):
     return float(max(dur, need.max() if need.size else 0.0))
 
 
+def draw_duration(qd, ud, length, draw_speed=DRAW_SPEED_FLEET, frac=QD_FRAC):
+    """Seconds of ink for one densified segment. -> float.
+
+    `length / draw_speed` is what the MATERIAL allows; `_draw_time` stretches it
+    until no joint exceeds `frac` of its velocity limit, which is why 4.5 m of
+    ink at 0.12 m/s can take 64 s and not 38.  The draw-speed limit is a cap,
+    never a promise, and this is the one place that arithmetic lives —
+    `arm_program` lays the clock down with it and `allocate.balance_loads`
+    scores a candidate assignment with it, so the allocator's idea of "how long
+    would this arm take" is the timeline's, not a proxy for it.
+    """
+    return _draw_time(qd, ud, float(length) / max(draw_speed, 1e-9), frac)
+
+
+def segment_draw_time(spec, seg, draw_speed=DRAW_SPEED_FLEET, qd_frac=QD_FRAC,
+                      h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+    """How long THIS arm needs to lay THIS certified segment's ink. -> seconds.
+
+    Densifies exactly as `arm_program` does (same IK, same pen) and paces the
+    result the same way, so summing this over an arm's segments and adding the
+    sequencer's tour cost reproduces `arm_program`'s `duration` to the float.
+    """
+    qs = np.asarray(seg["plan"]["qs"], float)
+    pts = np.asarray(seg["plan"]["pts"], float)
+    qd, ud, _ = densify(qs, pts, spec, h_inv, pen_ext)
+    return draw_duration(qd, ud, seg["length"], draw_speed, qd_frac)
+
+
 # --------------------------------------------------------------------------
 # what a pen-up costs — ONE definition, used by the timeline and the sequencer
 # --------------------------------------------------------------------------
@@ -520,7 +548,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     draw_len = transit_len = 0.0
     transit_s = t_home + t_down
     for k, D in enumerate(dense):
-        dur = _draw_time(D["qd"], D["ud"], D["length"] / draw_speed, qd_frac)
+        dur = draw_duration(D["qd"], D["ud"], D["length"], draw_speed, qd_frac)
         for uu, q in zip(D["ud"][1:], D["qd"][1:]):
             add(t + uu * dur, q, k, uu)
         n_ch = int(np.clip(round(D["length"] / ink_chunk), 3, 60))

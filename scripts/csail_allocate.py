@@ -299,6 +299,16 @@ def _phase_json(res):
         pens_mm={str(a): round(1000 * res["pens"][a], 1) for a in res["arms"]},
         traced_m=res["total_len"], drawn_m=res["drawn_len"],
         dropped_m=res["dropped_len"], n_probes=res["n_probes"],
+        draw_speed=res.get("draw_speed"),
+        balance=(None if not res.get("balance") else dict(
+            n_movable=int(res["balance"]["n_movable"]),
+            rounds=int(res["balance"]["rounds"]),
+            max_before_s=float(res["balance"]["max_before"]),
+            max_after_s=float(res["balance"]["max_after"]),
+            loads_before_s={str(k): float(v)
+                            for k, v in res["balance"]["loads_before"].items()},
+            loads_after_s={str(k): float(v)
+                           for k, v in res["balance"]["loads_after"].items()})),
         wall_s=res["timing"]["total"],
         transit_s=float(sum(res["transit_time"].values())),
         baseline_transit_s=float(sum(q["baseline_cost"]
@@ -391,6 +401,15 @@ def add_args(ap):
     # transit it prices is the transit `writing.arm_program` will lay down, so
     # they have to be the same numbers in both places (see run_allocation).
     ap.add_argument("--transit-speed", type=float, default=writing.TRANSIT_SPEED)
+    # the material's limit along a stroke.  It is the ALLOCATOR's cost model
+    # too, now that the allocator balances the fleet on seconds instead of
+    # metres (allocate.rebalance), so it is defined here with the other two
+    # rather than only where the timeline is frozen.
+    ap.add_argument("--draw-speed", type=float, default=writing.DRAW_SPEED_FLEET)
+    ap.add_argument("--no-balance", action="store_true",
+                    help="skip the min-max load pass and ship the raw interval "
+                         "cover — which is optimal for pen-ups and blind to "
+                         "the clock (see allocate.balance_loads)")
     ap.add_argument("--qd-frac", type=float, default=writing.QD_FRAC,
                     help="fraction of the FR3 joint-velocity limit any move may use")
     ap.add_argument("--sequencer", default=allocate.SEQUENCER,
@@ -469,6 +488,8 @@ def run_allocation(a, verbose=False):
               active_override=_override(a.arms),
               sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
               max_probes=getattr(a, "max_probes", 3),
+              balance=not getattr(a, "no_balance", False),
+              draw_speed=getattr(a, "draw_speed", writing.DRAW_SPEED_FLEET),
               seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
               atlas_dir=None if a.no_prefilter else str(Path(a.out)))
     if not getattr(a, "two_pass", False):

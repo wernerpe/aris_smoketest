@@ -42,6 +42,27 @@ INK = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
        "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
 
 
+def _balance_json(b):
+    """The load-balancing pass's own record, JSON-shaped. -> dict or None.
+
+    Kept per phase because "who drew what, and how long each arm therefore
+    took" is the number the makespan is made of, and reading it back out of the
+    per-arm metres afterwards loses the BEFORE half.
+    """
+    if not b:
+        return None
+    return dict(
+        n_movable=int(b["n_movable"]), rounds=int(b["rounds"]),
+        max_before_s=float(b["max_before"]), max_after_s=float(b["max_after"]),
+        draw_speed=float(b["draw_speed"]), n_replans=int(b["n_replans"]),
+        loads_before_s={str(k): float(v) for k, v in b["loads_before"].items()},
+        loads_after_s={str(k): float(v) for k, v in b["loads_after"].items()},
+        metres_before={str(k): float(v) for k, v in b["metres_before"].items()},
+        metres_after={str(k): float(v) for k, v in b["metres_after"].items()},
+        moves=[{k: (int(v) if isinstance(v, (int, np.integer)) else v)
+                for k, v in m.items()} for m in b["moves"]])
+
+
 def build_phase(a, res, dt, pens):
     """One drawing phase: freeze, conduct, and have the checker sign it off."""
     print(f"\nfreezing per-arm timelines for {res['name']} "
@@ -260,9 +281,9 @@ def main(argv=None):
                     help="coordination clock steps per animation frame")
     ap.add_argument("--subcheck", type=int, default=2,
                     help="scene_check re-sampling factor")
-    ap.add_argument("--draw-speed", type=float, default=writing.DRAW_SPEED_FLEET)
-    # --transit-speed and --qd-frac come from add_args: the sequencer prices
-    # its transits with them before this script ever freezes a timeline.
+    # --draw-speed, --transit-speed and --qd-frac all come from add_args: the
+    # allocator balances the fleet on them and the sequencer prices its
+    # transits with them before this script ever freezes a timeline.
     ap.add_argument("--safety", type=float, default=coordination.SAFETY_M)
     ap.add_argument("--calib", type=float, default=coordination.CALIB_M)
     ap.add_argument("--pause", type=float, default=2.0,
@@ -306,6 +327,9 @@ def main(argv=None):
         min_clearance=min(B["rep"]["min_clearance"] for B in built),
         densify_tip_err=max(B["worst_tip"] for B in built),
         pause_total=sum(B["sch"]["pause_total"] for B in built),
+        makespan_s=float(sum(B["sch"]["duration"] for B in built)
+                         + (n_pause * dt if n_pause else 0.0)),
+        balanced=any(B["res"].get("balance") for B in built),
         logo=dict(w=info["logo_w"], h=info["logo_h"],
                   center=[float(x) for x in info["center"]],
                   offset=[float(x) for x in info["offset"]]),
@@ -317,9 +341,12 @@ def main(argv=None):
             traced_m=res["total_len"], drawn_m=res["drawn_len"],
             dropped_m=res["dropped_len"],
             duration_s=float(sch["duration"]),
+            floor_s=float(max(sch["nominal"].values())),
             pause_total=float(sch["pause_total"]),
             pauses={str(k): float(v) for k, v in sch["pauses"].items()},
             priority=[int(x) for x in sch["order"]],
+            priority_search=sch.get("search"),
+            balance=_balance_json(res.get("balance")),
             margin=float(sch["margin"]), min_clearance=float(rep["min_clearance"]),
             per_pair=rep["per_pair"], scene_check_ok=bool(rep["ok"]),
             n_segments_validated=int(rep["n_segments"]),

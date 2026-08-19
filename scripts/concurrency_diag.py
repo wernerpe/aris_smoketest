@@ -204,8 +204,10 @@ def conduct(paths, fields, margin, order=None, sweep=coordination.SWEEP_K,
             horizon_mult=3.0, retry=True, free=None):
     """One scheduling run. -> dict(progress, finish, pauses, order, ...) or None.
 
-    A faithful restatement of `coordination.coordinate` -- same priority rule,
-    same DP, same backtrack, same deadlock retry -- with the collision images
+    A faithful restatement of `coordination.coordinate` -- same DP, same
+    backtrack, same deadlock retry, and the priority order either handed in
+    (`order`, which is how the shipped run is reproduced now that the conductor
+    SEARCHES its order) or the old busiest-first guess -- with the images
     handed in rather than built, so a counterfactual is a re-threshold and not a
     re-derivation.  The knobs are the counterfactuals:
 
@@ -712,7 +714,13 @@ def main(argv=None):
         t0 = time.time()
         fields = pair_fields(paths)
         free0 = make_free(paths, fields, margin0, sorted(paths))
-        sch = conduct(paths, fields, margin0, free=free0)
+        # THE SHIPPED ORDER IS AN INPUT, NOT A RE-DERIVATION.  The conductor
+        # searches its priority order now (`coordination._search_priority`), so
+        # re-deriving it here with this file's own busiest-first restatement
+        # would reconstruct a different run and the assertions below would be
+        # comparing two schedules rather than checking one.  The order the run
+        # shipped with is read off the reference summary and handed in.
+        sch = conduct(paths, fields, margin0, order=R["priority"], free=free0)
         assert sch is not None
         print(f"  geometry + conduct in {time.time() - t0:.1f} s; "
               f"priority {sch['order']}")

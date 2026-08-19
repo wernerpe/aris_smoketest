@@ -30,7 +30,7 @@ schedule) and makes the coordination problem small enough to solve exactly.
             anything between two samples.
 
   SCHEDULE  Parked arms first (they are obstacles, and their schedule is a
-            constant), then the moving arms longest-programme-first.  Each arm
+            constant), then the moving arms in a PRIORITY ORDER.  Each arm
             gets the earliest-arrival monotone schedule that stays in free
             cells against every arm already scheduled — which, because the
             parked ones come first, means against every arm in the rig.  That
@@ -40,13 +40,28 @@ schedule) and makes the coordination problem small enough to solve exactly.
             unsafe timeline.  A conflict with a PARKED arm is reported rather
             than scheduled around, because waiting cannot resolve one.
 
+  PRIORITY  The order is SEARCHED, not guessed.  Priority is the conductor's
+            only free variable and it is worth as much as the safety margin:
+            on the CSAIL logo's phase 1 only 3 of the 24 orders are feasible at
+            all and "busiest first, promote whoever deadlocks" landed on the
+            worst of the three (63.5 s against 48.3 s).  With at most
+            `PRIORITY_SEARCH_MAX` moving arms every permutation is enumerated
+            and the minimum-makespan one kept (`_search_priority`); above that
+            the old busiest-first heuristic with deadlock promotion is the
+            fallback, because 7! schedules is no longer cheap.
+
   NOT v1    No re-timing of a stroke, no path change, and no dynamics.  The
             only recovery from a deadlock is re-ordering the priorities and
-            trying again (`retry_orders`), which resolves an ordering deadlock
-            and cannot resolve a geometric one.  A pause here is instantaneous
-            in the animation's kinematic playback; a real run needs the
-            acceleration-limited version of the same schedule.
+            trying again — exhaustively where that is affordable, by promoting
+            the arm that failed (`retry_orders`) where it is not.  Either way
+            it resolves an ordering deadlock and cannot resolve a geometric
+            one.  A pause here is instantaneous in the animation's kinematic
+            playback; a real run needs the acceleration-limited version of the
+            same schedule.
 """
+import math
+import time
+
 import numpy as np
 
 from .frames import PEN_EXT, fk_many
@@ -59,6 +74,7 @@ SAFETY_M = 0.05      # m, operating clearance between two arms
 CALIB_M = 0.03       # m, unsurveyed base positions (see module docstring)
 SWEEP_K = 0.55       # sweep slack factor: 0.5 for the chord, +10 % for the arc
 BROAD_CAP = 0.25     # m, clearances above this are not computed exactly
+PRIORITY_SEARCH_MAX = 6   # moving arms whose 6! = 720 orders are all enumerated
 
 # (chain point i, chain point j, radius); indices into the 10-point chain
 # (frames.fk's 9 points + the pen tip).  Points 1/2 and 5/6 coincide by
@@ -188,29 +204,45 @@ def free_cells(pi, pj, margin, sweep=SWEEP_K, cap=BROAD_CAP):
 # ==========================================================================
 # scheduling
 # ==========================================================================
-def _dp(free_ab, prog_hi, n, horizon):
+def _dp(free_ab, prog_hi, n, horizon, deadline=None):
     """Earliest-arrival monotone schedule for one arm. -> (progress (M,), m_end).
 
     `free_ab` maps each already-scheduled arm to its (n-1, nb-1) free-cell
     image; `prog_hi` maps it to its progress at every time step.  State is
     (progress index, time step); the only moves are "advance one index" and
     "wait", which is exactly what a pause schedule is allowed to do.
+
+    `deadline` (a step index) says "do not bother unless this arm can arrive by
+    then", and is how the priority search pays for itself: an order whose arm
+    finishes later than the best complete order already found cannot win, so
+    the forward pass is allocated and run over `deadline + 1` columns instead
+    of the whole horizon and returns `(None, None)` if it does not arrive.  It
+    is a BOUND, not a shortcut — the rest-suffix row below is still built over
+    the WHOLE horizon, because the run does not end at the deadline and an arm
+    that arrives has to stand in its final pose until it does.  With
+    `deadline=None` this is exactly the unbounded search, to the index.
     """
     M = horizon
-    ok = np.ones((n - 1, M), bool)
-    for b, F in free_ab.items():
-        ok &= F[:, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
-    okf = np.vstack([ok, ok[-1:]])                # index n-1 sits in cell n-2
+    D = M if deadline is None else int(min(max(deadline, 0) + 1, M))
     # AN ARM THAT HAS FINISHED HAS NOT LEFT.  Arrival is not the end of the
     # arm's participation: it then stands at the last sample of its path for
     # the rest of the run while other arms are still moving, and the earliest
     # arrival is only safe if that resting pose stays clear too.  Requiring the
     # suffix of the last row is what makes "arrives at m_end" mean "is safe
-    # from 0 to the horizon" rather than "is safe until it stops".
-    rest = np.logical_and.accumulate(okf[n - 1, ::-1])[::-1]
-    reach = np.zeros((n, M), bool)
+    # from 0 to the horizon" rather than "is safe until it stops".  It is one
+    # row, so it is cheap to keep at full length even when the forward pass is
+    # bounded.
+    rest_row = np.ones(M, bool)
+    for b, F in free_ab.items():
+        rest_row &= F[n - 2, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
+    rest = np.logical_and.accumulate(rest_row[::-1])[::-1][:D]
+    ok = np.ones((n - 1, D), bool)
+    for b, F in free_ab.items():
+        ok &= F[:, np.clip(prog_hi[b][:D], 0, F.shape[1] - 1)]
+    okf = np.vstack([ok, ok[-1:]])                # index n-1 sits in cell n-2
+    reach = np.zeros((n, D), bool)
     reach[0, 0] = True
-    for m in range(1, M):
+    for m in range(1, D):
         av = reach[:, m - 1] & okf[:, m - 1]
         col = av.copy()
         col[1:] |= av[:-1]
@@ -248,26 +280,105 @@ def _schedule(paths, moving, static, cells, prog0, M, dt, verbose=False):
     return (prog, finish), None
 
 
+def _search_priority(paths, moving, static, cells, prog0, M, dt):
+    """Every priority order of `moving`, ranked on MAKESPAN. -> (best, stats).
+
+    THE CONDUCTOR'S ONLY FREE VARIABLE IS WHO GOES FIRST, so it should not stop
+    at the first order that happens to work.  `n!` orders for n <= 6 is at most
+    720, and they share prefixes: arm `a`'s schedule depends on the arms
+    scheduled BEFORE it and on nothing else, so a depth-first walk over
+    permutation PREFIXES costs at most sum_k P(n, k) DP solves (64 for n = 4,
+    1956 for n = 6) instead of n * n! (96 and 4320), and the collision images
+    are computed once for the whole search.
+
+    Two prunings, both exact rather than heuristic:
+
+      BOUND    makespan is the max over per-arm finishes, so a prefix's max is
+               a LOWER BOUND on every order that extends it.  A prefix already
+               worse than the best complete order is abandoned, and the DP for
+               each new arm is given that bound as a `deadline` so it stops
+               looking as soon as it is beaten.
+      TIES     the bound is not strict, so orders that TIE on makespan are all
+               explored and ranked on total pause and then on the order itself.
+               The winner is therefore a function of the geometry alone, with
+               no dependence on the order the permutations were walked in.
+
+    Children are tried busiest-first, which is the old heuristic's guess: it
+    costs nothing and finding a good incumbent in the first descent is what
+    makes the bound bite for the rest of the search.
+
+    -> (dict(order, prog, finish, makespan, pause) or None, stats).
+    """
+    n = len(moving)
+    nom = {a: (paths[a].n - 1) * dt for a in moving}
+    by_motion = sorted(moving, key=lambda a: (-paths[a].motion, a))
+    stats = dict(n_dp=0, n_orders=0, n_pruned=0, fail_depth=n + 1, failed=None)
+    best = {}
+
+    def note_fail(a, depth):
+        if depth < stats["fail_depth"]:
+            stats["fail_depth"], stats["failed"] = depth, a
+
+    def rec(order, prog, finish, m_max, pause):
+        if len(order) == n:
+            stats["n_orders"] += 1
+            key = (m_max, round(pause, 9), tuple(order))
+            if not best or key < best["key"]:
+                best.update(key=key, order=list(order), prog=dict(prog),
+                            finish=dict(finish), makespan=m_max * dt,
+                            pause=float(pause))
+            return
+        if best and m_max > best["key"][0]:       # cannot beat what we have
+            stats["n_pruned"] += 1
+            return
+        placed = set(order)
+        for a in by_motion:
+            if a in placed:
+                continue
+            cap = best["key"][0] if best else None
+            fab = {b: cells(a, b) for b in static + order}
+            stats["n_dp"] += 1
+            P, m_end = _dp(fab, prog, paths[a].n, M, deadline=cap)
+            if P is None:
+                if cap is None:       # a real refusal, not "would be too slow"
+                    note_fail(a, len(order))
+                continue
+            prog[a], finish[a] = P, m_end * dt
+            rec(order + [a], prog, finish, max(m_max, m_end),
+                pause + (m_end * dt - nom[a]))
+            del prog[a], finish[a]
+
+    rec([], dict(prog0), {}, 0, 0.0)
+    return (best or None), stats
+
+
 def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
-               horizon_mult=3.0, retry_orders=True, verbose=True):
+               horizon_mult=3.0, retry_orders=True, priority_search=True,
+               search_max_n=PRIORITY_SEARCH_MAX, verbose=True):
     """Frozen paths -> a merged, pause-scheduled timeline.
 
     -> dict(progress {arm: (M,) index}, order, moving, parked, pauses, finish,
-            duration, free, margin, M, dt, attempts).  `free[(a, b)]` is the
-    collision image the schedule for `a` was built against, kept so a caller (or
-    a test) can check WHICH pairs were considered rather than trusting that they
-    were.
+            duration, free, margin, M, dt, attempts, search).  `free[(a, b)]` is
+    the collision image the schedule for `a` was built against, kept so a caller
+    (or a test) can check WHICH pairs were considered rather than trusting that
+    they were.
 
-    PRIORITY IS A CHOICE, AND A BAD ONE IS RECOVERABLE.  Every arm after the
-    first is conducted around arms whose schedules are already fixed, so an arm
-    late in the order can find that the earlier ones are never simultaneously
-    out of its way — a deadlock of the ordering, not of the geometry.  The
-    error message used to say "try a different priority order"; `retry_orders`
-    makes the conductor take its own advice, promoting the arm that failed to
-    the front and trying again, up to once per moving arm.  Promotion is the
-    right move because the arm at the front is the one nobody has to avoid.
-    The collision images are computed once per pair and reused across attempts,
-    so a retry costs a DP and not a re-derivation of the geometry.
+    PRIORITY IS A CHOICE, AND IT IS THE ONLY ONE THE CONDUCTOR MAKES.  Every arm
+    after the first is conducted around arms whose schedules are already fixed,
+    so the order decides both whether a schedule exists at all (an arm late in
+    the order can find that the earlier ones are never simultaneously out of its
+    way — a deadlock of the ordering, not of the geometry) and how long it
+    takes.  With `priority_search` and at most `search_max_n` moving arms every
+    permutation is enumerated and the MINIMUM-MAKESPAN one shipped
+    (`_search_priority`); the collision images are computed once per pair and
+    shared by the whole search, so the enumeration costs DPs and not a
+    re-derivation of the geometry.
+
+    Above `search_max_n` moving arms — where n! stops being cheap — the old
+    behaviour is the fallback: busiest first, and `retry_orders` promotes the
+    arm that deadlocked to the front and tries again, up to once per moving
+    arm, because the arm at the front is the one nobody has to avoid.  Either
+    path reports infeasibility rather than shipping an unsafe timeline.
     """
     margin = float(safety + calib)
     dt = next(iter(paths.values())).dt
@@ -297,18 +408,47 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
 
     prog0 = {a: np.zeros(M, int) for a in static}
     attempts, res, failed = [], None, None
-    for _ in range(len(moving) + 1 if retry_orders else 1):
-        attempts.append(list(moving))
-        res, failed = _schedule(paths, moving, static, cells, prog0, M, dt)
-        if res is not None:
-            break
-        if not retry_orders or moving[0] == failed:
-            break
-        if verbose:
-            print(f"  arm {failed} deadlocked at priority "
-                  f"{moving.index(failed) + 1}; promoting it to the front and "
-                  "re-conducting")
-        moving = [failed] + [a for a in moving if a != failed]
+    search, n_attempts = None, 0
+    if priority_search and len(moving) <= int(search_max_n):
+        heuristic = list(moving)
+        t0 = time.time()
+        best, stats = _search_priority(paths, moving, static, cells, prog0, M, dt)
+        search = dict(n_arms=len(moving), n_permutations=math.factorial(len(moving)),
+                      n_dp=stats["n_dp"], n_orders_costed=stats["n_orders"],
+                      n_pruned=stats["n_pruned"], wall=float(time.time() - t0),
+                      heuristic_order=[int(a) for a in heuristic])
+        n_attempts = stats["n_orders"]
+        if best is not None:
+            moving = best["order"]
+            res, failed = (best["prog"], best["finish"]), None
+            search.update(order=[int(a) for a in moving],
+                          makespan=float(best["makespan"]),
+                          pause_total=float(best["pause"]))
+            if verbose:
+                print(f"  priority search: {stats['n_dp']} DP solves over the "
+                      f"{search['n_permutations']} orders of {len(moving)} "
+                      f"moving arms ({stats['n_orders']} costed to the end, "
+                      f"{stats['n_pruned']} prefixes cut) in {search['wall']:.1f} s"
+                      f" -> {best['makespan']:.1f} s with "
+                      + "".join(f"{a} " for a in moving).strip()
+                      + (" (the busiest-first guess)" if moving == heuristic else
+                         f" instead of {' '.join(str(a) for a in heuristic)}"))
+        else:
+            failed = stats["failed"] or (moving[0] if moving else None)
+    else:
+        for _ in range(len(moving) + 1 if retry_orders else 1):
+            attempts.append(list(moving))
+            res, failed = _schedule(paths, moving, static, cells, prog0, M, dt)
+            if res is not None:
+                break
+            if not retry_orders or moving[0] == failed:
+                break
+            if verbose:
+                print(f"  arm {failed} deadlocked at priority "
+                      f"{moving.index(failed) + 1}; promoting it to the front "
+                      "and re-conducting")
+            moving = [failed] + [a for a in moving if a != failed]
+        n_attempts = len(attempts)
     if res is None:
         a = failed
         blocked = [b for b in static + moving if b != a and not cells(a, b).any()]
@@ -317,7 +457,8 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
             + (f"; its path is never clear of arm{'s' if len(blocked) > 1 else ''} "
                f"{', '.join(str(b) for b in blocked)}, which no amount of "
                "waiting can fix" if blocked else
-               f"; {len(attempts)} priority orders were tried")
+               f"; {n_attempts} priority order"
+               f"{'' if n_attempts == 1 else 's'} were tried")
             + "; v1 does not re-route — try a placement that keeps the arms "
             "further apart")
     prog, finish = res
@@ -326,14 +467,14 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
     order = static + moving
     if verbose:
         for k, a in enumerate(moving):
-            note = ("no pauses (busiest arm)" if finish[a] <= nom[a] + 1e-9
+            note = ("no pauses" if finish[a] <= nom[a] + 1e-9
                     else f"+{finish[a] - nom[a]:.1f} s of pauses")
             print(f"  arm {a:>2}: priority {k + 1} of {len(moving)} moving "
                   f"({len(static)} parked arms are obstacles for all of them), "
                   f"{paths[a].n} steps, {nom[a]:.1f} s nominal -> {finish[a]:.1f} s "
                   f"scheduled ({note})")
-        if len(attempts) > 1:
-            print(f"  ({len(attempts)} priority orders tried before one worked)")
+        if search is None and n_attempts > 1:
+            print(f"  ({n_attempts} priority orders tried before one worked)")
 
     pauses = {a: float(finish[a] - nom[a]) for a in paths if paths[a].moves}
     duration = float(max(finish.values()))
@@ -342,8 +483,8 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
                 pauses=pauses, finish=finish, nominal=nom, duration=duration,
                 margin=margin, safety=float(safety), calib=float(calib),
                 sweep=float(sweep), M=m_last, dt=float(dt), free=free,
-                moving=moving, parked=static, attempts=len(attempts),
-                pause_total=float(sum(pauses.values())))
+                moving=moving, parked=static, attempts=int(n_attempts),
+                search=search, pause_total=float(sum(pauses.values())))
 
 
 def report(res, paths):

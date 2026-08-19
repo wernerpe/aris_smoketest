@@ -28,6 +28,16 @@ written for.
              arms with the right pen — which is optimal for "fewest pieces",
              i.e. fewest pen-up handoffs in the middle of a line.  Ties go to
              the least-loaded arm.
+  BALANCE    The cover is greedy per stroke and blind to the clock: on the
+             CSAIL logo it hands arm 97 four and a half of the seven and a half
+             orange metres and leaves three arms drawing 0.6 m each, so the
+             phase takes as long as arm 97 does however well it is conducted.
+             `balance_loads` is the repair — a greedy improvement pass that
+             moves (and swaps) segments MORE THAN ONE ARM ALREADY CERTIFIES
+             from the busiest arm to a less-loaded one, scored on the real
+             per-arm nominal clock (`writing.segment_draw_time` for the ink,
+             the sequencer's own tour cost for the pen-ups).  It never changes
+             WHAT is drawn, only who draws it, so coverage is invariant.
   REPAIR     The cover's own gaps are the first statement of what is missing in
              the terms that matter — the UNION of the arms carrying the right
              ink — and `probe_stroke` never saw them, because it only ever knew
@@ -54,13 +64,17 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import sequence
-from .fleet import FLEET
+from . import sequence, writing
+from .fleet import FLEET, H_INV_DEFAULT
 from .stroke_api import (plan_stroke, polyline_length, reverse_plan,
                          truncate_polyline)
 
 ACTIVE = [aid for aid, s in FLEET.items() if s.active]
 COLORS = ("grey", "orange")
+DRAW_SPEED = writing.DRAW_SPEED_FLEET    # m/s the material allows; a CAP, and
+#   the load model's — see `writing.draw_duration`, which stretches it wherever
+#   the redundancy resolution asks a joint to move faster than it may.
+BALANCE_ROUNDS = 200                     # accepted moves the balancer may make
 
 
 def active_arms(active_override=None):
@@ -493,6 +507,36 @@ def _segment_points(pts, s0, s1, direction):
     return sub[::-1] if direction < 0 else sub
 
 
+def _entry(st, sp, plan):
+    """One programme entry from a re-planned span. -> dict."""
+    pts = _segment_points(st["pts"], sp["s0"], sp["s1"], sp["direction"])
+    return dict(stroke_id=st["id"], color=st["color"], kind=st.get("kind", ""),
+                s_range=(float(sp["s0"]), float(sp["s1"])),
+                direction=int(sp["direction"]), pts=pts,
+                length=float(polyline_length(pts)), plan=plan)
+
+
+def replan_same_span(st, sp, spec, opts=None, min_seg=MIN_SEG_M, tol=1e-12):
+    """Re-plan EXACTLY this span for another arm. -> (entry, n_plan_calls).
+
+    The entry is None unless the arm's clean re-plan certifies the span end to
+    end — `replan_segment` is allowed to give ground and this is the one caller
+    that refuses to take it, because the whole point of a balancing move is
+    that the ink does not change.  Both directions are offered, because a plan
+    is a walk of the redundancy band and the band is not symmetric.
+    """
+    n = 0
+    for d in (int(sp["direction"]), -int(sp["direction"])):
+        plan, s2 = replan_segment(st["pts"], dict(sp, direction=d), spec, opts,
+                                  min_seg=min_seg)
+        n += int(s2["replans"])
+        if (plan is not None and s2["lost"] <= tol
+                and abs(s2["s0"] - sp["s0"]) <= tol
+                and abs(s2["s1"] - sp["s1"]) <= tol):
+            return _entry(st, s2, plan), n
+    return None, n
+
+
 def replan_segment(pts, span, spec, opts=None, backoff=BACKOFF_M,
                    tries=3, min_seg=MIN_SEG_M):
     """Re-plan one chosen span from scratch, shrinking it if it does not certify.
@@ -530,6 +574,227 @@ def replan_segment(pts, span, spec, opts=None, backoff=BACKOFF_M,
         else:
             s0 += back
     return None, dict(span, s0=s0, s1=s1, lost=lost, replans=tries)
+
+
+# ===========================================================================
+# 4b. load balancing: who draws it, when more than one arm may
+# ===========================================================================
+# THE COVER IS OPTIMAL FOR THE WRONG THING.  `greedy_cover` minimises pieces
+# per stroke, which is the right first objective (a piece is a pen-up, a
+# handoff and a visible seam) and says nothing at all about the clock.  A phase
+# ends when its LAST arm stops, so what the makespan pays for is the maximum
+# per-arm programme, and on the CSAIL logo's orange pass the greedy hands arm
+# 97 4.52 of the 7.45 m — 88.0 s of ink and pen-up against 18.0, 27.7 and
+# 34.4 s for the other three.  No conductor can recover that: 88.0 s is the
+# phase's floor, and it was set by an allocation that never looked at a clock.
+#
+# What follows is the smallest honest repair.  Minimum-makespan scheduling with
+# machine eligibility (R|M_j|C_max) is NP-hard, so this is not an optimiser: it
+# is a first-order greedy that repeatedly takes the BEST single move or swap
+# out of the busiest arm and stops when none improves.  Two properties are
+# worth more here than optimality:
+#
+#   COVERAGE IS INVARIANT.  A move only ever re-assigns a span that the
+#   receiving arm has ALREADY certified at exactly the same endpoints — the
+#   candidate is re-planned from scratch for that arm and refused unless its
+#   clean re-plan gives back not one millimetre (`lost == 0`).  The set of
+#   drawn spans is therefore identical before and after, and "does the balancer
+#   cost coverage" is not a measurement, it is a type.
+#
+#   THE SCORE IS THE TIMELINE'S.  `load_fn` prices an arm's programme as
+#   `writing.segment_draw_time` per segment plus the sequencer's own optimal
+#   tour cost over exactly those segments — which is `writing.arm_program`'s
+#   `duration` to the float, not a proxy for it.  A balancer optimising a
+#   different clock from the one the fleet runs on would be worse than none.
+def _slice_ends(ends, k):
+    """`sequence.endpoints` restricted to segment positions `k`, in that order."""
+    k = list(k)
+    return dict(q=ends["q"][k], xy=ends["xy"][k], hover=ends["hover"][k],
+                z=ends["z"][k], n=len(k))
+
+
+def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
+             qd_frac=writing.QD_FRAC, h_inv=H_INV_DEFAULT,
+             pen_ext=None, ends=None, exact_max_n=sequence.EXACT_MAX_N,
+             budget=sequence.TIME_BUDGET):
+    """Nominal seconds one arm needs for `segs`: its ink plus its best pen-up tour.
+
+    `draw_s` is the per-segment ink time in the same order as `segs`.  The
+    pen-up half is `sequence.solve` on the same cost matrix the real sequencing
+    pass uses, so this is not an estimate of the arm's programme — it is the
+    programme, costed before it is committed to.
+    """
+    if not len(segs):
+        return 0.0
+    pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
+    C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
+                             ends=ends, pen_ext=pen)
+    r = sequence.solve(C, len(segs), exact_max_n, budget)
+    return float(sum(draw_s) + r["cost"])
+
+
+def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
+                  verbose=False):
+    """Greedy min-max load balancing over segments several arms can certify.
+
+    `owner[i]` is the arm currently drawing segment i; `options[i]` is the set
+    of arms that can draw it AT THE SAME SPAN (`owner[i]` included);
+    `load_fn(arm, (i, j, ...)) -> seconds` prices one arm's whole programme.
+    -> (owner, info) with `info` carrying the loads before and after and every
+    move taken.
+
+    THE OBJECTIVE IS THE MAXIMUM LOAD, and the tie-break is the sum of squares.
+    The tie-break is not decoration: on a plateau — several moves that leave the
+    busiest arm exactly where it is — flattening the rest is what makes the NEXT
+    move able to lower the maximum, and a pure max objective stalls on the first
+    one.  Both are compared lexicographically and strictly, so the potential
+    falls at every accepted move; with finitely many assignments that is the
+    termination proof, and `max_rounds` is a belt on top of it.
+
+    Each round considers every single-segment RELOCATION out of the busiest arm
+    and every SWAP of one of its segments against one held by another arm, and
+    takes the best.  The busiest arm is the only source worth considering
+    because it is the only arm whose load is the objective; a swap is worth
+    considering separately from two moves because the pair can be admissible
+    when neither half is.
+    """
+    owner = list(owner)
+    options = [set(o) for o in options]
+    for i, (a, o) in enumerate(zip(owner, options)):
+        if a not in o:
+            raise ValueError(f"segment {i} is drawn by arm {a}, which is not "
+                             f"among the arms that certify it ({sorted(o)})")
+    arms = sorted(set(owner) | {a for o in options for a in o})
+    cache = {}
+
+    def load(a, own):
+        key = (a, tuple(i for i, x in enumerate(own) if x == a))
+        if key not in cache:
+            cache[key] = float(load_fn(a, key[1]))
+        return cache[key]
+
+    def score(own):
+        L = {a: load(a, own) for a in arms}
+        v = sorted(L.values(), reverse=True)
+        return (round(v[0], 9) if v else 0.0,
+                round(float(sum(x * x for x in v)), 6)), L
+
+    key, L = score(owner)
+    info = dict(loads_before=dict(L), max_before=key[0], moves=[], rounds=0,
+                n_movable=int(sum(1 for o in options if len(o) > 1)))
+    for _ in range(int(max_rounds)):
+        src = max(arms, key=lambda a: (L[a], a))
+        mine = [i for i, x in enumerate(owner) if x == src]
+        best = None
+        for i in mine:
+            for b in sorted(options[i] - {src}):
+                cand = list(owner)
+                cand[i] = b
+                k, _ = score(cand)
+                if best is None or k < best[0]:
+                    best = (k, cand, dict(kind="move", seg=i, frm=src, to=b))
+        for i in mine:
+            for j, b in enumerate(owner):
+                if b == src or b not in options[i] or src not in options[j]:
+                    continue
+                cand = list(owner)
+                cand[i], cand[j] = b, src
+                k, _ = score(cand)
+                if best is None or k < best[0]:
+                    best = (k, cand, dict(kind="swap", seg=i, other=j,
+                                          frm=src, to=b))
+        if best is None or not best[0] < key:
+            break
+        owner, key = best[1], best[0]
+        _, L = score(owner)
+        best[2].update(max_after=key[0])
+        info["moves"].append(best[2])
+        info["rounds"] += 1
+        if verbose:
+            m = best[2]
+            print(f"  balance {info['rounds']:>2}: {m['kind']} segment "
+                  f"{m['seg']} arm {m['frm']} -> arm {m['to']}"
+                  + (f" (against segment {m['other']})" if "other" in m else "")
+                  + f"; busiest arm now {key[0]:.1f} s")
+    info.update(loads_after=dict(L), max_after=key[0], n_loads=len(cache))
+    return owner, info
+
+
+def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
+              draw_speed=DRAW_SPEED, seq_opts=None, min_seg=MIN_SEG_M,
+              h_inv=H_INV_DEFAULT, verbose=False):
+    """The probe data + the placed spans -> a re-assignment. -> (placed, info).
+
+    Three steps, in the order that keeps the planner honest:
+
+      1. ALTERNATIVES.  For every placed span, the arms of the right colour
+         whose certified intervals already cover it end to end (`frac_covers`
+         over `ivmap` — the probe data, not a new guess), each offered a clean
+         re-plan of exactly that span and kept only if it certifies all of it.
+      2. PRICE.  Per (arm, span) the ink seconds; per arm the hover poses of
+         its whole candidate pool once, so a load is a cost-matrix slice and a
+         Held-Karp rather than a fresh IK sweep.
+      3. BALANCE.  `balance_loads` on the result.
+
+    `placed` entries are mutated in place (`arm` and `entry`), which is what the
+    caller then reads its programmes out of.
+    """
+    seq = dict(seq_opts or {})
+    ts = float(seq.get("transit_speed", writing.TRANSIT_SPEED))
+    qf = float(seq.get("qd_frac", writing.QD_FRAC))
+    exact = int(seq.get("exact_max_n", sequence.EXACT_MAX_N))
+    budget = float(seq.get("budget", sequence.TIME_BUDGET))
+
+    options, entries, n_probe = [], [], 0
+    for it in placed:
+        st, sp, own = it["stroke"], it["sp"], it["arm"]
+        opt, ent = {own}, {own: it["entry"]}
+        for b in arms:
+            if b == own or colors.get(b) != st["color"]:
+                continue
+            ivs = [v for v in ivmap.get(st["id"], []) if v.arm == b]
+            if not frac_covers(ivs, sp["s0"], sp["s1"]):
+                continue
+            e, n = replan_same_span(st, sp, specs[b], aopts[b], min_seg)
+            n_probe += n
+            if e is not None:
+                opt.add(b)
+                ent[b] = e
+        options.append(opt)
+        entries.append(ent)
+
+    pool = {a: [i for i, o in enumerate(options) if a in o] for a in arms}
+    at = {a: {i: k for k, i in enumerate(pool[a])} for a in arms}
+    ends, draw_s = {}, {}
+    for a in arms:
+        if not pool[a]:
+            continue
+        segs = [entries[i][a] for i in pool[a]]
+        ends[a] = sequence.endpoints(specs[a], segs, h_inv, pens[a])
+        for i, s in zip(pool[a], segs):
+            draw_s[(a, i)] = writing.segment_draw_time(specs[a], s, draw_speed,
+                                                       qf, h_inv, pens[a])
+
+    def load_fn(a, idx):
+        if not idx:
+            return 0.0
+        return arm_load(specs[a], [entries[i][a] for i in idx],
+                        [draw_s[(a, i)] for i in idx], ts, qf, h_inv, pens[a],
+                        ends=_slice_ends(ends[a], [at[a][i] for i in idx]),
+                        exact_max_n=exact, budget=budget)
+
+    owner0 = [it["arm"] for it in placed]
+    owner, info = balance_loads(owner0, options, load_fn, verbose=verbose)
+    for i, (it, a) in enumerate(zip(placed, owner)):
+        it["arm"], it["entry"] = a, entries[i][a]
+    info.update(n_replans=n_probe, draw_speed=float(draw_speed),
+                metres_before={a: float(sum(entries[i][owner0[i]]["length"]
+                                            for i in range(len(placed))
+                                            if owner0[i] == a)) for a in arms},
+                metres_after={a: float(sum(placed[i]["entry"]["length"]
+                                           for i in range(len(placed))
+                                           if owner[i] == a)) for a in arms})
+    return placed, info
 
 
 # ===========================================================================
@@ -803,7 +1068,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None,
              sequencer=SEQUENCER, seq_opts=None, pens=None, colors=None,
              max_probes=3, gap_tol=GAP_TOL_M, repair_rounds=3,
-             repair_budget=REPAIR_BUDGET):
+             repair_budget=REPAIR_BUDGET, balance=True,
+             draw_speed=DRAW_SPEED):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -830,6 +1096,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     exact to 16 segments) or "nn" (the old paper-distance nearest neighbour,
     kept for comparison).  Either way the chosen order is costed on the same
     transit-time matrix, so `transit_time` is comparable across both.
+
+    `balance` runs the min-max load pass over the chosen cover (see the
+    section-4b commentary and `rebalance`): a phase ends when its slowest arm
+    stops, and the interval cover alone will happily give one arm 60 % of the
+    ink.  It only ever re-assigns spans a second arm has already certified at
+    the same endpoints, so it cannot change the coverage; `draw_speed` is the
+    material's limit, and it enters here because the load it balances is
+    SECONDS and not metres.  `--no-balance` recovers the old allocation.
     """
     if arms is not None and active_override is not None:
         raise ValueError("pass arms= or active_override=, not both")
@@ -890,7 +1164,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     # ---- clean re-plans -------------------------------------------------
     t2 = time.time()
     programs = {a: [] for a in arms}
-    n_replan = 0
+    n_replan, placed = 0, []
     for ps in cover["per_stroke"]:
         st, L = ps["stroke"], ps["L"]
         for span in place_cuts(ps["chosen"], L, overlap):
@@ -899,20 +1173,30 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
             n_replan += sp["replans"]
             if plan is None:
                 continue
-            pts = _segment_points(st["pts"], sp["s0"], sp["s1"], sp["direction"])
-            programs[span["arm"]].append(dict(
-                stroke_id=st["id"], color=st["color"], kind=st.get("kind", ""),
-                s_range=(float(sp["s0"]), float(sp["s1"])),
-                direction=int(sp["direction"]), pts=pts,
-                length=float(polyline_length(pts)), plan=plan))
+            placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
+                               entry=_entry(st, sp, plan)))
     t_replan = time.time() - t2
+
+    # ---- load balancing -------------------------------------------------
+    t2b = time.time()
+    bal = None
+    pen_m = {a: pen_of(pens, a) for a in arms}
+    if balance and placed:
+        placed, bal = rebalance(placed, arms, colors, ivmap, specs, aopts,
+                                pen_m, draw_speed, seq_opts, min_seg,
+                                verbose=verbose)
+        n_replan += bal["n_replans"]
+    for it in placed:
+        programs[it["arm"]].append(it["entry"])
+    t_balance = time.time() - t2b
 
     dropped = leftover(strokes, programs, gap_tol)
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
-               sequencer=sequencer, pens={a: pen_of(pens, a) for a in arms},
+               sequencer=sequencer, pens=pen_m, balance=bal,
+               draw_speed=float(draw_speed),
                timing=dict(prefilter=t_pre, probe=t_probe, repair=t_repair,
-                           replan=t_replan))
+                           replan=t_replan, balance=t_balance))
     t3 = time.time()
     out["sequence"], out["transit"], out["transit_time"] = {}, {}, {}
     for a in arms:
@@ -997,9 +1281,22 @@ def report(res, strokes):
         lines.append("      " + "  ".join(
             f"{cells.get((ix, iy), 0.0):5.2f}" for ix in range(3))
             + ("   <- top" if iy == 2 else "   <- bottom" if iy == 0 else ""))
+    b = res.get("balance")
+    if b:
+        n_seg = sum(len(res["programs"][a]) for a in res["arms"])
+        lines.append(f"balance: {b['n_movable']} of {n_seg} segments are "
+                     f"certified by more than one arm; {b['rounds']} "
+                     f"move{'' if b['rounds'] == 1 else 's'} taken, busiest arm "
+                     f"{b['max_before']:.1f} s -> {b['max_after']:.1f} s "
+                     f"(the phase's floor), draw speed {b['draw_speed']:g} m/s")
+        lines.append("      per-arm nominal s  " + "  ".join(
+            f"{a}:{b['loads_before'].get(a, 0.0):.1f}->"
+            f"{b['loads_after'].get(a, 0.0):.1f}" for a in res["arms"]))
     t = res["timing"]
     lines.append(f"time  prefilter {t['prefilter']:.1f} s  probe {t['probe']:.1f} s"
                  f"  repair {t.get('repair', 0.0):.1f} s"
-                 f"  replan {t['replan']:.1f} s  sequence {t['sequence']:.1f} s"
+                 f"  replan {t['replan']:.1f} s"
+                 f"  balance {t.get('balance', 0.0):.1f} s"
+                 f"  sequence {t['sequence']:.1f} s"
                  f"  total {t['total']:.1f} s")
     return lines

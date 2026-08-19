@@ -378,9 +378,23 @@ Gaps: the band between the four inverted arms, and the sheet corners.
 one pen length per arm (arm 2 = 300 mm, arms 31/71/97 = 200 mm): **99.2139 % of
 11.567 traced metres certified**, one 0.091 m span left empty at the centre of
 the four inverted bases. 49 segments, both phases signed off by `scene_check`
-(86.2 mm minimum clearance against an 80 mm margin), 1843 frames at 12 fps.
-`docs/DEAD_SPANS.md` has the recipe and what each knob was worth; the pipeline is
-`csail_schedule.py --two-pass --pens 2:300,31:200,71:200,97:200 --min-coverage 0.99`.
+(82.0 mm minimum clearance against an 80 mm margin), 1304 frames at 12 fps —
+**108.6 s of wall clock**, down from 153.5 for the same ink after the makespan
+pass below. `docs/DEAD_SPANS.md` has the recipe and what each knob was worth;
+the pipeline is `csail_schedule.py --two-pass --pens 2:300,31:200,71:200,97:200
+--min-coverage 0.99`.
+
+**Makespan pass (2026-08-19).** Two changes, no safety spent and no metre
+given up: the conductor now SEARCHES its priority order (every permutation of
+up to six moving arms, ranked on makespan, branch-and-bounded through a shared
+set of collision images) instead of taking the first that works, and the
+allocator now balances the fleet on SECONDS instead of metres — a greedy
+min-max pass that re-assigns spans a second arm has already certified at
+identical endpoints, so coverage cannot change. Phase 1 63.5 → **38.4 s**,
+phase 2 88.0 → **68.3 s**, total 153.5 → **108.6 s** (−29.3 %), pause 148.0 →
+50.5 s (−66 %). Single pass with the arms permanently split grey/orange is
+faster still and tops out at 91.1 % of the logo, so it is refused: coverage is
+a constraint, not a term in the objective. `docs/CONCURRENCY.md`.
 
 ## Roadmap
 
@@ -407,6 +421,11 @@ the four inverted bases. 49 segments, both phases signed off by `scene_check`
    transit time — exact Held-Karp to 16 segments, NN + 2-opt/Or-opt with
    direction flips above it (`sequence.py`, `stroke_api.reverse_plan`;
    −33.6 % pen-up time, −22 % makespan)
+   ✅ makespan: exhaustive minimum-makespan priority search in the conductor
+   (`coordination._search_priority`) and a min-max load-balancing pass over the
+   interval cover (`allocate.balance_loads`, scored on the timeline's own
+   clock) — 153.5 → 108.6 s on the whole logo at unchanged coverage, margin and
+   certificates
    ▶ still open: the RRT transits (hover moves are still straight joint-space
    lines), re-ordering/re-routing in the conductor rather than pauses only, and
    the acceleration-limited version of the schedule — playback is kinematic
