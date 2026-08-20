@@ -130,3 +130,138 @@ The spiral is the one that matters most, because it is ONE stroke: there is no w
 | spiral | 40 | 1 | 55.9 s | 82.1 mm | PASS |
 | duotone | 65 | 2 | 34.4 s | 85.1 mm | PASS |
 
+
+## Speed-dependent verdict: that was a verdict AT ONE DRAW SPEED (2026-08-20)
+
+`scripts/speed_sweep.py`; floors in `out/floor_sp*.json`, conducted cells in
+`out/csail_schedule_sp*.json`, the mechanism in `out/speed_sweep_ink.json`.
+
+The section above judges the min-travel band and the fiber menus at
+`writing.DRAW_SPEED_FLEET` = 0.12 m/s, the speed the ANIMATION runs at. The rig
+draws at `pacing.V_DRAW` = **0.02 m/s**, six times slower, and the mechanism
+that made the features expensive is speed-dependent in a way the verdict was
+not. `writing._draw_time` is one `max`:
+
+    draw_s(segment) = max( length / draw_speed ,  need )
+    need            = max_i |dq_i| / (QD_MAX_i * qd_frac) / du_i
+
+`need` is a property of the path through the band alone — radians per unit of
+normalised arc over a velocity limit — and it never sees the draw speed. So
+each segment has a critical speed **v\* = length / need**, above which the joint
+cap binds and the ink is stretched and at or below which the ink is exactly the
+material's `length / draw_speed`. Constraining the band raises `need`, and so
+raises v\*; it cannot touch `length`. The premise the menus rest on — that
+interior draw time is invariant across variants — is not false in general. It
+is false **above** v\* and exactly true below it.
+
+**Method, and what is measured versus estimated.** Conducting a cell costs ~45
+min, so only four were conducted (0.08 and 0.12 m/s, both settings). Every cell
+is ALLOCATED and FROZEN at its own draw speed — `allocate.rebalance` scores
+assignments in seconds, so who draws what is itself a function of the speed —
+which gives the floor exactly. Makespan is then floor + a per-setting offset
+calibrated on the conducted cells (`speed_sweep.OFFSET_S`): 24.01 s for the
+defaults, 31.34 s with the features. That offset absorbs the entry/exit lifts
+and idle taxi that `floor_cell` omits, plus the conductor's pauses. **The
+load-bearing assumption is that the offset does not grow as the draw speed
+falls** — every term in it is a joint-space move paced by `qd_frac` and not by
+`draw_speed`, and a slower programme spreads the same hover conflicts over more
+seconds, so arms meet in time less often, not more. The two conducted speeds
+per setting agree on it to ~3.5 s, which is the error bar on every estimated
+row. Rebuilding the conducted cells from the model lands within **±1.8 s**:
+
+| cell | floor (computed) | makespan (model) | makespan (conducted) | error |
+|---|---|---|---|---|
+| 0.08 defaults | 90.9 s | 114.9 s | **116.708 s** | −1.77 s |
+| 0.08 min_travel+cluster | 107.1 s | 138.5 s | **140.083 s** | −1.63 s |
+| 0.12 defaults | 81.8 s | 105.8 s | **104.021 s** | +1.78 s |
+| 0.12 min_travel+cluster | 93.7 s | 125.0 s | **123.375 s** | +1.63 s |
+
+No conducted confirmation at 0.05 m/s was attempted: a 10-minute budget buys
+~350 frames there, i.e. fps ≈ 1.7, and the conductor's swept slack is
+0.55 × the per-step motion, so a clock that coarse measures its own coarseness
+and not the draw speed.
+
+**The grid.** Coverage is **99.2139 %** in all eight cells and all four
+conducted runs — asserted per cell from the allocator's own totals, not assumed.
+
+| draw speed | features | floor | ink | stretch | capped | transit | makespan |
+|---|---|---|---|---|---|---|---|
+| 0.02 m/s | defaults | 254.4 s | 582.4 s | 1.006x | 2/58 | 89.0 s | 278.5 s *(est)* |
+| 0.02 m/s | min_travel + cluster | 260.4 s | 579.6 s | **1.002x** | **1/57** | **81.1 s** | 291.8 s *(est)* |
+| 0.05 m/s | defaults | 118.3 s | 241.2 s | 1.043x | 4/56 | 80.5 s | 142.3 s *(est)* |
+| 0.05 m/s | min_travel + cluster | 132.6 s | 243.6 s | 1.053x | 6/55 | 82.1 s | 163.9 s *(est)* |
+| 0.08 m/s | defaults | 90.9 s | 175.0 s | 1.210x | 18/57 | 85.7 s | **116.7 s** |
+| 0.08 m/s | min_travel + cluster | 107.1 s | 182.1 s | 1.259x | 16/57 | 81.8 s | **140.1 s** |
+| 0.12 m/s | defaults | 81.8 s | 140.2 s | 1.457x | 29/52 | 82.7 s | **104.0 s** |
+| 0.12 m/s | min_travel + cluster | 93.7 s | 134.9 s | 1.401x | 24/55 | 77.9 s | **123.4 s** |
+
+| draw speed | defaults | min_travel + cluster | change |
+|---|---|---|---|
+| 0.02 m/s | 278.5 s | 291.8 s | **+4.8 %** |
+| 0.05 m/s | 142.3 s | 163.9 s | +15.2 % |
+| 0.08 m/s | 116.7 s | 140.1 s | +20.0 % |
+| 0.12 m/s | 104.0 s | 123.4 s | +18.6 % |
+
+**Where the cap binds.** Under the shipped band the smallest v\* on this logo is
+**0.0149 m/s** and the median is 0.109; under min-travel they are 0.0374 and
+0.128. So below ≈ 0.015 m/s *no* plan is joint-limited anywhere, and at the
+rig's 0.02 m/s exactly one or two segments of ~57 are — the ink comes out
+**1.002x** the material's time with the features on, against 1.401x at 0.12.
+**The hypothesis that the cap stops binding at the real draw speed is
+confirmed.**
+
+**But the features still lose at 0.02 m/s, and the reason has changed.** The
+ink objection is gone and the transit win is real — 81.1 s against 89.0 s,
+−8.9 % — and the cluster setting does **less total work**: draw + transit of
+660.8 s against 671.4 s. What it does not do is spread that work evenly. The
+floor is the busiest arm, and the whole residual penalty is one arm in one
+phase:
+
+| 0.02 m/s | phase 1 (grey) floor | phase 2 (orange) floor | imbalance ph2 |
+|---|---|---|---|
+| defaults | 102.1 s | 152.4 s | 1.40x |
+| min_travel + cluster | **100.6 s** | 159.8 s | 1.49x |
+
+That is precisely the open issue `docs/CONCURRENCY.md` already names:
+`allocate.arm_load` prices a candidate assignment with the SINGLE-variant
+sequencer, so the balancer balances a load the cluster DP then moves. At
+0.12 m/s that defect was hidden behind a much larger ink-stretch penalty; at
+0.02 m/s it is the only thing left, and it is now the one change that would
+flip this table.
+
+**The other half of the same knob is worth more than the features are.** v\* is
+linear in `qd_frac`, so the 0.30 default is as much a part of the 2026-08-20
+verdict as the draw speed. Re-conducting the 0.12 m/s pair at `--qd-frac 0.6` —
+not a hypothetical, it is the cap `README.md` reproduces the six-arm animation
+with — at identical coverage and clearance:
+
+| 0.12 m/s | qd_frac 0.30 (default) | qd_frac 0.60 (README demo recipe) |
+|---|---|---|
+| defaults | 104.0 s (ink 1.49x) | **84.4 s** (ink 1.07x) |
+| min_travel + cluster | 123.4 s (ink 1.48x) | **84.8 s** (ink 1.06x) |
+| gap | +18.6 % | **+0.4 %, a tie** |
+
+Doubling the cap is worth 18.9 % of the makespan on the shipped defaults alone,
+and it closes the feature gap almost entirely.
+
+**Reproduction note, reported rather than tidied away.** The 153.5 s and −65 %
+reconfiguration quoted above and in `docs/CONCURRENCY.md` do NOT reproduce from
+the committed code: `--cluster --band-objective min_travel` at 0.12 m/s now
+gives **123.4 s** with reconfiguration 46.93 → 43.78 rad (−6.7 %, not −65 %).
+The menus are the difference — mean 2.0–3.0 variants per segment now against
+4.6–6.0 in the stored `out/csail_schedule_new.json` — because
+`menu.MAX_SURCHARGE` = 0.05 s prunes variants by their interior draw-time cost,
+a repair that landed after those numbers were taken. Note that the surcharge is
+priced twice (`menu.py` prunes on it, `sequence.cost_matrix` charges
+`w_surcharge / qd_frac` for it) and **neither place sees `draw_speed`**, so
+below v\* both are paying for extra ink time that does not exist. That is
+conservative rather than wrong — it forgoes good variants, it never ships a bad
+plan — and nothing here changes it.
+
+**Recommendation (report only; no default is flipped by this work).**
+**REAL-RIG programs at 0.02 m/s:** keep `pwl.OBJECTIVE = "maximin_sigma"` and
+`allocate.CLUSTER = False` — the features cost 4.8 % of makespan, but the ink
+argument that put them there no longer applies and `allocate.arm_load` is the
+thing to fix. **DEMO-ANIMATION programs at 0.12–0.15 m/s:** same two defaults,
+and raise `--qd-frac` from 0.30 to 0.60, which is worth −18.9 % of makespan on
+the defaults alone at unchanged coverage and clearance.
