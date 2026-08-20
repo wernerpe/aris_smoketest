@@ -61,6 +61,14 @@ def _balance_json(b):
         return None
     return dict(
         n_movable=int(b["n_movable"]), rounds=int(b["rounds"]),
+        n_splits=int(b.get("n_splits", 0)),
+        splits=[{k: (int(v) if isinstance(v, (int, np.integer)) else v)
+                 for k, v in m.items()} for m in b.get("splits", [])],
+        n_segments_before=int(b.get("n_segments_before", 0)),
+        n_segments_after=int(b.get("n_segments_after", 0)),
+        min_split_m=float(b.get("min_split_m", 0.0)),
+        splice_m=float(b.get("splice_m", 0.0)),
+        coverage_lost_m=float(b.get("coverage_lost_m", 0.0)),
         max_before_s=float(b["max_before"]), max_after_s=float(b["max_after"]),
         draw_speed=float(b["draw_speed"]), n_replans=int(b["n_replans"]),
         loads_before_s={str(k): float(v) for k, v in b["loads_before"].items()},
@@ -185,9 +193,59 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
         progress={k: v[:M] for k, v in sch["progress"].items()}, sub=a.subcheck)
     print(f"  checked in {time.time() - t0:.1f} s")
     if not rep["ok"]:
+        # THE POSE AN ARM STOPS IN IS A CHOICE, AND IT IS THE POLICY'S CHOICE.
+        # Freeze-in-place parks an arm at the hover above its last stroke, and
+        # nothing guarantees that pose has any joint-limit margin left — the
+        # planner certified the STROKE, and the hover over its end is a separate
+        # IK solve.  `idle.plan_retreat` only ever offers a retreat to a pose
+        # that is in somebody's WAY, so a pose that is merely bad has no way of
+        # being noticed until this gate looks at it.  When that is the only
+        # thing wrong, the answer is conductor v1's: go home, where the pose is
+        # `q_seed` and known good.  Same last resort, same reason, as the
+        # `Unconductable` fallback above — the gates are not negotiable and the
+        # makespan is only an objective — and it is announced, not hidden.
+        frozen_only = (int(rep["frozen_failed"]) > 0
+                       and float(rep["min_clearance"]) >= sch["margin"] - 1e-12
+                       and bool(rep["monotone"])
+                       and int(rep["segments_failed"]) == 0
+                       and min(rep["joint_margin"].values()) > 0)
+        if frozen_only and policy != idle.POLICY_HOME:
+            bad = ", ".join(f"arm {x}: {','.join(v['violations'])}"
+                            for x, v in sorted(rep["frozen"].items())
+                            if not v["ok"])
+            print(f"  !! {res['name']} is clear and certified all the way "
+                  f"through, and then {rep['frozen_failed']} arm(s) stop in a "
+                  f"pose that fails its own gates ({bad}); re-conducting the "
+                  "whole phase with conductor v1's go-home")
+            allocate.resequence(res, q_start=q_start, return_home=True)
+            return build_phase(a, res, dt, pens, q_start=q_start,
+                               policy=idle.POLICY_HOME)
         raise SystemExit(f"scene_check REFUSED {res['name']}; nothing rendered")
     return dict(res=res, progs=progs, samp=samp, paths=paths, sch=sch,
                 qtraj=qtraj, rep=rep, M=M, worst_tip=worst_tip, idle=out)
+
+
+def nominal_floor(a, res, pens, q_start=None, policy=idle.POLICY_FREEZE):
+    """The longest per-arm frozen programme of an allocation. -> seconds.
+
+    AN EXACT LOWER BOUND ON THAT ALLOCATION'S MAKESPAN, and a cheap one.  The
+    conductor's only move is to insert pauses — it never shortens a path — so no
+    schedule of these programmes can finish before the busiest arm's own
+    programme does.  It costs one `writing.arm_program` per arm and not a single
+    collision image, which is what lets `build_phases` decide whether a second
+    allocation is even worth conducting.
+    """
+    best = 0.0
+    for aid in res["arms"]:
+        segs = res["programs"].get(aid, [])
+        if not segs:
+            continue
+        p = writing.arm_program(FLEET[aid], segs, a.draw_speed, a.transit_speed,
+                                H_INV_DEFAULT, qd_frac=a.qd_frac,
+                                pen_ext=pens[aid],
+                                q_start=(q_start or {}).get(aid), park=policy)
+        best = max(best, float(p["duration"]))
+    return best
 
 
 def build(a):
@@ -211,6 +269,58 @@ def build(a):
     dt = 1.0 / (a.fps * a.substeps)
     pens = {aid: next((p["pens"][aid] for p in phases if aid in p["pens"]), 0.110)
             for aid in FLEET}
+    # THE UNSPLIT ALLOCATION IS THE FALLBACK THE CONDUCTOR JUDGES v2 AGAINST.
+    # It is only built for the phases that were actually cut — a phase the
+    # splitter left alone is its own alternative — and it costs seconds, because
+    # allocating is cheap and it is CONDUCTING that is expensive.
+    alt = {}
+    if not getattr(a, "no_split", False) and not getattr(a, "no_verify", False):
+        cut = [k for k, p in enumerate(phases)
+               if (p.get("balance") or {}).get("n_splits", 0)]
+        if cut:
+            print(f"\nallocating {len(cut)} split phase(s) again without cutting, "
+                  "so the conductor can rule on whether the cuts paid")
+            base, _, _ = run_allocation(a, verbose=False, split=False)
+            for k in cut:
+                base[k].update(name=phases[k]["name"] + " [unsplit]",
+                               ink=phases[k]["ink"], strokes=phases[k]["strokes"])
+                alt[k] = base[k]
+    built = build_phases(a, phases, dt, pens, alt=alt)
+    return phases, strokes, info, built, dt, pens
+
+
+def build_phases(a, phases, dt, pens, alt=None):
+    """Already-allocated phases -> the conducted, signed-off list. -> built.
+
+    Split out of `build` so that a drawing which did not come from the tracer
+    can be put through the IDENTICAL conductor: `scripts/bench.py` allocates its
+    five generated test drawings and hands them here, and the regression numbers
+    it prints are therefore produced by the same code path as the logo's — not
+    by a second implementation that has to be kept in step with this one.
+
+    THE CONDUCTOR HAS THE LAST WORD ON THE ALLOCATION.  `alt[k]` is a second
+    allocation of the same phase drawing the same ink — in practice the same
+    phase allocated WITHOUT stroke splitting — and when it is given, the phase is
+    conducted both ways from the same starting pose and the faster one ships.
+
+    That is the objective hierarchy applied where the information actually is.
+    `allocate.balance_loads` minimises the busiest ARM; the makespan is the
+    busiest arm PLUS everything the conductor must insert to keep six of them out
+    of each other's way, and the balancer cannot see the second term — it prices
+    every arm as though it had the paper to itself.  On the CSAIL orange pass
+    that gap is the whole story: splitting takes the phase's floor from 65.1 s
+    to 55.2 s and its conducted makespan from 65.1 s to 95.3 s, because four
+    inverted arms that used to take turns now all work the middle of the sheet
+    at once and spend 110 s waiting for each other.  A lower floor is a promise;
+    only the conductor knows whether it can be kept, so only the conductor is
+    allowed to accept it.
+
+    The second conduct is usually not paid for.  `nominal_floor` is an exact
+    lower bound on an allocation's makespan and costs no collision images at
+    all, so an alternative that could not win even at its floor is dropped
+    before a single one is built — which is the normal case, because the normal
+    case is that splitting worked.
+    """
     # A PASS STARTS WHERE THE LAST ONE STOPPED.  Under freeze-in-place the fleet
     # does not return to `q_seed` between passes, so pass 2 is sequenced from the
     # poses pass 1 actually froze in — including any minimal retreat, which is
@@ -232,16 +342,59 @@ def build(a):
         last = k == len(phases) - 1
         policy_k = a.idle_policy if (last or a.freeze_all_phases) \
             else idle.POLICY_HOME
-        if policy_k != a.idle_policy:
-            print(f"\n{ph['name']} is not the last pass, so it goes home at the "
-                  "end: the pass after it starts from the ready pose")
-            allocate.resequence(ph, q_start=q_start, return_home=True)
-        elif k and q_start is not None and a.idle_policy != idle.POLICY_HOME:
-            print(f"\nre-sequencing {ph['name']} from the poses pass {k} froze "
-                  "in (the allocation is untouched)")
-            allocate.resequence(ph, q_start=q_start, return_home=False)
-        built.append(build_phase(a, ph, dt, pens, q_start=q_start,
-                                 policy=policy_k))
+        home_k = policy_k == idle.POLICY_HOME
+
+        def prepare(res):
+            if policy_k != a.idle_policy:
+                print(f"\n{res['name']} is not the last pass, so it goes home "
+                      "at the end: the pass after it starts from the ready pose")
+                allocate.resequence(res, q_start=q_start, return_home=True)
+            elif k and q_start is not None and a.idle_policy != idle.POLICY_HOME:
+                print(f"\nre-sequencing {res['name']} from the poses pass "
+                      f"{k} froze in (the allocation is untouched)")
+                allocate.resequence(res, q_start=q_start, return_home=False)
+
+        def conduct(res):
+            try:
+                return build_phase(a, res, dt, pens, q_start=q_start,
+                                   policy=policy_k)
+            except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+                print(f"  !! {res['name']} could not be conducted as allocated: "
+                      f"{exc}")
+                return None
+
+        prepare(ph)
+        B = conduct(ph)
+        other = (alt or {}).get(k) if isinstance(alt, dict) else \
+            (alt[k] if alt and k < len(alt) else None)
+        if other is not None:
+            prepare(other)
+            lb = nominal_floor(a, other, pens, q_start, policy_k)
+            if B is not None and lb >= float(B["sch"]["duration"]) - 1e-9:
+                print(f"  the unsplit allocation of {ph['name']} floors at "
+                      f"{lb:.1f} s, which is already the conducted "
+                      f"{B['sch']['duration']:.1f} s or worse — not conducting it")
+            else:
+                print(f"  conducting {ph['name']} again WITHOUT stroke splitting "
+                      f"(its floor is {lb:.1f} s"
+                      + ("" if B is None else
+                         f" against the {B['sch']['duration']:.1f} s splitting "
+                         "achieved") + ")")
+                C = conduct(other)
+                if C is not None and (B is None or float(C["sch"]["duration"])
+                                      < float(B["sch"]["duration"]) - 1e-9):
+                    n = int((ph.get("balance") or {}).get("n_splits", 0))
+                    print(f"  !! the conductor prefers the UNSPLIT allocation of "
+                          f"{ph['name']}: {C['sch']['duration']:.1f} s against "
+                          + ("a refusal" if B is None else
+                             f"{B['sch']['duration']:.1f} s")
+                          + f" — {n} split(s) discarded")
+                    B, ph = C, other
+                    phases[k] = other
+        if B is None:
+            raise SystemExit(f"{ph['name']} could not be conducted")
+        B["split_kept"] = B["res"] is not other
+        built.append(B)
         q_start = built[-1]["idle"]["q_end"]
 
         if k + 1 < len(phases):
@@ -263,7 +416,7 @@ def build(a):
                                 for x, v in rep["poses"].items() if not v["ok"])
                 raise SystemExit("the pen-swap hold pose is not safe"
                                  + (f" ({bad})" if bad else ""))
-    return phases, strokes, info, built, dt, pens
+    return built
 
 
 def payload(built, dt, pens, a, out):
@@ -384,6 +537,12 @@ def main(argv=None):
                     help="freeze at the end of EVERY pass, not just the last "
                          "one; the pass after a frozen one is then sequenced "
                          "from the poses it froze in")
+    ap.add_argument("--no-verify", action="store_true",
+                    help="ship the split allocation without conducting the "
+                         "unsplit one as well.  The A/B is the only thing that "
+                         "knows whether cutting a stroke paid: the balancer "
+                         "prices each arm alone on the paper and cannot see the "
+                         "contention a better-balanced fleet creates")
     ap.add_argument("--reseq-tries", type=int, default=3,
                     help="times a refused phase may be re-sequenced without the "
                          "pen-up transits the conductor could not run")
@@ -450,6 +609,7 @@ def main(argv=None):
             arm_retreat_s={str(x): float(progs[x]["retreat_s"])
                            for x in res["arms"]},
             name=res["name"], ink=res["ink"],
+            split_kept=bool(B.get("split_kept", True)),
             traced_m=res["total_len"], drawn_m=res["drawn_len"],
             dropped_m=res["dropped_len"],
             duration_s=float(sch["duration"]),

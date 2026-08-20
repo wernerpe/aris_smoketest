@@ -30,7 +30,12 @@ aris_sixarm/
   allocate.py      strokes x arms -> certified per-arm programs: interval probing
                    via plan_stroke, pen-colour partition enumeration, greedy
                    interval cover, mid-overlap handoff cuts, dropped-span report;
-                   active_override = a hypothetical fleet, never a registry edit
+                   v2 balances on SECONDS by move | swap | SPLIT, cutting a span
+                   on the busiest arm and handing one piece to an arm that
+                   certifies it; active_override = a hypothetical fleet, never
+                   a registry edit
+  bench/           five generated drawings the pipeline is regression-tested on,
+                   none of them the CSAIL logo  (docs/BENCH.md)
   coordination.py  CONDUCTOR v1: capsule model, pairwise collision images over
                    progress indices (swept cells, no tunnelling), priority
                    pause-scheduling by exact reachability DP.  Only the clock moves.
@@ -54,6 +59,8 @@ scripts/
   csail_drawing_demo.py  drake/meshcat playback of that npz (venv python3.10)
   solo_time.py     read-only: how much of the run is one arm drawing alone, and
                    whether anybody else certified the span (docs/SOLO_TIME.md)
+  bench.py         the standing regression: the whole pipeline over five
+                   generated drawings that are NOT the logo (docs/BENCH.md)
 tests/
   test_gates.py    real-touchdown validation gates (run these after ANY kinematics change)
   test_planner_robustness.py   regressions distilled from the fuzz campaign
@@ -64,6 +71,7 @@ docs/
   CONCURRENCY.md   where the 148 s of pause came from, and what each lever bought
   IDLE.md          the idle policy: freeze / retreat / just-in-time taxi
   SOLO_TIME.md     how much of the run is one arm alone, and why
+  BENCH.md         the standing regression table over five non-CSAIL drawings
 ```
 
 ## Key facts
@@ -458,6 +466,107 @@ that avoids it. `docs/IDLE.md`; `docs/SOLO_TIME.md` for what is left — a third
 of the run is one arm drawing alone, and two thirds of that is spans another arm
 certifies only PART of, which whole-segment moves cannot touch.
 
+## Allocation v2: stroke splitting, and what the conductor did with it (2026-08-19)
+
+`allocate.rebalance` now iterates **move | swap | SPLIT**. A span on the busiest
+arm is cut at a chosen `s` and one piece handed to a lighter arm that re-plans
+it from scratch; the pieces are `[s0, cut+e]` and `[cut-e, s1]`, so **their
+union is the input span for every cut position** and coverage is invariant by
+construction, not by measurement. Both pieces are held to 5 cm, the 5 mm they
+share is ink laid down twice so the pens meet, and the receiver's reach inside
+the span is measured by asking `plan_stroke` about that sub-span and reading
+`s_star` off both ends rather than guessing from whole-stroke intervals. The cut
+is then placed by bisecting to where the two arms' loads cross. `coverage_lost`
+re-derives the merged cover afterwards and refuses rather than return a
+programme that gave ink back: **0.000 mm** on every run in this repository.
+
+**It lowers the floor everywhere, and the conductor cannot always keep it.**
+
+| | floor v1 | floor v2 | cuts |
+|---|---|---|---|
+| CSAIL phase 1 grey | 32.1 s | **30.7 s** | 1 |
+| CSAIL phase 2 orange | 65.0 s | **51.1 s** | 2 |
+| bench spiral (ONE 14 m stroke) | 79.7 s | **56.7 s** | 9 |
+| bench duotone | 282.6 s | 251.1 s | 5 |
+| bench starburst | 160.8 s | 150.2 s | 2 |
+| bench scatter | 40.4 s | 37.8 s | 1 |
+| bench hatch | 351.5 s | 335.7 s | 9 |
+
+Conducted, the CSAIL orange pass goes the OTHER way: **65.06 → 95.3 s**, floor
+down 14 s and makespan up 30. `balance_loads` prices every arm as though it were
+alone on the paper — exactly right for the arm, blind to the other five — and
+under v1 arm 97 drew most of that pass by itself, which is 65 s of *solo* time
+and solo time never waits. Balancing it away put four arms into the middle of
+the sheet at once; the conductor refused the first schedule outright and its
+rescue spends 110 s of pause. So the objective hierarchy decides it where the
+information is: `csail_schedule.build_phases` conducts the split allocation
+**and** the unsplit one and ships the faster, with `nominal_floor` as an exact
+lower bound so the second conduct is skipped whenever it could not win.
+
+**The whole piece runs in 104.02 s against 105.42**, at the same 99.2139 % of
+11.567 traced metres, 82.1 mm of clearance against the 80 mm margin and
+`scene_check` PASS on both phases — grey keeps its cut (38.35 → 36.96 s), orange
+hands both of its own back. 1.3 %, where the floors said 21 %.
+
+```
+python3 scripts/csail_schedule.py --arms all --two-pass \
+    --pens 2:300,31:200,71:200,97:200 --max-probes 5 --min-coverage 0.99 \
+    --target-width 1.2969246423461636 --offset 0.1 0.05 --tag _v2 \
+    --fps 12 --substeps 4
+```
+
+`--no-split` recovers allocation v1 exactly (105.42 s, verified); `--no-verify`
+ships the split allocation without asking the conductor, which is how the 134 s
+run above was measured. `docs/SOLO_TIME.md` has the post mortem; `docs/BENCH.md`
+has the corpus.
+
+## The bench — five drawings that are not the logo (`scripts/bench.py`)
+
+Every headline above is one picture at one placement, which is the measurement a
+balancer tuned to that picture passes. `aris_sixarm/bench` generates five
+seeded, analytic drawings placed in sheet coordinates that owe nothing to the
+logo — a dense hatching patch on one arm, sparse scatter over the whole sheet, a
+starburst through the waist, one continuous 14 m spiral, and ten interleaved
+two-colour bands — and `scripts/bench.py` runs the FULL pipeline on each.
+
+| drawing | ink | coverage | makespan | floor | eff | cuts kept | solo |
+|---|---|---|---|---|---|---|---|
+| hatch | 30.1 m | 73.55 % | 355.1 s | 355.1 s | 1.00 | 0 (+9 back) | 82 % |
+| scatter | 8.6 m | 84.72 % | 41.4 s | 41.4 s | 1.00 | 1 | 26 % |
+| starburst | 20.2 m | 87.70 % | 162.3 s | 153.7 s | 0.95 | 2 | 6 % |
+| spiral | 14.4 m | 85.57 % | 89.4 s | 83.4 s | 0.93 | 0 (+9 back) | 12 % |
+| duotone | 29.8 m | 82.35 % | 268.5 s | 260.5 s | 0.97 | 5 | 41 % |
+
+Splitting lowers the allocation floor on **all five** (4.5 % to 28.9 %) at
+coverage identical to the digit, and the conductor keeps the cuts on three of
+them and hands them back on two — **8 kept, 18 reverted**. The two it refuses
+are the two where the ink is packed into one region, which is the same shape as
+the CSAIL orange pass, found twice more on geometry that owes it nothing.
+
+It also immediately found three things the logo could not, none of them about
+splitting:
+
+- **`plan_stroke` refuses a single stroke over 15.00 m outright**, as
+  `too_long` rather than as a split — 1500 lattice steps at the default 10 mm.
+  A 15.1 m spiral is not a hard allocation problem, it is one nobody is allowed
+  to attempt.
+- **The probe budget is per STROKE and reach is per METRE.** Worse, the gap walk
+  dead-ends: a window that certifies nothing is marked tried and never
+  subdivided, so it stops after four probes however large the budget is. The
+  14 m spiral certified **0.00 %** of itself at a budget of 5 *and* at a budget
+  of 40, while the atlas said 96 % of it was reachable. Scaling the budget and
+  bisecting barren windows (`allocate.stroke_probes`,
+  `probe_stroke(bisect=...)`, both behind one `probe_ref_m` argument and both
+  off by default) take it to **85.6 %**.
+- **Freeze-in-place can park an arm in a pose with no joint-limit margin left.**
+  The planner certified the *stroke*; the hover above its end is a separate IK
+  solve, and `idle.plan_retreat` only offers a retreat to a pose that is in
+  somebody's WAY — so a pose that is merely bad goes unnoticed until
+  `scene_check` refuses the phase. A phase that is clear and certified all the
+  way through and fails only on frozen poses is now re-conducted with conductor
+  v1's go-home: the same last resort, for the same reason, as the
+  `Unconductable` fallback beside it.
+
 ## Roadmap
 
 1. ✅ reachability + controllability atlas
@@ -488,6 +597,23 @@ certifies only PART of, which whole-segment moves cannot touch.
    interval cover (`allocate.balance_loads`, scored on the timeline's own
    clock) — 153.5 → 108.6 s on the whole logo at unchanged coverage, margin and
    certificates
+   ✅ allocation v2: STROKE SPLITTING as a third balancing move — a span on the
+   busiest arm is cut and one piece handed to an arm that certifies it, which
+   is the only move that reaches the 48 % of solo time `docs/SOLO_TIME.md`
+   measured as splittable (`allocate.rebalance`, `split_span`,
+   `_Pricer.probe_span`).  Coverage invariant by construction and measured at
+   0.000 mm.  It lowers the floor on all six drawings tested and the conductor
+   can only keep some of it, so the conductor now rules on each phase
+   (`csail_schedule.build_phases`) — see `docs/BENCH.md` and the honest post
+   mortem at the end of `docs/SOLO_TIME.md`
+   ✅ an anti-overfitting corpus: five generated drawings that are not the logo,
+   run through the whole pipeline as a standing regression (`aris_sixarm/bench`,
+   `scripts/bench.py`, `docs/BENCH.md`).  It found two things the logo never
+   could: a single stroke over 15 m is refused outright by `plan_stroke`'s
+   lattice ceiling, and the probe budget is per STROKE while reach is per METRE
+   — a 14 m spiral certified 0.00 % of itself until both were fixed
+   (`allocate.stroke_probes`, `probe_stroke(bisect=...)`)
    ▶ still open: the RRT transits (hover moves are still straight joint-space
-   lines), re-ordering/re-routing in the conductor rather than pauses only, and
-   the acceleration-limited version of the schedule — playback is kinematic
+   lines), re-ordering/re-routing in the conductor rather than pauses only (the
+   orange pass's splitting win is sitting behind exactly this), and the
+   acceleration-limited version of the schedule — playback is kinematic

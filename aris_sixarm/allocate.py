@@ -38,6 +38,15 @@ written for.
              per-arm nominal clock (`writing.segment_draw_time` for the ink,
              the sequencer's own tour cost for the pen-ups).  It never changes
              WHAT is drawn, only who draws it, so coverage is invariant.
+  SPLIT      Allocation v2's third move, and the only one that reaches the
+             48 % of solo drawing time `docs/SOLO_TIME.md` measured as
+             SPLITTABLE — a span another arm certifies PART of, which a
+             balancer whose moves are whole segments cannot see at all.  A span
+             on the busiest arm is CUT at a chosen s and one piece handed to a
+             lighter arm that re-plans it from scratch, with a 5 mm splice at
+             the seam and a 5 cm floor on both pieces.  The two pieces' union is
+             the input span for every cut position, so coverage is invariant
+             here too — and `coverage_lost` measures it rather than assume it.
   REPAIR     The cover's own gaps are the first statement of what is missing in
              the terms that matter — the UNION of the arms carrying the right
              ink — and `probe_stroke` never saw them, because it only ever knew
@@ -75,6 +84,22 @@ DRAW_SPEED = writing.DRAW_SPEED_FLEET    # m/s the material allows; a CAP, and
 #   the load model's — see `writing.draw_duration`, which stretches it wherever
 #   the redundancy resolution asks a joint to move faster than it may.
 BALANCE_ROUNDS = 200                     # accepted moves the balancer may make
+
+# ---- allocation v2: splitting as a balancing move -------------------------
+MIN_SPLIT_M = 0.05        # m; the shortest piece a split may create.  Not the
+#   same floor as MIN_SEG_M (0.025): that one asks "is this worth a pen-up at
+#   all", this one asks "is cutting a line here worth an ENTRY, an EXIT and a
+#   visible seam to the arm receiving it", and the answer is no for confetti.
+SPLIT_OVERLAP_M = 0.005   # m of ink drawn TWICE at a split seam, half either
+#   side of the cut — the same idea as `place_cuts`'s handoff overlap, so the
+#   two pens meet rather than leaving a hairline of bare paper at the join.
+SPLIT_ROUNDS = 60         # accepted splits one rebalance may make
+SPLIT_BUDGET = 3000       # clean re-plans the split search may spend
+SPLIT_CAND_SEGS = 8       # segments off the busiest arm considered per round
+SPLIT_CAND_RECV = 5       # ELIGIBLE receiving arms considered per segment
+SPLIT_CAND_CUTS = 3       # cut positions `split_candidates` offers by default
+SPLIT_COARSE_CUTS = 2     # of them tried while RANKING (segment, receiver, side)
+SPLIT_REFINE = 5          # bisection steps that then place the winner's cut
 
 
 def active_arms(active_override=None):
@@ -186,7 +211,7 @@ def _certified_span(res):
 
 
 def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M,
-                 gap_tol=GAP_TOL_M):
+                 gap_tol=GAP_TOL_M, bisect=False):
     """Up to `max_probes` plan calls -> (intervals, stats) for one (stroke, arm).
 
     Intervals are in the stroke's own normalised arc length and carry the
@@ -202,6 +227,17 @@ def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M,
     pieces.  Three probes reproduce the original behaviour exactly; the budget
     only ever buys more certified interval, never a weaker certificate, because
     every interval here is a span some `plan_stroke` call returned as planned.
+
+    `bisect` fixes the walk's one dead end, and `aris_sixarm/bench`'s spiral is
+    how it was found.  A gap that comes back certifying NOTHING is marked tried
+    and never looked at again — so the walk stops, and it stops after four
+    probes however large the budget is.  That is harmless while a stroke is
+    short enough that "this arm cannot draw this gap" is the truth about the
+    whole gap, and it is badly wrong for a long one, where it means "this arm
+    cannot START this fourteen-metre gap" and nothing more.  With `bisect` a
+    barren gap is halved and both halves queued instead, so the budget keeps
+    buying information.  It is off by default because it changes which intervals
+    a run finds, and the logo's published numbers were measured without it.
     """
     pts = np.asarray(pts, float)
     L = polyline_length(pts)
@@ -237,25 +273,30 @@ def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M,
         # first one on the same polyline
         return iv, stats
     eps = min_seg / max(L, 1e-9)
-    tried = set()
+    tried, pending = set(), []
     while stats["probes"] < max_probes:
         gaps = [(max(g[0], lo), min(g[1], hi)) for g in uncovered(iv, min_gap=eps)]
+        gaps += pending
         gaps = [g for g in gaps if (g[1] - g[0]) * L >= min_seg
                 and (round(g[0], 6), round(g[1], 6)) not in tried]
         if not gaps:
             break
-        a, b = max(gaps, key=lambda g: g[1] - g[0])
-        tried.add((round(a, 6), round(b, 6)))
+        a, b = max(gaps, key=lambda g: (g[1] - g[0], -g[0]))
+        key = (round(a, 6), round(b, 6))
+        tried.add(key)
+        pending = [g for g in pending
+                   if (round(g[0], 6), round(g[1], 6)) != key]
         sub = truncate_polyline(pts, a, b)
         if len(sub) < 2 or polyline_length(sub) < min_seg:
             continue
-        w = b - a
+        w, got = b - a, False
         r3 = plan_stroke(sub, spec, opts)
         stats["probes"] += 1
         stats["statuses"].append(r3["status"])
         s3, st3 = _certified_span(r3)
         if st3 in ("ok", "split") and s3 * w * L >= min_seg:
             iv.append(Interval(a, a + s3 * w, spec.arm_id, +1, "gap"))
+            got = True
         if s3 >= 1.0 - EPS_S or stats["probes"] >= max_probes:
             continue
         # the gap's far end is still open: the band may be walkable from that
@@ -266,7 +307,44 @@ def probe_stroke(pts, spec, opts=None, max_probes=3, min_seg=MIN_SEG_M,
         s4, st4 = _certified_span(r4)
         if st4 in ("ok", "split") and s4 * w * L >= min_seg:
             iv.append(Interval(b - s4 * w, b, spec.arm_id, -1, "gap_rev"))
+            got = True
+        if bisect and not got and w * L >= 2.0 * min_seg:
+            # NEITHER END OF THIS WINDOW IS DRAWABLE, WHICH IS NOT THE SAME AS
+            # THE WINDOW BEING OUT OF REACH.  Halve it and ask again: an arm may
+            # well certify the middle of a span it can neither start nor finish,
+            # and on a long stroke that is the usual case rather than the odd one.
+            mid = 0.5 * (a + b)
+            pending += [(a, mid), (mid, b)]
     return iv, stats
+
+
+def stroke_probes(L, max_probes, ref_m=None):
+    """How many plan calls ONE stroke's probe may spend. -> int.
+
+    THE BUDGET IS PER STROKE AND THE REACH PATTERN IS PER METRE.  That is fine
+    while every stroke is about the same length — the CSAIL logo's are 0.1 to
+    0.7 m — and it stops being fine the moment one is not.  `probe_stroke`
+    spends its budget walking the largest remaining gap, so five calls map a
+    half-metre line well and a fourteen-metre spiral hardly at all; and a stroke
+    the probe never mapped is a stroke the cover cannot place, which surfaces
+    not as a slow allocation but as MISSING INK.
+
+    A BIGGER BUDGET ON ITS OWN BUYS NOTHING, which is worth knowing before
+    reaching for this: `aris_sixarm/bench`'s spiral certifies 0.00 % of itself
+    at a flat budget of 5 AND at a flat budget of 40, because the walk dead-ends
+    (see `probe_stroke`'s `bisect`) long before the budget runs out.  The two
+    have to be turned on together, and `allocate` does exactly that from the one
+    `probe_ref_m` argument.  Together they take that spiral to 85.6 %.
+
+    `ref_m` is the stroke length the flat budget was chosen for: give it, and a
+    stroke n times longer gets n times the calls.  Left None the budget is flat,
+    which is what every run before this one did — so the logo's numbers are
+    untouched unless a caller asks for the new behaviour.
+    """
+    if ref_m is None or float(ref_m) <= 0.0:
+        return int(max_probes)
+    return int(max(int(max_probes),
+                   int(np.ceil(int(max_probes) * float(L) / float(ref_m)))))
 
 
 def uncovered(intervals, lo=0.0, hi=1.0, min_gap=0.0):
@@ -634,6 +712,21 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
     return float(sum(draw_s) + r["cost"])
 
 
+def load_score(loads):
+    """The balancer's objective for one assignment. -> (max load, sum of squares).
+
+    Compared lexicographically and strictly, so it is a POTENTIAL: every
+    accepted move (relocation, swap or split) lowers it, which is what makes
+    "iterate until nothing improves" terminate rather than cycle.  It lives at
+    module scope because the split search in `_split_search` has to be scored on
+    exactly the same ruler as `balance_loads`, and two rulers that disagree by a
+    rounding convention would let the two moves undo each other for ever.
+    """
+    v = sorted(loads.values(), reverse=True)
+    return (round(v[0], 9) if v else 0.0,
+            round(float(sum(x * x for x in v)), 6))
+
+
 def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
                   verbose=False):
     """Greedy min-max load balancing over segments several arms can certify.
@@ -676,9 +769,7 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
 
     def score(own):
         L = {a: load(a, own) for a in arms}
-        v = sorted(L.values(), reverse=True)
-        return (round(v[0], 9) if v else 0.0,
-                round(float(sum(x * x for x in v)), 6)), L
+        return load_score(L), L
 
     key, L = score(owner)
     info = dict(loads_before=dict(L), max_before=key[0], moves=[], rounds=0,
@@ -721,82 +812,631 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
     return owner, info
 
 
+# ===========================================================================
+# 4c. allocation v2: SPLITTING a placed span is also a balancing move
+# ===========================================================================
+# THE BALANCER'S MOVE SET WAS THE WRONG SHAPE, AND `docs/SOLO_TIME.md` MEASURED
+# BY HOW MUCH.  Over the shipped CSAIL schedule, 48 % of the time one arm spends
+# drawing alone is SPLITTABLE: another arm of the right colour certifies PART of
+# the span being drawn and not all of it.  A balancer whose only moves are
+# "hand the whole segment over" and "trade two whole segments" cannot see any of
+# it — the receiving arm refuses the span at its far end, so the move is never
+# even offered — and the phase floors at whatever the busiest arm's own ink
+# costs.  Phase 2 of the logo is exactly that shape: arm 97 finishes AT its
+# floor, and its floor is 49.6 s of ink no other arm certifies end to end,
+# against 31.8 s at sub-span granularity.
+#
+# So the move set grows a third member.  A split takes one placed span, cuts it
+# at a chosen `s`, and hands one of the two pieces to a less-loaded arm.  Four
+# things keep it honest, and they are the same four the whole-segment moves
+# already obeyed:
+#
+#   COVERAGE CANNOT DROP.  The two pieces are [s0, cut + e] and [cut - e, s1]
+#   with e half the splice, so their UNION is the input span for every cut
+#   position — there is no `s` at which a piece of paper belongs to neither
+#   half.  Each piece is then re-planned from scratch for the arm that will draw
+#   it and refused unless the clean re-plan certifies it end to end
+#   (`replan_same_span`, which gives back not one millimetre).  If either half
+#   will not certify, the split is not taken; there is no partial acceptance
+#   that could leave a hole.  `rebalance` re-derives the merged cover afterwards
+#   and raises rather than return a programme that lost ink.
+#
+#   NO CONFETTI.  Both pieces are held to `min_split` (0.05 m), an order of
+#   magnitude above the 5 mm splice and twice `MIN_SEG_M`.  A cut costs the
+#   receiving arm an entry and an exit — 1.4-1.9 s of pen-up on this piece —
+#   so a split that hands over 2 cm of ink is a loss dressed as a win, and the
+#   floor says so before the clock has to.
+#
+#   THE SEAM IS A HANDOFF LIKE ANY OTHER.  `place_cuts` already puts a handoff
+#   in the middle of the overlap and grows both sides past it so the ink meets;
+#   a split has no overlap to sit in the middle of, so it MAKES one — `splice`
+#   metres drawn twice, half either side of the cut.
+#
+#   THE COLOUR AND THE PHASE ARE CONSTRAINTS, NOT PREFERENCES.  A receiver is
+#   only considered if `colors` says it is holding the right ink for this
+#   stroke in this phase, which is the same test the cover and the whole-segment
+#   moves apply.
+#
+# The search over cuts is not an optimisation, it is three candidates: the cut
+# that would EQUALISE the two arms' loads, the cut that transfers as much as the
+# receiver's reach allows, and the midpoint between them.  The equalising cut is
+# the one that lowers the objective; the other two are what is left when the
+# reach will not stretch that far.  Where the reach gives out is not guessed —
+# it is `certified_prefix` / `certified_suffix` over the probe intervals
+# `probe_stroke` already bought, which is the same data `docs/SOLO_TIME.md`
+# counted its 48 % with.
+
+
+def certified_prefix(ivs, s0, s1):
+    """How far past `s0` the union of `ivs` runs unbroken. -> s in [s0, s1].
+
+    The furthest a cut may be pushed if the receiver is to take the HEAD of the
+    span: beyond it the arm's certified reach has a hole in it, and a piece with
+    a hole is not a piece any clean re-plan will accept.
+    """
+    x = float(s0)
+    for v in sorted(ivs, key=lambda v: (v.s0, -v.s1)):
+        if v.s0 > x + EPS_S:
+            break
+        x = max(x, min(float(v.s1), float(s1)))
+        if x >= s1 - EPS_S:
+            return float(s1)
+    return float(min(x, s1))
+
+
+def certified_suffix(ivs, s0, s1):
+    """How far back from `s1` the union of `ivs` runs unbroken. -> s in [s0, s1].
+
+    The mirror of `certified_prefix`, for a receiver taking the TAIL.  Both ends
+    are asked separately because a plan is a walk of the redundancy band and the
+    band is not symmetric: an arm that cannot start a line can often finish it.
+    """
+    x = float(s1)
+    for v in sorted(ivs, key=lambda v: (-v.s1, v.s0)):
+        if v.s1 < x - EPS_S:
+            break
+        x = min(x, max(float(v.s0), float(s0)))
+        if x <= s0 + EPS_S:
+            return float(s0)
+    return float(max(x, s0))
+
+
+def split_candidates(s0, s1, L, prefix, suffix, want_m, min_split=MIN_SPLIT_M,
+                     splice=SPLIT_OVERLAP_M, n=SPLIT_CAND_CUTS):
+    """Where a span could be cut for one particular receiver. -> [(s_cut, side)].
+
+    `side` names WHICH PIECE THE RECEIVER TAKES — "head" is [s0, cut + e] and
+    "tail" is [cut - e, s1], e being half the splice.  `prefix` and `suffix` are
+    that receiver's unbroken certified reach in from each end (see
+    `certified_prefix`); `want_m` is the ink the balancer would like to hand
+    over, i.e. the equalising cut.
+
+    Candidates come back best-first and deduplicated, and every one of them is a
+    pure function of the arguments: no state, no randomness, no tie broken on
+    anything the caller cannot see.  Both pieces are held to `min_split` metres,
+    which is what stops a balancer with a cutting move from turning a line into
+    confetti one 5 cm win at a time.
+    """
+    e = 0.5 * float(splice) / max(L, 1e-9)
+    mp = float(min_split) / max(L, 1e-9)
+    w = float(want_m) / max(L, 1e-9)
+    out, seen = [], set()
+    for side in ("head", "tail"):
+        if side == "head":                     # receiver draws [s0, cut + e]
+            lo, hi = s0 + mp - e, min(float(prefix) - e, s1 - mp + e)
+            picks = (s0 + w - e, hi, 0.5 * (lo + hi))
+        else:                                  # receiver draws [cut - e, s1]
+            lo, hi = max(float(suffix) + e, s0 + mp - e), s1 - mp + e
+            picks = (s1 - w + e, lo, 0.5 * (lo + hi))
+        if hi < lo - 1e-12:
+            continue
+        for c in picks[:max(int(n), 1)]:
+            c = round(float(min(max(c, lo), hi)), 9)
+            if (c, side) in seen:
+                continue
+            seen.add((c, side))
+            out.append((c, side))
+    return out
+
+
+def split_span(sp, s_cut, L, side, splice=SPLIT_OVERLAP_M):
+    """One placed span cut in two. -> (the span its owner keeps, the span given).
+
+    `side` names which piece the RECEIVER takes.  Each piece is grown by half
+    the splice past the cut, so `splice` metres of ink are laid down twice and
+    the two pens meet instead of leaving a hairline of bare paper at the join —
+    the same treatment `place_cuts` gives a handoff between two cover intervals.
+
+    THE UNION OF THE TWO PIECES IS THE INPUT SPAN, for every `s_cut`.  That is
+    not a property this function checks, it is the reason it is written this way:
+    coverage invariance under splitting is a type, exactly as it is for a move.
+    """
+    e = 0.5 * float(splice) / max(L, 1e-9)
+    s0, s1 = float(sp["s0"]), float(sp["s1"])
+    c = float(np.clip(s_cut, s0, s1))
+    lo = dict(sp, s0=s0, s1=min(c + e, s1), source="split")
+    hi = dict(sp, s0=max(c - e, s0), s1=s1, source="split")
+    return (hi, lo) if side == "head" else (lo, hi)
+
+
+def merged_spans(items):
+    """Placed spans -> {stroke id: merged, sorted, non-overlapping [(s0, s1)]}.
+
+    What the fleet will have covered, with WHO draws it and IN HOW MANY PIECES
+    projected away — which is exactly the quantity a split must not change.
+    """
+    by = {}
+    for it in items:
+        sp = it["sp"]
+        by.setdefault(int(it["stroke"]["id"]), []).append(
+            (float(min(sp["s0"], sp["s1"])), float(max(sp["s0"], sp["s1"]))))
+    out = {}
+    for k, v in by.items():
+        v.sort()
+        m = [list(v[0])]
+        for a, b in v[1:]:
+            if a <= m[-1][1] + EPS_S:
+                m[-1][1] = max(m[-1][1], b)
+            else:
+                m.append([a, b])
+        out[k] = [(float(a), float(b)) for a, b in m]
+    return out
+
+
+def coverage_lost(before, after, lengths, tol=EPS_S):
+    """Metres in `before`'s cover that `after`'s does not cover. -> float.
+
+    THE GUARD RAIL, stated in metres rather than in reasoning.  Splitting is
+    coverage-invariant by construction, and this is the measurement that says so
+    out loud once per allocation: an arithmetic slip in a cut position is a
+    silent hole in the picture, and a silent hole is the one failure mode this
+    pipeline has always refused to allow.
+    """
+    lost = 0.0
+    for sid, spans in before.items():
+        L = float(lengths.get(sid, 0.0))
+        cover = [Interval(a, b, -1) for a, b in after.get(sid, [])]
+        for a, b in spans:
+            for x, y in uncovered(cover, lo=a, hi=b, min_gap=tol):
+                lost += (y - x) * L
+    return float(lost)
+
+
+def _span_key(it, arm):
+    """A placed span identified by what a plan call would actually be handed."""
+    sp = it["sp"]
+    return (int(it["stroke"]["id"]), round(float(sp["s0"]), 9),
+            round(float(sp["s1"]), 9), int(sp["direction"]), int(arm))
+
+
+def _stack_ends(es):
+    """One-segment `sequence.endpoints` dicts -> the many-segment one."""
+    if not es:
+        return dict(q=np.zeros((0, 2, 7)), xy=np.zeros((0, 2, 2)),
+                    hover=np.zeros((0, 2, 7)), z=np.zeros((0, 2)), n=0)
+    return dict(q=np.concatenate([e["q"] for e in es]),
+                xy=np.concatenate([e["xy"] for e in es]),
+                hover=np.concatenate([e["hover"] for e in es]),
+                z=np.concatenate([e["z"] for e in es]), n=len(es))
+
+
+class _Pricer:
+    """Certifies and prices per-arm programmes over a MUTABLE set of spans.
+
+    `rebalance` used to build its cost model exactly once, and could, because
+    its moves changed only WHO drew a segment.  Splitting changes the segments
+    themselves, so the model has to be rebuildable — and rebuilding it must not
+    re-buy a plan call for every alternative that was already certified two
+    rounds ago.
+
+    Everything expensive is therefore memoised on the SPAN (stroke, endpoints,
+    direction, arm) rather than on its position in any list, which is precisely
+    the granularity a split preserves: cutting segment i in two leaves every
+    other segment's clean re-plan, hover poses and ink seconds untouched, and
+    even the per-arm LOAD survives if that arm's bag did not change.  The load
+    key is the sorted tuple of span keys for that reason, and the segments are
+    priced in that same sorted order so the cache cannot return a number the
+    recomputation would disagree with.
+    """
+
+    def __init__(self, arms, colors, ivmap, specs, aopts, pens, draw_speed,
+                 seq, min_seg, h_inv, q_start, return_home):
+        self.arms = sorted(arms)
+        self.colors, self.ivmap = colors, ivmap
+        self.specs, self.aopts, self.pens = specs, aopts, pens
+        self.draw_speed, self.min_seg, self.h_inv = draw_speed, min_seg, h_inv
+        self.ts = float(seq.get("transit_speed", writing.TRANSIT_SPEED))
+        self.qf = float(seq.get("qd_frac", writing.QD_FRAC))
+        self.exact = int(seq.get("exact_max_n", sequence.EXACT_MAX_N))
+        self.budget = float(seq.get("budget", sequence.TIME_BUDGET))
+        self.q_start = dict(q_start or {})
+        self.return_home = bool(return_home)
+        self._entry, self._ends, self._draw, self._load = {}, {}, {}, {}
+        self._probe = {}
+        self.n_replans = self.n_probes = 0
+        self.reach = None      # {(stroke id, arm): bool} from the atlas prefilter
+
+    # -- certification -----------------------------------------------------
+    def seed(self, it):
+        """Adopt the entry the cover already certified, at no plan-call cost."""
+        self._entry.setdefault(_span_key(it, it["arm"]), it["entry"])
+
+    def probe_span(self, it, arm):
+        """Where this arm's reach gives out INSIDE this exact span. -> (pre, suf).
+
+        Two `plan_stroke` calls on the sub-polyline the balancer is actually
+        holding: forward, whose `s_star` is the certified head, and reversed,
+        whose `s_star` is the certified tail.  Both come back in the stroke's own
+        normalised arc length, and both are spans the certified-or-split contract
+        has PLANNED — this reads no interval off a model and extrapolates none.
+
+        `probe_stroke`'s intervals cannot answer this on their own.  Its budget
+        is spent walking the whole STROKE's gaps, and a placed span is usually a
+        fraction of one stroke; asking about the span directly is the difference
+        between "this arm reaches somewhere on this line" and "this arm reaches
+        the first 40 % of the piece arm 97 is holding".  It is also the cheap
+        half of the work: two probes cost about what one clean re-plan does, and
+        they replace a cut position that would otherwise have to be guessed.
+        """
+        k = _span_key(it, arm)
+        if k in self._probe:
+            return self._probe[k]
+        st, sp = it["stroke"], it["sp"]
+        s0, s1 = float(sp["s0"]), float(sp["s1"])
+        pre, suf = s0, s1
+        sub = truncate_polyline(st["pts"], s0, s1)
+        if len(sub) >= 2:
+            w = s1 - s0
+            r = plan_stroke(sub, self.specs[arm], self.aopts[arm])
+            self.n_probes += 1
+            f, stt = _certified_span(r)
+            if stt == "ok":
+                pre = s1
+            elif stt == "split":
+                pre = s0 + f * w
+            rr = plan_stroke(sub[::-1], self.specs[arm], self.aopts[arm])
+            self.n_probes += 1
+            g, stt = _certified_span(rr)
+            if stt == "ok":
+                suf = s0
+            elif stt == "split":
+                suf = s1 - g * w
+        self._probe[k] = (float(pre), float(suf))
+        return self._probe[k]
+
+    def reaches(self, it, arm):
+        """Is this (stroke, arm) pair worth a probe at all? -> bool.
+
+        The atlas prefilter's answer, re-used: an arm with no reachable cell
+        within 5 cm of any point of the stroke cannot certify a sub-span of it
+        either, and asking costs two plan calls that will both come back
+        `start_infeasible`.  Absent a prefilter everything is asked.
+        """
+        if self.reach is None:
+            return True
+        return bool(self.reach.get((it["stroke"]["id"], arm), True))
+
+    def entry(self, it, arm):
+        """This arm's clean re-plan of EXACTLY this span, or None. -> entry|None."""
+        k = _span_key(it, arm)
+        if k not in self._entry:
+            e, n = replan_same_span(it["stroke"], it["sp"], self.specs[arm],
+                                    self.aopts[arm], self.min_seg)
+            self.n_replans += n
+            self._entry[k] = e
+        return self._entry[k]
+
+    # -- pricing -----------------------------------------------------------
+    def draw_s(self, arm, it, ent):
+        k = _span_key(it, arm)
+        if k not in self._draw:
+            self._draw[k] = float(writing.segment_draw_time(
+                self.specs[arm], ent, self.draw_speed, self.qf, self.h_inv,
+                self.pens[arm]))
+        return self._draw[k]
+
+    def ends(self, arm, it, ent):
+        k = _span_key(it, arm)
+        if k not in self._ends:
+            self._ends[k] = sequence.endpoints(self.specs[arm], [ent],
+                                               self.h_inv, self.pens[arm])
+        return self._ends[k]
+
+    def load(self, arm, pairs):
+        """Nominal seconds arm `arm` needs for these (item, entry) pairs."""
+        if not pairs:
+            return 0.0
+        pairs = sorted(pairs, key=lambda p: _span_key(p[0], arm))
+        ck = (arm, tuple(_span_key(it, arm) for it, _ in pairs))
+        if ck not in self._load:
+            self._load[ck] = arm_load(
+                self.specs[arm], [e for _, e in pairs],
+                [self.draw_s(arm, it, e) for it, e in pairs],
+                self.ts, self.qf, self.h_inv, self.pens[arm],
+                ends=_stack_ends([self.ends(arm, it, e) for it, e in pairs]),
+                exact_max_n=self.exact, budget=self.budget,
+                q_start=self.q_start.get(arm), return_home=self.return_home)
+        return self._load[ck]
+
+    def loads(self, items):
+        """Per-arm seconds for the assignment `items` currently carries."""
+        by = {}
+        for it in items:
+            by.setdefault(it["arm"], []).append((it, it["entry"]))
+        return {a: self.load(a, by.get(a, [])) for a in self.arms}
+
+    def load_fn(self, items, entries):
+        """`balance_loads`'s pricing callback over this item list."""
+        def f(a, idx):
+            return self.load(a, [(items[i], entries[i][a]) for i in idx])
+        return f
+
+    # -- the alternatives a whole-segment move may choose from -------------
+    def options(self, items):
+        """(options, entries): the arms that certify each span AT ITS ENDPOINTS."""
+        opts, ents = [], []
+        for it in items:
+            st, own = it["stroke"], it["arm"]
+            self.seed(it)
+            o, e = {own}, {own: it["entry"]}
+            for b in self.arms:
+                if b == own or self.colors.get(b) != st["color"]:
+                    continue
+                ivs = [v for v in self.ivmap.get(st["id"], []) if v.arm == b]
+                if not frac_covers(ivs, it["sp"]["s0"], it["sp"]["s1"]):
+                    continue
+                x = self.entry(it, b)
+                if x is not None:
+                    o.add(b)
+                    e[b] = x
+            opts.append(o)
+            ents.append(e)
+        return opts, ents
+
+
+def _try_cut(items, i, side, s_cut, L, src, recv, splice, pricer):
+    """Cut span `i`, certify both halves, and price the whole fleet with them.
+
+    -> (score, trial items, loads, record) or None if either half will not
+    certify for the arm that would draw it.  BOTH halves are re-planned from
+    scratch through `replan_same_span`, which refuses a plan that gives back so
+    much as a millimetre — the donor's remainder is not grandfathered in just
+    because it used to be part of a span the donor certified.
+    """
+    it = items[i]
+    keep = dict(it, entry=None)
+    give = dict(it, entry=None, arm=recv)
+    keep["sp"], give["sp"] = split_span(it["sp"], s_cut, L, side, splice)
+    e_give = pricer.entry(give, recv)
+    if e_give is None:
+        return None
+    e_keep = pricer.entry(keep, src)
+    if e_keep is None:
+        return None
+    keep["entry"], give["entry"] = e_keep, e_give
+    trial = items[:i] + [keep, give] + items[i + 1:]
+    loads = pricer.loads(trial)
+    key = load_score(loads)
+    return key, trial, loads, dict(
+        kind="split", seg=int(i), frm=int(src), to=int(recv), side=side,
+        stroke=int(it["stroke"]["id"]), s_cut=float(s_cut),
+        keep_m=float(e_keep["length"]), give_m=float(e_give["length"]),
+        max_after=float(key[0]))
+
+
+def _bisect_cut(items, i, side, lo, hi, L, src, recv, splice, pricer, best,
+                steps=SPLIT_REFINE):
+    """Walk the cut to where the two arms' loads CROSS. -> (best, evaluations).
+
+    Handing more ink over lowers the donor's load and raises the receiver's,
+    both monotonically, so the maximum of the two is V-shaped in the cut
+    position and its minimum is the crossing point.  That makes a bisection the
+    right search and a fixed number of steps enough: five halvings place the cut
+    to about 3 % of the span, which is finer than the 5 cm floor cares about.
+
+    The coarse candidates in `_split_search` decide WHICH span to cut and WHO
+    takes which end; this decides WHERE, and it is worth doing separately
+    because the analytic guess has to price a pen-up tour it cannot see.  A cut
+    the arms will not certify is treated as "too much ink handed over", which is
+    the usual reason: the receiver's reach is what runs out.  `best` is threaded
+    through so the answer is never worse than what was already found.
+    """
+    a, z, n = float(lo), float(hi), 0
+    for _ in range(int(steps)):
+        if z - a <= 1e-9:
+            break
+        c = round(0.5 * (a + z), 9)
+        r = _try_cut(items, i, side, c, L, src, recv, splice, pricer)
+        n += 1
+        if r is None:                       # give less and try again
+            a, z = (a, c) if side == "head" else (c, z)
+            continue
+        key, trial, loads, rec = r
+        if best is None or key < best[0]:
+            best = (key, trial, rec)
+        more = loads[src] > loads.get(recv, 0.0)
+        if side == "head":                  # a bigger cut hands over more
+            a, z = (c, z) if more else (a, c)
+        else:                               # a smaller cut hands over more
+            a, z = (a, c) if more else (c, z)
+    return best, n
+
+
+def _split_search(items, loads, pricer, min_split, splice, budget):
+    """The best IMPROVING split of one span off the busiest arm.
+
+    -> ((score, new items, record), plan calls spent), the triple being None
+    when nothing improves.  The busiest arm is the only source worth cutting for
+    the same reason it is the only source worth moving from: it is the only arm
+    whose load is the objective.  Segments are tried longest-first (the ink is
+    where the seconds are) and receivers least-loaded-first.
+
+    TWO STAGES, because the two questions have different prices.  WHICH span to
+    cut and WHO takes which end is decided on two coarse candidates apiece — the
+    load-equalising cut and the most the receiver's reach will take — and only
+    the winner is then refined by `_bisect_cut`.  Every candidate is scored on
+    `load_score`, the balancer's own ruler, so a split and a relocation can be
+    compared without either being given a handicap; a split is accepted only if
+    it beats the score the move/swap pass left behind.
+    """
+    key0 = load_score(loads)
+    src = max(loads, key=lambda a: (loads[a], a))
+    mine = sorted((i for i, it in enumerate(items) if it["arm"] == src),
+                  key=lambda i: (-float(items[i]["entry"]["length"]), i))
+    spent, best, where = 0, None, None
+    for i in mine[:SPLIT_CAND_SEGS]:
+        it = items[i]
+        st, sp = it["stroke"], it["sp"]
+        if float(it["entry"]["length"]) < 2.0 * min_split + splice:
+            continue                       # cannot make two legal pieces
+        L = polyline_length(st["pts"])
+        rate = pricer.draw_s(src, it, it["entry"]) / max(it["entry"]["length"], 1e-9)
+        # ELIGIBILITY BEFORE LOAD.  Ranking every arm by load and then keeping
+        # the lightest few hands the shortlist to the arms that are idle BECAUSE
+        # THEY REACH NOTHING — two parked floor arms at 0.0 s crowd out the arm
+        # that certifies 93 % of the span and happens to be second busiest.  So
+        # the colour and the atlas are applied first and the load only orders
+        # what is left.
+        recv = sorted((b for b in pricer.arms
+                       if b != src and pricer.colors.get(b) == st["color"]
+                       and pricer.reaches(it, b)),
+                      key=lambda b: (loads.get(b, 0.0), b))
+        for b in recv[:SPLIT_CAND_RECV]:
+            ivs = [v for v in pricer.ivmap.get(st["id"], []) if v.arm == b]
+            n0 = pricer.n_probes
+            p2, s2 = pricer.probe_span(it, b)
+            spent += pricer.n_probes - n0
+            # the probe of THIS span and the probe pass's intervals over the
+            # whole stroke are both certified runs in from the same end, so the
+            # longer of the two is certified as well and neither is discarded
+            pre = max(certified_prefix(ivs, sp["s0"], sp["s1"]), p2)
+            suf = min(certified_suffix(ivs, sp["s0"], sp["s1"]), s2)
+            if pre <= sp["s0"] + EPS_S and suf >= sp["s1"] - EPS_S:
+                continue                   # this arm certifies neither end
+            want = max(0.5 * (loads[src] - loads.get(b, 0.0)) / max(rate, 1e-9),
+                       min_split)
+            for c, side in split_candidates(sp["s0"], sp["s1"], L, pre, suf,
+                                            want, min_split, splice,
+                                            n=SPLIT_COARSE_CUTS):
+                if spent >= budget:
+                    return (best if best and best[0] < key0 else None), spent
+                n0 = pricer.n_replans
+                r = _try_cut(items, i, side, c, L, src, b, splice, pricer)
+                spent += pricer.n_replans - n0
+                if r is not None and (best is None or r[0] < best[0]):
+                    best = (r[0], r[1], r[3])
+                    where = (i, side, b, L, sp, pre, suf)
+    if where is None:
+        return None, spent
+    # The winner is located; now place its cut exactly.  This runs even when no
+    # COARSE candidate improved anything: the two coarse cuts are the equalising
+    # guess (which has to price a pen-up tour it cannot see) and the receiver's
+    # maximum reach (which usually overshoots), and the cut that actually helps
+    # is routinely between them.
+    i, side, b, L, sp, pre, suf = where
+    e = 0.5 * splice / max(L, 1e-9)
+    mp = min_split / max(L, 1e-9)
+    if side == "head":
+        lo, hi = sp["s0"] + mp - e, min(pre - e, sp["s1"] - mp + e)
+    else:
+        lo, hi = max(suf + e, sp["s0"] + mp - e), sp["s1"] - mp + e
+    n0 = pricer.n_replans
+    best, _ = _bisect_cut(items, i, side, lo, hi, L, src, b, splice, pricer, best)
+    spent += pricer.n_replans - n0
+    return (best if best[0] < key0 else None), spent
+
+
 def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
               draw_speed=DRAW_SPEED, seq_opts=None, min_seg=MIN_SEG_M,
               h_inv=H_INV_DEFAULT, verbose=False, q_start=None,
-              return_home=True):
+              return_home=True, split=True, min_split=MIN_SPLIT_M,
+              splice=SPLIT_OVERLAP_M, split_rounds=SPLIT_ROUNDS,
+              split_budget=SPLIT_BUDGET, reach=None):
     """The probe data + the placed spans -> a re-assignment. -> (placed, info).
 
-    Three steps, in the order that keeps the planner honest:
+    ALLOCATION v2.  The loop is (move | swap | split) until nothing improves:
 
       1. ALTERNATIVES.  For every placed span, the arms of the right colour
          whose certified intervals already cover it end to end (`frac_covers`
          over `ivmap` — the probe data, not a new guess), each offered a clean
          re-plan of exactly that span and kept only if it certifies all of it.
-      2. PRICE.  Per (arm, span) the ink seconds; per arm the hover poses of
-         its whole candidate pool once, so a load is a cost-matrix slice and a
-         Held-Karp rather than a fresh IK sweep.
-      3. BALANCE.  `balance_loads` on the result.
+      2. BALANCE.  `balance_loads` takes relocations and swaps out of the
+         busiest arm until neither lowers the objective.
+      3. SPLIT.  `_split_search` then asks the finer question the whole-segment
+         moves cannot: is there a span on the busiest arm that a lighter arm
+         certifies PART of?  If cutting it there lowers the same objective, the
+         cut is taken, both halves are re-planned from scratch for the arms that
+         will draw them, and the loop goes back to (1) — a new piece is a new
+         segment, and its neighbours' alternatives may have changed with it.
 
-    `placed` entries are mutated in place (`arm` and `entry`), which is what the
-    caller then reads its programmes out of.
+    Coverage is invariant through all three (see the section-4c commentary), and
+    `coverage_lost` re-derives the merged cover at the end and REFUSES rather
+    than return a programme that gave ink back.  `split=False` recovers
+    allocation v1 exactly: one pass of steps 1-2 and no cutting.
+
+    `placed` grows when a span is cut, so it is both mutated in place and
+    returned; the caller reads its programmes out of the result either way.
     """
-    seq = dict(seq_opts or {})
-    ts = float(seq.get("transit_speed", writing.TRANSIT_SPEED))
-    qf = float(seq.get("qd_frac", writing.QD_FRAC))
-    exact = int(seq.get("exact_max_n", sequence.EXACT_MAX_N))
-    budget = float(seq.get("budget", sequence.TIME_BUDGET))
+    pricer = _Pricer(arms, colors, ivmap, specs, aopts, pens, draw_speed,
+                     dict(seq_opts or {}), min_seg, h_inv, q_start, return_home)
+    pricer.reach = reach
+    items = [dict(it) for it in placed]
+    lengths = {int(it["stroke"]["id"]): polyline_length(it["stroke"]["pts"])
+               for it in items}
+    cover0 = merged_spans(items)
+    owner0 = [(it["arm"], float(it["entry"]["length"])) for it in items]
+    moves, splits, loads_before, n_movable, spent = [], [], None, 0, 0
 
-    options, entries, n_probe = [], [], 0
-    for it in placed:
-        st, sp, own = it["stroke"], it["sp"], it["arm"]
-        opt, ent = {own}, {own: it["entry"]}
-        for b in arms:
-            if b == own or colors.get(b) != st["color"]:
-                continue
-            ivs = [v for v in ivmap.get(st["id"], []) if v.arm == b]
-            if not frac_covers(ivs, sp["s0"], sp["s1"]):
-                continue
-            e, n = replan_same_span(st, sp, specs[b], aopts[b], min_seg)
-            n_probe += n
-            if e is not None:
-                opt.add(b)
-                ent[b] = e
-        options.append(opt)
-        entries.append(ent)
+    for _ in range(int(split_rounds) + 1):
+        options, entries = pricer.options(items)
+        owner, info = balance_loads([it["arm"] for it in items], options,
+                                    pricer.load_fn(items, entries),
+                                    verbose=verbose)
+        for i, (it, a) in enumerate(zip(items, owner)):
+            it["arm"], it["entry"] = a, entries[i][a]
+        if loads_before is None:
+            loads_before, n_movable = dict(info["loads_before"]), info["n_movable"]
+        moves += info["moves"]
+        if not split:
+            break
+        best, used = _split_search(items, dict(info["loads_after"]), pricer,
+                                   float(min_split), float(splice),
+                                   max(int(split_budget) - spent, 0))
+        spent += used
+        if best is None:
+            break
+        key, items, rec = best
+        splits.append(rec)
+        if verbose:
+            print(f"  split {len(splits):>2}: stroke {rec['stroke']} cut at "
+                  f"s={rec['s_cut']:.4f}; arm {rec['frm']} keeps "
+                  f"{rec['keep_m']:.3f} m, arm {rec['to']} takes "
+                  f"{rec['give_m']:.3f} m; busiest arm now {key[0]:.1f} s")
 
-    pool = {a: [i for i, o in enumerate(options) if a in o] for a in arms}
-    at = {a: {i: k for k, i in enumerate(pool[a])} for a in arms}
-    ends, draw_s = {}, {}
-    for a in arms:
-        if not pool[a]:
-            continue
-        segs = [entries[i][a] for i in pool[a]]
-        ends[a] = sequence.endpoints(specs[a], segs, h_inv, pens[a])
-        for i, s in zip(pool[a], segs):
-            draw_s[(a, i)] = writing.segment_draw_time(specs[a], s, draw_speed,
-                                                       qf, h_inv, pens[a])
+    lost = coverage_lost(cover0, merged_spans(items), lengths)
+    if lost > 1e-9:
+        raise ValueError(
+            f"the balancer gave back {lost:.6f} m of certified ink; a split may "
+            "only ever hand over a piece an arm has re-planned at exactly the "
+            "same endpoints (see allocate.split_span)")
 
-    def load_fn(a, idx):
-        if not idx:
-            return 0.0
-        return arm_load(specs[a], [entries[i][a] for i in idx],
-                        [draw_s[(a, i)] for i in idx], ts, qf, h_inv, pens[a],
-                        ends=_slice_ends(ends[a], [at[a][i] for i in idx]),
-                        exact_max_n=exact, budget=budget,
-                        q_start=(q_start or {}).get(a), return_home=return_home)
-
-    owner0 = [it["arm"] for it in placed]
-    owner, info = balance_loads(owner0, options, load_fn, verbose=verbose)
-    for i, (it, a) in enumerate(zip(placed, owner)):
-        it["arm"], it["entry"] = a, entries[i][a]
-    info.update(n_replans=n_probe, draw_speed=float(draw_speed),
-                metres_before={a: float(sum(entries[i][owner0[i]]["length"]
-                                            for i in range(len(placed))
-                                            if owner0[i] == a)) for a in arms},
-                metres_after={a: float(sum(placed[i]["entry"]["length"]
-                                           for i in range(len(placed))
-                                           if owner[i] == a)) for a in arms})
+    placed[:] = items
+    loads_after = pricer.loads(items)
+    info = dict(
+        loads_before=loads_before or {}, loads_after=loads_after,
+        max_before=load_score(loads_before or {})[0],
+        max_after=load_score(loads_after)[0],
+        moves=moves, rounds=len(moves), splits=splits, n_splits=len(splits),
+        n_movable=int(n_movable), n_replans=int(pricer.n_replans),
+        n_probes=int(pricer.n_probes), split_calls=int(spent),
+        draw_speed=float(draw_speed),
+        min_split_m=float(min_split), splice_m=float(splice),
+        coverage_lost_m=float(lost), split_enabled=bool(split),
+        n_segments_before=len(owner0), n_segments_after=len(items),
+        metres_before={a: float(sum(m for x, m in owner0 if x == a))
+                       for a in pricer.arms},
+        metres_after={a: float(sum(it["entry"]["length"] for it in items
+                                   if it["arm"] == a)) for a in pricer.arms})
     return placed, info
 
 
@@ -1131,7 +1771,10 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_seg=MIN_SEG_M, overlap=OVERLAP_M, active_override=None,
              sequencer=SEQUENCER, seq_opts=None, pens=None, colors=None,
              max_probes=3, gap_tol=GAP_TOL_M, repair_rounds=3,
-             repair_budget=REPAIR_BUDGET, balance=True,
+             repair_budget=REPAIR_BUDGET, balance=True, split=True,
+             probe_ref_m=None,
+             min_split=MIN_SPLIT_M, splice=SPLIT_OVERLAP_M,
+             split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
              draw_speed=DRAW_SPEED, q_start=None, return_home=True):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
@@ -1154,6 +1797,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     subsets.  Left None, the 2^n - 2 partitions are enumerated as before, which
     is the single-pass answer.
 
+    `probe_ref_m` turns on DEEP PROBING for strokes much longer than the flat
+    budget was chosen for: the per-stroke budget scales with length
+    (`stroke_probes`) and a barren gap is bisected rather than abandoned
+    (`probe_stroke`'s `bisect`).  They are one knob because they are one fix —
+    a stroke twenty times the reference length needs the probe both to keep
+    looking and to be allowed to look.  Left None both are off, which is what
+    every run before this one used and what the logo's published numbers are.
+
     `sequencer` picks how each arm's segments are ordered: "opt" (the default;
     `sequence.solve` — minimum transit TIME over orders and directions,
     exact to 16 segments) or "nn" (the old paper-distance nearest neighbour,
@@ -1167,6 +1818,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     the same endpoints, so it cannot change the coverage; `draw_speed` is the
     material's limit, and it enters here because the load it balances is
     SECONDS and not metres.  `--no-balance` recovers the old allocation.
+
+    `split` is allocation v2 (see section 4c): the balancer may also CUT a span
+    on the busiest arm and hand one piece to a less-loaded arm that certifies
+    it, which is the only move that reaches the 48 % of solo drawing time
+    `docs/SOLO_TIME.md` measured as splittable.  `min_split` is the shortest
+    piece a cut may create and `splice` the ink drawn twice at the seam.
+    Coverage is invariant under it by construction and re-measured before the
+    result is returned; `split=False` recovers allocation v1 exactly.
     """
     if arms is not None and active_override is not None:
         raise ValueError("pass arms= or active_override=, not both")
@@ -1191,8 +1850,11 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                                         stroke=st["id"]))
                 continue
             v, s = probe_stroke(st["pts"], specs[a], aopts[a],
-                                max_probes=max_probes, min_seg=min_seg,
-                                gap_tol=gap_tol)
+                                max_probes=stroke_probes(
+                                    polyline_length(st["pts"]), max_probes,
+                                    probe_ref_m),
+                                min_seg=min_seg, gap_tol=gap_tol,
+                                bisect=probe_ref_m is not None)
             s["stroke"] = st["id"]
             probe_stats.append(s)
             ivs += v
@@ -1248,7 +1910,10 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         placed, bal = rebalance(placed, arms, colors, ivmap, specs, aopts,
                                 pen_m, draw_speed, seq_opts, min_seg,
                                 verbose=verbose, q_start=q_start,
-                                return_home=return_home)
+                                return_home=return_home, split=split,
+                                min_split=min_split, splice=splice,
+                                split_rounds=split_rounds,
+                                split_budget=split_budget, reach=pre)
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
@@ -1287,7 +1952,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out["drawn_len"] = float(sum(s["length"] for a in arms
                                  for s in out["programs"][a]))
     out["dropped_len"] = float(sum(d["length"] for d in dropped))
-    out["n_probes"] = int(sum(p["probes"] for p in probe_stats)) + n_repair
+    out["n_probes"] = (int(sum(p["probes"] for p in probe_stats)) + n_repair
+                       + int((bal or {}).get("n_probes", 0)))
+    out["n_split_probes"] = int((bal or {}).get("n_probes", 0))
     out["n_repair_probes"] = int(n_repair)
     out["n_repair_spans"] = int(cover.get("repair_added", 0))
     out["n_replans"] = n_replan
@@ -1358,11 +2025,29 @@ def report(res, strokes):
     b = res.get("balance")
     if b:
         n_seg = sum(len(res["programs"][a]) for a in res["arms"])
-        lines.append(f"balance: {b['n_movable']} of {n_seg} segments are "
+        lines.append(f"balance: {b['n_movable']} of "
+                     f"{b.get('n_segments_before', n_seg)} segments are "
                      f"certified by more than one arm; {b['rounds']} "
-                     f"move{'' if b['rounds'] == 1 else 's'} taken, busiest arm "
-                     f"{b['max_before']:.1f} s -> {b['max_after']:.1f} s "
-                     f"(the phase's floor), draw speed {b['draw_speed']:g} m/s")
+                     f"move{'' if b['rounds'] == 1 else 's'} and "
+                     f"{b.get('n_splits', 0)} "
+                     f"split{'' if b.get('n_splits', 0) == 1 else 's'} taken, "
+                     f"busiest arm {b['max_before']:.1f} s -> "
+                     f"{b['max_after']:.1f} s (the phase's floor), draw speed "
+                     f"{b['draw_speed']:g} m/s")
+        if b.get("n_splits"):
+            lines.append(f"      {b['n_segments_before']} segments -> "
+                         f"{b['n_segments_after']}; "
+                         f"{1000 * b['splice_m']:.0f} mm splice per cut, "
+                         f"shortest piece allowed {1000 * b['min_split_m']:.0f} "
+                         f"mm, coverage given back "
+                         f"{1000 * b['coverage_lost_m']:.3f} mm; the cut search "
+                         f"spent {b.get('n_probes', 0)} sub-span probes")
+            for m in b["splits"]:
+                lines.append(f"        stroke {m['stroke']:>3} cut at "
+                             f"s={m['s_cut']:.4f}: arm {m['frm']} keeps "
+                             f"{m['keep_m']:.3f} m, arm {m['to']} takes the "
+                             f"{m['side']} {m['give_m']:.3f} m -> "
+                             f"{m['max_after']:.1f} s")
         lines.append("      per-arm nominal s  " + "  ".join(
             f"{a}:{b['loads_before'].get(a, 0.0):.1f}->"
             f"{b['loads_after'].get(a, 0.0):.1f}" for a in res["arms"]))

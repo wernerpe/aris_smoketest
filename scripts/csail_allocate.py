@@ -303,6 +303,10 @@ def _phase_json(res):
         balance=(None if not res.get("balance") else dict(
             n_movable=int(res["balance"]["n_movable"]),
             rounds=int(res["balance"]["rounds"]),
+            n_splits=int(res["balance"].get("n_splits", 0)),
+            n_segments_before=int(res["balance"].get("n_segments_before", 0)),
+            n_segments_after=int(res["balance"].get("n_segments_after", 0)),
+            coverage_lost_m=float(res["balance"].get("coverage_lost_m", 0.0)),
             max_before_s=float(res["balance"]["max_before"]),
             max_after_s=float(res["balance"]["max_after"]),
             loads_before_s={str(k): float(v)
@@ -410,6 +414,14 @@ def add_args(ap):
                     help="skip the min-max load pass and ship the raw interval "
                          "cover — which is optimal for pen-ups and blind to "
                          "the clock (see allocate.balance_loads)")
+    ap.add_argument("--no-split", action="store_true",
+                    help="allocation v1: balance with whole-segment moves and "
+                         "swaps only.  v2 may also CUT a span on the busiest "
+                         "arm and hand one piece to an arm that certifies it, "
+                         "which is the only move that reaches the 48 %% of solo "
+                         "drawing time docs/SOLO_TIME.md measured as splittable")
+    ap.add_argument("--min-split", type=float, default=allocate.MIN_SPLIT_M,
+                    help="metres; the shortest piece a cut may create")
     ap.add_argument("--qd-frac", type=float, default=writing.QD_FRAC,
                     help="fraction of the FR3 joint-velocity limit any move may use")
     ap.add_argument("--sequencer", default=allocate.SEQUENCER,
@@ -465,7 +477,7 @@ def parse_pens(s):
     return out
 
 
-def run_allocation(a, verbose=False):
+def run_allocation(a, verbose=False, split=None):
     """Trace -> place -> allocate. -> (phases, strokes, info).
 
     One code path for the allocation PNG/JSON and for the animation, so the
@@ -500,6 +512,12 @@ def run_allocation(a, verbose=False):
               sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
               max_probes=getattr(a, "max_probes", 3),
               balance=not getattr(a, "no_balance", False),
+              # `split=False` here is how the caller asks for the SAME ink
+              # allocated without cutting, which is what the conducted A/B in
+              # `csail_schedule.build_phases` needs a second copy of
+              split=(not getattr(a, "no_split", False)) if split is None
+                    else bool(split),
+              min_split=getattr(a, "min_split", allocate.MIN_SPLIT_M),
               draw_speed=getattr(a, "draw_speed", writing.DRAW_SPEED_FLEET),
               seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
               return_home=getattr(a, "idle_policy",

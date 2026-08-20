@@ -488,16 +488,35 @@ def test_balancing_lowers_the_busiest_arm():
     assert again == out and info2["rounds"] == 0
 
 
+def _covered(r):
+    """{stroke id: merged covered spans} of a shipped allocation.
+
+    WHAT IS ON THE PAPER, with who drew it and in how many pieces projected
+    away.  That is the quantity the balancer must not change, and it is not the
+    same as the list of spans: allocation v2 may CUT a span in two, which
+    changes the pieces and not one millimetre of the ink.
+    """
+    return allocate.merged_spans(
+        [dict(stroke=dict(id=s["stroke_id"]),
+              sp=dict(s0=min(s["s_range"]), s1=max(s["s_range"])))
+         for a in r["arms"] for s in r["programs"][a]])
+
+
 def test_balancing_cannot_change_what_is_drawn():
     """Coverage is invariant under the balancer BY CONSTRUCTION, and stays so.
 
     A move only ever hands a span to an arm that has certified the SAME span at
     the same endpoints (`replan_same_span` refuses a re-plan that gives back so
-    much as a millimetre), so the set of drawn spans cannot change — which is
-    what makes "does load balancing cost coverage" a question with a
-    structural answer rather than a measured one.  Checked twice: the pure pass
-    refuses an assignment it was not offered, and a real two-arm allocation
-    draws exactly the same ink with the pass on and off.
+    much as a millimetre), and a SPLIT only ever hands over a piece whose
+    complement its owner has re-planned — the union of the two is the input span
+    for every cut position.  So the covered ink cannot change, which is what
+    makes "does load balancing cost coverage" a question with a structural
+    answer rather than a measured one.
+
+    Checked three ways: the pure pass refuses an assignment it was not offered;
+    a real two-arm allocation covers exactly the same ink with the pass off,
+    with whole-segment moves only, and with cutting enabled; and v1's stronger
+    claim — that the SPANS THEMSELVES are untouched — is still pinned for v1.
     """
     try:
         allocate.balance_loads([7], [{3, 5}], lambda a, i: 0.0)
@@ -512,30 +531,210 @@ def test_balancing_cannot_change_what_is_drawn():
     kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
               colors={31: "grey", 71: "grey"}, verbose=False)
     raw = allocate.allocate(strokes, balance=False, **kw)
-    bal = allocate.allocate(strokes, balance=True, **kw)
+    v1 = allocate.allocate(strokes, balance=True, split=False, **kw)
+    v2 = allocate.allocate(strokes, balance=True, split=True, **kw)
 
     def spans(r):
         return sorted((s["stroke_id"], round(min(s["s_range"]), 9),
                        round(max(s["s_range"]), 9))
                       for a in r["arms"] for s in r["programs"][a])
 
-    assert bal["balance"]["n_movable"] >= 2, \
+    assert v1["balance"]["n_movable"] >= 2, \
         "no segment had an alternative arm: the test proves nothing"
-    assert bal["balance"]["rounds"] >= 1, "the balancer never moved anything"
-    assert spans(raw) == spans(bal), "the balancer changed WHICH ink is drawn"
-    assert abs(raw["dropped_len"] - bal["dropped_len"]) < 1e-12
-    assert abs(raw["drawn_len"] - bal["drawn_len"]) < 1e-9
-    assert bal["balance"]["max_after"] < bal["balance"]["max_before"], \
-        "the busiest arm did not get lighter"
-    # ...and every segment is still drawn by an arm that certified it: re-plan
-    # the shipped geometry for its new owner and it must come back "ok"
+    assert v1["balance"]["rounds"] >= 1, "the balancer never moved anything"
+    assert spans(raw) == spans(v1), "a whole-segment move changed the SPANS"
+    assert v1["balance"]["n_splits"] == 0, "split=False cut something anyway"
+    for r, tag in ((v1, "v1"), (v2, "v2")):
+        assert _covered(raw) == _covered(r), f"{tag} changed WHICH ink is drawn"
+        assert abs(raw["dropped_len"] - r["dropped_len"]) < 1e-12, tag
+        assert r["drawn_len"] >= raw["drawn_len"] - 1e-9, \
+            f"{tag} ships less ink than the cover it started from"
+        assert r["balance"]["coverage_lost_m"] == 0.0, tag
+        assert r["balance"]["max_after"] < r["balance"]["max_before"], \
+            f"{tag}: the busiest arm did not get lighter"
+        # ...and every segment is still drawn by an arm that certified it:
+        # re-plan the shipped geometry for its new owner and it must be "ok"
+        from aris_sixarm.stroke_api import plan_stroke
+        for a in r["arms"]:
+            for s in r["programs"][a]:
+                p = plan_stroke(np.asarray(s["pts"], float), FLEET[a],
+                                {"pen_ext": r["pens"][a]})
+                assert p["status"] == "ok", \
+                    (f"{tag}: arm {a} cannot certify the segment it was given: "
+                     f"{p['status']}")
+
+
+# ==========================================================================
+# allocation v2: stroke splitting as a balancing move
+# ==========================================================================
+def test_a_cut_covers_the_span_it_cut_and_makes_no_confetti():
+    """The geometry of a split, before any arm is asked to certify it.
+
+    `split_span`'s contract is that the union of the two pieces IS the input
+    span, for every cut position and both sides — that is the whole coverage
+    guarantee, and it should hold at the ends of the interval and at silly cut
+    positions outside it, not merely in the middle where it is obvious.
+    `split_candidates`'s contract is the other half: never offer a cut that
+    makes a piece shorter than the floor.
+    """
+    L, sp = 2.0, dict(s0=0.20, s1=0.80, direction=1, source="cover")
+    splice = allocate.SPLIT_OVERLAP_M
+    for side in ("head", "tail"):
+        for c in (0.0, 0.2, 0.35, 0.5, 0.799, 0.8, 1.0):
+            keep, give = allocate.split_span(sp, c, L, side, splice)
+            # the union of the two pieces IS the input span: it reaches both of
+            # its ends and there is no gap in the middle, at any cut position
+            assert abs(min(keep["s0"], give["s0"]) - sp["s0"]) < 1e-12 and \
+                abs(max(keep["s1"], give["s1"]) - sp["s1"]) < 1e-12, \
+                f"{side} at {c}: the pieces do not reach the span's own ends"
+            lo, hi = sorted((keep, give), key=lambda s: (s["s0"], s["s1"]))
+            assert lo["s1"] >= hi["s0"] - 1e-12, \
+                f"{side} at {c}: a hole of {hi['s0'] - lo['s1']:.2e} between them"
+            # away from the ends the seam is ink drawn twice, 5 mm of it; a cut
+            # within half a splice of an end has nowhere to put the other half
+            e = 0.5 * splice / L
+            if sp["s0"] + e < c < sp["s1"] - e:
+                assert abs((lo["s1"] - hi["s0"]) * L - splice) < 1e-9, \
+                    (f"{side} at {c}: the seam is "
+                     f"{1000 * (lo['s1'] - hi['s0']) * L:.2f} mm, not "
+                     f"{1000 * splice:.0f}")
+
+    # and no candidate cut may leave a piece under the floor
+    mins = 0.05
+    for pre, suf in ((0.80, 0.20), (0.50, 0.60), (0.25, 0.75), (0.20, 0.80)):
+        for c, side in allocate.split_candidates(0.20, 0.80, L, pre, suf, 0.3,
+                                                 mins, splice):
+            keep, give = allocate.split_span(sp, c, L, side, splice)
+            for piece in (keep, give):
+                assert (piece["s1"] - piece["s0"]) * L >= mins - 1e-9, \
+                    (f"candidate {c:.4f} ({side}) makes a "
+                     f"{(piece['s1'] - piece['s0']) * L * 1000:.1f} mm piece")
+            # the receiver's half must lie inside what it certified
+            assert (give["s1"] <= pre + 1e-9 if side == "head"
+                    else give["s0"] >= suf - 1e-9), \
+                f"candidate {c:.4f} ({side}) reaches past the certified run"
+
+
+def test_a_split_certifies_both_halves_and_keeps_the_coverage():
+    """One stroke, one arm holding all of it, and a cut that both arms certify.
+
+    The instance is the smallest one that a whole-segment balancer provably
+    cannot improve: a SINGLE segment.  Handing it over whole only makes the
+    receiver the new busiest arm, so v1 has no move at all and must leave the
+    load exactly where it found it; v2 cuts it.  What is asserted is not the
+    speed (that is the next test) but the two guarantees: both halves come back
+    from an INDEPENDENT `plan_stroke` as "ok" for the arm that was given them,
+    and the ink on the paper is the same ink.
+    """
     from aris_sixarm.stroke_api import plan_stroke
-    for a in bal["arms"]:
-        for s in bal["programs"][a]:
+    strokes = [dict(pts=np.column_stack([np.linspace(1.55, 2.05, 60),
+                                         np.full(60, 1.64)]),
+                    color="grey", kind="line", id=0)]
+    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+              colors={31: "grey", 71: "grey"}, verbose=False)
+    v1 = allocate.allocate(strokes, split=False, **kw)
+    v2 = allocate.allocate(strokes, split=True, **kw)
+
+    assert v1["balance"]["rounds"] == 0 and v1["balance"]["n_splits"] == 0, \
+        "a one-segment instance should offer a whole-segment balancer nothing"
+    n = v2["balance"]["n_splits"]
+    assert n >= 1, "the splitter left a single 0.5 m segment on one arm"
+    assert v2["balance"]["n_segments_after"] == \
+        v2["balance"]["n_segments_before"] + n
+    assert v2["balance"]["coverage_lost_m"] == 0.0
+    assert _covered(v1) == _covered(v2), "the cut changed WHICH ink is drawn"
+    assert v2["dropped_len"] <= v1["dropped_len"] + 1e-12
+
+    used, pieces = set(), 0
+    for a in v2["arms"]:
+        for s in v2["programs"][a]:
+            pieces += 1
+            used.add(a)
+            assert s["length"] >= allocate.MIN_SPLIT_M - 1e-9, \
+                f"arm {a} was handed {1000 * s['length']:.1f} mm of confetti"
             r = plan_stroke(np.asarray(s["pts"], float), FLEET[a],
-                            {"pen_ext": bal["pens"][a]})
+                            {"pen_ext": v2["pens"][a]})
             assert r["status"] == "ok", \
-                f"arm {a} cannot certify the segment it was given: {r['status']}"
+                f"arm {a} cannot certify its half of the cut: {r['status']}"
+    assert len(used) == 2 and pieces == 1 + n, \
+        f"{pieces} pieces over {len(used)} arms; wanted {1 + n} over 2"
+    # the seam is ink drawn twice, and only that much of it
+    extra = v2["drawn_len"] - v1["drawn_len"]
+    assert 0 < extra <= n * allocate.SPLIT_OVERLAP_M + 1e-6, \
+        f"the cut added {1000 * extra:.2f} mm of ink, not one 5 mm splice"
+
+
+def test_splitting_beats_not_splitting_on_a_constructed_instance():
+    """The constructed case the whole feature exists for, and it must win.
+
+    Three long strokes in the band arms 31 and 71 share.  Whole-segment moves
+    can only deal them out 2-1, which leaves one arm carrying half again what
+    the other does; cutting can do better, and the assertion is that it DOES —
+    a strictly lower busiest arm, out of the same ink, with the coverage
+    unmoved.  The run is also required to be reproducible, because a balancer
+    whose answer depends on the wall clock cannot be regression-tested.
+    """
+    ys = (1.560, 1.640, 1.720)
+    strokes = [dict(pts=np.column_stack([np.linspace(1.60, 2.00, 48),
+                                         np.full(48, y)]),
+                    color="grey", kind="line", id=i) for i, y in enumerate(ys)]
+    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+              colors={31: "grey", 71: "grey"}, verbose=False)
+    v1 = allocate.allocate(strokes, split=False, **kw)
+    v2 = allocate.allocate(strokes, split=True, **kw)
+
+    assert v2["balance"]["n_splits"] >= 1, "no cut was taken at all"
+    assert v2["balance"]["max_after"] < v1["balance"]["max_after"] - 1e-6, \
+        (f"splitting did not beat not splitting: {v2['balance']['max_after']:.2f} "
+         f"s vs {v1['balance']['max_after']:.2f} s")
+    assert _covered(v1) == _covered(v2), "the extra move cost coverage"
+    assert v2["balance"]["coverage_lost_m"] == 0.0
+
+    again = allocate.allocate(strokes, split=True, **kw)
+    assert again["balance"]["n_splits"] == v2["balance"]["n_splits"]
+    assert abs(again["balance"]["max_after"] - v2["balance"]["max_after"]) < 1e-9, \
+        "two runs of the same allocation disagreed"
+    assert [round(m["s_cut"], 12) for m in again["balance"]["splits"]] == \
+        [round(m["s_cut"], 12) for m in v2["balance"]["splits"]], \
+        "the cut positions are not a function of the input"
+
+
+def test_the_bench_corpus_is_deterministic_and_is_not_the_logo():
+    """The anti-overfitting corpus has to be reproducible to be a regression.
+
+    Two calls must give bit-identical geometry, the seeded generators must
+    actually depend on their seed (a generator that ignores it is deterministic
+    for the wrong reason), and every drawing must land on the sheet — a corpus
+    half of which is off the paper would measure the clipper, not the allocator.
+    """
+    from aris_sixarm import bench
+    from aris_sixarm.fleet import SHEET as SH
+    assert len(bench.ORDER) == 5 and set(bench.ORDER) == set(bench.BENCH)
+    for name in bench.ORDER:
+        a, ma = bench.make(name)
+        b, mb = bench.make(name)
+        assert len(a) == len(b) == ma["n_strokes"], name
+        for x, y in zip(a, b):
+            assert x["color"] == y["color"] and x["id"] == y["id"], name
+            assert np.array_equal(np.asarray(x["pts"]), np.asarray(y["pts"])), \
+                f"{name} is not reproducible"
+        assert abs(ma["total_m"] - mb["total_m"]) < 1e-12
+        pts = np.vstack([np.asarray(s["pts"], float) for s in a])
+        assert pts[:, 0].min() > 0 and pts[:, 0].max() < SH[0], f"{name} off sheet"
+        assert pts[:, 1].min() > 0 and pts[:, 1].max() < SH[1], f"{name} off sheet"
+        assert ma["total_m"] > 5.0, f"{name} is only {ma['total_m']:.2f} m"
+
+    # the two that draw randomness must actually use it
+    for name in ("scatter",):
+        a, _ = bench.make(name)
+        c, _ = bench.make(name, seed=999)
+        same = all(np.array_equal(np.asarray(x["pts"]), np.asarray(y["pts"]))
+                   for x, y in zip(a, c))
+        assert not same, f"{name} ignores its seed"
+    # and the corpus is the regime table it claims to be
+    assert len(bench.make("spiral")[0]) == 1, "the spiral is not one stroke"
+    assert {s["color"] for s in bench.make("duotone")[0]} == {"grey", "orange"}
+    assert bench.make("hatch")[1]["total_m"] > 25.0
 
 
 # ==========================================================================
