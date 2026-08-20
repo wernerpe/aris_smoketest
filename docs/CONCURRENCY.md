@@ -64,4 +64,41 @@ Lever (1) and one this study did not have — the *allocation* — are built, an
 
 **Single pass was measured, not assumed.** The other way to spend the pen swap is not to have one: all 62 colour partitions of the six arms, at the shipped placement, arms permanently grey or orange. The best of them (arms 2 and 97 orange, the rest grey) certifies **91.088 %** — 1.03 m of the logo left empty against a 99.0 % gate — balances to a 73.9 s floor and conducts, `scene_check` PASS at 82.9 mm, to **74.7 s end to end**. It is 33.9 s faster than the two-pass run and it is refused, because 8.9 % of the picture is not a term in the objective. Two passes ship.
 
+## Lever 4 is built: see docs/IDLE.md (2026-08-19)
+
+"Tuck poses" above — ranked 4th, worth −65 % of the pause and −15.1 s of clock —
+is now `aris_sixarm/idle.py`, and it is the last lever this study named that had
+not been turned. An arm that finishes lifts its pen and STOPS THERE instead of
+going home; a frozen pose that the rest-suffix rule can be *measured* to be
+paying for gets a certified minimal retreat; an arm with slack taxis to its next
+entry slowly instead of racing there. **108.6 → 105.4 s**, all of it in the
+orange pass (68.3 → 65.1 s, which now finishes exactly at its floor).
+
+This study predicted −15.1 s of makespan for tuck poses and got −3.2 s, and the
+gap is instructive: it costed a tuck as free, and a tuck is only free for the
+pass nobody follows. The grey pass is followed by the orange one, which has to
+start somewhere; walking home BETWEEN two passes is strictly worse than walking
+home during one, because during a pass the trip overlaps somebody else's
+drawing. The −65 % of pause it predicted went the other way too — pause RISES
+50.5 → 101.4 s — because an arm that stops early now stands still rather than
+flying home, which is the cheaper of the two and exactly what the objective
+hierarchy asks for. `docs/IDLE.md` has the rest.
+
+Two things this study could not have seen, because both are about the pose an
+arm parks in rather than the path it takes to get there: at the inverted ready
+pose a 200 mm pen sits **16 mm below the paper** and a 300 mm pen **113 mm**
+below — v1 parked four arms there three times a run and no gate looked, because
+paper clearance is checked on the nine FK chain points and the pen is not one of
+them. And re-pricing the sequencer for "no trip home" changes which order it
+picks, which is enough to route one arm's pen-up straight through another's base
+column: a refusal no amount of waiting or re-prioritising can answer, and the
+first time this pipeline has had to hand a conductor's verdict back to the
+component that made the choice (`coordination.hard_blocks` →
+`allocate.resequence(forbid=...)`).
+
+**Everything above this section is a study of conductor v1 and stays true of
+it.** `scripts/concurrency_diag.py` still reproduces it — it now pins
+`--idle-policy home` for exactly that reason, and skips its per-arm assertions
+when handed a reference schedule conducted under a different policy.
+
 **Caveats.** All of this is conductor v1's move set — advance or wait on a frozen path — so "makespan" means the kinematic playback, not an acceleration-limited run. The counterfactual margins are re-thresholds of the same collision images, checked only by the conductor's own test; a real margin change must go back through `scene_check`. Blame for a wait with no blocker at that instant is assigned to the first cell the arm would run into at full speed from there, which is a defensible reading of "what is in the way" and not the only one; 0.0 s of the 148.0 ended up unattributed.

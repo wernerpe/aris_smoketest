@@ -50,14 +50,27 @@ schedule) and makes the coordination problem small enough to solve exactly.
             the old busiest-first heuristic with deadlock promotion is the
             fallback, because 7! schedules is no longer cheap.
 
+  IDLE      An arm that has arrived has NOT left: the rest suffix in `_dp`
+            keeps checking its final pose against everyone still moving, which
+            is correct and is also what made three quarters of the fleet's
+            pauses "waiting for permission to go home".  WHERE an arm stops is
+            not this module's choice — `idle.py` makes it and hands the paths
+            in — but two things here serve it: `rest_delays` measures what the
+            rest rule cost each arm (by re-running the same DP with the rule
+            dropped), and `hard_blocks` names the progress indices no schedule
+            can ever reach, which is the difference between "this is slow" and
+            "this cannot run".
+
   NOT v1    No re-timing of a stroke, no path change, and no dynamics.  The
-            only recovery from a deadlock is re-ordering the priorities and
-            trying again — exhaustively where that is affordable, by promoting
-            the arm that failed (`retry_orders`) where it is not.  Either way
-            it resolves an ordering deadlock and cannot resolve a geometric
-            one.  A pause here is instantaneous in the animation's kinematic
-            playback; a real run needs the acceleration-limited version of the
-            same schedule.
+            only recovery from a deadlock IN HERE is re-ordering the priorities
+            and trying again — exhaustively where that is affordable, by
+            promoting the arm that failed (`retry_orders`) where it is not.
+            Either way it resolves an ordering deadlock and cannot resolve a
+            geometric one; a refusal now carries the evidence (`err.free`,
+            `err.paths`) so a caller that CAN change a path — the sequencer, via
+            `idle.unrunnable` — gets told which one.  A pause here is
+            instantaneous in the animation's kinematic playback; a real run
+            needs the acceleration-limited version of the same schedule.
 """
 import math
 import time
@@ -204,7 +217,7 @@ def free_cells(pi, pj, margin, sweep=SWEEP_K, cap=BROAD_CAP):
 # ==========================================================================
 # scheduling
 # ==========================================================================
-def _dp(free_ab, prog_hi, n, horizon, deadline=None):
+def _dp(free_ab, prog_hi, n, horizon, deadline=None, rest=True):
     """Earliest-arrival monotone schedule for one arm. -> (progress (M,), m_end).
 
     `free_ab` maps each already-scheduled arm to its (n-1, nb-1) free-cell
@@ -232,10 +245,16 @@ def _dp(free_ab, prog_hi, n, horizon, deadline=None):
     # from 0 to the horizon" rather than "is safe until it stops".  It is one
     # row, so it is cheap to keep at full length even when the forward pass is
     # bounded.
+    #
+    # `rest=False` drops that requirement, and is NOT a schedule anyone may
+    # run: it is the counterfactual "when could this arm have arrived if the
+    # pose it stops in cost nothing", which is exactly the seconds an idle
+    # policy is trying to buy back (`idle.rest_delays`).
     rest_row = np.ones(M, bool)
-    for b, F in free_ab.items():
-        rest_row &= F[n - 2, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
-    rest = np.logical_and.accumulate(rest_row[::-1])[::-1][:D]
+    if rest:
+        for b, F in free_ab.items():
+            rest_row &= F[n - 2, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
+    rest_ok = np.logical_and.accumulate(rest_row[::-1])[::-1][:D]
     ok = np.ones((n - 1, D), bool)
     for b, F in free_ab.items():
         ok &= F[:, np.clip(prog_hi[b][:D], 0, F.shape[1] - 1)]
@@ -247,9 +266,9 @@ def _dp(free_ab, prog_hi, n, horizon, deadline=None):
         col = av.copy()
         col[1:] |= av[:-1]
         reach[:, m] = col
-        if reach[n - 1, m] and rest[m]:
+        if reach[n - 1, m] and rest_ok[m]:
             break
-    hits = np.flatnonzero(reach[n - 1] & rest)
+    hits = np.flatnonzero(reach[n - 1] & rest_ok)
     if not len(hits):
         return None, None
     m_end = int(hits[0])
@@ -452,7 +471,7 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
     if res is None:
         a = failed
         blocked = [b for b in static + moving if b != a and not cells(a, b).any()]
-        raise RuntimeError(
+        err = RuntimeError(
             f"arm {a} has no monotone pause schedule inside {M * dt:.0f} s"
             + (f"; its path is never clear of arm{'s' if len(blocked) > 1 else ''} "
                f"{', '.join(str(b) for b in blocked)}, which no amount of "
@@ -461,6 +480,14 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
                f"{'' if n_attempts == 1 else 's'} were tried")
             + "; v1 does not re-route — try a placement that keeps the arms "
             "further apart")
+        # THE REFUSAL IS EVIDENCE, NOT JUST A VERDICT.  The caller can often act
+        # on WHERE the arm got stuck (`hard_blocks` below turns these images
+        # into "this progress index is impossible whatever anyone else does"),
+        # and re-deriving the images to find out would cost as much as the
+        # conduct that just failed.
+        err.free, err.paths, err.arm = free, paths, a
+        err.margin, err.sweep = margin, float(sweep)
+        raise err
     prog, finish = res
     for a in static:
         finish[a] = 0.0
@@ -485,6 +512,87 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
                 sweep=float(sweep), M=m_last, dt=float(dt), free=free,
                 moving=moving, parked=static, attempts=int(n_attempts),
                 search=search, pause_total=float(sum(pauses.values())))
+
+
+def hard_blocks(paths, margin=SAFETY_M + CALIB_M, sweep=SWEEP_K, free=None):
+    """Progress indices no schedule can ever reach. -> {(a, b): rows}.
+
+    A row of `a`'s collision image against `b` with NO free cell in it says
+    something a pause schedule can never answer: wherever `b` is on its own
+    path, `a` may not be at that index.  Waiting does not help, priority does
+    not help, and the conductor is right to refuse — but it is not a placement
+    failure either, because the index belongs to a PATH somebody chose, and the
+    sequencer chooses paths.  A blocked index inside a pen-up transit is an
+    edge of a tour, and `allocate.resequence(forbid=...)` can be asked for the
+    best tour that does not use it.
+
+    `free` re-uses images already computed (the ones the failed `coordinate`
+    attached to its exception); missing pairs are derived here.
+    """
+    free = {} if free is None else free
+    out = {}
+    for a, pa in paths.items():
+        if not pa.moves:
+            continue
+        for b in paths:
+            if b == a:
+                continue
+            F = free.get((a, b))
+            if F is None:
+                F = free[(a, b)] = free_cells(paths[a], paths[b], margin, sweep)
+            rows = np.flatnonzero(~F.any(axis=1))
+            if len(rows):
+                out[(a, b)] = rows
+    return out
+
+
+def rest_delays(paths, res):
+    """How much the rest-suffix rule cost each arm, and who made it pay.
+
+    -> {arm: dict(arrive_s, free_arrive_s, delay_s, blockers {arm: seconds})}
+
+    THE POSE AN ARM STOPS IN IS THE ONE THING A PAUSE SCHEDULE CANNOT FIX.  An
+    arm held up on its path gets there eventually; an arm whose FINAL pose is
+    inside somebody's corridor is refused permission to arrive at all until that
+    somebody has gone past, and the DP pays for it in front-loaded waiting.
+    Re-running each arm's own DP with the rest requirement dropped (`_dp(...,
+    rest=False)`) separates the two exactly: `delay_s` is the seconds that are
+    about where the arm STOPS rather than where it goes, and `blockers` names
+    the arms whose swept tube the frozen pose sits in during those seconds.
+
+    That number, and not a geometric guess, is what `idle.plan_retreat` triggers
+    on — a frozen pose nobody is waiting on is a frozen pose to leave alone.
+    Nothing here re-schedules: it re-reads the images the schedule was built
+    from, so it cannot change what runs.
+    """
+    dt, M = float(res["dt"]), int(res["M"])
+    prog = {a: np.asarray(p, int) for a, p in res["progress"].items()}
+    margin, sweep = float(res["margin"]), float(res["sweep"])
+    free = res["free"]
+
+    def cells(a, b):
+        if (a, b) not in free:
+            free[(a, b)] = free_cells(paths[a], paths[b], margin, sweep)
+        return free[(a, b)]
+
+    static, moving = list(res["parked"]), list(res["moving"])
+    out = {}
+    for k, a in enumerate(moving):
+        others = static + moving[:k]
+        fab = {b: cells(a, b) for b in others}
+        n = paths[a].n
+        m_arr = int(round(res["finish"][a] / dt))
+        _, m_free = _dp(fab, prog, n, M, rest=False)
+        m_free = m_arr if m_free is None else int(m_free)
+        blk = {}
+        for b, F in fab.items():
+            j = np.clip(prog[b][m_free:max(m_arr, m_free)], 0, F.shape[1] - 1)
+            bad = int(np.count_nonzero(~F[n - 2, j]))
+            if bad:
+                blk[b] = bad * dt
+        out[a] = dict(arrive_s=float(m_arr * dt), free_arrive_s=float(m_free * dt),
+                      delay_s=float(max(0, m_arr - m_free) * dt), blockers=blk)
+    return out
 
 
 def report(res, paths):

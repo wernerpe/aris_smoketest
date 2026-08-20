@@ -664,14 +664,22 @@ def figure(phs, cf, path):
 
 
 # ==========================================================================
-def build_phase(res, dt, pens, draw_speed, transit_speed, qd_frac):
+def build_phase(res, dt, pens, draw_speed, transit_speed, qd_frac,
+                park=writing.PARK_HOME):
+    """THIS FILE IS ABOUT CONDUCTOR v1, so it parks arms the way v1 did.
+
+    `writing.arm_program` now freezes an arm where it finishes by default
+    (`aris_sixarm/idle.py`); every number in docs/CONCURRENCY.md was measured
+    with the go-home behaviour, and reconstructing it under a different idle
+    policy would be a different run wearing this document's labels.
+    """
     progs, samp = {}, {}
     for aid in FLEET:
         segs = res["programs"].get(aid, []) if aid in res["arms"] else []
         p = writing.arm_program(FLEET[aid], segs, draw_speed=draw_speed,
                                 transit_speed=transit_speed, qd_frac=qd_frac,
                                 h_inv=H_INV_DEFAULT, pen_ext=pens[aid],
-                                verbose=False)
+                                park=park, verbose=False)
         progs[aid], samp[aid] = p, writing.uniform_samples(p, dt)
     paths = coordination.arm_paths({a: samp[a]["q"] for a in FLEET}, dt, pens=pens)
     return progs, samp, paths
@@ -687,6 +695,7 @@ def main(argv=None):
     ap.add_argument("--safety", type=float, default=coordination.SAFETY_M)
     ap.add_argument("--calib", type=float, default=coordination.CALIB_M)
     ap.add_argument("--ref", default=str(ROOT / "out/csail_schedule_full.json"))
+    ap.set_defaults(idle_policy="home")   # see build_phase: this is a v1 study
     ap.add_argument("--png", default=str(ROOT / "out/concurrency_diagnostic.png"))
     ap.add_argument("--json", default=str(ROOT / "out/concurrency_diagnostic.json"))
     ap.add_argument("--no-perms", action="store_true")
@@ -697,6 +706,16 @@ def main(argv=None):
     pen = parse_pens(a.pens) or {}
     pens = {x: float(pen.get(x, 0.110)) for x in FLEET}
     ref = json.loads(Path(a.ref).read_text())
+    # The reference has to be a run of the SAME policy or the reconstruction is
+    # of a different piece of work; say so once, loudly, instead of failing an
+    # assertion twenty lines further down with a number that looks like a bug.
+    same = ref.get("idle_policy", "home") == "home"
+    if not same:
+        print(f"\n!! {a.ref} was scheduled with idle_policy="
+              f"{ref.get('idle_policy')!r}; this study reconstructs conductor "
+              "v1's go-home behaviour, so the per-arm checks against it are "
+              "SKIPPED.  Re-run csail_schedule.py --idle-policy home for a "
+              "reference this can be pinned to.\n")
 
     t00 = time.time()
     phases, _, _ = run_allocation(a, verbose=False)
@@ -710,7 +729,8 @@ def main(argv=None):
                                          a.transit_speed, a.qd_frac)
         for x in res["arms"]:                 # the reconstruction is exact or nothing
             got, want = progs[x]["duration"], R["arm_nominal_s"][str(x)]
-            assert abs(got - want) < 1e-9, f"arm {x} nominal {got} != {want}"
+            assert not same or abs(got - want) < 1e-9, \
+                f"arm {x} nominal {got} != {want}"
         t0 = time.time()
         fields = pair_fields(paths)
         free0 = make_free(paths, fields, margin0, sorted(paths))
@@ -725,12 +745,13 @@ def main(argv=None):
         print(f"  geometry + conduct in {time.time() - t0:.1f} s; "
               f"priority {sch['order']}")
         for x, v in sorted(sch["pauses"].items()):
-            want = R["pauses"][str(x)]
+            want = R["pauses"].get(str(x), float("nan"))
             print(f"  arm {x:>2}: nominal {sch['nominal'][x]:6.2f} s  "
                   f"pause {v:6.2f} s  (shipped {want:6.2f} s)"
                   + ("" if abs(v - want) < 1e-9 else "   <-- MISMATCH"))
-            assert abs(v - want) < 1e-9, f"arm {x} pause {v} != shipped {want}"
-        assert abs(sch["duration"] - R["duration_s"]) < 1e-9
+            assert not same or abs(v - want) < 1e-9, \
+                f"arm {x} pause {v} != shipped {want}"
+        assert not same or abs(sch["duration"] - R["duration_s"]) < 1e-9
         events, steps, asap = blame(sch, paths, samp, fields, margin0)
         ph = dict(name=res["name"], sch=sch, paths=paths, samp=samp,
                   fields=fields, events=events, steps=steps, asap=asap,

@@ -47,12 +47,24 @@ FALLBACK_HEIGHT = 0.30
 # --------------------------------------------------------------------------
 # pen-up poses
 # --------------------------------------------------------------------------
+HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
+#   Looser than `validate.MARGIN_GATE` (0.15) on purpose and historically: a
+#   hover is a place to stand, not a curve to be dragged along at a commanded
+#   speed.  Callers that are CHOOSING a pose rather than accepting one — the
+#   idle policy's retreat — ask for the stricter gate instead, because there is
+#   no reason to spend margin you do not have to.
+
+
 def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
-                  pen_ext=PEN_EXT, span=0.6, n_q7=25):
+                  pen_ext=PEN_EXT, span=0.6, n_q7=25, margin_min=HOVER_MARGIN):
     """IK pose with the pen tip at (x, y, z), R = rotx(pi), nearest to q_ref.
 
     Scans q7 around q_ref[6] (the redundancy that q_ref already picked) and
-    all analytic branches; returns the solution with the smallest ||dq||_inf.
+    all analytic branches; returns the solution with the smallest ||dq||_inf
+    among those keeping at least `margin_min` rad of joint-limit margin.  The
+    filter is inside the scan and not applied afterwards, so raising it does not
+    merely reject the nearest solution — it picks the nearest ACCEPTABLE one,
+    which is usually a different q7 rather than no answer at all.
     """
     Twb = spec.T_world_base(h_inv)
     R_w = rotx(np.pi)
@@ -65,7 +77,7 @@ def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     best, best_d = None, np.inf
     for q7 in q7s:
         for q in ik.solve(T_b, q7, q_ref):
-            if joint_margin(q) < 0.10:
+            if joint_margin(q) < margin_min:
                 continue
             d = float(np.max(np.abs(q - q_ref)))
             if d < best_d:
@@ -480,9 +492,14 @@ def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_
     return np.asarray(q_ref, float), 0.0
 
 
+PARK_FREEZE = "freeze"      # stop at the hover pose above the last stroke
+PARK_HOME = "home"          # the old behaviour: transit back to `spec.q_seed`
+
+
 def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
                 h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
-                pen_ext=PEN_EXT, verbose=False):
+                pen_ext=PEN_EXT, q_start=None, park=PARK_FREEZE, retreat=None,
+                taxi_stretch=0.0, verbose=False):
     """One arm's frozen nominal timeline from its allocated segments.
 
     `segs` are `allocate.allocate`'s programme entries, already in the order the
@@ -495,15 +512,46 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     default pen here against a 300 mm plan would silently re-plan the transit
     for a tool the arm is not holding.
 
-    -> dict(t, q, seg, u, phases, ink, duration, lifts, dense_tip_err)
+    WHERE THE ARM STARTS AND WHERE IT STOPS ARE NOW ARGUMENTS, because both used
+    to be `spec.q_seed` and that cost more clock than anything else in the piece
+    (`docs/IDLE.md`):
+
+      `q_start`      the pose the arm is standing in when the pass begins.  The
+                     second pass of a two-pass run starts wherever the first one
+                     left the arm, so this is not `q_seed` there and the
+                     animation would teleport if it pretended otherwise.
+      `park`         "freeze" (default) lifts the pen at the last stroke's exit
+                     and STOPS THERE; "home" is the old transit back to
+                     `spec.q_seed`.  Freezing is not a saving of a second and a
+                     half of home transit — it is a saving of the WAIT for
+                     permission to arrive, because the conductor may not let an
+                     arm reach its final pose until that pose is clear all the
+                     way to the horizon, and the hover pose above the ink an arm
+                     has just laid is a pose the fleet was already avoiding.
+      `retreat`      a (7,) pose to creep to after that lift, for the rare
+                     frozen pose that is genuinely in another arm's way.
+                     `idle.plan_retreat` chooses it; this only lays it down.
+      `taxi_stretch` seconds to spread ACROSS THE PEN-UP BLOCKS (never across
+                     the ink).  An arm with slack against the phase's floor
+                     arrives at each entry just in time instead of racing there
+                     and standing still: same path, same certificate, a fraction
+                     of the per-step motion, and therefore a fraction of the
+                     swept-tube slack it costs everybody else.
+
+    -> dict(t, q, seg, u, phases, ink, duration, lifts, dense_tip_err, q_end,
+            transit_s, taxi_s, retreat_s, draw_s, ...)
        t     (K,)    waypoint times, strictly increasing
        q     (K,7)   waypoint joints
        seg   (K,)    index into `segs` while drawing, -1 while not
        u     (K,)    normalised arc position within that segment
        ink   list of (t_visible, chunk_xyz (M,3))
+       `transit_s` is the pen-up time the SEQUENCER priced; `taxi_s` and
+       `retreat_s` are the two idle-policy additions on top of it, kept apart
+       so "the sequencer's model is the timeline's clock" stays checkable.
     """
     t, T, Q, S, U = 0.0, [], [], [], []
     ink, phases, lifts, worst = [], [], [], 0.0
+    q0 = np.asarray(spec.q_seed if q_start is None else q_start, float)
 
     def add(tt, q, s=-1, u=0.0):
         T.append(float(tt))
@@ -512,12 +560,13 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         U.append(float(u))
 
     if not segs:                                  # an arm that reaches nothing
-        add(0.0, spec.q_seed)
-        add(1.0, spec.q_seed)
+        add(0.0, q0)
+        add(1.0, q0)
         return dict(t=np.array(T), q=np.array(Q), seg=np.array(S), u=np.array(U),
                     phases=[], ink=[], duration=0.0, lifts=[], dense_tip_err=0.0,
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
-                    fallbacks=0)
+                    taxi_s=0.0, retreat_s=0.0, q_end=q0, park=str(park),
+                    pen=float(pen_ext), fallbacks=0)
 
     dense = []
     for k, s in enumerate(segs):
@@ -535,18 +584,41 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                   f"{s['length']:.3f} m, tip_err={err:.2e} m"
                   + (f", {fb} IK fallbacks" if fb else ""))
 
-    q_lift0, z0 = lifted_or_lower(spec, dense[0]["qd"][0], dense[0]["pts"][0],
-                                  h_inv=h_inv, pen_ext=pen_ext)
-    lifts.append(z0)
-    add(0.0, spec.q_seed)
-    t_home, t_down = enter_time(spec.q_seed, q_lift0, dense[0]["qd"][0], qd_frac)
-    t += t_home
-    add(t, q_lift0)
-    t += t_down
+    # ---- every pen-up beat, priced before any of it is laid down ----------
+    # The taxi stretch is a FACTOR on the pen-up blocks, so the total has to be
+    # known first; and knowing it first is also what keeps `transit_s` equal to
+    # the number the sequencer minimised whatever the stretch turns out to be.
+    hov = [lifted_or_lower(spec, D["qd"][0], D["pts"][0], h_inv=h_inv,
+                           pen_ext=pen_ext) for D in dense]
+    hox = [lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,
+                           pen_ext=pen_ext) for D in dense]
+    beats = [list(enter_time(q0, hov[0][0], dense[0]["qd"][0], qd_frac))]
+    hops = []
+    for k, D in enumerate(dense):
+        if k + 1 < len(dense):
+            hop = float(np.linalg.norm(dense[k + 1]["pts"][0] - D["pts"][-1]))
+            hops.append(hop)
+            beats.append(list(transit_time(D["qd"][-1], hox[k][0], hov[k + 1][0],
+                                           dense[k + 1]["qd"][0], hop,
+                                           transit_speed, qd_frac)))
+        elif park == PARK_HOME:
+            beats.append(list(exit_time(D["qd"][-1], hox[k][0], spec.q_seed,
+                                        qd_frac)))
+        else:                                     # freeze: lift, and stop
+            beats.append([_dq_time(D["qd"][-1], hox[k][0], qd_frac, T_LIFT_F)])
+    transit_s = float(sum(sum(b) for b in beats))
+    stretch = max(0.0, float(taxi_stretch))
+    kf = 1.0 + stretch / transit_s if transit_s > 1e-12 and stretch else 1.0
+    taxi_s = transit_s * (kf - 1.0)
+
+    lifts.append(hov[0][1])
+    add(0.0, q0)
+    t += kf * beats[0][0]
+    add(t, hov[0][0])
+    t += kf * beats[0][1]
     add(t, dense[0]["qd"][0], 0, 0.0)
 
     draw_len = transit_len = 0.0
-    transit_s = t_home + t_down
     for k, D in enumerate(dense):
         dur = draw_duration(D["qd"], D["ud"], D["length"], draw_speed, qd_frac)
         for uu, q in zip(D["ud"][1:], D["qd"][1:]):
@@ -564,40 +636,40 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         t += dur
         draw_len += D["length"]
 
-        nxt = dense[k + 1] if k + 1 < len(dense) else None
-        q_end, z1 = lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,
-                                    pen_ext=pen_ext)
-        lifts.append(z1)
-        t0 = t
-        if nxt is None:
-            t_up, t_home = exit_time(D["qd"][-1], q_end, spec.q_seed, qd_frac)
-            t += t_up
-            add(t, q_end)
-            t += t_home
+        b, t0 = beats[k + 1], t
+        lifts.append(hox[k][1])
+        t += kf * b[0]
+        add(t, hox[k][0])
+        if k + 1 < len(dense):
+            lifts.append(hov[k + 1][1])
+            transit_len += hops[k]
+            t += kf * b[1]
+            add(t, hov[k + 1][0])
+            t += kf * b[2]
+            add(t, dense[k + 1]["qd"][0], k + 1, 0.0)
+        elif park == PARK_HOME:
+            t += kf * b[1]
             add(t, spec.q_seed)
-        else:
-            q_next, z2 = lifted_or_lower(spec, nxt["qd"][0], nxt["pts"][0], h_inv=h_inv,
-                                         pen_ext=pen_ext)
-            lifts.append(z2)
-            hop = float(np.linalg.norm(nxt["pts"][0] - D["pts"][-1]))
-            transit_len += hop
-            t_up, t_go, t_down = transit_time(D["qd"][-1], q_end, q_next,
-                                              nxt["qd"][0], hop, transit_speed,
-                                              qd_frac)
-            t += t_up
-            add(t, q_end)
-            t += t_go
-            add(t, q_next)
-            t += t_down
-            add(t, nxt["qd"][0], k + 1, 0.0)
-        transit_s += t - t0
         phases.append(dict(kind="transit", seg=k, t0=float(t0), t1=float(t)))
+
+    retreat_s = 0.0
+    if retreat is not None and park != PARK_HOME:
+        q_ret = np.asarray(retreat, float).reshape(7)
+        retreat_s = _dq_time(hox[-1][0], q_ret, qd_frac, T_LIFT_F)
+        t0 = t
+        t += retreat_s
+        add(t, q_ret)
+        phases.append(dict(kind="retreat", seg=len(dense) - 1, t0=float(t0),
+                           t1=float(t)))
 
     T = np.maximum.accumulate(np.asarray(T, float) + 1e-9 * np.arange(len(T)))
     return dict(t=T, q=np.array(Q), seg=np.array(S), u=np.array(U), phases=phases,
                 ink=ink, duration=float(T[-1]), lifts=lifts, dense_tip_err=worst,
                 draw_len=draw_len, transit_len=transit_len,
-                transit_s=float(transit_s), draw_s=float(T[-1] - transit_s),
+                transit_s=float(transit_s), taxi_s=float(taxi_s),
+                retreat_s=float(retreat_s), q_end=np.array(Q[-1], float),
+                park=str(park), pen=float(pen_ext),
+                draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
                 fallbacks=int(sum(D["fallbacks"] for D in dense)))
 
 

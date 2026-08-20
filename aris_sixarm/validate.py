@@ -200,6 +200,55 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
     return dict(ok=not V, n=int(len(qs)), violations=V, worst=worst, notes=notes)
 
 
+def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
+               z_clear=Z_CLEAR, eps=EPS):
+    """The single-configuration half of `validate_plan`. -> dict(ok, ...).
+
+    A POSE AN ARM STANDS IN IS NOT A PLAN, AND IS STILL A CLAIM.  When an arm
+    stops where it finished rather than going home (`idle.py`), the pose it
+    holds for the rest of the run was never handed to the stroke validator —
+    nobody drew with it — and yet the fleet has to live next to it for a minute.
+    This re-derives the three gates that are about the configuration alone and
+    not about a curve: the FR3 joint limits with the same comfort margin, the
+    chain's height above the paper, and the inverted arms' boom keep-out.
+
+    Deliberately NOT checked here: tip-on-curve, sigma, continuity, velocity —
+    a static pose has no curve, no motion and no clock.  Inter-arm clearance is
+    somebody else's job (`coordination`/`scene_check`), because it is a property
+    of the fleet and not of the pose.
+    """
+    q = np.asarray(q, float).reshape(1, 7)
+    V, worst = [], {}
+    try:
+        Twb = spec.T_world_base() if h_inv is None else spec.T_world_base(h_inv)
+        marg = float(joint_margin_many(q)[0])
+        worst["joint_margin"] = marg
+        if marg < margin_gate - eps:
+            V.append(dict(kind="margin", index=0, value=marg, limit=margin_gate))
+        _, p = fk_many(q)                                # (1,9,3) base frame
+        pw = p @ Twb[:3, :3].T + Twb[:3, 3]
+        z = float(pw[0, 1:, 2].min())
+        worst["min_chain_z"] = z
+        if z < z_clear - eps:
+            V.append(dict(kind="paper_clearance", index=0, value=z, limit=z_clear))
+        tip = Twb[:3, :3] @ tip_pos_many(q, pen_ext)[0] + Twb[:3, 3]
+        worst["tip_z"] = float(tip[2])
+        if tip[2] < -eps:
+            V.append(dict(kind="pen_below_paper", index=0, value=float(tip[2]),
+                          limit=0.0))
+        if spec.mount == "inv":
+            rb = np.hypot(p[0, :, 0], p[0, :, 1])
+            hit = (p[0, :, 2] < BOOM_Z) & (rb < BOOM_R)
+            worst["boom_r"] = float(rb[hit].min()) if hit.any() else float("inf")
+            if hit.any():
+                V.append(dict(kind="boom_keepout", index=0,
+                              value=worst["boom_r"], limit=BOOM_R))
+    except Exception:                                  # never raise (see module doc)
+        V.append(dict(kind="validator_error", index=-1, value=0.0, limit=0.0,
+                      traceback=traceback.format_exc()))
+    return dict(ok=not V, n=1, violations=V, worst=worst, notes=[])
+
+
 def violation_summary(rep, top=6):
     """One line per distinct violation kind, worst first."""
     kinds = {}

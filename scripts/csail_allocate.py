@@ -28,7 +28,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import allocate, trace, writing   # noqa: E402
+from aris_sixarm import allocate, idle, trace, writing   # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
@@ -431,6 +431,17 @@ def add_args(ap):
     ap.add_argument("--max-probes", type=int, default=3,
                     help="plan calls per (stroke, arm); above 2 they walk the "
                          "largest remaining gap (see allocate.probe_stroke)")
+    # THE IDLE POLICY IS A SEQUENCING QUESTION BEFORE IT IS A CONDUCTING ONE.
+    # Under "freeze" an arm does not go home when it finishes, so the tour the
+    # sequencer prices must not pay for the trip — which changes WHICH segment
+    # it chooses to finish on.  It lives here, with the other two halves of the
+    # shared cost model, so the allocator and the schedule cannot disagree.
+    ap.add_argument("--idle-policy", choices=(idle.POLICY_FREEZE,
+                                              idle.POLICY_HOME),
+                    default=idle.POLICY_FREEZE,
+                    help="what an arm does when it finishes: 'freeze' (default) "
+                         "lifts the pen and stops where it is; 'home' is "
+                         "conductor v1's transit back to the ready pose")
     return ap
 
 
@@ -491,6 +502,8 @@ def run_allocation(a, verbose=False):
               balance=not getattr(a, "no_balance", False),
               draw_speed=getattr(a, "draw_speed", writing.DRAW_SPEED_FLEET),
               seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
+              return_home=getattr(a, "idle_policy",
+                                  idle.POLICY_FREEZE) == idle.POLICY_HOME,
               atlas_dir=None if a.no_prefilter else str(Path(a.out)))
     if not getattr(a, "two_pass", False):
         res = allocate.allocate(strokes, **kw)

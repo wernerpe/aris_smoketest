@@ -616,7 +616,7 @@ def _slice_ends(ends, k):
 def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
              qd_frac=writing.QD_FRAC, h_inv=H_INV_DEFAULT,
              pen_ext=None, ends=None, exact_max_n=sequence.EXACT_MAX_N,
-             budget=sequence.TIME_BUDGET):
+             budget=sequence.TIME_BUDGET, q_start=None, return_home=True):
     """Nominal seconds one arm needs for `segs`: its ink plus its best pen-up tour.
 
     `draw_s` is the per-segment ink time in the same order as `segs`.  The
@@ -628,7 +628,8 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
         return 0.0
     pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
     C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
-                             ends=ends, pen_ext=pen)
+                             ends=ends, pen_ext=pen, q_start=q_start,
+                             return_home=return_home)
     r = sequence.solve(C, len(segs), exact_max_n, budget)
     return float(sum(draw_s) + r["cost"])
 
@@ -722,7 +723,8 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
 
 def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
               draw_speed=DRAW_SPEED, seq_opts=None, min_seg=MIN_SEG_M,
-              h_inv=H_INV_DEFAULT, verbose=False):
+              h_inv=H_INV_DEFAULT, verbose=False, q_start=None,
+              return_home=True):
     """The probe data + the placed spans -> a re-assignment. -> (placed, info).
 
     Three steps, in the order that keeps the planner honest:
@@ -781,7 +783,8 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
         return arm_load(specs[a], [entries[i][a] for i in idx],
                         [draw_s[(a, i)] for i in idx], ts, qf, h_inv, pens[a],
                         ends=_slice_ends(ends[a], [at[a][i] for i in idx]),
-                        exact_max_n=exact, budget=budget)
+                        exact_max_n=exact, budget=budget,
+                        q_start=(q_start or {}).get(a), return_home=return_home)
 
     owner0 = [it["arm"] for it in placed]
     owner, info = balance_loads(owner0, options, load_fn, verbose=verbose)
@@ -834,7 +837,8 @@ def transit_metres(items, start_xy):
     return tot
 
 
-def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
+def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
+                 forbid=None):
     """One arm's bag of segments -> the programme in the order it will be drawn.
 
     -> dict(programme, order, dirs, method, cost, baseline_cost, n_reversed,
@@ -842,6 +846,15 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
     SECONDS off the same matrix (`sequence.cost_matrix`), which is the point:
     "the new order saves X %" is then one subtraction inside one model, not a
     comparison of two different accountings.
+
+    `forbid` is a set of `(i, j)` bag-index pairs the tour may not contain —
+    "do not draw segment j straight after segment i" — with `i = None` meaning
+    "do not start with j".  It is how a conductor's refusal gets back to the
+    component that made the choice: a pen-up transit that no schedule can run
+    (`coordination.hard_blocks`) is an EDGE of this tour, and the exact solver
+    is perfectly happy to give the best tour that avoids it.  Both directions of
+    both segments are cut, because which hover pose the transit flies through
+    depends on the directions and the refusal was about the geometry.
     """
     n = len(segs)
     t0 = time.time()
@@ -851,13 +864,25 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
                     wall=0.0)
     seq_opts = dict(seq_opts or {})
     mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv",
-                                    "pen_ext") if k in seq_opts}
+                                    "pen_ext", "q_start", "return_home")
+           if k in seq_opts}
     exact = seq_opts.get("exact_max_n", sequence.EXACT_MAX_N)
     budget = seq_opts.get("budget", sequence.TIME_BUDGET)
 
     base_order, _ = order_nearest(segs, spec.xy)
     C = sequence.cost_matrix(spec, segs, **mat)
     base_cost = sequence.sequence_cost(C, n, base_order, [1] * n)
+    n_forbidden = 0
+    for i, j in (forbid or ()):
+        if not 0 <= int(j) < n:
+            continue
+        if i is None:
+            C[2 * n, 2 * int(j):2 * int(j) + 2] = np.inf
+        elif 0 <= int(i) < n:
+            C[2 * int(i):2 * int(i) + 2, 2 * int(j):2 * int(j) + 2] = np.inf
+        else:
+            continue
+        n_forbidden += 1
     if sequencer in ("nn", "nearest_xy"):
         r = dict(order=base_order, dirs=[1] * n, method="nearest_xy")
     elif sequencer in ("opt", "transit"):
@@ -879,10 +904,48 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None):
             n_rev += 1
     return dict(programme=prog, order=[int(i) for i in r["order"]], dirs=dirs,
                 method=r["method"], n=n, n_reversed=n_rev, n_refused=n_ref,
+                n_forbidden=int(n_forbidden),
                 cost=float(sequence.sequence_cost(C, n, r["order"], dirs)),
                 baseline_cost=float(base_cost),
                 nn_cost=float(r.get("nn_cost", float("nan"))),
                 wall=float(time.time() - t0))
+
+
+def resequence(res, q_start=None, return_home=None, specs=None, forbid=None):
+    """Re-order every arm's segments from a different start pose. -> res.
+
+    WHO DRAWS WHAT DOES NOT CHANGE — the same bag of certified spans stays with
+    the same arm, so coverage is untouched by construction, exactly as it is for
+    the balancer.  What changes is the order, the directions and the transit
+    seconds, because both ends of the tour moved: the second pass of a two-pass
+    run starts wherever the conductor's idle policy left the arm standing, and
+    that is not known until the first pass has been conducted (a minimal retreat
+    can move it).  Re-ordering from the BAG rather than from the already-ordered
+    programme is what keeps a segment from being reversed twice.
+
+    Mutates and returns `res`.
+    """
+    specs = FLEET if specs is None else specs
+    if "bag" not in res:
+        raise KeyError("this allocation was not built with a bag to re-order; "
+                       "run allocate() from this version")
+    if return_home is None:
+        return_home = res.get("return_home", True)
+    res["return_home"] = bool(return_home)
+    res["q_start"] = {a: np.asarray(v, float) for a, v in (q_start or {}).items()}
+    for a in res["arms"]:
+        sq = dict(res.get("seq_opts") or {})
+        sq["pen_ext"] = res["pens"][a]
+        sq["return_home"] = bool(return_home)
+        if a in res["q_start"]:
+            sq["q_start"] = res["q_start"][a]
+        seq = sequence_arm(res["bag"][a], specs[a], res.get("sequencer", SEQUENCER),
+                           res["aopts"][a], sq, forbid=(forbid or {}).get(a))
+        res["programs"][a] = seq.pop("programme")
+        res["sequence"][a] = seq
+        res["transit"][a] = transit_metres(res["programs"][a], specs[a].xy)
+        res["transit_time"][a] = seq["cost"]
+    return res
 
 
 def reverse_segment(seg, spec, opts=None):
@@ -1069,7 +1132,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              sequencer=SEQUENCER, seq_opts=None, pens=None, colors=None,
              max_probes=3, gap_tol=GAP_TOL_M, repair_rounds=3,
              repair_budget=REPAIR_BUDGET, balance=True,
-             draw_speed=DRAW_SPEED):
+             draw_speed=DRAW_SPEED, q_start=None, return_home=True):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -1184,7 +1247,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     if balance and placed:
         placed, bal = rebalance(placed, arms, colors, ivmap, specs, aopts,
                                 pen_m, draw_speed, seq_opts, min_seg,
-                                verbose=verbose)
+                                verbose=verbose, q_start=q_start,
+                                return_home=return_home)
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
@@ -1199,9 +1263,19 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                            replan=t_replan, balance=t_balance))
     t3 = time.time()
     out["sequence"], out["transit"], out["transit_time"] = {}, {}, {}
+    # the unsequenced bag and the per-arm planner options, kept so the pass can
+    # be re-ordered from a different start pose without re-probing anything
+    # (`resequence`); `programs[a]` below is the bag put in an order.
+    out["bag"] = {a: list(programs[a]) for a in arms}
+    out["aopts"], out["seq_opts"] = dict(aopts), dict(seq_opts or {})
+    out["q_start"] = {a: np.asarray(v, float) for a, v in (q_start or {}).items()}
+    out["return_home"] = bool(return_home)
     for a in arms:
         sq = dict(seq_opts or {})
         sq["pen_ext"] = out["pens"][a]
+        sq["return_home"] = bool(return_home)
+        if q_start is not None and a in q_start:
+            sq["q_start"] = np.asarray(q_start[a], float)
         seq = sequence_arm(programs[a], specs[a], sequencer, aopts[a], sq)
         out["programs"][a] = seq.pop("programme")
         out["sequence"][a] = seq

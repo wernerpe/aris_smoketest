@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import allocate, coordination, scene_check, trace   # noqa: E402
 from aris_sixarm.allocate import Interval            # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET           # noqa: E402
+from aris_sixarm.frames import FR3_MAX, FR3_MIN   # noqa: E402
 from aris_sixarm.validate import validate_plan       # noqa: E402
 
 
@@ -535,6 +536,247 @@ def test_balancing_cannot_change_what_is_drawn():
                             {"pen_ext": bal["pens"][a]})
             assert r["status"] == "ok", \
                 f"arm {a} cannot certify the segment it was given: {r['status']}"
+
+
+# ==========================================================================
+# the idle policy (aris_sixarm/idle.py)
+# ==========================================================================
+def _hover(arm, xy):
+    """The pose `writing.arm_program` would freeze this arm in over `xy`."""
+    from aris_sixarm import writing
+    q, _ = writing.lifted_or_lower(FLEET[arm], FLEET[arm].q_seed, np.asarray(xy, float))
+    return np.asarray(q, float)
+
+
+def _short_segment(arm, cx, cy, length=0.20, pen=0.110, n=21):
+    """One certified programme entry: a straight `length` m stroke at (cx, cy)."""
+    from aris_sixarm.stroke_api import plan_stroke
+    pts = np.column_stack([np.linspace(cx - length / 2, cx + length / 2, n),
+                           np.full(n, cy)])
+    r = plan_stroke(pts, FLEET[arm], {"pen_ext": pen})
+    assert r["status"] == "ok", f"arm {arm} at ({cx}, {cy}): {r['status']}"
+    return dict(plan=r, pts=np.asarray(r["pts"], float), length=float(length),
+                stroke_id=0, color="grey", kind="", s_range=(0.0, 1.0),
+                direction=1, flipped=False)
+
+
+def test_a_frozen_arm_is_an_obstacle_all_the_way_to_the_horizon():
+    """Freezing in place moves WHERE an arm stands, not whether it is in the way.
+
+    Two claims, because the policy rests on both.  First the semantics: the
+    reachability DP validates an arm's final pose over the whole SUFFIX of the
+    run, so an arm whose frozen pose sits in a corridor another arm has not
+    reached yet is refused permission to arrive — and `rest_delays` recovers
+    exactly that cost by re-running the same DP with the requirement dropped.
+    Second the geometry: the clearance `idle` reads off a frozen pose is the
+    same number the conductor's own collision image carries in its last row, so
+    "static obstacle" means the image, not a separate model that could drift
+    from it.
+    """
+    from aris_sixarm import idle
+    # --- semantics, on an image built by hand so the answer is arithmetic ---
+    nA, nB, dt, M = 6, 40, 0.5, 200
+    F = np.ones((nA - 1, nB - 1), bool)
+    F[nA - 2, 10:20] = False          # A's REST pose blocks B's cells 10..19
+    prog_b = np.clip(np.arange(M), 0, nB - 1)
+    with_rest, m_rest = coordination._dp({"B": F}, {"B": prog_b}, nA, M)
+    free, m_free = coordination._dp({"B": F}, {"B": prog_b}, nA, M, rest=False)
+    assert m_free == nA - 1, \
+        f"nothing blocks A on its way, it should arrive at {nA - 1}, got {m_free}"
+    assert m_rest == 21, \
+        (f"A may neither move into nor stand in its last cell while B is in "
+         f"cells 10..19, so it arrives one step after B leaves them (21), "
+         f"not {m_rest}")
+    assert m_rest > m_free, "the rest requirement cost nothing: nothing is tested"
+    assert np.all(np.diff(with_rest) >= 0) and np.all(np.diff(with_rest) <= 1)
+    assert with_rest[m_rest] == nA - 1 and free[m_free] == nA - 1
+
+    # --- geometry: `idle`'s frozen-pose clearance vs the conductor's image ---
+    q0 = np.asarray(FLEET[31].q_seed, float)
+    qa = np.linspace(q0, q0 + np.array([0.4, 0.1, 0, 0.1, 0, 0, 0]), 12)
+    qb = np.linspace(q0, q0 + np.array([0.0, 0.2, 0, 0.2, 0, 0, 0]), 30)
+    pa = coordination.ArmPath(31, qa, 0.02)
+    pb = coordination.ArmPath(71, qb, 0.02)
+    D = coordination.clearance_matrix(pa, pb)
+    row = np.minimum(D[-1, :-1], D[-1, 1:]) - coordination.SWEEP_K * pb.step
+    got = idle.tube_clearance(pa.q[-1], 31, 0.110, pb, 0)
+    assert abs(got - float(row.min())) < 1e-6, \
+        (f"the frozen pose reads {1000 * got:.2f} mm, the conductor's own last "
+         f"image row says {1000 * float(row.min()):.2f} mm")
+    # ...and it is CONSERVATIVE against the row the DP actually consults, which
+    # still carries the sweep of A moving into that pose
+    margin = 0.08
+    img = coordination.free_cells(pa, pb, margin)
+    assert np.all(row[img[-1]] >= margin - 1e-6), \
+        "the image called a cell free that the frozen pose is not clear of"
+    for j0 in (0, 10, 25):
+        assert idle.tube_clearance(pa.q[-1], 31, 0.110, pb, j0) >= got - 1e-9, \
+            "a shorter remaining tube cannot be tighter than the whole of it"
+
+
+def test_a_retreat_is_offered_only_on_genuine_interference():
+    """The retreat is a repair, and a repair nobody needs is a regression.
+
+    The same frozen pose is put next to two different neighbours: one whose
+    swept tube it sits inside (4 mm of clearance against an 80 mm margin) and
+    one 153 mm clear.  The first must be offered a way out; the second must be
+    left exactly where it is, because moving an arm that is not in the way
+    costs seconds, invites a new conflict, and is the sort of thing a policy
+    does when it is triggering on geometry instead of on interference.
+
+    What the repair has to be is also pinned: certified as a pose in its own
+    right, clear of the whole remaining tube afterwards, and SMALL — the point
+    of the policy is that it is not the trip home, and here it is 8.9x less
+    joint travel than `q_seed` would have been.
+    """
+    from aris_sixarm import idle, validate, writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    q_frozen = _hover(31, (bx + 0.30, by - 0.30))
+    home_dq = float(np.max(np.abs(np.asarray(spec.q_seed, float) - q_frozen)))
+
+    def neighbour(cx):
+        s = _short_segment(71, cx, 1.331)
+        return coordination.ArmPath(71, np.asarray(s["plan"]["qs"], float), 1 / 48.)
+
+    tight, clear = neighbour(1.85), neighbour(2.00)
+    gap_t = idle.tube_clearance(q_frozen, 31, 0.110, tight, 0)
+    gap_c = idle.tube_clearance(q_frozen, 31, 0.110, clear, 0)
+    assert gap_t < 0.08 <= gap_c, \
+        (f"the fixture is not what the test needs: {1000 * gap_t:.1f} mm and "
+         f"{1000 * gap_c:.1f} mm against an 80 mm margin")
+
+    assert idle.frozen_interference(q_frozen, 31, 0.110, {71: clear}, {71: 0},
+                                    0.08) == {}
+    assert idle.plan_retreat(spec, q_frozen, 31, 0.110, {71: clear}, {71: 0},
+                             0.08) is None, \
+        "a retreat was offered to an arm that is 153 mm clear of everything"
+
+    hit = idle.frozen_interference(q_frozen, 31, 0.110, {71: tight}, {71: 0}, 0.08)
+    assert set(hit) == {71}
+    got = idle.plan_retreat(spec, q_frozen, 31, 0.110, {71: tight}, {71: 0}, 0.08)
+    assert got is not None, "no retreat found for a pose 4 mm from another arm"
+    assert validate.check_pose(got["q"], spec, None, 0.110)["ok"], \
+        f"the retreat pose does not certify: {got['tag']}"
+    assert got["clearance"] >= 0.08, \
+        f"the retreat is still inside the tube ({1000 * got['clearance']:.1f} mm)"
+    assert idle.frozen_interference(got["q"], 31, 0.110, {71: tight}, {71: 0},
+                                    0.08) == {}
+    assert got["dq"] < 0.5 * home_dq, \
+        (f"the 'minimal' retreat moves {got['dq']:.2f} rad where going home "
+         f"would move {home_dq:.2f} rad")
+    # every candidate is a pose the arm may legally stand in, in order of cost
+    cands = idle.retreat_candidates(spec, q_frozen, pen_ext=0.110)
+    assert cands and all(np.min(np.minimum(c["q"] - FR3_MIN, FR3_MAX - c["q"]))
+                         >= validate.MARGIN_GATE - 1e-9 for c in cands)
+    assert all(a["dq"] <= b["dq"] for a, b in zip(cands, cands[1:]))
+    assert writing.lifted_config(spec, q_frozen, (bx + 0.30, by - 0.30),
+                                 margin_min=5.0)[0] is None, \
+        "the hover IK ignored the joint-margin floor it was given"
+
+
+def test_the_slow_taxi_stretches_the_pen_ups_and_never_the_ink():
+    """"Drawing has priority over taxiing" is an arithmetic property here.
+
+    The just-in-time policy spends an arm's slack by slowing the moves BETWEEN
+    strokes.  If a single one of those seconds ever landed on a stroke instead,
+    the certified velocity profile of that stroke would be a different profile
+    and the pen would be somewhere else on the paper.  So: the whole stretch
+    lands in the pen-up blocks, every stroke keeps its exact duration, the
+    drawn joint samples are identical, and the number the sequencer minimised
+    (`transit_s`) is untouched — the stretch is reported separately as `taxi_s`
+    precisely so that cross-check can keep working.
+    """
+    from aris_sixarm import idle, writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    segs = [_short_segment(31, bx + 0.30, by - 0.30),
+            _short_segment(31, bx - 0.30, by - 0.30)]
+    base = writing.arm_program(spec, segs, pen_ext=0.110)
+    S = 7.5
+    slow = writing.arm_program(spec, segs, pen_ext=0.110, taxi_stretch=S)
+
+    assert abs(slow["duration"] - (base["duration"] + S)) < 1e-9, \
+        f"asked for +{S} s, got +{slow['duration'] - base['duration']:.4f} s"
+    assert abs(slow["taxi_s"] - S) < 1e-9
+    assert abs(slow["transit_s"] - base["transit_s"]) < 1e-12, \
+        "the stretch was folded into the price the sequencer optimised"
+    assert abs(slow["draw_s"] - base["draw_s"]) < 1e-9, "the ink got slower"
+    sb = [p for p in base["phases"] if p["kind"] == "stroke"]
+    ss = [p for p in slow["phases"] if p["kind"] == "stroke"]
+    assert len(sb) == len(ss) == len(segs)
+    for x, y in zip(sb, ss):
+        assert abs((x["t1"] - x["t0"]) - (y["t1"] - y["t0"])) < 1e-9, \
+            "a stroke changed duration when only the transits were stretched"
+    assert np.allclose(base["q"], slow["q"]), "the stretch moved the PATH"
+    assert np.array_equal(base["seg"], slow["seg"])
+    # every drawing sample still moves at the same joint speed it was paced at
+    for k in range(len(segs)):
+        m = base["seg"] == k
+        db = np.diff(base["t"][m]), np.diff(slow["t"][m])
+        assert np.allclose(db[0], db[1], atol=1e-9)
+    # and the guard that throws a stretch away is a strict makespan-then-pause
+    # comparison, so a slower fleet can never be kept
+    assert not idle._better(dict(duration=10.0, pause_total=0.0),
+                            dict(duration=9.0, pause_total=99.0))
+    assert idle._better(dict(duration=9.0, pause_total=1.0),
+                        dict(duration=9.0, pause_total=2.0))
+    assert not idle._better(dict(duration=9.0, pause_total=3.0),
+                            dict(duration=9.0, pause_total=2.0)), \
+        "a tie on the clock must be broken on pause, not waved through"
+    assert idle._better(dict(duration=8.0, pause_total=99.0),
+                        dict(duration=9.0, pause_total=0.0)), \
+        "makespan is the objective; pause is only the tie-break"
+
+
+def test_freeze_in_place_beats_going_home_on_a_two_arm_scene():
+    """The A/B the whole change rests on, small enough to read.
+
+    Two arms, one 0.20 m stroke each, 0.4 m apart on the paper; the only
+    difference between the two runs is what the arms do when they have finished
+    drawing.  Going home is not free — it is a metre of joint travel through
+    the middle of the rig that the conductor then has to keep everybody else
+    out of, and that the arm may not complete until the pose is clear to the
+    horizon.  Freezing costs a pen lift.
+
+    The ink is asserted identical in both, because a policy that bought its
+    seconds by drawing less would be no policy at all.
+    """
+    from aris_sixarm import idle, scene_check
+    b31, b71 = FLEET[31].xy, FLEET[71].xy
+    segs = {a: [] for a in FLEET}
+    segs[31] = [_short_segment(31, b31[0] + 0.30, b31[1] - 0.30)]
+    segs[71] = [_short_segment(71, b71[0] - 0.30, b71[1] - 0.30)]
+    pens = {a: 0.110 for a in FLEET}
+    dt = 1 / 48.
+
+    runs = {p: idle.conduct(segs, pens, dt, policy=p, verbose=False)
+            for p in (idle.POLICY_FREEZE, idle.POLICY_HOME)}
+    fre, hom = runs[idle.POLICY_FREEZE], runs[idle.POLICY_HOME]
+
+    assert fre["sch"]["duration"] < hom["sch"]["duration"], \
+        (f"freeze {fre['sch']['duration']:.2f} s is not faster than home "
+         f"{hom['sch']['duration']:.2f} s")
+    for a in (31, 71):
+        assert np.allclose(hom["q_end"][a], FLEET[a].q_seed), \
+            f"'home' left arm {a} somewhere other than its ready pose"
+        assert not np.allclose(fre["q_end"][a], FLEET[a].q_seed), \
+            f"'freeze' sent arm {a} home anyway"
+        assert abs(fre["progs"][a]["draw_s"] - hom["progs"][a]["draw_s"]) < 1e-6
+        assert abs(fre["progs"][a]["draw_len"] - hom["progs"][a]["draw_len"]) < 1e-12
+    # both timelines are ones the independent checker signs off, frozen poses
+    # and all — the policy may not buy time out of the margin
+    for name, r in runs.items():
+        M = r["sch"]["M"]
+        qtraj = {a: r["samp"][a]["q"][np.clip(r["sch"]["progress"][a][:M], 0,
+                                             r["samp"][a]["n"] - 1)]
+                 for a in FLEET}
+        rep = scene_check.check_timeline(qtraj, dt, r["sch"]["margin"],
+                                         pen_ext=pens, verbose=False)
+        assert rep["ok"], (f"{name}: scene_check refused (clearance "
+                           f"{1000 * rep['min_clearance']:.1f} mm, "
+                           f"{rep['frozen_failed']} bad frozen poses)")
+        assert rep["frozen_failed"] == 0
 
 
 if __name__ == "__main__":

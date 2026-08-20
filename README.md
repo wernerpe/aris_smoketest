@@ -34,6 +34,10 @@ aris_sixarm/
   coordination.py  CONDUCTOR v1: capsule model, pairwise collision images over
                    progress indices (swept cells, no tunnelling), priority
                    pause-scheduling by exact reachability DP.  Only the clock moves.
+  idle.py          what an arm does when it stops drawing: freeze in place (the
+                   default) instead of going home, a certified minimal retreat
+                   for a frozen pose that is genuinely in the way, and slow
+                   just-in-time taxiing out of measured slack.  docs/IDLE.md
   scene_check.py   independent re-derivation of a MERGED multi-arm timeline:
                    all-pairs clearance incl. between-sample sweeps, monotone
                    progress, validate_plan per segment.  It has the veto.
@@ -48,12 +52,18 @@ scripts/
                    allocations, "largest size within 1 pp of the best coverage"
   csail_schedule.py  allocate -> freeze timelines -> conduct -> validate -> npz
   csail_drawing_demo.py  drake/meshcat playback of that npz (venv python3.10)
+  solo_time.py     read-only: how much of the run is one arm drawing alone, and
+                   whether anybody else certified the span (docs/SOLO_TIME.md)
 tests/
   test_gates.py    real-touchdown validation gates (run these after ANY kinematics change)
   test_planner_robustness.py   regressions distilled from the fuzz campaign
-  test_csail.py    tracer / allocator / conductor regressions (11 tests, < 0.1 s)
+  test_csail.py    tracer / allocator / conductor / idle-policy regressions
+  test_sequence.py per-arm sequencing: reversal, cost model, exact + fallback
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
+  CONCURRENCY.md   where the 148 s of pause came from, and what each lever bought
+  IDLE.md          the idle policy: freeze / retreat / just-in-time taxi
+  SOLO_TIME.md     how much of the run is one arm alone, and why
 ```
 
 ## Key facts
@@ -357,12 +367,34 @@ python3 scripts/csail_schedule.py --arms all --tag _6arm \
     --placement out/csail_placement_6arm.json --draw-speed 0.15 --qd-frac 0.6 \
     --final out/csail_final.png
 /home/franka/git/franka_manipulation_station/.venv/bin/python \
-    scripts/csail_drawing_demo.py
+    scripts/csail_drawing_demo.py --schedule out/csail_schedule_6arm.npz \
+    --summary out/csail_schedule_6arm.json --out out/csail_drawing.html \
+    --zip out/csail_drawing.zip
 ```
 
 Add `--sequencer nn` to either of the first two for the old paper-distance
 chain with every segment drawn forward — the same pipeline, the same
 validator, 83.1 s instead of 64.8 s.
+
+**The whole logo** (`out/csail_full.html`, `out/csail_full.zip`,
+`out/csail_full_final.png`, and the `_full` schedule the demo reads by default)
+is the two-pass run, and every flag it needs is on one line:
+
+```
+python3 scripts/csail_schedule.py --arms all --two-pass \
+    --pens 2:300,31:200,71:200,97:200 --max-probes 5 --min-coverage 0.99 \
+    --target-width 1.2969246423461636 --offset 0.1 0.05 \
+    --tag _full --fps 12 --substeps 4 --final out/csail_full_final.png
+python3 scripts/solo_time.py --arms all --two-pass \
+    --pens 2:300,31:200,71:200,97:200 --max-probes 5 \
+    --target-width 1.2969246423461636 --offset 0.1 0.05
+/home/franka/git/franka_manipulation_station/.venv/bin/python \
+    scripts/csail_drawing_demo.py
+```
+
+`--idle-policy home` on the first of those puts conductor v1's go-home
+behaviour back for comparison (`docs/IDLE.md`); `--no-jit` and `--no-retreat`
+switch off one piece of the policy each.
 
 `out/csail_final.png` is the end state: ink in pen colours, the 13 unreachable
 spans dashed.
@@ -395,6 +427,36 @@ phase 2 88.0 → **68.3 s**, total 153.5 → **108.6 s** (−29.3 %), pause 148.
 50.5 s (−66 %). Single pass with the arms permanently split grey/orange is
 faster still and tops out at 91.1 % of the logo, so it is refused: coverage is
 a constraint, not a term in the objective. `docs/CONCURRENCY.md`.
+
+**Idle policy (2026-08-19).** What an arm does when it stops drawing, which was
+"go home" and is now "stop where you are" (`aris_sixarm/idle.py`,
+`--idle-policy freeze|home`, default freeze). Three quarters of every pause the
+fleet paid was an arm waiting for permission to reach its PARK pose, so this
+attacks where an arm STOPS rather than where it goes: freeze in place, a
+certified minimal retreat for a frozen pose that is measurably in the way, and
+slow just-in-time taxiing out of measured slack. **108.6 → 105.4 s (−2.95 %)**
+at unchanged coverage (99.2139 %), margin and certificates, both phases signed
+off by `scene_check` at 83.8 mm against the 80 mm margin.
+
+The win is all in the orange pass: **68.3 → 65.1 s, and it now finishes exactly
+at its floor** — dropping the trip home lowers the floor and the conductor lands
+on it, so there is no concurrency loss left to remove. Freezing only pays for
+the pass nobody follows, so the grey pass still goes home (the next pass has to
+start somewhere, and walking home *between* passes is strictly worse than
+walking home *during* one). Arm 31 had nowhere clear to stop and went home
+alone; arms 2 and 71 took retreats of 0.4 and 2.3 rad against the 3.4–3.7 a trip
+home would have cost. Pause goes UP, 50.5 → 101.4 s, which is the objective
+hierarchy working as written: makespan first, pause only as the tie-break.
+
+Two things fell out of it. At the inverted ready pose a 200 mm pen sits 16 mm
+BELOW the paper and a 300 mm pen 113 mm below — v1 parked four arms there three
+times a run and no gate looked, because paper clearance is checked on the nine
+FK chain points and the pen is not one of them (reported, deliberately not
+gated). And a pen-up the conductor cannot run is an EDGE of a tour, so the
+refusal is now handed back to the sequencer, which is asked for the best order
+that avoids it. `docs/IDLE.md`; `docs/SOLO_TIME.md` for what is left — a third
+of the run is one arm drawing alone, and two thirds of that is spans another arm
+certifies only PART of, which whole-segment moves cannot touch.
 
 ## Roadmap
 

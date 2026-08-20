@@ -97,14 +97,26 @@ def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
 
 
 def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-                h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT):
+                h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT, q_start=None,
+                return_home=True):
     """Every transit time an ordering could possibly pay. -> (2n+1, 2n+1).
 
     Node `2i + d` is segment i drawn forward (d = 0) or backward (d = 1); node
-    `2n` is the depot, the arm's ready pose.  `C[a, b]` is the seconds from
-    node a's EXIT to node b's ENTRY, hover overhead included; `C[2n, b]` is the
-    entry lift from the ready pose and `C[a, 2n]` the exit lift back to it.
+    `2n` is the depot, the pose the arm starts the pass in.  `C[a, b]` is the
+    seconds from node a's EXIT to node b's ENTRY, hover overhead included;
+    `C[2n, b]` is the entry lift from the depot and `C[a, 2n]` the exit lift.
     A segment cannot follow itself in either direction, so those cells are inf.
+
+    THE DEPOT IS NOT ALWAYS THE READY POSE, AND THE TOUR DOES NOT ALWAYS CLOSE.
+    `q_start` is where the arm is standing when the pass begins — `spec.q_seed`
+    for the first pass, and wherever the previous pass froze it for the second.
+    `return_home=False` is the freeze-in-place idle policy (`idle.py`): the arm
+    lifts its pen at the last stroke and stops, so the last leg costs the lift
+    and nothing else.  Both belong here rather than in a correction downstream,
+    because the ORDER the sequencer picks depends on them: which segment is
+    cheapest to start from depends on where the arm is, and an arm that never
+    goes home should not be paying for the trip when it decides which segment
+    to finish on.
 
     Built as four array operations rather than 4n^2 scalar calls, which is what
     keeps a few hundred segments per arm affordable: the local search then only
@@ -132,9 +144,12 @@ def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
     C[:N, :N] = lift[:, None] + travel + lower[None, :]
     seg = np.arange(N) // 2
     C[:N, :N][seg[:, None] == seg[None, :]] = np.inf         # no self-succession
-    home = np.repeat(np.asarray(spec.q_seed, float)[None, :], N, axis=0)
-    C[N, :N] = _row_time(home, ent_h, qd_frac, T_HOME_F) + lower
-    C[:N, N] = lift + _row_time(exi_h, home, qd_frac, T_HOME_F)
+    q0 = np.asarray(spec.q_seed if q_start is None else q_start, float)
+    depot = np.repeat(q0[None, :], N, axis=0)
+    C[N, :N] = _row_time(depot, ent_h, qd_frac, T_HOME_F) + lower
+    C[:N, N] = lift + (_row_time(exi_h, np.repeat(np.asarray(spec.q_seed, float)
+                                                  [None, :], N, axis=0),
+                                 qd_frac, T_HOME_F) if return_home else 0.0)
     return C
 
 

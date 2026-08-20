@@ -35,12 +35,24 @@ import numpy as np
 
 from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk
 from .fleet import FLEET, H_INV_DEFAULT
-from .validate import validate_plan
+from .validate import check_pose as validate_pose, validate_plan
 
 # same envelope as the conductor, restated here on purpose: if someone widens
 # a capsule there and the two disagree, this check is supposed to notice.
 RADII = ((0, 1, 0.09), (1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
          (5, 7, 0.07), (7, 8, 0.07), (8, 9, 0.03))
+
+# REPORTED, NOT GATED, AND DELIBERATELY SO.  `validate.check_pose` measures the
+# pen tip against the paper plane, which nothing did before: the paper-clearance
+# gate looks at the nine FK chain points and the pen is not one of them.  It
+# turns out the INVERTED READY POSE fails it — the tip is 16 mm below the paper
+# with a 200 mm pen and 113 mm below with a 300 mm one — so conductor v1 parked
+# four arms through the table three times a run and no check noticed.  Making it
+# a gate here would retroactively refuse the last release rather than the thing
+# it is warning about, so it is separated out, reported loudly, and left for the
+# rig owner to answer (a shorter pen, a different ready pose, or a survey that
+# says the table is lower than the model thinks).
+PEN_PAPER = "pen_below_paper"
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -112,6 +124,58 @@ def pen_len(pen_ext, arm):
     return float(pen_ext)
 
 
+def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+                 verbose=True):
+    """A whole fleet standing still, all at once. -> report dict.
+
+    A POSE IS A CLAIM EVEN WHEN NOTHING IS MOVING.  Two of them are load-bearing
+    and neither is a stroke: the configuration every arm holds while a human
+    walks in to swap the pens, and — since `idle.py` — the pose each arm freezes
+    in when it finishes, which the next pass then starts from and which no
+    stroke validator ever saw.  Both get the same treatment as a timeline: pair
+    clearance from this module's own capsules and its own segment distance, plus
+    `validate.check_pose` per arm for the gates that are about the configuration
+    alone (joint limits with the planner's comfort margin, chain height above
+    the paper, the inverted arms' boom keep-out).
+
+    No sweep slack is subtracted, because nothing sweeps.
+    """
+    arms = sorted(q_by_arm)
+    P = {a: _chain(np.asarray(q_by_arm[a], float).reshape(7), FLEET[a], h_inv,
+                   pen_len(pen_ext, a)) for a in arms}
+    per_pair, worst, worst_at = {}, np.inf, None
+    for i, ai in enumerate(arms):
+        for aj in arms[i + 1:]:
+            d = float(pair_clearance(P[ai], P[aj]))
+            per_pair[(ai, aj)] = d
+            if d < worst:
+                worst, worst_at = d, (ai, aj)
+    poses, bad, dipped = {}, 0, []
+    for a in arms:
+        rep = validate_pose(np.asarray(q_by_arm[a], float).reshape(7), FLEET[a],
+                            h_inv, pen_len(pen_ext, a))
+        kinds = [v["kind"] for v in rep["violations"]]
+        hard = [k for k in kinds if k != PEN_PAPER]
+        bad += 1 if hard else 0
+        dipped += [a] if PEN_PAPER in kinds else []
+        poses[a] = dict(ok=not hard, worst=rep["worst"], violations=kinds)
+    ok = bool(worst >= margin and bad == 0)
+    rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
+               worst_pair=worst_at, poses=poses, poses_failed=int(bad),
+               pen_below_paper=sorted(dipped),
+               per_pair={f"{i}-{j}": v for (i, j), v in per_pair.items()})
+    if verbose:
+        print(f"scene_check(static): {len(arms)} arms, min clearance "
+              f"{1000 * worst:.1f} mm (margin {1000 * margin:.0f} mm)"
+              + (f" between arms {worst_at[0]} and {worst_at[1]}" if worst_at else "")
+              + f"; {len(arms) - bad}/{len(arms)} poses pass their own gates"
+              + f" -> {'PASS' if ok else 'FAIL'}")
+        if dipped:
+            print(f"  !! WARNING: arms {dipped} hold a pose whose PEN TIP is "
+                  "below the paper plane (see `PEN_PAPER` in scene_check)")
+    return rep
+
+
 def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                    pen_ext=PEN_EXT, sub=2, progress=None, verbose=True):
     """Verify a merged timeline. -> report dict (`ok` gates the animation).
@@ -168,6 +232,23 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
             d = np.diff(np.asarray(p, int))
             mono &= bool(np.all(d >= 0) and np.all(d <= 1))
 
+    # WHERE THE ARMS STOP IS PART OF THE TIMELINE.  Under the freeze-in-place
+    # idle policy the last sample of each arm is a pose nothing ever certified —
+    # it is a hover, not a stroke, so `validate_plan` below never sees it — and
+    # the fleet then stands in it for the rest of the run and (in a two-pass
+    # piece) through the pen swap and into the next pass.  Its inter-arm
+    # clearance is already covered by the sweep above; these are the gates that
+    # are about the configuration alone.
+    frozen, frozen_bad, frozen_dip = {}, 0, []
+    for a in arms:
+        rep_p = validate_pose(np.asarray(qtraj[a], float)[-1], FLEET[a], h_inv,
+                              pen_len(pen_ext, a))
+        kinds = [v["kind"] for v in rep_p["violations"]]
+        hard = [k for k in kinds if k != PEN_PAPER]
+        frozen_bad += 1 if hard else 0
+        frozen_dip += [a] if PEN_PAPER in kinds else []
+        frozen[a] = dict(ok=not hard, worst=rep_p["worst"], violations=kinds)
+
     seg_reports, seg_bad = [], 0
     if programs:
         for a, segs in programs.items():
@@ -180,7 +261,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                 seg_bad += 0 if rep["ok"] else 1
                 seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
 
-    ok = bool(worst >= margin and mono and seg_bad == 0
+    ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
               and min(lim.values()) > 0.0)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
@@ -188,7 +269,9 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                joint_margin=lim, monotone=bool(mono), n_frames=M, n_fine=F,
                pens={int(a): pen_len(pen_ext, a) for a in arms},
                n_segments=len(seg_reports), segments_failed=int(seg_bad),
-               segments=seg_reports)
+               segments=seg_reports, frozen=frozen,
+               frozen_failed=int(frozen_bad),
+               frozen_pen_below_paper=sorted(frozen_dip))
     if verbose:
         print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
               f"{len(arms)} arms, {len(per_pair)} pairs")
@@ -198,5 +281,13 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                  f"{worst_at[1]}" if worst_at else ""))
         print(f"  per-arm plan validation: {len(seg_reports) - seg_bad}/"
               f"{len(seg_reports)} segments ok; progress monotone: {mono}")
+        print(f"  frozen poses: {len(arms) - frozen_bad}/{len(arms)} pass the "
+              "joint-limit, paper and boom gates"
+              + ("" if not frozen_bad else "  <- "
+                 + "; ".join(f"arm {a}: {','.join(v['violations'])}"
+                             for a, v in frozen.items() if not v["ok"]))
+              + ("" if not frozen_dip else
+                 f"; !! arms {frozen_dip} stop with the PEN TIP BELOW THE "
+                 "PAPER (reported, not gated — see scene_check.PEN_PAPER)"))
         print(f"  VERDICT {'PASS' if ok else 'FAIL'}")
     return rep
