@@ -472,6 +472,394 @@ def solve(C, n, exact_max_n=EXACT_MAX_N, budget=TIME_BUDGET, or_max=OR_OPT_MAX):
                 wall=float(time.time() - t0))
 
 
+# ==========================================================================
+# 5. clusters: the state is (segment, direction, VARIANT)
+# ==========================================================================
+# A segment used to offer two nodes.  With `menu.py` it offers 2 x V: each
+# certified (entry, exit) fiber pair, drawn either way round.  Everything below
+# is the same machinery over a longer node list — the SAME cost model, the same
+# Held-Karp, the same 2-opt/Or-opt move set — plus one new move that swaps a
+# segment's variant without touching the order.
+#
+# THE OBJECTIVE IS STILL MAKESPAN, AND THE TIE-BREAKS ARE INFINITESIMAL.  The
+# matrix the DP minimises is the transit seconds the timeline will pay PLUS
+# 1e-7 per radian of two things the clock cannot see: the reconfiguration
+# ||q_exit - q_entry_next||_inf across each transit, and the interior travel
+# surcharge of the variant being entered.  Both are weighted far below any
+# transit difference that could matter (a whole tour's tie-break tops out
+# around 1e-5 s against transits of seconds), so they can never buy a slower
+# schedule — they only choose among schedules the clock calls equal.  And
+# equal is the common case, not the rare one: `writing`'s lift, lower and
+# travel beats are FLOORED at 0.20/0.20/0.25 s, so a joint move that fits
+# inside the floor is free, and the arm has been wandering inside that freedom.
+# `cluster_solve` reports `cost` re-derived from the pure transit matrix, so
+# nothing downstream ever sees the tie-break — `csail_schedule.cross_check`
+# compares it against `writing.arm_program`'s own total to 1e-6.
+W_RECONFIG = 1e-7        # s per rad of ||q_exit - q_entry||_inf  (tie-break)
+W_SURCHARGE = 1.0        # the interior surcharge is SECONDS; see below
+EXACT_MAX_STATES = 20_000_000    # 2^n * nodes before Held-Karp is refused
+
+
+def cluster_endpoints(spec, menus, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+    """Flatten per-segment menus into one node list. -> dict.
+
+    Node `base[i] + 2*v + d` is segment i, variant v, drawn forward (d = 0) or
+    backward (d = 1).  Putting the direction in the LOW bit is what lets
+    `flip_index` stay exactly what it was: turning a segment round is still
+    `node ^ 1`, so every asymmetric-cost move in section 3 works unchanged.
+
+    -> dict(seg, var, dirn, base, nv, ent_q, exi_q, ent_xy, exi_xy, ent_h,
+            exi_h, surcharge, n, N)
+    """
+    vlists = [list(m.variants) if hasattr(m, "variants") else list(m)
+              for m in menus]
+    if any(not v for v in vlists):
+        raise ValueError("every segment needs at least one certified variant; "
+                         "segment(s) "
+                         f"{[i for i, v in enumerate(vlists) if not v]} have none")
+    nv = [len(v) for v in vlists]
+    base = np.concatenate([[0], np.cumsum([2 * k for k in nv])]).astype(int)
+    N = int(base[-1])
+    seg = np.zeros(N, int)
+    var = np.zeros(N, int)
+    dirn = np.zeros(N, int)
+    ent_q = np.zeros((N, 7))
+    exi_q = np.zeros((N, 7))
+    ent_xy = np.zeros((N, 2))
+    exi_xy = np.zeros((N, 2))
+    sur = np.zeros(N)
+    ent_h = np.zeros((N, 7))
+    exi_h = np.zeros((N, 7))
+    for i, vs in enumerate(vlists):
+        for v, x in enumerate(vs):
+            # a variant has two ends, not four: the hover above each is solved
+            # ONCE and handed to both directions, which is the same call at the
+            # same heights `writing.arm_program` will make when it lays the
+            # transit down (that identity is what `cross_check` relies on).
+            hov = {}
+            for e_ in ("entry", "exit"):
+                hov[e_], _ = lifted_or_lower(spec, np.asarray(x[f"{e_}_q"], float),
+                                             np.asarray(x[f"{e_}_xy"], float),
+                                             h_inv=h_inv, pen_ext=pen_ext)
+            for d in (0, 1):
+                k = base[i] + 2 * v + d
+                seg[k], var[k], dirn[k] = i, v, d
+                sur[k] = float(x.get("surcharge", 0.0))
+                # drawn backward, the plan's LAST sample is the one entered at
+                a, b = ("entry", "exit") if d == 0 else ("exit", "entry")
+                ent_q[k] = np.asarray(x[f"{a}_q"], float)
+                exi_q[k] = np.asarray(x[f"{b}_q"], float)
+                ent_xy[k] = np.asarray(x[f"{a}_xy"], float)
+                exi_xy[k] = np.asarray(x[f"{b}_xy"], float)
+                ent_h[k], exi_h[k] = hov[a], hov[b]
+    return dict(seg=seg, var=var, dirn=dirn, base=base, nv=nv, ent_q=ent_q,
+                exi_q=exi_q, ent_xy=ent_xy, exi_xy=exi_xy, ent_h=ent_h,
+                exi_h=exi_h, surcharge=sur, n=len(menus), N=N)
+
+
+def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
+                        qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+                        q_start=None, return_home=True, ends=None,
+                        w_reconfig=W_RECONFIG, w_surcharge=W_SURCHARGE):
+    """Every transit an ordering-and-variant choice could pay. -> (C, T, ends).
+
+    `C` is the pure transit seconds, built by the SAME four array operations
+    as `cost_matrix` — same `lift`/`lower` row times, same pen-tip hop floor,
+    same `writing.dq_time_many` for the hover-to-hover move — so a one-variant
+    menu reproduces `cost_matrix` cell for cell.  `T` is the infinitesimal
+    tie-break described above, and is what the search adds to `C`; nothing
+    reports it.
+    """
+    e = cluster_endpoints(spec, menus, h_inv, pen_ext) if ends is None else ends
+    N = e["N"]
+    if N == 0:
+        return np.zeros((1, 1)), np.zeros((1, 1)), e
+    ent_q, ent_h, ent_xy = e["ent_q"], e["ent_h"], e["ent_xy"]
+    exi_q, exi_h, exi_xy = e["exi_q"], e["exi_h"], e["exi_xy"]
+
+    lift = _row_time(exi_q, exi_h, qd_frac, T_LIFT_F)
+    lower = _row_time(ent_h, ent_q, qd_frac, T_LOWER_F)
+    hop = np.linalg.norm(ent_xy[None, :, :] - exi_xy[:, None, :], axis=-1)
+    floor = np.maximum(T_TRAVEL_MIN, hop / max(transit_speed, 1e-9))
+    travel = dq_time_many(exi_h, ent_h, qd_frac, floor)
+
+    C = np.full((N + 1, N + 1), np.inf)
+    C[:N, :N] = lift[:, None] + travel + lower[None, :]
+    same = e["seg"][:, None] == e["seg"][None, :]
+    C[:N, :N][same] = np.inf                  # one node per segment, per tour
+    q0 = np.asarray(spec.q_seed if q_start is None else q_start, float)
+    depot = np.repeat(q0[None, :], N, axis=0)
+    C[N, :N] = _row_time(depot, ent_h, qd_frac, T_HOME_F) + lower
+    C[:N, N] = lift + (_row_time(exi_h, np.repeat(np.asarray(spec.q_seed, float)
+                                                  [None, :], N, axis=0),
+                                 qd_frac, T_HOME_F) if return_home else 0.0)
+
+    # the tie-break: reconfiguration on the edge, surcharge on the node entered
+    T = np.zeros((N + 1, N + 1))
+    T[:N, :N] = w_reconfig * np.max(np.abs(exi_q[:, None, :] - ent_q[None, :, :]),
+                                    axis=-1)
+    # THE INTERIOR IS NOT INVARIANT, AND ASSUMING IT WAS COST 47 % OF THE CLOCK.
+    # The first version of this priced only transit, on the argument that every
+    # variant of a stroke draws the same polyline at the same speed.  It does
+    # not: a variant is a different path through the band, so it has a
+    # different |dq/ds|, and `writing.draw_duration` stretches the ink until no
+    # joint exceeds `qd_frac` of its limit.  Measured on the CSAIL grey phase,
+    # choosing fibers on transit alone moved the busiest arm's DRAW time
+    # 20.2 -> 30.9 s while saving 8 s of transit across the whole fleet — a
+    # trade the clock refuses.  With `pwl.TRAVEL_MODE = "time"` the band DP
+    # already costs an edge in seconds at full joint speed, so the menu's
+    # surcharge IS the extra draw time this variant will cost, and it enters at
+    # full weight, scaled by the same `qd_frac` the timeline will apply.
+    T[:, :N] += (w_surcharge / max(qd_frac, 1e-6)) * e["surcharge"][None, :]
+    if not return_home:
+        # WHERE AN ARM STOPS IS A DECISION, AND UNDER FREEZE NOBODY WAS MAKING
+        # IT.  With `return_home=False` the last leg costs the lift and nothing
+        # else, so `C[a, N]` is the SAME number for every node and the DP is
+        # perfectly indifferent about which stroke it finishes on and which
+        # fiber it comes off.  That was harmless when a segment offered two
+        # nodes; with 2 x V it makes the set of equal-transit tours enormous,
+        # the search picks an arbitrary member, and the arm freezes in an
+        # arbitrary posture — which the conductor then has to certify as an
+        # OBSTACLE for the rest of the run, and refuses ("frozen pose sits in
+        # another arm's tube").  So the same infinitesimal tie-break that
+        # prices reconfiguration on every other edge is applied to the last
+        # one, measured against the ready pose: among tours the clock cannot
+        # separate, finish in the posture nearest the one the arm is known to
+        # be able to stand in.  It buys no seconds and is not meant to; it
+        # replaces an arbitrary choice with a defensible one.
+        home = np.repeat(np.asarray(spec.q_seed, float)[None, :], N, axis=0)
+        T[:N, N] += w_reconfig * np.max(np.abs(exi_q - home), axis=-1)
+    T[~np.isfinite(C)] = 0.0
+    return C, T, e
+
+
+def cluster_held_karp(C, e):
+    """Exact order, direction AND variant. -> dict.
+
+    dp[mask, node] is the cheapest way to leave the depot, draw exactly the
+    segments in `mask`, and be standing at `node`'s exit.  Identical in shape
+    to `held_karp`; the only difference is that a segment now contributes
+    2 x V nodes instead of 2, and choosing one commits its direction AND its
+    entry/exit fiber.
+
+    The relaxation is done for every successor node at once — each node belongs
+    to exactly one segment, so `mask | (1 << seg[node])` is a per-node target
+    mask and the scatter has no duplicate (mask, node) pairs to collide on.
+    That keeps the inner loop six array operations instead of one per segment.
+    """
+    seg, N, n = e["seg"], e["N"], e["n"]
+    if n == 0:
+        return dict(order=[], dirs=[], variants=[], cost=0.0, states=0,
+                    method="cluster_held_karp")
+    T = C[:N, :N]
+    dp = np.full((1 << n, N), np.inf)
+    par = np.full((1 << n, N), -1, np.int32)
+    nodes = np.arange(N)
+    dp[1 << seg, nodes] = C[N, :N]
+    seg_bit = (1 << seg).astype(np.int64)
+    for mask in range(1, 1 << n):
+        row = dp[mask]
+        if not np.isfinite(row).any():
+            continue
+        cand = row[:, None] + T
+        best = cand.min(axis=0)
+        arg = cand.argmin(axis=0)
+        free = (mask & seg_bit) == 0
+        if not free.any():
+            continue
+        nms = (mask | seg_bit)[free]
+        nds = nodes[free]
+        b = best[free]
+        upd = b < dp[nms, nds]
+        if upd.any():
+            dp[nms[upd], nds[upd]] = b[upd]
+            par[nms[upd], nds[upd]] = arg[free][upd]
+    full = (1 << n) - 1
+    tot = dp[full] + C[:N, N]
+    if not np.isfinite(tot).any():
+        raise RuntimeError(f"no feasible order over {n} segments")
+    k = int(np.argmin(tot))
+    body, mask = [], full
+    while k >= 0:
+        body.append(k)
+        p = int(par[mask, k])
+        mask ^= 1 << int(seg[k])
+        k = p
+    body.reverse()
+    return dict(cost=float(tot[int(np.argmin(tot))]), nodes=body,
+                states=int((1 << n) * N), method="cluster_held_karp",
+                **_cluster_split(body, e))
+
+
+def _cluster_split(nodes, e):
+    """Node ids -> (order, dirs, variants)."""
+    seg, var, dirn = e["seg"], e["var"], e["dirn"]
+    return dict(order=[int(seg[k]) for k in nodes],
+                dirs=[1 if dirn[k] == 0 else -1 for k in nodes],
+                variants=[int(var[k]) for k in nodes])
+
+
+def cluster_siblings(e):
+    """node -> the other variants of the same segment, same direction."""
+    base, nv, N = e["base"], e["nv"], e["N"]
+    out = []
+    for k in range(N):
+        i, v, d = int(e["seg"][k]), int(e["var"][k]), int(e["dirn"][k])
+        out.append(np.array([base[i] + 2 * w + d for w in range(nv[i])
+                             if w != v], int))
+    return out
+
+
+def _variant_pass(C, tour, sibs, deadline):
+    """One sweep of variant re-selection: keep the order and both neighbours,
+    swap which certified fiber pair this segment is drawn on.
+
+    THE MOVE THE OLD SEARCH COULD NOT MAKE.  2-opt re-orders and Or-opt
+    relocates; both can only pick from the two nodes a segment offered.  With a
+    menu, the cheapest thing to do is often to draw the same stroke in the same
+    place at the same time and simply come off it somewhere else, which is a
+    move in neither of the other two neighbourhoods.  It is also the cheapest
+    to price — two edges — so it runs in the same descent loop as the others.
+    """
+    moved = False
+    m = len(tour)
+    for p in range(1, m):
+        k = tour[p]
+        sib = sibs[k]
+        if not len(sib):
+            continue
+        prev, nxt = tour[p - 1], tour[(p + 1) % m]
+        cur = C[prev, k] + C[k, nxt]
+        alt = C[prev, sib] + C[sib, nxt]
+        j = int(np.argmin(alt))
+        if alt[j] < cur - EPS:
+            tour[p] = int(sib[j])
+            moved = True
+        if time.time() > deadline:
+            break
+    return moved
+
+
+def cluster_descend(C, R, fl, tour, sibs, deadline, or_max=OR_OPT_MAX,
+                    max_rounds=100):
+    """2-opt, Or-opt and variant re-selection until none of the three bites."""
+    rounds = 0
+    for rounds in range(1, max_rounds + 1):
+        a = _two_opt_pass(C, R, fl, tour, deadline)
+        b = _or_opt_pass(C, R, fl, tour, deadline, or_max)
+        c = _variant_pass(C, tour, sibs, deadline)
+        if not (a or b or c) or time.time() > deadline:
+            break
+    return rounds
+
+
+def cluster_nearest_neighbour(C, e):
+    """Greedy seed over nodes, one segment each. -> tour (depot first)."""
+    seg, N, n = e["seg"], e["N"], e["n"]
+    used = np.zeros(n, bool)
+    tour, cur = [N], N
+    for _ in range(n):
+        row = C[cur, :N].copy()
+        row[used[seg]] = np.inf
+        k = int(np.argmin(row))
+        if not np.isfinite(row[k]):
+            raise RuntimeError("nearest neighbour found no reachable segment")
+        tour.append(k)
+        used[seg[k]] = True
+        cur = k
+    return tour
+
+
+def cluster_local_search(C, e, tour, budget=TIME_BUDGET, or_max=OR_OPT_MAX,
+                         kick_seed=0, stall=60):
+    """Descent + double-bridge kicks, with variant re-selection in the move set."""
+    N, n = e["N"], e["n"]
+    fl = flip_index(N)
+    R = reversal_penalty(C, N)
+    sibs = cluster_siblings(e)
+    t0 = time.time()
+    deadline = t0 + budget
+    tour = list(tour)
+    rounds = cluster_descend(C, R, fl, tour, sibs, deadline, or_max)
+    best, best_cost = list(tour), cycle_cost(C, tour)
+    rng = np.random.default_rng(kick_seed)
+    kicks = accepted = since = 0
+    while n >= 4 and time.time() < deadline and since < stall:
+        cand = double_bridge(best, rng)
+        rounds += cluster_descend(C, R, fl, cand, sibs, deadline, or_max)
+        kicks += 1
+        c = cycle_cost(C, cand)
+        if c < best_cost - EPS:
+            best, best_cost, since, accepted = cand, c, 0, accepted + 1
+        else:
+            since += 1
+    return best, dict(rounds=rounds, kicks=kicks, accepted=accepted,
+                      wall=float(time.time() - t0),
+                      stalled=bool(since >= stall))
+
+
+def cluster_solve(C, T, e, exact_max_n=EXACT_MAX_N, budget=TIME_BUDGET,
+                  or_max=OR_OPT_MAX, exact_max_states=EXACT_MAX_STATES):
+    """(C, T, ends) -> dict(order, dirs, variants, cost, method, ...).
+
+    The search runs on `C + T`; `cost` is re-derived from `C` alone, so the
+    number returned is the transit seconds the timeline will pay and the
+    tie-break never leaves this function.
+    """
+    t0 = time.time()
+    n, N = e["n"], e["N"]
+    if n == 0:
+        return dict(order=[], dirs=[], variants=[], cost=0.0, method="empty",
+                    n=0, nn_cost=0.0, wall=0.0)
+    W = C + T
+    exact = n <= exact_max_n and (1 << n) * max(N, 1) <= exact_max_states
+    if exact:
+        out = cluster_held_karp(W, e)
+        out.update(n=n, nn_cost=float("nan"), wall=float(time.time() - t0),
+                   cost=cycle_cost(C, tour_of_nodes(out["nodes"], N)))
+        return out
+    tour = cluster_nearest_neighbour(W, e)
+    nn_cost = cycle_cost(C, tour)
+    tour, stats = cluster_local_search(W, e, tour, budget, or_max)
+    body = [k for k in tour if k != N]
+    return dict(cost=cycle_cost(C, tour), n=n, nodes=body,
+                method="cluster_nn+2opt+oropt+variant", nn_cost=float(nn_cost),
+                stats=stats, wall=float(time.time() - t0),
+                **_cluster_split(body, e))
+
+
+def tour_of_nodes(nodes, N):
+    """Node ids -> the closed tour, depot first."""
+    return [N] + list(nodes)
+
+
+def reconfiguration(segs):
+    """Sum of ||q_exit - q_entry_next||_inf over consecutive segments. -> rad.
+
+    THE QUANTITY THE CLOCK CANNOT SEE, AND THE ONE THE ARM IS DOING.  Between
+    two strokes the arm lifts, flies to the next hover and lowers, and
+    `writing`'s beats FLOOR each of those at 0.20/0.25/0.20 s.  A pen-up whose
+    joint move fits inside its floor therefore costs the same as one that
+    barely moves at all — so the transit-seconds objective is blind, over a
+    wide band, to how far round the null space the arm actually swings.  This
+    measures that swing directly: the largest single-joint jump between the
+    configuration a segment ends in and the one the next begins in, summed
+    along the programme.
+
+    It is a diagnostic, not a gate and not a term in the objective.  It is
+    reported because it is what a person watching the rig sees — an arm that
+    finishes a stroke and then rolls its wrist most of a turn before starting
+    the next one — and because the fiber menus exist to lower it.
+    """
+    segs = list(segs)
+    tot = 0.0
+    for a, b in zip(segs[:-1], segs[1:]):
+        qa = np.asarray(a["plan"]["qs"], float)[-1]
+        qb = np.asarray(b["plan"]["qs"], float)[0]
+        tot += float(np.max(np.abs(qa - qb)))
+    return tot
+
+
 def order_arm(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
               h_inv=H_INV_DEFAULT, exact_max_n=EXACT_MAX_N, budget=TIME_BUDGET,
               baseline=None):

@@ -64,6 +64,67 @@ Lever (1) and one this study did not have — the *allocation* — are built, an
 
 **Single pass was measured, not assumed.** The other way to spend the pen swap is not to have one: all 62 colour partitions of the six arms, at the shipped placement, arms permanently grey or orange. The best of them (arms 2 and 97 orange, the rest grey) certifies **91.088 %** — 1.03 m of the logo left empty against a 99.0 % gate — balances to a 73.9 s floor and conducts, `scene_check` PASS at 82.9 mm, to **74.7 s end to end**. It is 33.9 s faster than the two-pass run and it is refused, because 8.9 % of the picture is not a term in the objective. Two passes ship.
 
+## The L1→L2 interface: entry/exit fiber menus (2026-08-20)
+
+**The complaint this answers.** An arm finishes a stroke at q7 = −1.2 and
+starts the next one at q7 = +0.9, and no re-ordering can mend it, because both
+numbers were fixed by a band DP that never heard of the neighbouring strokes.
+`sequence.py` was choosing an order over ends it was not allowed to move.
+
+**What was built** (`aris_sixarm/menu.py`, `sequence.cluster_*`,
+`allocate.sequence_arm_cluster`). Every stroke end sits on a *fiber* — the q7
+interval the gates leave open there — so L1 now offers a MENU: ~3 certified q7
+candidates per end per spanning sheet, with every (entry, exit) pair the band
+cannot connect pruned by the band DP's own forward sweep. L2's state grows from
+(segment, direction) to **(segment, direction, variant)**; Held-Karp is still
+exact below 16 segments (the node count goes from 2n to 2n·V, and the
+relaxation is vectorised so the inner loop stays six array operations), and the
+NN + 2-opt + Or-opt fallback gains a **variant re-selection** move — draw the
+same stroke in the same place at the same time and simply come off it somewhere
+else, a move in neither of the other two neighbourhoods. Nothing is planned
+until it is chosen: a menu entry is a promise of two configurations and a cost,
+and only the chosen variant is materialised, through the same `stroke_api` path,
+with the same independent validator. That laziness is exact — `tests/test_menu.py`
+pins that a lazily materialised variant is the eagerly planned one to the float,
+and that a one-variant menu reproduces `sequence.cost_matrix` cell for cell and
+`held_karp`'s tour node for node.
+
+**It does what it was built to do.** On the shipped CSAIL two-pass run, at
+**identical coverage (99.2139 %)**, identical segment count and identical ink:
+
+| | old | new | change |
+|---|---|---|---|
+| transit (both phases, all arms) | 96.02 s | **81.84 s** | **−14.8 %** |
+| reconfiguration Σ‖q_exit − q_entry_next‖∞ | 46.93 rad | **16.41 rad** | **−65.0 %** |
+| min clearance | 82.1 mm | 86.0 mm | +4.8 % |
+| coverage | 99.2139 % | 99.2139 % | — |
+
+**And it is off by default, because the makespan went the other way: 104.0 →
+153.5 s.** The reason is the same one that keeps the min-travel band objective
+off (`docs/REDUNDANCY.md`): the premise "interior draw time is invariant across
+variants" is FALSE. A variant is a different path through the band, so it has a
+different |dq/ds|, and `writing.draw_duration` stretches the ink until no joint
+exceeds `qd_frac` = 0.30 of its limit. Pinning fibers to save 14 s of transit
+across the fleet moved the busiest grey arm's DRAW time 20.2 → 30.9 s over the
+same 2.00 m, and the floor is what the makespan is made of. Two attempts to
+repair it in place are recorded because both failed: costing the band edge in
+SECONDS rather than radians (`pwl._edge_travel(mode="time")`, which makes the
+menu's surcharge a real draw-time price the DP can pay) recovered a third of
+the loss, and capping the admissible surcharge (`menu.MAX_SURCHARGE`) recovered
+none of it — because even ONE pinned variant is a constraint the free band DP
+would not have chosen. Both knobs are in the code and both are measured.
+
+**What would have to change for it to pay.** The band would have to be
+re-planned per variant against a draw-time objective rather than scored by a
+lattice proxy, and `allocate.arm_load` — which prices a candidate assignment
+with the single-variant sequencer — would have to price with the cluster model,
+or the balancer balances loads the sequencer then moves. Neither is a
+half-day's work, and neither is worth starting until the draw speed stops being
+joint-limited: at `qd_frac` = 0.30 the ink is the constraint, and every one of
+these levers is spending ink time to buy pen-up time.
+
+Turn it on with `--cluster` (`allocate.CLUSTER`).
+
 ## Lever 4 is built: see docs/IDLE.md (2026-08-19)
 
 "Tuck poses" above — ranked 4th, worth −65 % of the pause and −15.1 s of clock —

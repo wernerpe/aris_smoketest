@@ -55,7 +55,8 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import allocate, bench, coordination, idle, writing  # noqa: E402
+from aris_sixarm import (allocate, bench, coordination, idle,  # noqa: E402
+                         sequence, writing)
 from aris_sixarm.fleet import FLEET, SHEET                            # noqa: E402
 from csail_schedule import build_phases                               # noqa: E402
 
@@ -169,6 +170,16 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
                n_segments=int(sum(len(p["programs"][x]) for p in phases
                                   for x in p["arms"])),
                n_phases=len(phases), splits=splits, alloc_s=t_alloc,
+               # the null-space swing between consecutive strokes that the
+               # floored transit beats hide (`sequence.reconfiguration`)
+               reconfig_rad=float(sum(sequence.reconfiguration(p["programs"][x])
+                                      for p in phases for x in p["arms"])),
+               transit_s=float(sum(p["transit_time"][x]
+                                   for p in phases for x in p["arms"])),
+               menu_variants=float(np.mean([v["mean_variants"]
+                                            for p in phases
+                                            for v in (p.get("menu_stats") or {}).values()
+                                            if v.get("sizes")] or [0.0])),
                floor_alloc_s=float(sum(max((p.get("balance") or {})
                                            .get("loads_after", {0: 0.0}).values())
                                        for p in phases)))

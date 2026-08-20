@@ -73,7 +73,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import sequence, writing
+from . import menu, sequence, writing
 from .fleet import FLEET, H_INV_DEFAULT
 from .stroke_api import (plan_stroke, polyline_length, reverse_plan,
                          truncate_polyline)
@@ -169,6 +169,12 @@ def pen_of(pens, arm, default=None):
 
 
 EPS_S = 1e-6
+# OFF BY DEFAULT, FOR THE SAME REASON THE BAND OBJECTIVE IS.  It wins the two
+# things it was built to win — transit -14.8 %, reconfiguration -65.0 % on the
+# shipped CSAIL run — and loses the one that outranks them: pinning a stroke's
+# entry and exit fiber is a constraint on the band, and a constrained band
+# draws slower (see `pwl.OBJECTIVE`).  Turn it on with `--cluster`.
+CLUSTER = False          # final per-arm programmes go through the fiber menus
 SEQUENCER = "opt"        # "opt" = minimum transit time; "nn" = the old xy chain
 OVERLAP_M = 0.004        # m of ink each side of a handoff cut
 BACKOFF_M = 0.006        # m to give up per failed clean re-plan
@@ -1551,6 +1557,144 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
                 wall=float(time.time() - t0))
 
 
+def build_menus(segs, spec, opts=None, n_cand=menu.N_CAND,
+                max_sheets=menu.MAX_SHEETS, max_variants=menu.MAX_VARIANTS,
+                max_surcharge=menu.MAX_SURCHARGE, verbose=False):
+    """One entry/exit fiber menu per segment. -> (menus, stats).
+
+    A segment whose menu comes back empty — or which the band will not span
+    from any candidate fiber — keeps the plan the allocator already certified,
+    wrapped as a one-variant `menu.PlanMenu`.  That is what makes turning the
+    feature on incapable of losing a segment: the worst case is the menu the
+    pipeline had before, and the DP that consumes it reduces to the DP that
+    consumed that.
+    """
+    out, n_menu, n_plan, sizes = [], 0, 0, []
+    for s in segs:
+        m = None
+        try:
+            m = menu.stroke_menu(s["pts"], spec, opts, n_cand, max_sheets,
+                                 max_variants, max_surcharge)
+        except Exception:                      # a menu is an optimisation, not
+            m = None                           # a promise: never lose a segment
+        if m is not None and m.status == "ok" and len(m):
+            out.append(m)
+            n_menu += 1
+            sizes.append(len(m))
+        else:
+            out.append(menu.PlanMenu(s["plan"]))
+            n_plan += 1
+            sizes.append(1)
+    if verbose:
+        print(f"    menus: {n_menu} enumerated, {n_plan} fell back to the "
+              f"certified plan; sizes {sizes}")
+    return out, dict(n_menu=n_menu, n_plan=n_plan, sizes=sizes,
+                     n_variants=int(sum(sizes)),
+                     mean_variants=float(np.mean(sizes)) if sizes else 0.0)
+
+
+def sequence_arm_cluster(segs, spec, menus, opts=None, seq_opts=None,
+                         forbid=None, verbose=False):
+    """Order, direction AND entry/exit fiber, in one exact DP. -> dict.
+
+    The same contract as `sequence_arm` — it returns a `programme` and the
+    transit seconds it costs — with two differences.  The DP chooses among each
+    segment's certified variants as well as its two directions, and the chosen
+    variant is then MATERIALISED: planned for real through `stroke_api`, corner
+    rounding, dense back-out and the independent validator included.
+
+    `cost` is re-derived from the materialised programme with the ordinary
+    `sequence.cost_matrix`, not read off the cluster matrix.  That is deliberate
+    belt and braces: the advertised endpoints are exact (see `menu.py`), but
+    the number this function reports is the one `writing.arm_program` will pay,
+    measured on the plans that will actually be executed, and
+    `csail_schedule.cross_check` compares the two to 1e-6.  It is also what
+    makes a refused reversal or a variant that will not certify cost what it
+    actually costs rather than what it was hoped to.
+
+    `baseline_cost` is the nearest-xy chain priced on the ALLOCATOR's plans —
+    the programme this arm would have had before any of this existed — so
+    `baseline_cost - cost` is the whole L1->L2 saving (order, direction AND
+    fiber), not just the ordering part.  The two therefore come off two
+    matrices on purpose, which is the one place this differs from
+    `sequence_arm`, where both come off one.
+    """
+    n = len(segs)
+    t0 = time.time()
+    if n == 0:
+        return dict(programme=[], order=[], dirs=[], variants=[], method="empty",
+                    n=0, cost=0.0, baseline_cost=0.0, n_reversed=0, n_refused=0,
+                    n_rematerialised=0, wall=0.0)
+    seq_opts = dict(seq_opts or {})
+    mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv",
+                                    "pen_ext", "q_start", "return_home")
+           if k in seq_opts}
+    exact = seq_opts.get("exact_max_n", sequence.EXACT_MAX_N)
+    budget = seq_opts.get("budget", sequence.TIME_BUDGET)
+
+    C, T, e = sequence.cluster_cost_matrix(spec, menus, **mat)
+    base = sequence.cost_matrix(spec, segs, **mat)
+    base_order, _ = order_nearest(segs, spec.xy)
+    base_cost = sequence.sequence_cost(base, n, base_order, [1] * n)
+    n_forbidden = 0
+    for i, j in (forbid or ()):
+        if not 0 <= int(j) < n:
+            continue
+        b1, b2 = int(e["base"][int(j)]), int(e["base"][int(j) + 1])
+        if i is None:
+            C[e["N"], b1:b2] = np.inf
+        elif 0 <= int(i) < n:
+            a1, a2 = int(e["base"][int(i)]), int(e["base"][int(i) + 1])
+            C[a1:a2, b1:b2] = np.inf
+        else:
+            continue
+        n_forbidden += 1
+    T[~np.isfinite(C)] = 0.0
+    r = sequence.cluster_solve(C, T, e, exact, budget)
+
+    prog, dirs, n_rev, n_ref, n_mat = [], [], 0, 0, 0
+    for k, d, v in zip(r["order"], r["dirs"], r["variants"]):
+        seg, m = segs[k], menus[k]
+        plan = seg["plan"]
+        if not isinstance(m, menu.PlanMenu):
+            cand = m.materialize(v, opts)
+            if cand.get("status") == "ok":
+                plan, n_mat = cand, n_mat + 1
+            # a variant that will not certify is not an error: the segment
+            # keeps the plan the allocator already had, and the re-costing
+            # below prices whatever it ended up with rather than what was asked
+        # `pts` stays the segment's own polyline, exactly as `sequence_arm`
+        # leaves it: `endpoints` and `arm_program` read `plan["pts"]`, while
+        # `transit_metres` and the JSON read `seg["pts"]`, and swapping in the
+        # dense back-out here would make those two report a different quantity
+        # in the cluster path than in the plain one for no gain.
+        item = dict(seg, plan=plan, variant=int(v))
+        rev = reverse_segment(item, spec, opts) if d < 0 else None
+        if d < 0 and rev is None:
+            n_ref += 1
+        if rev is None:
+            prog.append(dict(item, flipped=False))
+            dirs.append(1)
+        else:
+            prog.append(rev)
+            dirs.append(-1)
+            n_rev += 1
+    C2 = sequence.cost_matrix(spec, prog, **mat)
+    cost = sequence.sequence_cost(C2, n, list(range(n)), [1] * n)
+    if verbose:
+        print(f"    cluster: {r['method']} {n} segs, {e['N']} nodes, "
+              f"transit {cost:.2f} s (baseline {base_cost:.2f} s), "
+              f"{n_mat} re-materialised")
+    return dict(programme=prog, order=[int(i) for i in r["order"]], dirs=dirs,
+                variants=[int(v) for v in r["variants"]], method=r["method"],
+                n=n, n_reversed=n_rev, n_refused=n_ref, n_rematerialised=n_mat,
+                n_forbidden=int(n_forbidden), n_nodes=int(e["N"]),
+                cost=float(cost), cluster_cost=float(r["cost"]),
+                baseline_cost=float(base_cost),
+                nn_cost=float(r.get("nn_cost", float("nan"))),
+                wall=float(time.time() - t0))
+
+
 def resequence(res, q_start=None, return_home=None, specs=None, forbid=None):
     """Re-order every arm's segments from a different start pose. -> res.
 
@@ -1562,6 +1706,15 @@ def resequence(res, q_start=None, return_home=None, specs=None, forbid=None):
     that is not known until the first pass has been conducted (a minimal retreat
     can move it).  Re-ordering from the BAG rather than from the already-ordered
     programme is what keeps a segment from being reversed twice.
+
+    THE FIBER MENUS ARE RE-ORDERED WITH IT.  A re-sequence that fell back to
+    the plain (segment, direction) DP would silently throw the variant choice
+    away and restore the entry configurations the allocator happened to plan
+    first — which is exactly the reconfiguration the menus exist to remove, and
+    it would come back at the one moment it matters most, the start of the
+    second pass.  So when `res` carries menus, this re-runs the CLUSTER DP over
+    the same menus: a new start pose can make a different fiber the right one
+    to enter on, and that is a decision worth re-taking rather than inheriting.
 
     Mutates and returns `res`.
     """
@@ -1579,8 +1732,16 @@ def resequence(res, q_start=None, return_home=None, specs=None, forbid=None):
         sq["return_home"] = bool(return_home)
         if a in res["q_start"]:
             sq["q_start"] = res["q_start"][a]
-        seq = sequence_arm(res["bag"][a], specs[a], res.get("sequencer", SEQUENCER),
-                           res["aopts"][a], sq, forbid=(forbid or {}).get(a))
+        mus = (res.get("menus") or {}).get(a)
+        if mus and len(mus) == len(res["bag"][a]) and \
+                res.get("sequencer", SEQUENCER) in ("opt", "transit"):
+            seq = sequence_arm_cluster(res["bag"][a], specs[a], mus,
+                                       res["aopts"][a], sq,
+                                       forbid=(forbid or {}).get(a))
+        else:
+            seq = sequence_arm(res["bag"][a], specs[a],
+                               res.get("sequencer", SEQUENCER),
+                               res["aopts"][a], sq, forbid=(forbid or {}).get(a))
         res["programs"][a] = seq.pop("programme")
         res["sequence"][a] = seq
         res["transit"][a] = transit_metres(res["programs"][a], specs[a].xy)
@@ -1775,7 +1936,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              probe_ref_m=None,
              min_split=MIN_SPLIT_M, splice=SPLIT_OVERLAP_M,
              split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
-             draw_speed=DRAW_SPEED, q_start=None, return_home=True):
+             draw_speed=DRAW_SPEED, q_start=None, return_home=True,
+             cluster=CLUSTER, menu_opts=None):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -1935,13 +2097,29 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out["aopts"], out["seq_opts"] = dict(aopts), dict(seq_opts or {})
     out["q_start"] = {a: np.asarray(v, float) for a, v in (q_start or {}).items()}
     out["return_home"] = bool(return_home)
+    out["menus"], out["menu_stats"] = {}, {}
     for a in arms:
         sq = dict(seq_opts or {})
         sq["pen_ext"] = out["pens"][a]
         sq["return_home"] = bool(return_home)
         if q_start is not None and a in q_start:
             sq["q_start"] = np.asarray(q_start[a], float)
-        seq = sequence_arm(programs[a], specs[a], sequencer, aopts[a], sq)
+        use_cluster = cluster and sequencer in ("opt", "transit") and programs[a]
+        if use_cluster:
+            mopts = dict(menu_opts or {})
+            mopts.setdefault("verbose", verbose)
+            mus, mstat = build_menus(programs[a], specs[a], aopts[a], **mopts)
+            seq = sequence_arm_cluster(programs[a], specs[a], mus, aopts[a], sq,
+                                       verbose=verbose)
+            # the lattices and their sheet decompositions are the memory-heavy
+            # part (a 38-sheet band is tens of MB); the variant metadata that
+            # `resequence` needs is not, so the menus are kept and the lattices
+            # are not.  A later re-materialisation rebuilds, deterministically.
+            out["menus"][a] = [m.drop_lattice() if hasattr(m, "drop_lattice")
+                               else m for m in mus]
+            out["menu_stats"][a] = mstat
+        else:
+            seq = sequence_arm(programs[a], specs[a], sequencer, aopts[a], sq)
         out["programs"][a] = seq.pop("programme")
         out["sequence"][a] = seq
         out["transit"][a] = transit_metres(out["programs"][a], FLEET[a].xy)

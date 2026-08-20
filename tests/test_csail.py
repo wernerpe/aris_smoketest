@@ -673,9 +673,20 @@ def test_splitting_beats_not_splitting_on_a_constructed_instance():
     a strictly lower busiest arm, out of the same ink, with the coverage
     unmoved.  The run is also required to be reproducible, because a balancer
     whose answer depends on the wall clock cannot be regression-tested.
+
+    THE STROKES ARE 0.70 m, NOT 0.40 m, AND THAT IS THE POINT OF THIS NOTE.
+    At 0.40 m this instance is only imbalanced under ONE of the two band
+    objectives: `min_travel` balances it to 13.85 s against 13.74 s with no cut
+    at all — better than the 14.58 s `maximin_sigma` needs a cut to reach — so
+    the splitter examines 20 candidates and correctly refuses every one, and
+    the test fails for a reason that has nothing to do with splitting.  At
+    0.70 m the whole-segment deal is 38.7 s against 26.1 s under BOTH
+    objectives and cutting is needed under both, so what this pins is the
+    SPLITTER and not whichever objective happens to be `pwl.OBJECTIVE` today.
+    The assertions are the ones it has always had.
     """
     ys = (1.560, 1.640, 1.720)
-    strokes = [dict(pts=np.column_stack([np.linspace(1.60, 2.00, 48),
+    strokes = [dict(pts=np.column_stack([np.linspace(1.50, 2.20, 48),
                                          np.full(48, y)]),
                     color="grey", kind="line", id=i) for i, y in enumerate(ys)]
     kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},

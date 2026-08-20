@@ -67,6 +67,12 @@ DEFAULTS = dict(
     split_back=0.010,      # m pulled back from s* before re-planning the head
     validate=True,
     keep_debug=False,      # attach the lattice/sheet objects (memory-heavy)
+    objective=pwl.OBJECTIVE,   # band objective; see `_sheet_pass`
+    travel_mode=pwl.TRAVEL_MODE,          # how min_travel charges an edge
+    fallback_objective="maximin_sigma",   # tried when the first certifies nothing
+    j_start=None,          # pin the entry q7 index (fiber menus; see menu.py)
+    j_end=None,            # pin the exit  q7 index
+    sheet_id=None,         # pin the IK sheet; REQUIRED whenever j_start/j_end are
 )
 
 SPLIT_REASONS = ("start_infeasible", "empty_fiber", "sheet_collapse",
@@ -171,26 +177,52 @@ def _degenerate(reason, spec, depth, **kw):
                 arm=getattr(spec, "arm_id", None), depth=depth, **kw)
 
 
-def _plan(pts_xy, spec, o, depth):
+def _split_from(ctx, spec, o, depth, s_reach, reason, **kw):
+    """The "split" result, with its head certified through this same entry."""
+    s_reach = float(np.clip(s_reach, 0.0, 1.0))
+    head, s_cert = _head_plan(ctx["poly"], spec, o, depth, s_reach, ctx["L"])
+    return dict(ctx["base"], status="split", s_star=s_cert, s_reach=s_reach,
+                reason=reason, head=head, **kw)
+
+
+def prepare(pts_xy, spec, o, depth=0):
+    """Everything before an objective is chosen. -> (ctx, early).
+
+    Hygiene -> resample at the lattice step -> sheet clip -> `build_lattice` ->
+    `sheet_fields`.  `early` is a finished result dict (degenerate, or a split
+    the band never got far enough to argue with) and `ctx` is None; otherwise
+    `early` is None and `ctx` carries poly, pts, Ns, L, base, notes, lat,
+    sheets, order, fiber_cut, ds_dense and md.
+
+    WHY THIS IS A FUNCTION AND NOT A COMMENT.  `menu.py` needs exactly this
+    prefix and nothing after it, and the q7 INDICES it hands to the sequencer
+    have to mean the same thing they mean inside `_plan` — same resampling,
+    same clip, same lattice, same sheet numbering.  Two implementations that
+    "do the same preprocessing" would agree until the day one of them was
+    edited, and the failure would be a silently mismatched entry
+    configuration, which is the hardest kind of wrong number to see.  Sharing
+    the code is the only way to promise it.
+    """
     notes = []
     # ---- 0. shape / hygiene ------------------------------------------------
     if _is_multi_stroke(pts_xy):
-        return _degenerate("not_a_single_stroke", spec, depth,
-                           notes=["input is a list of polylines (e.g. "
-                                  "letters.place(...)); plan each one separately"])
+        return None, _degenerate("not_a_single_stroke", spec, depth,
+                                 notes=["input is a list of polylines (e.g. "
+                                        "letters.place(...)); plan each separately"])
     try:
         arr = np.asarray(pts_xy, float)
     except Exception:
-        return _degenerate("bad_shape", spec, depth, notes=["input is not numeric"])
+        return None, _degenerate("bad_shape", spec, depth,
+                                 notes=["input is not numeric"])
     if arr.ndim != 2 or arr.size == 0 or arr.shape[1] != 2:
-        return _degenerate("bad_shape" if arr.size else "empty", spec, depth,
-                           notes=[f"input shape {arr.shape}, want (N,2)"])
+        return None, _degenerate("bad_shape" if arr.size else "empty", spec, depth,
+                                 notes=[f"input shape {arr.shape}, want (N,2)"])
     poly, notes = sanitize(arr, o["dup_tol"])
     if len(poly) < 2:
-        return _degenerate("too_few_points", spec, depth, notes=notes)
+        return None, _degenerate("too_few_points", spec, depth, notes=notes)
     L_in = polyline_length(poly)
     if L_in < o["min_length"]:
-        return _degenerate("too_short", spec, depth, notes=notes, arc_len=L_in)
+        return None, _degenerate("too_short", spec, depth, notes=notes, arc_len=L_in)
 
     # ---- 1. lattice sampling, then the sheet clip --------------------------
     # `planner.resample` steps by a fixed ds and stops at the last WHOLE step,
@@ -209,20 +241,23 @@ def _plan(pts_xy, spec, o, depth):
         coarse, _ = planner.resample(poly, L_in / o["max_steps"])
         kept = planner.clip_to_sheet(coarse, verbose=False)
         if len(kept) < 2:
-            return _degenerate("off_sheet", spec, depth, notes=notes, arc_len=L_in)
+            return None, _degenerate("off_sheet", spec, depth, notes=notes,
+                                     arc_len=L_in)
         notes.append(f"stroke is {L_in:.1f} m; coarse-clipped to the sheet first")
         poly, L_in = kept, polyline_length(kept)
         ds_lat = _fit_ds(L_in, o["ds_lattice"])
         if L_in / ds_lat > o["max_steps"]:
-            return _degenerate("too_long", spec, depth, notes=notes, arc_len=L_in)
+            return None, _degenerate("too_long", spec, depth, notes=notes,
+                                     arc_len=L_in)
     pts, _ = planner.resample(poly, ds_lat)
     if len(pts) < 2:
-        return _degenerate("too_short", spec, depth, notes=notes, arc_len=L_in)
+        return None, _degenerate("too_short", spec, depth, notes=notes, arc_len=L_in)
     clip_s = (0.0, 1.0)
     if o["clip_to_sheet"]:
         kept, sl = planner.clip_to_sheet(pts, verbose=False, return_slice=True)
         if len(kept) < 2:
-            return _degenerate("off_sheet", spec, depth, notes=notes, arc_len=L_in)
+            return None, _degenerate("off_sheet", spec, depth, notes=notes,
+                                     arc_len=L_in)
         if len(kept) != len(pts):
             n = len(pts) - 1
             clip_s = (sl.start / n, (sl.stop - 1) / n)
@@ -230,19 +265,15 @@ def _plan(pts_xy, spec, o, depth):
                          f"{clip_s[1]:.3f}] of the input ({len(kept)}/{len(pts)} steps)")
             poly, pts = kept, kept
             if polyline_length(poly) < o["min_length"]:
-                return _degenerate("too_short_after_clip", spec, depth,
-                                   notes=notes, arc_len=polyline_length(poly))
+                return None, _degenerate("too_short_after_clip", spec, depth,
+                                         notes=notes,
+                                         arc_len=polyline_length(poly))
     L = polyline_length(poly)
     Ns = len(pts)
     base = dict(arm=getattr(spec, "arm_id", None), depth=depth, arc_len=L,
                 arc_len_input=L_in, clip_s=clip_s, n_lattice=Ns, notes=notes,
                 stroke=poly)
-
-    def split(s_reach, reason, **kw):
-        s_reach = float(np.clip(s_reach, 0.0, 1.0))
-        head, s_cert = _head_plan(poly, spec, o, depth, s_reach, L)
-        return dict(base, status="split", s_star=s_cert, s_reach=s_reach,
-                    reason=reason, head=head, **kw)
+    ctx = dict(poly=poly, pts=pts, Ns=Ns, L=L, base=base, notes=notes)
 
     # ---- 2. the lattice ----------------------------------------------------
     lat = planner.build_lattice(pts, spec, h_inv=o["h_inv"], pen_ext=o["pen_ext"],
@@ -252,48 +283,78 @@ def _plan(pts_xy, spec, o, depth):
         # where the arm could pick the stroke up again — the tail the caller
         # should re-offer (to this arm after a pen-up, or to a neighbour).
         nxt = np.flatnonzero(fiber)
-        return split(0.0, "start_infeasible", fiber_cut=0,
-                     s_resume=float(nxt[0] / (Ns - 1)) if len(nxt) else None)
+        return None, _split_from(
+            ctx, spec, o, depth, 0.0, "start_infeasible", fiber_cut=0,
+            s_resume=float(nxt[0] / (Ns - 1)) if len(nxt) else None)
     fiber_cut = int(np.flatnonzero(~fiber)[0] - 1) if not fiber.all() else Ns - 1
     base["fiber_cut_s"] = fiber_cut / (Ns - 1)
 
-    # ---- 3. sheets -> PWL -> corner rounding -> dense certification --------
+    # ---- 3. sheets ---------------------------------------------------------
     sheets = pwl.sheet_fields(lat)
     if not sheets:
-        return split(0.0, "start_infeasible", fiber_cut=0)
+        return None, _split_from(ctx, spec, o, depth, 0.0, "start_infeasible",
+                                 fiber_cut=0)
     # A sheet is tried WHOLE — polyline and dense certification together —
     # before the next one is considered.  The grid says a corridor exists at
     # the lattice's 10 mm sampling; the 5 mm chase is the one that has to hold,
     # and a sheet can pass the first and fail the second.  Conceding a split
     # while another sheet would have carried the stroke end to end is the
     # difference between an honest split and a lazy one.
-    order = sorted(sheets, key=lambda sh: (not sh["spans_s"], -sh["nodes"]))
-    ds_dense = _fit_ds(L, o["ds_dense"])
-    md = max(int(round(L / ds_dense)), 1)
-    res = sh = sm = None
-    best = (-1.0, "sheet_collapse", {})            # (s_reach, reason, extras)
-    for cand in order[:max(1, o["max_sheets"])]:
-        r = pwl.plan_pwl(lat, cand, jump=planner.JUMP_THRESH)
-        if not r["ok"]:
-            reach = int(r["cut_index"]) / (Ns - 1)
-            reason = "empty_fiber" if int(r["cut_index"]) >= fiber_cut \
-                and fiber_cut < Ns - 1 else "sheet_collapse"
-            if reach > best[0]:
-                best = (reach, reason, dict(sheet=int(cand["id"])))
-            continue
-        c, info = _certify_sheet(poly, spec, o, lat, cand, r, ds_dense)
-        if c is not None:
-            if info == "sharp":
-                notes.append("corner rounding did not certify; kept the sharp "
-                             "polyline")
-            res, sh, sm = r, cand, c
-            break
-        reach = max(int(info.get("cut_index", -1)), 0) / md
-        if reach > best[0]:
-            best = (reach, "chase_failed",
-                    dict(sheet=int(cand["id"]), n_knots=int(len(r["knots"])),
-                         chase_stop=info["history"][-1][3] if info.get("history")
-                         else ""))
+    ctx.update(lat=lat, sheets=sheets, fiber_cut=fiber_cut,
+               order=sorted(sheets, key=lambda sh: (not sh["spans_s"], -sh["nodes"])),
+               ds_dense=_fit_ds(L, o["ds_dense"]),
+               md=max(int(round(L / _fit_ds(L, o["ds_dense"]))), 1))
+    return ctx, None
+
+
+def _plan(pts_xy, spec, o, depth):
+    ctx, early = prepare(pts_xy, spec, o, depth)
+    if early is not None:
+        return early
+    return plan_from_ctx(ctx, spec, o, depth)
+
+
+def plan_from_ctx(ctx, spec, o, depth=0):
+    """The half of `_plan` after `prepare`: choose a band path and certify it.
+
+    Split out so a fiber-menu variant can be materialised from a lattice that
+    has already been built (`menu.py`), instead of paying for the IK twice.
+    With `o["j_start"]` / `o["j_end"]` set this plans exactly the variant the
+    sequencer costed; with them None it is the ordinary whole-stroke plan.
+    """
+    poly, pts, Ns, L = ctx["poly"], ctx["pts"], ctx["Ns"], ctx["L"]
+    # A ctx is planned from MORE THAN ONCE (one fiber-menu variant per call),
+    # so the notes list has to be copied: shared, a note appended by the second
+    # materialisation appears retroactively in the plan the first one returned.
+    notes = list(ctx["notes"])
+    base = dict(ctx["base"], notes=notes)
+    lat, sheets = ctx["lat"], ctx["sheets"]
+    order, fiber_cut = ctx["order"], ctx["fiber_cut"]
+    ds_dense, md = ctx["ds_dense"], ctx["md"]
+
+    def split(s_reach, reason, **kw):
+        return _split_from(ctx, spec, o, depth, s_reach, reason, **kw)
+
+    # ---- 4. PWL -> corner rounding -> dense certification -------------------
+    res, sh, sm, best = _sheet_pass(poly, spec, o, lat, order, ds_dense, md, Ns,
+                                    fiber_cut, o["objective"], notes)
+    fb = o.get("fallback_objective")
+    if sm is None and fb and fb != o["objective"]:
+        # THE FALLBACK IS WHY THE OBJECTIVE CHANGE CANNOT COST COVERAGE.  The
+        # gated shortest path is entitled to run along the gate boundary, and
+        # the 5 mm chase samples between the lattice's 10 mm nodes; when that
+        # loses a stroke on every sheet, the older bottleneck objective — which
+        # buys margin by construction — is tried on exactly the same sheets and
+        # the same gates before a split is conceded.  A split is therefore
+        # never the new objective's doing: it is a statement about the band.
+        r2, s2, m2, b2 = _sheet_pass(poly, spec, o, lat, order, ds_dense, md, Ns,
+                                     fiber_cut, fb, notes)
+        if m2 is not None:
+            notes.append(f"the {o['objective']} band plan certified on no sheet; "
+                         f"fell back to {fb}")
+            res, sh, sm = r2, s2, m2
+        elif b2[0] > best[0]:
+            best = b2
     if sm is None:
         return split(best[0], best[1], fiber_cut=fiber_cut, n_sheets=len(sheets),
                      **best[2])
@@ -315,6 +376,8 @@ def _plan(pts_xy, spec, o, depth):
                max_step=float(sm["max_step"]), sum_travel=float(sm["sum_travel"]),
                n_knots=int(len(knots)), n_dense=int(len(qs)),
                sheet=int(sh["id"]), n_sheets=len(sheets),
+               objective=res["objective"], dp_travel=float(res["dp_travel"]),
+               q7_span=float(np.ptp(sm["q7"])),
                fallbacks=int(sm["fallbacks"]),
                windows=np.asarray(sm["windows"], float),
                n_bisect=int(sm["n_bisect"]),
@@ -334,6 +397,58 @@ def _plan(pts_xy, spec, o, depth):
     if not rep["ok"]:
         out.update(status="bug", reason="validation_failed")
     return out
+
+
+def _sheet_pass(poly, spec, o, lat, order, ds_dense, md, Ns, fiber_cut,
+                objective, notes):
+    """Try each candidate sheet WHOLE under one band objective.
+
+    -> (pwl result, sheet, certified chase, best) — the first three None when
+    no sheet carried the stroke end to end, and `best` the (reach, reason,
+    extras) triple the caller turns into a split.  Factored out of `_plan` so
+    the fallback objective is literally the same pass run again rather than a
+    second implementation of it that could drift.
+    """
+    res = sh = sm = None
+    best = (-1.0, "sheet_collapse", {})            # (s_reach, reason, extras)
+    if o.get("sheet_id") is not None:
+        # PINNING THE INDICES IS NOT ENOUGH — PIN THE SHEET.  A q7 index names
+        # a column of the band, not a posture: two sheets can both be free at
+        # (0, j0) and hold configurations a branch flip apart (measured: q7
+        # exactly pi apart on a CSAIL segment).  A menu advertises the entry
+        # configuration of ONE sheet, so materialising the variant on whichever
+        # sheet happens to be tried first would hand the sequencer a plan that
+        # starts somewhere other than where it was costed.  Silent, and worth
+        # a whole schedule.
+        order = [sh_ for sh_ in order if int(sh_["id"]) == int(o["sheet_id"])]
+        if not order:
+            return None, None, None, (-1.0, "sheet_collapse",
+                                      dict(sheet=int(o["sheet_id"])))
+    for cand in order[:max(1, o["max_sheets"])]:
+        r = pwl.plan_pwl(lat, cand, jump=planner.JUMP_THRESH,
+                         objective=objective, j_start=o.get("j_start"),
+                         j_end=o.get("j_end"),
+                         travel_mode=o.get("travel_mode", pwl.TRAVEL_MODE))
+        if not r["ok"]:
+            reach = int(r["cut_index"]) / (Ns - 1)
+            reason = "empty_fiber" if int(r["cut_index"]) >= fiber_cut \
+                and fiber_cut < Ns - 1 else "sheet_collapse"
+            if reach > best[0]:
+                best = (reach, reason, dict(sheet=int(cand["id"])))
+            continue
+        c, info = _certify_sheet(poly, spec, o, lat, cand, r, ds_dense)
+        if c is not None:
+            if info == "sharp":
+                notes.append("corner rounding did not certify; kept the sharp "
+                             "polyline")
+            return r, cand, c, best
+        reach = max(int(info.get("cut_index", -1)), 0) / md
+        if reach > best[0]:
+            best = (reach, "chase_failed",
+                    dict(sheet=int(cand["id"]), n_knots=int(len(r["knots"])),
+                         chase_stop=info["history"][-1][3] if info.get("history")
+                         else ""))
+    return res, sh, sm, best
 
 
 def _certify_sheet(poly, spec, o, lat, sheet, res, ds_dense):
@@ -379,7 +494,18 @@ def _head_plan(poly, spec, o, depth, s_reach, L):
     sub = truncate_polyline(poly, 0.0, s_head)
     if len(sub) < 2:
         return none
-    r = plan_stroke(sub, spec, dict(o), _depth=depth + 1)
+    # THE PINS DO NOT SURVIVE A TRUNCATION.  `j_start`, `j_end` and `sheet_id`
+    # name a q7 column and a connected component of THIS stroke's lattice; the
+    # head is a shorter stroke with its own lattice, its own sheet numbering
+    # and its own fiber at the far end, so carrying them over constrains the
+    # re-plan to an exit that has no meaning there.  Measured: a variant whose
+    # exit was unreachable recursed to full depth still pinned to the parent's
+    # j_end, so every head failed and s_star collapsed to 0.0 where a genuine
+    # head would have certified.  A head is planned free.
+    sub_o = dict(o)
+    for k in ("j_start", "j_end", "sheet_id"):
+        sub_o[k] = None
+    r = plan_stroke(sub, spec, sub_o, _depth=depth + 1)
     head = r if r["status"] == "ok" else r.get("head")
     if head is None:
         return none

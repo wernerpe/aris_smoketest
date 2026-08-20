@@ -28,7 +28,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import allocate, idle, trace, writing   # noqa: E402
+from aris_sixarm import allocate, idle, pwl, trace, writing   # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
@@ -448,6 +448,18 @@ def add_args(ap):
     # sequencer prices must not pay for the trip — which changes WHICH segment
     # it chooses to finish on.  It lives here, with the other two halves of the
     # shared cost model, so the allocator and the schedule cannot disagree.
+    # THE TWO HALVES OF THE 2026-08-20 REFACTOR, EACH WITH ITS OWN OFF SWITCH,
+    # because the A/B that justifies them has to be runnable from one binary.
+    ap.add_argument("--cluster", action="store_true",
+                    help="sequence on (segment, direction, VARIANT): build the "
+                         "entry/exit fiber menus and run the cluster DP. Off by "
+                         "default — it buys transit and reconfiguration and "
+                         "costs draw time; see allocate.CLUSTER")
+    ap.add_argument("--band-objective", choices=pwl.OBJECTIVES,
+                    default=pwl.OBJECTIVE,
+                    help="the (s, q7) band objective: 'min_travel' (default) is "
+                         "the gated shortest path, 'maximin_sigma' the older "
+                         "bottleneck objective")
     ap.add_argument("--idle-policy", choices=(idle.POLICY_FREEZE,
                                               idle.POLICY_HOME),
                     default=idle.POLICY_FREEZE,
@@ -507,7 +519,9 @@ def run_allocation(a, verbose=False, split=None):
     if pens:
         print("  pens: " + "  ".join(f"arm {k} = {1000 * v:.0f} mm"
                                      for k, v in sorted(pens.items())))
-    kw = dict(opts=None, verbose=verbose, pens=pens,
+    kw = dict(opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE)),
+              cluster=getattr(a, "cluster", allocate.CLUSTER),
+              verbose=verbose, pens=pens,
               active_override=_override(a.arms),
               sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
               max_probes=getattr(a, "max_probes", 3),

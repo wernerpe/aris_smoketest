@@ -41,8 +41,8 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, coordination, idle, scene_check, trace,  # noqa: E402
-                         writing)
+from aris_sixarm import (allocate, coordination, idle, scene_check, sequence,  # noqa: E402
+                         trace, writing)
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from csail_allocate import add_args, run_allocation, final_png      # noqa: E402
 
@@ -637,8 +637,19 @@ def main(argv=None):
                           for x in res["arms"]},
             arm_sequencer_method={str(x): res["sequence"][x]["method"]
                                   for x in res["arms"]},
+            # the reconfiguration the transit floors hide (`sequence.reconfiguration`)
+            arm_reconfig_rad={str(x): float(sequence.reconfiguration(
+                res["programs"][x])) for x in res["arms"]},
+            arm_variants={str(x): list(res["sequence"][x].get("variants", []))
+                          for x in res["arms"]},
+            menu_stats={str(x): (res.get("menu_stats") or {}).get(x)
+                        for x in res["arms"]},
             colors={str(k): v for k, v in res["colors"].items()}))
     # what the old single-phase readers look for, pointed at phase 1
+    summary["reconfig_rad"] = float(sum(
+        sum(ph["arm_reconfig_rad"].values()) for ph in summary["phases"]))
+    summary["transit_s"] = float(sum(
+        sum(ph["arm_transit_s"].values()) for ph in summary["phases"]))
     summary.update(pauses=summary["phases"][0]["pauses"],
                    priority=summary["phases"][0]["priority"],
                    arm_metres=summary["phases"][0]["arm_metres"],

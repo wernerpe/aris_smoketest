@@ -58,6 +58,46 @@ arms carry more than 16 pieces, so those two rows can move by a fraction of a
 second between machines. The splits, the coverage and the floor do not.
 
 
+## The 2026-08-20 refactor did not move a digit of this corpus, on purpose
+
+The gated min-travel band objective (`pwl.OBJECTIVE`) and the entry/exit fiber
+menus with the (segment, direction, variant) cluster DP (`allocate.CLUSTER`)
+are both **off by default** — `docs/REDUNDANCY.md` and `docs/CONCURRENCY.md`
+have the measurements that put them there, and the short version is that both
+constrain the band, a constrained band has a larger |dq/ds|, and
+`writing.draw_duration` stretches the ink until no joint exceeds `qd_frac`
+= 0.30 of its limit. They buy pen-up time with ink time, and the ink is the
+larger number.
+
+So the claim this corpus has to support is a NEGATIVE one: with the shipped
+defaults the pipeline is behaviour-identical to the one that produced the table
+below. Re-run on that basis, `hatch` and `scatter` reproduce **every** column
+to the digit — coverage, makespan, floor, efficiency, splits, pause, clearance,
+`scene_check` — and differ only in wall clock (1854 → 1825 s and 2303 → 2207 s,
+which is the machine and not the planner):
+
+| drawing | coverage | makespan | floor | eff | splits | clearance | reconfig | verdict |
+|---|---|---|---|---|---|---|---|---|
+| hatch | 73.55 % | 355.1 s | 355.1 s | 1.00 | 0 | 138.4 mm | 43.7 rad | identical |
+| scatter | 84.72 % | 41.4 s | 41.4 s | 1.00 | 1 | 85.0 mm | 77.4 rad | identical |
+| starburst | 87.70 % | 162.3 s | 153.7 s | 0.95 | 2 | 81.4 mm | 32.7 rad | identical |
+| spiral | 85.57 % | 89.4 s | 83.4 s | 0.93 | 0 | 82.1 mm | 49.9 rad | identical |
+| duotone | 82.35 % | 268.5 s | 260.5 s | 0.97 | 5 | 85.1 mm | 98.5 rad | identical |
+
+All five are re-run, and every one of `coverage`, `makespan_s`, `floor_s`,
+`efficiency`, `splits`, `pause_total`, `min_clearance`, `n_segments` and
+`solo_share` compares equal to 1e-6 against `out/bench.json` — column by
+column, not eyeballed. Efficiency does not regress anywhere because nothing
+moved anywhere. The only column that differs is the wall clock, which is the
+machine.
+
+**What the corpus gained is a column, not a number.** `bench.py` now records
+`reconfig_rad` — Σ‖q_exit − q_entry_next‖∞ over consecutive segments, the
+null-space swing between strokes that the floored transit beats hide and the
+quantity the fiber menus exist to lower (`sequence.reconfiguration`). Turning
+`--cluster` on cuts that quantity by 65 % on the CSAIL logo and costs 47 % of
+the clock, which is why it is off.
+
 ## Results (2026-08-20, allocation v2 (splitting), 31706 s for all five)
 
 | drawing | regime | ink m | cov % | makespan | floor | eff | splits | solo % | wall |

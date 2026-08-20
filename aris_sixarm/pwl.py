@@ -38,16 +38,30 @@ docstring for why that is not a stylistic choice.
 import numpy as np
 
 from . import ik, planner
-from .frames import PEN_EXT, joint_margin, rotx, tip_pos_many
+from .frames import PEN_EXT, QD_MAX, joint_margin, rotx, tip_pos_many
 from .metrics import sigma_min as _sigma_min, tip_jacobian_many
 from .pacing import dq_ds
 
 SIGMA_GATE = 0.10        # band gate, sigma_min (above planner.HARD_SIGMA = 0.08)
 MARGIN_GATE = 0.15       # band gate, joint margin (rad)
 W_CLEARANCE = 1.0        # tie-break pull toward the middle of the corridor
-W_TRAVEL = 0.25          # tie-break pull toward fewer q7 index steps
+W_TRAVEL = 0.25          # tie-break pull toward fewer q7 index steps (maximin only)
 RDP_EPS = 1.0            # simplification tolerance, q7 GRID INDICES
 _SIGMA_Q = planner._SIGMA_Q      # bottleneck quantum, shared with the lattice DP
+_TRAVEL_Q = 1e6          # travel quantum (1e-6 rad), for an EXACT lexicographic DP
+# THE DEFAULT IS THE BOTTLENECK OBJECTIVE, AND THAT IS A MEASUREMENT, NOT A
+# PREFERENCE.  "min_travel" is implemented, tested and available, and on the
+# band it does exactly what it claims: -68 % of q7 wander, -32 % of lattice
+# travel, -13 % of knots, both gates untouched.  It also costs the CLOCK, which
+# is the one thing this project is allowed to optimise.  Constraining the band
+# path raises |dq/ds|; `writing.draw_duration` then stretches the ink until no
+# joint exceeds `qd_frac` (0.30) of its velocity limit; and drawing is the
+# dominant term in the makespan floor.  On the shipped CSAIL run the busiest
+# grey arm's draw time went 20.2 -> 30.9 s over the SAME 2.00 m of ink, and the
+# two-pass floor went 84.3 -> 93.2 s.  docs/REDUNDANCY.md has the measurement.
+OBJECTIVE = "maximin_sigma"      # default band objective; see `_dense_dp`
+TRAVEL_MODE = "time"             # how an edge is charged; see `_edge_travel`
+OBJECTIVES = ("min_travel", "maximin_sigma")
 
 
 # --------------------------------------------------------------------------
@@ -338,7 +352,211 @@ def _edge_ok(sheet, jump):
     return out
 
 
-def _dense_dp(free, sigma, clear, edge_ok, w_clearance, w_travel):
+def _edge_travel(sheet, mode="separable"):
+    """(Ns-1, Nq, 3) joint travel of every lattice edge, sum_j |dq_j|.
+
+    INDEXED BY SOURCE, exactly like `_edge_ok`: entry [i, j, t] is the edge
+    LEAVING (i, j) with dj = t - 1.  The two arrays are consumed together and a
+    mismatched convention between them would be silent, so they are built the
+    same way on purpose.  The norm is L1 over the seven joints because that is
+    the project's own `sum_travel` (`chase_report`, `planner.path_report`,
+    `smooth_report`): the quantity the DP minimises is then the quantity every
+    report downstream prints, rather than a proxy that correlates with it.
+
+    TWO WAYS TO PRICE AN EDGE, AND THE DIFFERENCE IS THE STAIRCASE.
+
+    `mode="chord"` is the obvious one: the straight-line joint distance
+    ||Q[i+1, j+dj] - Q[i, j]||_1 between the two lattice nodes.  It prices the
+    path the DP literally walks — and that path is NOT the one that gets
+    executed.  A dense DP crossing the band at half an index per step has to
+    alternate dj = 0, 1, 0, 1; RDP then straightens that staircase into a
+    ramp, and the ramp's travel is what the arm actually pays.  Charging the
+    staircase makes the DP optimise a quantity the simplification is about to
+    throw away, which is measurable: over the 35 certified CSAIL stroke/arm
+    pairs the chord cost cut the LATTICE travel 31.8 % and moved the certified
+    dense travel the wrong way by 2.0 %.
+
+    `mode="separable"` (the default) prices the ramp instead, by splitting the
+    edge into the two motions it is made of:
+
+        travel = ||Q[i, j+dj] - Q[i, j]||_1        the null-space step sideways
+               + ||Q[i+1, j+dj] - Q[i, j+dj]||_1   following the stroke there
+
+    The first term is charged per index of q7 actually crossed, so a staircase
+    and the ramp it approximates cost the SAME (both cross the same indices) —
+    the DP stops caring about quantisation noise and starts caring about the
+    net excursion.  The second term is the cost of advancing the stroke at the
+    column the edge lands in, which is what makes the objective prefer the part
+    of the band where dragging the pen forward is cheap in joint space.  That
+    second term is the one the chord cost hides, and it is where the dense
+    travel was going.
+
+    Infeasible, off-sheet or off-mask edges are +inf so they can never be
+    chosen; the caller masks with `_edge_ok` as well, which is belt and braces
+    and costs nothing.
+    """
+    if mode not in ("separable", "chord", "time"):
+        raise ValueError(f"unknown edge-travel mode {mode!r}")
+    Q, mask = sheet["Q"], sheet["mask"]
+    Ns, Nq = mask.shape
+    out = np.full((Ns - 1, Nq, 3), np.inf)
+
+    def norm(d):
+        """L1 over the joints, or SECONDS at full joint speed for mode=time."""
+        return (np.max(np.abs(d) / QD_MAX, axis=-1) if mode == "time"
+                else np.sum(np.abs(d), axis=-1))
+
+    for t, dj in enumerate((-1, 0, 1)):
+        lo, hi = max(0, -dj), min(Nq, Nq - dj)
+        if lo >= hi:
+            continue
+        src, dst = slice(lo, hi), slice(lo + dj, hi + dj)
+        ok = mask[:-1, src] & mask[1:, dst]
+        chord = norm(Q[:-1, src] - Q[1:, dst])
+        if mode == "chord":
+            d = chord
+        else:
+            side = norm(Q[:-1, dst] - Q[:-1, src]) if dj else 0.0
+            fwd = norm(Q[1:, dst] - Q[:-1, dst])
+            d = side + fwd
+            if dj:
+                # AN UNDEFINED PRICE MUST NOT BECOME AN INFINITE ONE.  The
+                # separable price routes the edge through the intermediate node
+                # (i, j+dj), and where the sheet has no node there the two
+                # terms read NaN.  Letting that become +inf would DELETE an
+                # edge `_edge_ok` has already certified — a cost model acting
+                # as a feasibility gate — and the DP cannot tell "expensive"
+                # from "forbidden", so the band would be reported as
+                # disconnected at a step where it is not.  Measured on the
+                # CSAIL bands: 21 of 1452 certified edges (1.45 %) priced
+                # +inf this way, which is enough to concede false splits and
+                # to shrink the fiber menus.  The chord is always defined for
+                # an edge whose two ENDPOINTS are on the sheet, so it is what
+                # those edges are charged.
+                d = np.where(mask[:-1, dst], d, chord)
+        out[:, src, t] = np.where(ok, np.nan_to_num(d, nan=np.inf,
+                                                    posinf=np.inf), np.inf)
+    return out
+
+
+def _start_mask(free0, j_start):
+    """Row of admissible s = 0 cells, optionally pinned to one q7 index."""
+    m = np.asarray(free0, bool).copy()
+    if j_start is not None:
+        keep = np.zeros(m.shape, bool)
+        j = int(j_start)
+        if 0 <= j < len(m):
+            keep[j] = True
+        m &= keep
+    return m
+
+
+def _backtrack(parent, j_end, Ns):
+    """Walk the dq7-index backpointers from a terminal q7 index to s = 0."""
+    js = [int(j_end)]
+    for i in range(Ns - 1, 0, -1):
+        k = int(parent[i][js[-1]])
+        assert k >= 0, f"missing parent at step {i}"
+        js.append(js[-1] - (k - 1))
+    return np.array(js[::-1])
+
+
+def travel_forward(free, clear, edge_ok, edge_travel, w_clearance=W_CLEARANCE,
+                   j_start=None):
+    """One forward sweep of the GATED MIN-TRAVEL DP. -> (A, C, parent, last).
+
+    `A[j]` is the least total joint travel (QUANTISED — see below) with which
+    s = Ns-1 can be reached at q7 index j, `C[j]` the accompanying clearance
+    tie-break cost, both +inf where j is not reachable.  `parent` holds the
+    dq7-index backpointers and `last` the farthest s reached (< Ns-1 means the
+    gated band disconnected, which is the caller's split signal).
+
+    THE OBJECTIVE, AND WHY IT IS THE WHOLE POINT.  The gates are not in the
+    cost: sigma_min >= sigma_gate and margin >= margin_gate have already carved
+    the free region this DP runs on, so they are HARD and a path either respects
+    them or does not exist.  What is left to choose among the admissible paths
+    is then a plain shortest-path question — minimise the joint travel the arm
+    actually spends — and not a bottleneck question.  Maximising min-sigma over
+    a region where every cell already clears the gate buys controllability the
+    gate has already bought, and pays for it in q7 wander: the maximin path will
+    climb the band to sit on a ridge and climb back down, and every radian of
+    that climb is a null-space self-motion the pen does not need.
+
+    EXACTLY LEXICOGRAPHIC, NOT NEARLY.  Travel is quantised to 1e-6 rad and
+    accumulated as an integer in a float64 (a 15 m stroke tops out around 1e10,
+    against the 9e15 where float64 stops counting exactly), so `A == A.min()`
+    is a true equality test and the clearance tie-break is applied to exactly
+    the set of optimal paths.  Both terms are additive, so unlike the maximin
+    DP — whose tie-break is only greedy-lexicographic, as `planner.plan` says —
+    this one is exact in both components.  Clearance stays the tie-break for
+    the reason `plan_pwl` wants it: among equally short paths, the one down the
+    middle of the corridor is the one RDP can straighten.
+    """
+    Ns, Nq = free.shape
+    INF = np.inf
+    Tq = np.where(edge_ok, np.round(np.where(np.isfinite(edge_travel),
+                                             edge_travel, 0.0) * _TRAVEL_Q), INF)
+    Tq = np.where(np.isfinite(edge_travel), Tq, INF)
+    node_c = np.where(free, -w_clearance * clear, INF)
+    parent = np.full((Ns, Nq), -1, np.int8)
+    start = _start_mask(free[0], j_start)
+    A = np.where(start, 0.0, INF)
+    C = np.where(start, node_c[0], INF)
+    last = 0 if np.isfinite(A).any() else -1
+    for i in range(1, Ns):
+        ca = np.full((Nq, 3), INF)
+        cc = np.full((Nq, 3), INF)
+        for t, dj in enumerate((-1, 0, 1)):
+            lo, hi = max(0, dj), min(Nq, Nq + dj)
+            if lo >= hi:
+                continue
+            tgt, src = slice(lo, hi), slice(lo - dj, hi - dj)
+            feas = free[i][tgt] & np.isfinite(A[src]) & edge_ok[i - 1][src, t]
+            ca[tgt, t] = np.where(feas, A[src] + Tq[i - 1][src, t], INF)
+            cc[tgt, t] = np.where(feas, C[src] + node_c[i][tgt], INF)
+        best = ca.min(axis=1)
+        k = np.argmin(np.where(ca == best[:, None], cc, INF), axis=1)
+        An = np.take_along_axis(ca, k[:, None], 1)[:, 0]
+        if not np.isfinite(An).any():
+            break
+        A = An
+        C = np.take_along_axis(cc, k[:, None], 1)[:, 0]
+        parent[i], last = np.where(np.isfinite(An), k, -1), i
+    return A, C, parent, last
+
+
+def _dense_dp_travel(free, clear, edge_ok, edge_travel, w_clearance,
+                     j_start=None, j_end=None):
+    """Gated min-travel path across the band. -> (js | None, last, travel rad).
+
+    `j_start` / `j_end` pin the entry / exit q7 index (the fiber-menu case);
+    left None they are free and the DP picks the cheapest pair.  A None path
+    with `last == Ns - 1` means the band spans the stroke but not to the exit
+    that was asked for — which is exactly the reachability question the menu
+    prunes on, answered by the band DP itself rather than guessed.
+    """
+    Ns = free.shape[0]
+    A, C, parent, last = travel_forward(free, clear, edge_ok, edge_travel,
+                                        w_clearance, j_start)
+    if last < Ns - 1:
+        return None, last, np.inf
+    fin = np.isfinite(A)
+    if j_end is not None:
+        pick = np.zeros(fin.shape, bool)
+        j = int(j_end)
+        if 0 <= j < len(fin):
+            pick[j] = True
+        fin &= pick
+    if not fin.any():
+        return None, last, np.inf
+    lo = A[fin].min()
+    tie = fin & (A == lo)
+    j = int(np.argmin(np.where(tie, C, np.inf)))
+    return _backtrack(parent, j, Ns), last, float(lo) / _TRAVEL_Q
+
+
+def _dense_dp(free, sigma, clear, edge_ok, w_clearance, w_travel,
+              j_start=None, j_end=None):
     """Monotone-in-s DP over the free cells, transitions dq7 index in {-1,0,+1}.
 
     OBJECTIVE (same shape as planner.plan, deliberately): lexicographic
@@ -351,13 +569,26 @@ def _dense_dp(free, sigma, clear, edge_ok, w_clearance, w_travel):
     of the corridor, which is what survives being straightened into segments.
     (Exact for the primary bottleneck; the tie-break is greedy-lexicographic,
     exactly as in planner.plan.)
+
+    SINCE THE MIN-TRAVEL OBJECTIVE BECAME THE DEFAULT this is the FALLBACK
+    rather than the usual path: `stroke_api` reaches for it when the gated
+    shortest path fails to certify on every sheet.  A min-travel path is
+    entitled to run along the gate boundary — every cell it uses clears
+    sigma_gate, but only just — and the 5 mm chase that has the last word
+    samples BETWEEN the lattice's 10 mm nodes, where "only just" can become
+    "not quite".  Maximin buys the margin back by construction, so it is the
+    right thing to fall back to and the wrong thing to start from.
+    `j_start` / `j_end` pin the entry / exit q7 index, so a fiber-menu variant
+    can be re-planned here on exactly the endpoints it was costed on.
     """
     Ns, Nq = free.shape
     NEG, INF = -np.inf, np.inf
     Sq = np.where(free, np.round(np.nan_to_num(sigma) * _SIGMA_Q), NEG)
     node_c = np.where(free, -w_clearance * clear, INF)
     parent = np.full((Ns, Nq), -1, np.int8)
-    B, C = Sq[0].copy(), np.where(free[0], node_c[0], INF)
+    start = _start_mask(free[0], j_start)
+    B = np.where(start, Sq[0], NEG)
+    C = np.where(start, node_c[0], INF)
     last = 0 if np.isfinite(C).any() else -1
     for i in range(1, Ns):
         cb = np.full((Nq, 3), NEG)
@@ -379,14 +610,18 @@ def _dense_dp(free, sigma, clear, edge_ok, w_clearance, w_travel):
         C, parent[i], last = Cn, np.where(np.isfinite(Cn), k, -1), i
     if last < Ns - 1:
         return None, last
-    tie = B == B.max()
+    fin = np.isfinite(C)
+    if j_end is not None:
+        pick = np.zeros(fin.shape, bool)
+        j = int(j_end)
+        if 0 <= j < len(fin):
+            pick[j] = True
+        fin &= pick
+    if not fin.any():
+        return None, last
+    tie = fin & (B == B[fin].max())
     j = int(np.argmin(np.where(tie, C, INF)))
-    js = [j]
-    for i in range(Ns - 1, 0, -1):
-        k = int(parent[i][js[-1]])
-        assert k >= 0, f"missing parent at step {i}"
-        js.append(js[-1] - (k - 1))
-    return np.array(js[::-1]), last
+    return _backtrack(parent, j, Ns), last
 
 
 def _interp_j(f, ii, jf):
@@ -516,40 +751,80 @@ def _sample_pwl(knot_i, knot_j, Ns):
     return np.interp(np.arange(Ns), knot_i, knot_j)
 
 
+def band_free(sheet, sigma_gate=SIGMA_GATE, margin_gate=MARGIN_GATE):
+    """The gated free region of a sheet: where BOTH hard gates hold.
+
+    Named because it is now the interface between the gates and every objective
+    that runs on them — `plan_pwl`, the fiber menus in `menu.py`, and the tests
+    that pin that a gate is never traded away for a shorter path.
+    """
+    sig, mar = sheet["sigma"], sheet["margin"]
+    return (sheet["mask"] & (np.nan_to_num(sig) >= sigma_gate)
+            & (np.nan_to_num(mar) >= margin_gate))
+
+
 def plan_pwl(lat, sheet, sigma_gate=SIGMA_GATE, margin_gate=MARGIN_GATE,
              w_clearance=W_CLEARANCE, w_travel=W_TRAVEL, eps_idx=RDP_EPS,
-             jump=planner.JUMP_THRESH, exact=True):
+             jump=planner.JUMP_THRESH, exact=True, objective=OBJECTIVE,
+             j_start=None, j_end=None, travel_mode=TRAVEL_MODE):
     """Plan one stroke's redundancy as a piecewise-linear q7(s) on `sheet`.
 
     `sheet` is a dict from `sheet_fields` (e.g. `dominant_sheet(sheets)`).
     Steps: gate the sheet to a free region -> chamfer clearance map -> dense
-    monotone DP (maximin sigma, clearance tie-break) -> RDP simplification with
-    a per-segment corridor check (`Corridor`: grid proxy, then — with
-    `exact=True` — a case-consistent IK chase along the candidate segment, so
-    the knots that come out are certified against the real kinematics and not
-    merely against the 48-sample q7 grid).
+    monotone DP -> RDP simplification with a per-segment corridor check
+    (`Corridor`: grid proxy, then — with `exact=True` — a case-consistent IK
+    chase along the candidate segment, so the knots that come out are certified
+    against the real kinematics and not merely against the 48-sample q7 grid).
+
+    OBJECTIVE.  "min_travel" (the default) minimises total joint travel over
+    the gated free region, with clearance as an exact tie-break; the gates are
+    hard and are not in the cost.  "maximin_sigma" is the older bottleneck
+    objective, kept as the automatic fallback for strokes the shortest path
+    cannot get certified (see `_dense_dp`).  Both walk the SAME free region, so
+    switching between them can never trade a gate for anything.
+
+    `j_start` / `j_end` pin the entry / exit q7 index for the fiber-menu path
+    in `menu.py`; left None the DP chooses both ends itself, which is the
+    behaviour every existing caller gets.
 
     Returns dict:
         ok          the PWL spans the whole stroke
         sheet       sheet id it was planned on
+        objective   which DP produced it
         knots       (K, 2) [s in 0..1, q7 in rad] — THE PLAN
         knot_idx    (K, 2) the same knots as (i, j) lattice indices
         dense       (Ns, 2) the DP path in the same units, before simplification
         sigma, margin, clearance   (Ns,) fields sampled along the PWL
         dense_sigma, dense_margin  (Ns,) fields along the dense path
         bottleneck  min sigma along the dense path (lattice values)
+        dp_travel   total lattice joint travel of the dense path (rad)
         n_dense, n_knots, cut_index, cut_s
         exact_calls, exact_samples   work done by the exact corridor stage
     """
+    if objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {objective!r}, want one of {OBJECTIVES}")
     Ns, Nq = sheet["mask"].shape
     q7s = lat["q7s"]
     sig, mar = sheet["sigma"], sheet["margin"]
-    free = (sheet["mask"] & (np.nan_to_num(sig) >= sigma_gate)
-            & (np.nan_to_num(mar) >= margin_gate))
+    free = band_free(sheet, sigma_gate, margin_gate)
     clear = clearance_map(free)
     edges = _edge_ok(sheet, jump) & free[:-1][:, :, None]
-    js, last = _dense_dp(free, sig, clear, edges, w_clearance, w_travel)
+    if objective == "min_travel":
+        js, last, dp_cost = _dense_dp_travel(free, clear, edges,
+                                             _edge_travel(sheet, travel_mode),
+                                             w_clearance, j_start, j_end)
+    else:
+        js, last = _dense_dp(free, sig, clear, edges, w_clearance, w_travel,
+                             j_start, j_end)
+        dp_cost = np.inf
+    # `dp_travel` is always the CHORD travel of the chosen lattice path, so the
+    # two objectives are described in the same units whatever they optimise.
+    dp_travel = (float(_edge_travel(sheet, "chord")[
+        np.arange(Ns - 1), js[:-1], js[1:] - js[:-1] + 1].sum())
+        if js is not None else np.inf)
     out = dict(sheet=int(sheet["id"]), ok=js is not None, free=free,
+               objective=objective, dp_travel=float(dp_travel),
+               dp_cost=float(dp_cost), travel_mode=travel_mode,
                clearance_map=clear, cut_index=int(last),
                cut_s=float(last / (Ns - 1)))
     if js is None:

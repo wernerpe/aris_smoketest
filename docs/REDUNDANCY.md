@@ -180,6 +180,112 @@ The 2-knot rim arc is the point of the exercise: the redundancy decision for a
 is small enough to log, diff, hand to a controller, or re-time — and it is
 *more* controllable than the 131-step schedule it replaces.
 
+## The band objective changed: gated min-travel, not maximin (2026-08-20)
+
+**The gates were always hard, and the objective was doing their job twice.**
+`plan_pwl` carves a free region out of the sheet with σ ≥ 0.10 and margin ≥ 0.15
+*before* any search runs, so every cell the DP may stand on has already cleared
+both gates. Maximising the bottleneck σ over that region buys controllability
+the gate has already bought — and pays for it in q7 wander, because the maximin
+path will climb the band to sit on a ridge and climb back down, and every radian
+of that climb is a null-space self-motion the pen does not need. The default is
+now **minimise total joint travel subject to the same two gates**, with
+clearance as an exact tie-break; `maximin_sigma` stays as the automatic
+fallback (below).
+
+**Exactly lexicographic, not nearly.** Travel is quantised to 1e-6 rad and
+accumulated as an integer in a float64, so `A == A.min()` is a true equality
+test and the clearance tie-break is applied to exactly the set of optimal
+paths. Both terms are additive, so — unlike the maximin DP, whose tie-break is
+only greedy-lexicographic — this one is exact in *both* components.
+
+**An edge is charged for the ramp, not the staircase.** The obvious edge cost is
+the chord ‖Q[i+1, j+dj] − Q[i, j]‖₁, and it is wrong here: a dense path crossing
+the band at half an index per step must alternate dj = 0, 1, 0, 1, and RDP then
+straightens that staircase into a ramp the arm actually executes. Charging the
+staircase optimises a quantity the simplification is about to discard. The
+shipped cost splits the edge into the two motions it is made of — the
+null-space step sideways plus following the stroke at the column it lands in —
+so a staircase and its ramp cost the same, and the DP starts caring about the
+net excursion and about where in the band dragging the pen forward is cheap.
+Measured over the 34 CSAIL stroke/arm pairs both objectives certify: chord
+scored +2.03 % of dense travel against separable's +1.49 %, and 99 knots
+against 90.
+
+**What it bought, over those 34 paired plans:**
+
+| | maximin σ | gated min-travel | change |
+|---|---|---|---|
+| q7 span inside strokes | 10.41 rad | **3.27 rad** | **−68.6 %** (27 better, 0 worse) |
+| lattice path travel | 223.6 rad | **151.6 rad** | −32.2 % |
+| PWL knots | 104 | **90** | −13.5 % |
+| certified dense travel | 133.6 rad | 135.6 rad | **+1.5 %** |
+| worst σ over the corpus | 0.2349 | 0.2343 | gate 0.10, never touched |
+| worst margin | 0.1645 | 0.1509 | gate 0.15, never touched |
+
+**It is not the default, and the reason is the clock.** Everything above is
+true of the BAND. What the band does not know is that `writing.draw_duration`
+stretches every stroke until no joint exceeds `qd_frac` = 0.30 of its velocity
+limit, and that drawing — not transit — is the dominant term in the makespan
+floor. A shorter path through the band is a more *constrained* path, it has a
+larger |dq/ds|, and the ink slows down to match. Measured on the shipped CSAIL
+run, at identical coverage, identical segments and identical metres:
+
+| | maximin σ | gated min-travel |
+|---|---|---|
+| grey, arm 31: 9 segments, 2.002 m | draw **20.22 s** | draw **30.91 s** |
+| grey, arm 71: 6 segments, 1.741 m | draw 20.73 s | draw 24.83 s |
+| orange, arm 97: 13 segments, 3.79 m | draw 49.63 s | draw 78.07 s |
+| worst per-sample ‖Δq‖∞ (grey, arm 31) | 0.082 | 0.105 |
+| two-pass floor (busiest arm, both phases) | **84.3 s** | 93.2 s |
+
+At the planner's own pacing the two are indistinguishable (+0.01 % over 34
+paired plans), which is why this was not obvious: `pacing.pace` runs at
+`SAFETY`, the timeline runs at 30 % of the joint limits, and only the second
+one binds. So `pwl.OBJECTIVE` ships as `maximin_sigma`. The gated shortest path
+is implemented, tested (`tests/test_menu.py`) and one keyword away
+(`objective="min_travel"`), and it is the right objective the day the draw
+speed stops being joint-limited — but the hierarchy is makespan first, and
+against that it loses.
+
+**And the row below is the honest one: dense joint travel did not fall
+either, and it was never going to.** Regressing the certified travel of those
+34 plans on what produces it gives
+
+    travel ≈ 13.94 · L − 0.67 · q7span     (corr(travel, L) = 0.954)
+
+— joint travel is about 95 % *arc length*, and the q7 coefficient is NEGATIVE.
+Moving q7 does not merely cost travel, it can buy it back, because a null-space
+motion that counter-rotates against the stroke-following motion makes ‖Δq‖
+smaller, not larger. On one 0.173 m segment, pinning q7 flat took the travel
+from 1.219 to 2.257 rad — nearly double. So "minimise joint travel" and
+"stop the wrist wandering" are *different, partly opposed* objectives on this
+robot, and the one worth having is the second: q7 wander is what a person
+watching the rig sees, what decides which fiber a stroke ends on, and therefore
+what the sequencer downstream has to pay for. The 1.5 % is reported rather than
+tuned away.
+
+**The fallback is why this cannot cost coverage.** A gated shortest path is
+entitled to run along the gate boundary — every cell clears σ ≥ 0.10, but only
+just — while the 5 mm chase that has the last word samples *between* the
+lattice's 10 mm nodes, where "only just" can become "not quite". When the
+min-travel plan certifies on no sheet, `stroke_api` re-runs the identical sheet
+pass under `maximin_sigma`, which buys margin by construction, before conceding
+a split. A split is therefore never the new objective's doing: it is a
+statement about the band. Coverage on the shipped logo is unmoved at
+**99.2139 %**.
+
+**One existing test had its premise outgrown, and was re-tuned rather than
+relaxed.** `test_splitting_beats_not_splitting_on_a_constructed_instance` built
+three 0.40 m strokes in the band arms 31 and 71 share, and asserted cutting
+beats not cutting. Under the new objective the whole-segment allocation
+balances that instance to 13.85 s against 13.74 s — better than the 14.58 s the
+old objective needed a *cut* to reach — so the splitter examined 20 candidates
+and correctly refused all of them. The strokes are now 0.70 m, where the
+whole-segment deal is 38.7 s against 26.1 s and cutting is needed again; every
+assertion is unchanged and both objectives pass it, so what it pins is the
+splitter and not the band objective.
+
 ## Open questions
 
 - Cross-arm coordination: two arms in the 10% overlap band must also resolve
