@@ -22,6 +22,9 @@ randomness use `np.random.default_rng(seed)` with the seed pinned in
 The fleet is the rig as it stands — all six arms, `2:300 31:200 71:200 97:200`
 mm pens, 80 mm margin (50 safety + 30 calibration), freeze-in-place idle policy,
 0.12 m/s draw and 0.80 m/s transit — because a pen is a fixture and not a knob.
+The joint-velocity cap and the fiber menus are NOT fixtures any more: they are
+the EXECUTION PROFILE, chosen per drawing by conducting the candidates
+(`csail_schedule.select_profile`, and the last section of this document).
 `scene_check` has a veto on every row below; a drawing it refuses is printed as
 REFUSED rather than quietly dropped.
 
@@ -121,6 +124,11 @@ below and `docs/CONCURRENCY.md`, which now carries all three measurements side
 by side.)
 
 ## Results (2026-08-20, allocation v2 (splitting), 31706 s for all five)
+
+*This table is the corpus at ONE pinned execution profile, `qd0.30` — what
+`bench.py --pin-profile qd0.30` reproduces. The shipped corpus now selects a
+profile per drawing and is the last section of this document; every row there
+is faster, at identical coverage, and this one is what it is measured against.*
 
 | drawing | regime | ink m | cov % | makespan | floor | eff | splits | solo % | wall |
 |---|---|---|---|---|---|---|---|---|---|
@@ -402,3 +410,102 @@ one back for a FINISHING POSE).
 
 `--qd-frac 0.6` per run still does what it always did, and `README.md`'s demo
 recipe still passes it.
+
+## The profile is chosen per drawing, and the corpus is what decides it (2026-08-21)
+
+`csail_schedule.select_profile`, `bench.py` (selection is the default; pin one
+cell with `--pin-profile qd0.30`). The section above ends by saying that
+`qd_frac` 0.60 was adopted as a default, re-certified, and put back because ONE
+row of this corpus refused it. That was the right call about a DEFAULT and the
+wrong question: a cap that is worth −18.9 % on one drawing and unconductable on
+another is not a constant, it is a **property of the programme**. So the
+pipeline stops guessing it. Four EXECUTION PROFILES — `qd_frac` 0.30 or 0.60,
+crossed with the fiber menus off or on (`--cluster --band-objective
+min_travel`, the pair) — are ALLOCATED for every drawing, CONDUCTED
+cheapest-floor-first, and the fastest one `scene_check` certifies is what
+ships. All four outcomes are recorded in the schedule JSON.
+
+**What it costs is less than one corpus.** `nominal_floor` is an exact lower
+bound on any schedule of an allocation, so a cell whose floor is already the
+incumbent's certified makespan or worse is never conducted — a proof, not a
+heuristic. **8 of the 20 cells were conducted; 12 were pruned and 1 refused.**
+The whole selected corpus took 23176 s against 31706 s for the single-profile
+one, and three of the five drawings decided on a single conduct.
+
+| drawing | profile | ink m | cov % | makespan | was (qd0.30) | change | floor | eff | splits | solo % | clearance | cells conducted |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| hatch | **qd0.60** | 30.1 | 73.55 | **241.0 s** | 355.1 s | **−32.1 %** | 241.0 s | 1.00 | 7 | 77 | 82.6 mm | 1 of 4 |
+| scatter | **qd0.60+cluster** | 8.6 | 84.72 | **26.6 s** | 41.4 s | **−35.7 %** | 26.6 s | 1.00 | 0 | 21 | 86.2 mm | 1 of 4 |
+| starburst | **qd0.60+cluster** | 20.2 | 87.70 | **99.9 s** | 162.3 s | **−38.5 %** | 76.5 s | 0.77 | 0 | 33 | 84.8 mm | 2 of 4 |
+| spiral | **qd0.60+cluster** | 14.4 | 85.57 | **62.8 s** | 89.4 s | **−29.7 %** | 40.5 s | 0.65 | 9 | 32 | 84.2 mm | 3 of 4 |
+| duotone | **qd0.60** | 29.8 | 82.35 | **140.5 s** | 268.5 s | **−47.7 %** | 139.2 s | 0.99 | 6 | 15 | 81.7 mm | 1 of 4 |
+
+**Coverage is identical to the digit in all five rows** — 73.55, 84.72, 87.70,
+85.57, 82.35 % — against the table above, which is the invariant this corpus
+exists to protect stated as a measurement. Every shipped row is `scene_check`
+PASS with more clearance than the 80 mm margin.
+
+**And no single profile would have done this.** Two drawings ship the menus ON
+and two ship them OFF, at the same cap:
+
+| profile | ships on |
+|---|---|
+| qd0.60 (menus off) | hatch, duotone — the two DENSE drawings |
+| qd0.60+cluster | scatter, starburst, spiral — and the CSAIL logo |
+| qd0.30, qd0.30+cluster | nothing; every cell pruned or beaten |
+
+That split is not noise, and it is the first thing this corpus has said about
+the menus that the logo could not: the fiber menus pay where the pen-up time is
+the problem (sparse strokes, radial rays, one long spiral) and cost where one
+arm is saturated with ink (hatch's 30 m in one territory, duotone's bands).
+`allocate.arm_load` prices a candidate bag with the cluster model now
+(`docs/CONCURRENCY.md`), so this is no longer the accounting error it was — it
+is the real shape of the trade.
+
+### The spiral: the refusal reproduces, and it was never the cap
+
+The section above records `qd_frac` 0.60 as REFUSED on the spiral, after the
+whole ladder. **It still is, and the selector walked straight into it** — the
+cell is conducted, refused, recorded with its reason, and the search carries on
+down the floor order instead of stopping or shipping it:
+
+| cell | floor | outcome |
+|---|---|---|
+| qd0.60+cluster | 38.5 s | certified **62.833 s** — **shipped**, 84.2 mm |
+| qd0.60 | 40.8 s | **REFUSED** — `phase 1: grey could not be conducted` |
+| qd0.30 | 56.7 s | certified **89.396 s**, 82.1 mm |
+| qd0.30+cluster | 69.0 s | not conducted — floor cannot beat 62.833 s |
+
+Three things are worth reading off that table. **The control is clean:** the
+0.30 cell gives back the committed row to the float — 89.396 s against
+89.395833 s, 82.1 mm against 82.1 mm — so the refusal above it is about the
+profile and not about the code having moved. **The fallback works:** a refused
+cell costs the run its conduct and nothing else. And **the diagnosis changes.**
+It is 0.60 with the menus OFF that cannot be conducted; 0.60 with the menus ON
+conducts in 62.8 s and certifies at 84.2 mm. The cap was never unsafe — the
+`rebalance` prices in seconds, halving the transit term moves which assignment
+is cheapest, and it is THAT allocation the conductor cannot run. Give the
+sequencer the fiber menus and it reaches a different one, which it can. The
+open issue this corpus named (`coordination.hard_blocks` carries a refused
+pen-up back to the allocator but not a refused FINISHING POSE) is unchanged and
+still the right thing to build; what has changed is that a drawing no longer
+has to be slow because one cell of four is unconductable.
+
+### What is pinned, and where the determinism still stops
+
+Selection is deterministic: the allocator and sequencer are functions of their
+input, the conduct order is by floor with ties broken on the fixed `PROFILES`
+order, and the winning conduct is the one that ships — never re-run. The
+caveats are the ones this document already carries, and one new one:
+
+* `sequence.TIME_BUDGET` is wall clock above 16 segments per arm, so `hatch`
+  and `duotone` can still move between machines and between concurrencies —
+  and these five rows were run in PARALLEL on one 32-core machine, which is a
+  different concurrency from the reference. Their allocations, and therefore
+  their floors and their selected profiles, are reproducible only at the
+  concurrency they were taken at. The three exact rows carry the signal.
+* A pruned cell is proved unable to win, not measured. `--no-profile-prune`
+  conducts all four; on this corpus it would cost roughly three times the
+  clock and cannot change an answer.
+* `profile_floor` assumes each pass starts from the ready pose, which is true
+  under the shipped idle policy and not under `--freeze-all-phases`.

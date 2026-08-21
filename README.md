@@ -392,13 +392,25 @@ is the two-pass run, and every flag it needs is on one line:
 python3 scripts/csail_schedule.py --arms all --two-pass \
     --pens 2:300,31:200,71:200,97:200 --max-probes 5 --min-coverage 0.99 \
     --target-width 1.2969246423461636 --offset 0.1 0.05 \
-    --tag _full --fps 12 --substeps 4 --final out/csail_full_final.png
+    --tag _full --fps 12 --substeps 4 --final out/csail_full_final.png \
+    --select-profile --program
 python3 scripts/solo_time.py --arms all --two-pass \
     --pens 2:300,31:200,71:200,97:200 --max-probes 5 \
     --target-width 1.2969246423461636 --offset 0.1 0.05
 /home/franka/git/franka_manipulation_station/.venv/bin/python \
     scripts/csail_drawing_demo.py
 ```
+
+`--select-profile` is the last two flags' worth of the argument that used to be
+made by hand: it allocates all four EXECUTION PROFILES — `qd_frac` 0.30 or
+0.60, fiber menus off or on — conducts them cheapest-floor-first, and ships the
+fastest one `scene_check` certifies, recording all four outcomes in the
+schedule JSON.  On this logo it ships **qd0.60+cluster at 77.792 s** (82.4 mm
+clearance, 99.2139 % coverage) after conducting two cells and proving the other
+two could not win; see `docs/BENCH.md`.  `--program` writes
+`out/csail_program_full.json` from the allocation that shipped, so the
+programme and the schedule cannot describe different runs.  Drop both flags to
+conduct exactly the `--qd-frac` / `--cluster` you pass.
 
 `--idle-policy home` on the first of those puts conductor v1's go-home
 behaviour back for comparison (`docs/IDLE.md`); `--no-jit` and `--no-retreat`
@@ -519,6 +531,16 @@ python3 scripts/csail_schedule.py --arms all --two-pass \
 ships the split allocation without asking the conductor, which is how the 134 s
 run above was measured. `docs/SOLO_TIME.md` has the post mortem; `docs/BENCH.md`
 has the corpus.
+
+**That 104.02 s is one EXECUTION PROFILE of four, and it is no longer the one
+that ships (2026-08-20).** The same A/B machinery now chooses `qd_frac` and the
+fiber menus per programme instead of per repository, and on this logo it ships
+**77.792 s** — 82.4 mm of clearance, the same 99.2139 % coverage, both phases
+`scene_check` PASS. The shipped `_full` artefacts are that run. The two 0.30
+cells were never conducted: their floors (83.789 s and 92.716 s) are already
+worse than the certified 77.792 s, which is a proof and not a guess.
+`docs/BENCH.md` has the grid, and the corpus is why it is a choice — the same
+0.60 cap that wins here is REFUSED outright on `bench`'s spiral.
 
 ## The bench — five drawings that are not the logo (`scripts/bench.py`)
 

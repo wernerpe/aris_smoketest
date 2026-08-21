@@ -28,9 +28,17 @@ The order of operations is the point:
      the pose the fleet holds while a human swaps the pens.  The payload is not
      written unless both pass.
 
-Writes out/csail_schedule<tag>.npz and (with --final) the end-state still.
+With `--select-profile`, steps 1-4 are run for each of FOUR execution profiles
+— `qd_frac` 0.30 or 0.60, fiber menus off or on — and the fastest one step 4
+certifies is what ships (section 5).  The other three are recorded in the
+schedule JSON with their makespan, or with the reason they were refused, or
+with the floor that proves they could not have won.
+
+Writes out/csail_schedule<tag>.npz, (with --program) the shipped allocation as
+out/csail_program<tag>.json, and (with --final) the end-state still.
 """
 import argparse
+import copy
 import json
 import sys
 import time
@@ -41,10 +49,11 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, coordination, idle, scene_check, sequence,  # noqa: E402
-                         trace, writing)
+from aris_sixarm import (allocate, coordination, idle, pwl, scene_check,  # noqa: E402
+                         sequence, trace, writing)
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
-from csail_allocate import add_args, run_allocation, final_png      # noqa: E402
+from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
+                            program_json, totals)
 
 INK = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
        "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
@@ -248,9 +257,317 @@ def nominal_floor(a, res, pens, q_start=None, policy=idle.POLICY_FREEZE):
     return best
 
 
-def build(a):
+# ---------------------------------------------------------------------------
+# 5.  THE EXECUTION PROFILE IS A PROPERTY OF THE PROGRAMME, NOT OF THE REPO
+#
+# Two knobs move the makespan more than anything else the pipeline chooses, and
+# neither has one right value for every drawing:
+#
+#   `qd_frac`   the fraction of the FR3 joint-velocity limit a move may use.
+#               `writing.draw_duration` stretches the ink until no joint exceeds
+#               it, so it is the cap that decides whether a segment's clock is
+#               the material's `length / draw_speed` or the joint limit's
+#               (`docs/BENCH.md`, "Speed-dependent verdict").  0.60 is worth
+#               −18.9 % of the CSAIL demo makespan and is what `README.md`
+#               reproduces the animation with; 0.30 is the module default.
+#   `cluster`   the entry/exit fiber menus and the (segment, direction,
+#               VARIANT) DP, with the min-travel band they are variants OF —
+#               `--cluster --band-objective min_travel`, the pair, because the
+#               menus are variants of the band the objective chooses and
+#               measuring one without the other measures neither
+#               (`scripts/speed_sweep.py`, `docs/CONCURRENCY.md`).
+#
+# The evidence that they belong here rather than in a default: at 0.60 with the
+# cluster features the CSAIL logo conducts in 77.792 s against 104.021 s on the
+# shipped defaults, `scene_check` PASS at 82.4 mm — and the SAME 0.60 is
+# REFUSED outright on `bench`'s spiral, after the whole re-sequence ladder,
+# conductor v1's go-home and the unsplit allocation.  One number cannot be both,
+# so the choice is made per programme, by conducting the candidates and keeping
+# the fastest one that certifies.  A profile that cannot be conducted, or whose
+# timeline `scene_check` refuses, is not a slower answer — it is not an answer,
+# and it is recorded as REFUSED with the reason rather than quietly dropped.
+#
+# WHAT MAKES IT AFFORDABLE IS `nominal_floor`.  Conducting a cell is the
+# expensive half of this pipeline (minutes to an hour); allocating one is
+# seconds.  The busiest arm's own frozen programme is an exact lower bound on
+# what any schedule of that allocation can achieve, so a candidate whose FLOOR
+# is already the incumbent's certified MAKESPAN or worse cannot win and is
+# never conducted.  Ordering the candidates by that floor is what makes the
+# pruning bite, and it bites hard: over `bench`'s five drawings and the logo,
+# 8 of the 24 cells were conducted and three of the six drawings decided on a
+# single conduct (`docs/BENCH.md`).
+PROFILES = (dict(qd_frac=0.30, cluster=False), dict(qd_frac=0.30, cluster=True),
+            dict(qd_frac=0.60, cluster=False), dict(qd_frac=0.60, cluster=True))
+
+
+class NoProfile(SystemExit):
+    """No candidate certified.  Carries the grid, because that IS the result.
+
+    A `SystemExit` so that every caller which already stops on a refused phase
+    stops here too, and an object rather than a string so that a caller which
+    reports rather than stops — `scripts/bench.py` prints a REFUSED row — can
+    still say WHICH four things were tried and why each one failed.
+    """
+
+    def __init__(self, msg, grid):
+        super().__init__(msg)
+        self.grid = grid
+
+
+def profile_name(p):
+    """'qd0.60+cluster'. -> str.  The key every table and JSON record uses."""
+    return f"qd{float(p['qd_frac']):.2f}" + ("+cluster" if p["cluster"] else "")
+
+
+def profile_args(a, p):
+    """`a` with one profile's knobs set. -> a shallow copy of `a`.
+
+    `--cluster` carries `--band-objective min_travel` with it and the profile is
+    the PAIR: the fiber menus are variants of the band the objective chooses, so
+    a cluster run under the bottleneck objective is neither of the two things
+    this grid is comparing.  With the menus off the caller's own objective is
+    left alone, because then it is the only band there is.
+    """
+    b = copy.copy(a)
+    b.qd_frac = float(p["qd_frac"])
+    b.cluster = bool(p["cluster"])
+    if p["cluster"]:
+        b.band_objective = "min_travel"
+    else:
+        b.band_objective = getattr(a, "band_objective", pwl.OBJECTIVE)
+    return b
+
+
+def profile_pause_s(a, n_phases):
+    """The pen-swap seconds a makespan of `n_phases` phases carries. -> float."""
+    if n_phases <= 1:
+        return 0.0
+    fps = float(getattr(a, "fps", 0.0) or 0.0)
+    pause = float(getattr(a, "pause", 0.0))
+    # the payload lays the pause down in whole animation frames, so quote the
+    # number the schedule will actually have rather than the one asked for
+    return round(pause * fps) / fps if fps else pause
+
+
+def profile_floor(a, phases, pens, alt=None):
+    """A lower bound on the conducted makespan of an allocation. -> seconds.
+
+    THE BOUND HAS TO BE A BOUND, or the pruning it drives is a guess.  Three
+    things are deliberately left out, and each of them only ever ADDS seconds to
+    the number this is bounding: the conductor's pauses (it never shortens a
+    path, it only waits), the idle policy's taxi and retreat, and the trip home
+    that every pass but the last one pays for at its end — this prices every
+    phase as though it froze in place, which is the cheaper park.  What it does
+    assume is that a pass starts from the ready pose, which is true under the
+    shipped policy (an intermediate pass goes home, so the next one starts
+    there) and not under `--freeze-all-phases`, where this is an estimate and
+    the pruning it drives should be turned off.
+
+    `alt[k]` is the unsplit allocation `build_phases` may ship instead, so the
+    bound has to be the cheaper of the two floors — the conductor is allowed to
+    prefer either one and the bound must hold for whichever it ships.
+    """
+    tot = profile_pause_s(a, len(phases))
+    for k, ph in enumerate(phases):
+        f = nominal_floor(a, ph, pens, None, idle.POLICY_FREEZE)
+        other = (alt or {}).get(k) if isinstance(alt, dict) else None
+        if other is not None:
+            f = min(f, nominal_floor(a, other, pens, None, idle.POLICY_FREEZE))
+        tot += float(f)
+    return float(tot)
+
+
+def profile_makespan(a, built):
+    """What the shipped summary will call `makespan_s` for this conduct."""
+    return float(sum(B["sch"]["duration"] for B in built)
+                 + profile_pause_s(a, len(built)))
+
+
+def select_profile(a, alloc, dt, conduct=None, floor=None, profiles=PROFILES,
+                   prune=True, verbose=True):
+    """Conduct the execution profiles and ship the fastest CERTIFIED one.
+
+        alloc(b, p) -> (phases, alt, pens)     allocate `p` under the args `b`
+        conduct(b, phases, dt, pens, alt=alt) -> built        (`build_phases`)
+
+    Returns `dict(chosen=<grid row>, grid=[<grid row> x len(profiles)])`, in
+    which the chosen row carries `built`, `phases`, `alt` and `pens` — the
+    conduct that WON is the conduct that ships, never re-run, so what the
+    payload is written from is the timeline `scene_check` signed off on here.
+
+    Deterministic: the allocator and the sequencer are functions of their input
+    (up to `sequence.TIME_BUDGET` on arms above 16 segments, which is the same
+    caveat every row of `docs/BENCH.md` carries), the conduct order is by floor
+    with ties broken on the fixed `PROFILES` order, and nothing here reads a
+    clock except to report one.
+    """
+    conduct = build_phases if conduct is None else conduct
+    floor = profile_floor if floor is None else floor
+    grid = []
+    for i, p in enumerate(profiles):
+        b = profile_args(a, p)
+        if verbose:
+            print(f"\n{'=' * 74}\n=== allocating profile {profile_name(p)} "
+                  f"({i + 1} of {len(profiles)})\n{'=' * 74}")
+        row = dict(profile=profile_name(p), qd_frac=float(p["qd_frac"]),
+                   cluster=bool(p["cluster"]),
+                   band_objective=getattr(b, "band_objective", None),
+                   status="allocated", floor_s=None, makespan_s=None,
+                   reason=None, alloc_s=0.0, conduct_s=0.0, args=b)
+        t0 = time.time()
+        try:
+            phases, alt, pens = alloc(b, p)
+            row.update(phases=phases, alt=alt, pens=pens,
+                       floor_s=float(floor(b, phases, pens, alt)))
+        except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+            # AN ALLOCATION CAN REFUSE TOO, and a profile that cannot be
+            # allocated (or that draws less of the picture than this run was
+            # asked for) is refused for the same reason a refused conduct is:
+            # it is not a slower answer, it is not an answer.
+            row.update(status="refused", reason=f"{type(exc).__name__}: {exc}")
+        row["alloc_s"] = time.time() - t0
+        grid.append(row)
+        if verbose:
+            print(f"\n--- profile {row['profile']} allocated in "
+                  f"{row['alloc_s']:.1f} s"
+                  + (f", floor {row['floor_s']:.3f} s"
+                     if row["floor_s"] is not None else f": {row['reason']}"))
+    ready = [i for i, r in enumerate(grid) if r["status"] == "allocated"]
+    order = sorted(ready, key=lambda i: (grid[i]["floor_s"], i))
+    if verbose:
+        print(f"\n{'=' * 74}\n=== execution profiles: {len(order)} of "
+              f"{len(grid)} allocated, conducting in floor order\n{'=' * 74}")
+        for r in grid:
+            print(f"  {r['profile']:<16} "
+                  + (f"floor {r['floor_s']:8.3f} s   (allocated in "
+                     f"{r['alloc_s']:.1f} s)" if r["floor_s"] is not None
+                     else f"REFUSED at allocation: {r['reason']}"))
+
+    best = None
+    for rank, i in enumerate(order):
+        r = grid[i]
+        r["rank"] = rank
+        if prune and best is not None \
+                and r["floor_s"] >= best["makespan_s"] - 1e-9:
+            r.update(status="pruned",
+                     reason=f"floor {r['floor_s']:.3f} s cannot beat the "
+                            f"certified {best['makespan_s']:.3f} s of "
+                            f"{best['profile']}")
+            if verbose:
+                print(f"\n  {r['profile']}: {r['reason']} — not conducted")
+            continue
+        if verbose:
+            print(f"\n{'=' * 74}\n=== conducting profile {r['profile']} "
+                  f"(qd_frac {r['qd_frac']:.2f}, cluster "
+                  f"{'on' if r['cluster'] else 'off'}, band "
+                  f"{r['band_objective']}), floor {r['floor_s']:.3f} s"
+                  + ("" if best is None else
+                     f", to beat {best['makespan_s']:.3f} s")
+                  + f"\n{'=' * 74}")
+        t0 = time.time()
+        try:
+            built = conduct(r["args"], r["phases"], dt, r["pens"], alt=r["alt"])
+        except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+            r.update(status="refused", reason=f"{type(exc).__name__}: {exc}",
+                     conduct_s=time.time() - t0)
+            if verbose:
+                print(f"  !! profile {r['profile']} REFUSED: {r['reason']}")
+            continue
+        r["conduct_s"] = time.time() - t0
+        ok = all(bool(B["rep"]["ok"]) for B in built)
+        r.update(built=built, makespan_s=profile_makespan(r["args"], built),
+                 scene_check=ok,
+                 min_clearance=float(min(B["rep"]["min_clearance"] for B in built)))
+        if not ok:
+            # `build_phase` already has the veto and raises rather than
+            # returning a refused timeline; this is the belt to that braces, so
+            # that a future conductor which reports instead of raising cannot
+            # ship an uncertified profile through this door.
+            r.update(status="refused",
+                     reason="scene_check refused the conducted timeline")
+            continue
+        r["status"] = "certified"
+        if verbose:
+            print(f"  profile {r['profile']} CERTIFIED: "
+                  f"{r['makespan_s']:.3f} s against a floor of "
+                  f"{r['floor_s']:.3f} s, clearance "
+                  f"{1000 * r['min_clearance']:.1f} mm ({r['conduct_s']:.0f} s)")
+        if best is None or r["makespan_s"] < best["makespan_s"] - 1e-9:
+            best = r
+    if best is None:
+        raise NoProfile(
+            "no execution profile could be certified: "
+            + "; ".join(f"{r['profile']}: {r['reason']}" for r in grid), grid)
+    best["chosen"] = True
+    if verbose:
+        print(f"\n{'=' * 74}\n=== SHIPPING {best['profile']}: "
+              f"{best['makespan_s']:.3f} s\n" + "\n".join(profile_table(grid))
+              + f"\n{'=' * 74}")
+    return dict(chosen=best, grid=grid)
+
+
+def profile_table(grid):
+    """The four outcomes as markdown. -> list of lines."""
+    out = ["| profile | qd_frac | cluster | floor | makespan | outcome |",
+           "|---|---|---|---|---|---|"]
+    for r in grid:
+        ms = ("**%.3f s**" % r["makespan_s"]) if r.get("makespan_s") is not None \
+            else "—"
+        if r.get("chosen"):
+            ms += " (shipped)"
+        out.append(f"| {r['profile']} | {r['qd_frac']:.2f} | "
+                   f"{'on' if r['cluster'] else 'off'} | "
+                   + (f"{r['floor_s']:.3f} s" if r["floor_s"] is not None else "—")
+                   + f" | {ms} | "
+                   + {"certified": "certified",
+                      "pruned": "not conducted",
+                      "refused": "REFUSED"}.get(r["status"], r["status"])
+                   + (f" — {r['reason']}" if r["reason"] else "") + " |")
+    return out
+
+
+def profile_json(sel):
+    """The grid as it is recorded in the program and schedule JSON. -> dict.
+
+    Every cell of it, refusals and prunings included with their reason: the
+    record of what shipped is only worth anything beside the record of what did
+    not, and a run that quietly dropped the three losers would be
+    indistinguishable from one that never tried them.
+    """
+    def row(r):
+        return dict(
+            profile=r["profile"], qd_frac=r["qd_frac"], cluster=r["cluster"],
+            band_objective=r["band_objective"], status=r["status"],
+            chosen=bool(r.get("chosen", False)),
+            floor_rank=r.get("rank"),
+            floor_s=r["floor_s"], makespan_s=r.get("makespan_s"),
+            min_clearance=r.get("min_clearance"),
+            scene_check=r.get("scene_check"), reason=r["reason"],
+            alloc_s=round(float(r["alloc_s"]), 3),
+            conduct_s=round(float(r["conduct_s"]), 3))
+    ch = sel.get("chosen")
+    return dict(chosen=ch["profile"] if ch else None,
+                qd_frac=ch["qd_frac"] if ch else None,
+                cluster=ch["cluster"] if ch else None,
+                band_objective=ch["band_objective"] if ch else None,
+                makespan_s=ch["makespan_s"] if ch else None,
+                floor_s=ch["floor_s"] if ch else None,
+                n_conducted=int(sum(r["status"] in ("certified", "refused")
+                                    and r.get("rank") is not None
+                                    for r in sel["grid"])),
+                grid=[row(r) for r in sel["grid"]])
+
+
+def allocate_all(a, verbose=False):
+    """Trace, allocate, and build the unsplit fallback. -> (phases, alt, pens).
+
+    Everything `build_phases` needs and nothing it does not, so that ONE
+    allocation is what the single-profile path and every cell of the profile
+    grid are made of.  Refuses on coverage here rather than after conducting:
+    a run that draws less of the picture than it was asked for is not a faster
+    run, and finding that out costs one allocation instead of one conduct.
+    """
     phases, strokes, info = run_allocation(a, verbose=False)
-    from csail_allocate import totals
     for ph in phases:
         print(f"\n=== {ph['name']} ===")
         for line in allocate.report(ph, ph["strokes"]):
@@ -266,7 +583,6 @@ def build(a):
             f"in {T['n_dropped']} spans left empty (lower --min-coverage to "
             "render it anyway)")
 
-    dt = 1.0 / (a.fps * a.substeps)
     pens = {aid: next((p["pens"][aid] for p in phases if aid in p["pens"]), 0.110)
             for aid in FLEET}
     # THE UNSPLIT ALLOCATION IS THE FALLBACK THE CONDUCTOR JUDGES v2 AGAINST.
@@ -285,8 +601,33 @@ def build(a):
                 base[k].update(name=phases[k]["name"] + " [unsplit]",
                                ink=phases[k]["ink"], strokes=phases[k]["strokes"])
                 alt[k] = base[k]
-    built = build_phases(a, phases, dt, pens, alt=alt)
-    return phases, strokes, info, built, dt, pens
+    return phases, alt, pens, strokes, info
+
+
+def build(a):
+    """Allocate and conduct, at one profile or at the best of four. -> tuple."""
+    dt = 1.0 / (a.fps * a.substeps)
+    if not getattr(a, "select_profile", False):
+        phases, alt, pens, strokes, info = allocate_all(a)
+        built = build_phases(a, phases, dt, pens, alt=alt)
+        return phases, strokes, info, built, dt, pens, None
+
+    # THE PROFILE IS SELECTED ON THIS PROGRAMME, BY CONDUCTING IT.  The tracer
+    # and the placement are the same in every cell — only the two knobs move —
+    # so the strokes and the placement info are kept per cell only because the
+    # winner's are the ones that get written out beside its allocation.
+    seen = {}
+
+    def alloc(b, p):
+        phases, alt, pens, strokes, info = allocate_all(b)
+        seen[profile_name(p)] = (strokes, info)
+        return phases, alt, pens
+
+    sel = select_profile(a, alloc, dt,
+                         prune=not getattr(a, "no_profile_prune", False))
+    best = sel["chosen"]
+    strokes, info = seen[best["profile"]]
+    return (best["phases"], strokes, info, best["built"], dt, best["pens"], sel)
 
 
 def build_phases(a, phases, dt, pens, alt=None):
@@ -551,6 +892,23 @@ def main(argv=None):
                          "coverage (fraction of traced metres)")
     ap.add_argument("--require-full", action="store_true",
                     help="shorthand for --min-coverage 1.0")
+    # ---- the execution profile (section 5) ------------------------------
+    # OPT-IN, because --qd-frac and --cluster are arguments and a script that
+    # ignored the flags it was handed would be worse than one that does not
+    # search: `scripts/speed_sweep.py` conducts NAMED cells of exactly this
+    # grid and has to keep getting the cell it asked for.
+    ap.add_argument("--select-profile", action="store_true",
+                    help="conduct the four execution profiles (qd_frac 0.30 / "
+                         "0.60 x cluster off / on) and ship the fastest one "
+                         "scene_check certifies, recording all four outcomes.  "
+                         "Overrides --qd-frac, --cluster and --band-objective")
+    ap.add_argument("--no-profile-prune", action="store_true",
+                    help="conduct every profile even when its floor already "
+                         "says it cannot win (see csail_schedule.profile_floor)")
+    ap.add_argument("--program", action="store_true",
+                    help="also write out/csail_program<tag>.json from the "
+                         "allocation that SHIPPED, so the programme and the "
+                         "schedule cannot describe different runs")
     ap.add_argument("--final", default=None)
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv)
@@ -558,9 +916,23 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    phases, strokes, info, built, dt, pens = build(a)
+    phases, strokes, info, built, dt, pens, sel = build(a)
+    prof = profile_json(sel) if sel else None
+    if prof:
+        # the shipped profile's own knobs, so that everything written below
+        # reports the run that happened and not the run that was asked for
+        a.qd_frac, a.cluster = prof["qd_frac"], prof["cluster"]
+        a.band_objective = prof["band_objective"]
     path = out / f"csail_schedule{a.tag}.npz"
     nF, nInk, M_tot, n_pause = payload(built, dt, pens, a, path)
+    if a.program:
+        doc = program_json(phases, strokes, info,
+                           out / f"csail_program{a.tag}.json")
+        if prof:
+            doc["profile"] = prof
+            (out / f"csail_program{a.tag}.json").write_text(json.dumps(doc))
+        print(f"wrote {out}/csail_program{a.tag}.json "
+              f"({(out / f'csail_program{a.tag}.json').stat().st_size / 1e3:.0f} kB)")
     if a.final:
         final_png(phases, strokes, a.final)
     print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB): {nF} frames @ "
@@ -570,9 +942,11 @@ def main(argv=None):
           + (f"; {a.final}" if a.final else ""))
     print(f"SCHEDULE WALL CLOCK {time.time() - t0:.1f} s")
 
-    from csail_allocate import totals
     T = totals(phases)
     summary = dict(
+        profile=prof, qd_frac=float(a.qd_frac),
+        cluster=bool(getattr(a, "cluster", False)),
+        band_objective=getattr(a, "band_objective", None),
         frames=nF, fps=a.fps, duration=(nF - 1) / a.fps, ink_chunks=nInk,
         n_phases=len(phases), two_pass=len(phases) > 1,
         pen_swap_pause_s=(n_pause * dt if n_pause else 0.0),

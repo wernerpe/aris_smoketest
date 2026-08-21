@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The standing regression: the whole pipeline over five drawings that are not CSAIL.
 
-    python3 scripts/bench.py                    # all five, the shipped settings
+    python3 scripts/bench.py                    # all five, profile selected
     python3 scripts/bench.py --only spiral      # one of them
+    python3 scripts/bench.py --pin-profile qd0.30      # one named cell, no search
     python3 scripts/bench.py --no-split         # allocation v1, for comparison
 
 Every published number in this repository is one picture at one placement, and a
@@ -15,6 +16,12 @@ prints one row per drawing.
 
 The columns, and what each is worth:
 
+  profile     the EXECUTION PROFILE that shipped: the fastest of the four
+              (`qd_frac` 0.30 / 0.60) x (fiber menus off / on) combinations
+              that `scene_check` certified ON THIS DRAWING
+              (`csail_schedule.select_profile`).  It is a column rather than a
+              constant because the corpus is what made it one: the cap that
+              takes 26 % off `scatter` is REFUSED outright on `spiral`.
   coverage    certified metres over traced metres.  The constraint, not the
               objective: a run that goes faster by drawing less has not gone
               faster.  It is a property of the PLACEMENT as much as of the
@@ -55,9 +62,10 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, bench, coordination, idle,  # noqa: E402
+from aris_sixarm import (allocate, bench, coordination, idle, pwl,  # noqa: E402
                          sequence, writing)
 from aris_sixarm.fleet import FLEET, SHEET                            # noqa: E402
+import csail_schedule as schedule                                     # noqa: E402
 from csail_schedule import build_phases                               # noqa: E402
 
 # THE RIG, NOT A TUNING KNOB.  A pen is a fixture bolted to an arm: the same
@@ -87,10 +95,16 @@ class Args:
         self.fps, self.substeps, self.subcheck = 12.0, 4, 2
         self.draw_speed = writing.DRAW_SPEED_FLEET
         self.transit_speed = writing.TRANSIT_SPEED
-        # the module default, like everything else here: the corpus measures
-        # the pipeline as it ships, and `writing.QD_FRAC` is a fixture of the
-        # conductor (see the comment on it) rather than a per-drawing knob
+        # THE STARTING POINT OF THE PROFILE SEARCH, NOT THE SETTING.  These
+        # three were the shipped defaults and the corpus measured the pipeline
+        # at them; the pipeline now CHOOSES between four combinations of the
+        # first two per drawing (`csail_schedule.select_profile`), and what a
+        # row reports is the profile that won.  They stay here because
+        # `--pin-profile` still runs a single named cell, and because a cell is
+        # exactly these args with two attributes replaced.
         self.qd_frac = writing.QD_FRAC
+        self.cluster = allocate.CLUSTER
+        self.band_objective = pwl.OBJECTIVE
         self.safety, self.calib = coordination.SAFETY_M, coordination.CALIB_M
         self.idle_policy = idle.POLICY_FREEZE
         self.no_jit = self.no_retreat = False
@@ -128,13 +142,19 @@ def solo_share(built):
     return solo / steps, duo / steps, idlest / steps
 
 
-def run_one(name, a, split=True, verbose=False, seq_opts=None):
-    """One bench drawing, end to end. -> dict of metrics (or an `error`)."""
-    t0 = time.time()
-    strokes, meta = bench.make(name)
+def allocate_one(a, strokes, split=True, verbose=False, seq_opts=None):
+    """One bench drawing allocated under `a`. -> (phases, alt, pens).
+
+    The signature `csail_schedule.select_profile` asks its caller for, so that
+    a corpus row and the logo are chosen between the same four profiles by the
+    same code — the point of the corpus being that a knob tuned until the logo
+    is fast is indistinguishable, from inside the logo, from one that works.
+    """
     arms = allocate.active_arms("all")
     inks = [c for c in allocate.COLORS if any(s["color"] == c for s in strokes)]
-    kw = dict(opts=None, verbose=verbose, pens=PENS, active_override="all",
+    kw = dict(opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE)),
+              cluster=getattr(a, "cluster", allocate.CLUSTER),
+              verbose=verbose, pens=PENS, active_override="all",
               sequencer="opt", max_probes=5, probe_ref_m=PROBE_REF_M,
               balance=True, split=split,
               draw_speed=a.draw_speed,
@@ -150,6 +170,7 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
                                  qd_frac=a.qd_frac), **(seq_opts or {})),
               return_home=a.idle_policy == idle.POLICY_HOME,
               atlas_dir=str(ROOT / "out"))
+
     def alloc(cut, tag=""):
         out = []
         for ink in inks:
@@ -172,7 +193,56 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
         if cutk:
             base = alloc(False, " [unsplit]")
             alt = {k: base[k] for k in cutk}
-    t_alloc = time.time() - t0
+    return phases, alt, {aid: PENS.get(aid, 0.110) for aid in FLEET}
+
+
+def run_one(name, a, split=True, verbose=False, seq_opts=None,
+            profiles=schedule.PROFILES, prune=True):
+    """One bench drawing, end to end. -> dict of metrics (or an `error`).
+
+    `profiles=None` runs the single cell `a` names, which is what
+    `--pin-profile` is for; otherwise the four are allocated, the promising
+    ones conducted in floor order, and the fastest CERTIFIED one is the row.
+    """
+    t0 = time.time()
+    strokes, meta = bench.make(name)
+    dt = 1.0 / (a.fps * a.substeps)
+    grid, prof = None, None
+
+    def one(b, p=None):
+        return allocate_one(b, strokes, split=split, verbose=verbose,
+                            seq_opts=seq_opts)
+
+    if profiles is None:
+        phases, alt, pens = one(a)
+        t_alloc = time.time() - t0
+        sel = None
+    else:
+        try:
+            sel = schedule.select_profile(a, one, dt, profiles=profiles,
+                                          prune=prune, verbose=True)
+        except schedule.NoProfile as exc:
+            # EVERY CANDIDATE REFUSED IS STILL A RESULT, and the corpus prints
+            # it as one: the grid says which four were tried and why each
+            # failed, which is the difference between a drawing this pipeline
+            # cannot draw and a drawing nobody asked it to.
+            g = [r for r in exc.grid if r.get("phases")]
+            ph = g[0]["phases"] if g else []
+            traced = float(sum(p["total_len"] for p in ph))
+            dropped = float(sum(p["dropped_len"] for p in ph))
+            return dict(name=name, regime=meta["regime"],
+                        n_strokes=meta["n_strokes"], traced_m=traced,
+                        dropped_m=dropped,
+                        coverage=1.0 - dropped / max(traced, 1e-9),
+                        splits=0, profile=None,
+                        profile_grid=schedule.profile_json(
+                            dict(chosen=None, grid=exc.grid))["grid"],
+                        error=str(exc), wall_s=time.time() - t0), ph, None
+        best = sel["chosen"]
+        phases, alt, pens = best["phases"], best["alt"], best["pens"]
+        a = best["args"]
+        prof, grid = best["profile"], schedule.profile_json(sel)["grid"]
+        t_alloc = sum(r["alloc_s"] for r in sel["grid"])
 
     traced = float(sum(p["total_len"] for p in phases))
     dropped = float(sum(p["dropped_len"] for p in phases))
@@ -183,6 +253,10 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
                n_segments=int(sum(len(p["programs"][x]) for p in phases
                                   for x in p["arms"])),
                n_phases=len(phases), splits=splits, alloc_s=t_alloc,
+               profile=prof, profile_grid=grid,
+               qd_frac=float(a.qd_frac),
+               cluster=bool(getattr(a, "cluster", False)),
+               band_objective=getattr(a, "band_objective", None),
                # the null-space swing between consecutive strokes that the
                # floored transit beats hide (`sequence.reconfiguration`)
                reconfig_rad=float(sum(sequence.reconfiguration(p["programs"][x])
@@ -196,15 +270,20 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
                floor_alloc_s=float(sum(max((p.get("balance") or {})
                                            .get("loads_after", {0: 0.0}).values())
                                        for p in phases)))
-    dt = 1.0 / (a.fps * a.substeps)
-    pens = {aid: PENS.get(aid, 0.110) for aid in FLEET}
-    try:
-        built = build_phases(a, phases, dt, pens, alt=alt)
-    except (SystemExit, idle.Unconductable, RuntimeError) as exc:
-        row.update(error=f"{type(exc).__name__}: {exc}", wall_s=time.time() - t0)
-        return row, phases, None
-    pause = a.pause if len(built) > 1 else 0.0
-    makespan = float(sum(B["sch"]["duration"] for B in built) + pause)
+    if sel is not None:
+        # THE CONDUCT THAT WON IS THE CONDUCT THAT SHIPS.  Re-running it here
+        # would be a second measurement of the same thing, and the row would
+        # have no way of saying which of the two the grid recorded.
+        built = sel["chosen"]["built"]
+    else:
+        try:
+            built = build_phases(a, phases, dt, pens, alt=alt)
+        except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+            row.update(error=f"{type(exc).__name__}: {exc}",
+                       wall_s=time.time() - t0)
+            return row, phases, None
+    pause = schedule.profile_pause_s(a, len(built))
+    makespan = schedule.profile_makespan(a, built)
     floor = float(sum(max(B["sch"]["nominal"].values()) for B in built) + pause)
     solo, duo, none = solo_share(built)
     # SPLITS PROPOSED IS NOT SPLITS KEPT.  `build_phases` conducts the unsplit
@@ -236,8 +315,8 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
     return row, phases, built
 
 
-HEAD = ("drawing", "regime", "ink m", "cov %", "makespan", "floor", "eff",
-        "splits", "solo %", "wall")
+HEAD = ("drawing", "regime", "profile", "ink m", "cov %", "makespan", "floor",
+        "eff", "splits", "solo %", "wall")
 
 
 def _reconcile(rows):
@@ -263,8 +342,10 @@ def table(rows):
     out = ["| " + " | ".join(HEAD) + " |",
            "|" + "|".join("---" for _ in HEAD) + "|"]
     for r in rows:
+        prof = r.get("profile") or "—"
         if r.get("error"):
-            out.append(f"| {r['name']} | {r['regime']} | {r['traced_m']:.1f} | "
+            out.append(f"| {r['name']} | {r['regime']} | {prof} | "
+                       f"{r['traced_m']:.1f} | "
                        f"{100 * r['coverage']:.2f} | REFUSED | — | — | "
                        f"{r['splits']} | — | {r['wall_s']:.0f} s |")
             continue
@@ -273,10 +354,42 @@ def table(rows):
         if rev:
             sp += f" (+{rev} reverted)"
         out.append(
-            f"| {r['name']} | {r['regime']} | {r['traced_m']:.1f} | "
+            f"| {r['name']} | {r['regime']} | **{prof}** | {r['traced_m']:.1f} | "
             f"{100 * r['coverage']:.2f} | **{r['makespan_s']:.1f} s** | "
             f"{r['floor_s']:.1f} s | {r['efficiency']:.2f} | {sp} | "
             f"{100 * r['solo_share']:.0f} | {r['wall_s']:.0f} s |")
+    return out
+
+
+def profile_table(rows):
+    """The four profiles per drawing, outcome by outcome. -> list of lines.
+
+    The losers are the point.  A row that says only what shipped cannot be
+    told apart from a row that never looked, and two of the three things this
+    table records — a cap that is REFUSED on one drawing and certified on
+    another, a cap whose floor is already beaten before it is conducted — are
+    the whole argument for choosing per programme instead of once.
+    """
+    out = ["| drawing | profile | floor | makespan | outcome |",
+           "|---|---|---|---|---|"]
+    for r in rows:
+        grid = r.get("profile_grid") or []
+        for g in grid:
+            ms = "—" if g.get("makespan_s") is None else f"{g['makespan_s']:.1f} s"
+            if g.get("chosen"):
+                ms = f"**{ms}** (shipped)"
+            why = {"certified": "certified", "pruned": "not conducted",
+                   "refused": "REFUSED"}.get(g["status"], g["status"])
+            note = (g.get("reason") or "").strip()
+            if note and g["status"] == "refused":
+                note = note.split("\n")[0][:150]
+                why += f" — {note}"
+            elif note and g["status"] == "pruned":
+                why += f" — {note}"
+            out.append(f"| {r['name'] if g is grid[0] else ''} | {g['profile']} | "
+                       + (f"{g['floor_s']:.1f} s" if g.get("floor_s") is not None
+                          else "—")
+                       + f" | {ms} | {why} |")
     return out
 
 
@@ -296,6 +409,14 @@ def main(argv=None):
                     help="re-render docs/BENCH.md from a finished out/bench.json "
                          "instead of running anything; the numbers are the same "
                          "measurement, only the prose around them is rebuilt")
+    ap.add_argument("--pin-profile", default=None,
+                    help="run ONE named execution profile (e.g. 'qd0.30', "
+                         "'qd0.60+cluster') instead of selecting between the "
+                         "four.  The corpus SELECTS by default, because that is "
+                         "what the pipeline does; pin one to reproduce a cell")
+    ap.add_argument("--no-profile-prune", action="store_true",
+                    help="conduct every profile even when its floor already "
+                         "says it cannot win")
     ap.add_argument("--verbose", action="store_true")
     a0 = ap.parse_args(argv)
     if a0.from_json:
@@ -308,22 +429,35 @@ def main(argv=None):
         return doc["rows"]
     names = [a0.only] if a0.only else list(bench.ORDER)
     seq = {} if a0.budget is None else dict(budget=float(a0.budget))
+    profiles = schedule.PROFILES
+    if a0.pin_profile:
+        pinned = [p for p in schedule.PROFILES
+                  if schedule.profile_name(p) == a0.pin_profile]
+        if not pinned:
+            raise SystemExit(
+                f"--pin-profile {a0.pin_profile!r} is not one of "
+                + ", ".join(schedule.profile_name(p) for p in schedule.PROFILES))
+        profiles = tuple(pinned)
 
     rows, t0 = [], time.time()
     for name in names:
         print(f"\n{'=' * 74}\n=== {name}\n{'=' * 74}")
         r, _, _ = run_one(name, Args(), split=not a0.no_split,
-                          verbose=a0.verbose, seq_opts=seq)
+                          verbose=a0.verbose, seq_opts=seq, profiles=profiles,
+                          prune=not a0.no_profile_prune)
         rows.append(r)
         if r.get("error"):
             print(f"  !! {name}: {r['error']}")
         else:
-            print(f"  {name}: coverage {100 * r['coverage']:.2f} %, makespan "
+            print(f"  {name}: profile {r.get('profile')}, coverage "
+                  f"{100 * r['coverage']:.2f} %, makespan "
                   f"{r['makespan_s']:.1f} s against a floor of {r['floor_s']:.1f} s "
                   f"(efficiency {r['efficiency']:.2f}), {r['splits']} splits, "
                   f"solo {100 * r['solo_share']:.0f} %, "
                   f"clearance {1000 * r['min_clearance']:.1f} mm, "
                   f"{r['wall_s']:.0f} s wall")
+        if r.get("profile_grid"):
+            print("\n".join(profile_table([r])))
     wall = time.time() - t0
 
     print("\n" + "\n".join(table(rows)))
@@ -361,10 +495,13 @@ randomness use `np.random.default_rng(seed)` with the seed pinned in
 
 The fleet is the rig as it stands — all six arms, `2:300 31:200 71:200 97:200`
 mm pens, 80 mm margin (50 safety + 30 calibration), freeze-in-place idle policy,
-0.12 m/s draw, 0.80 m/s transit and the joint-velocity cap the conductor
-ships with (`writing.QD_FRAC`) — because a pen is a fixture and not a knob.
-`scene_check` has a veto on every row below; a drawing it refuses is printed as
-REFUSED rather than quietly dropped.
+0.12 m/s draw and 0.80 m/s transit — because a pen is a fixture and not a knob.
+The joint-velocity cap and the fiber menus are NOT fixtures: they are the
+EXECUTION PROFILE, and each drawing gets the fastest of the four that
+`scene_check` certifies on it (`csail_schedule.select_profile`).  The `profile`
+column says which one shipped and the grid below it says what the other three
+did.  `scene_check` has a veto on every row; a drawing no profile can conduct
+is printed as REFUSED rather than quietly dropped.
 
 **What this corpus found that the logo could not.** All three are about long
 strokes or crowded arms, none is about splitting, and each is reported here
@@ -416,7 +553,17 @@ def write_doc(path, rows, wall, split=True):
           "the one stroke splitting exists to lower. `splits` counts the cuts "
           "the conductor KEPT; a bracketed number is cuts it handed back, "
           "because `csail_schedule.build_phases` conducts the unsplit "
-          "allocation as well and ships the faster of the two.", "",
+          "allocation as well and ships the faster of the two. `profile` is "
+          "the execution profile that shipped — the fastest of the four "
+          "`scene_check` certified on THAT drawing.", ""]
+    if any(r.get("profile_grid") for r in rows):
+        L += ["**All four profiles, per drawing.** A cell is conducted only "
+              "when its floor — an exact lower bound on any schedule of that "
+              "allocation — could still beat the incumbent, so `not conducted` "
+              "is a proof and not a skip:", ""]
+        L += profile_table(rows)
+        L += [""]
+    L += [
           "**What splitting is worth before the conductor sees it**, measured "
           "on the same five drawings at the allocation stage alone (the busiest "
           "arm's nominal programme, v1 whole-segment moves only against v2 with "

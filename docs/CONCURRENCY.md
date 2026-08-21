@@ -161,6 +161,18 @@ logo. `docs/BENCH.md`'s sweep has the current A/B at every speed.
 
 Turn it on with `--cluster` (`allocate.CLUSTER`).
 
+**The corpus was re-run, and it did not flip the default — it retired the
+question (2026-08-20).** Both halves of this section's conclusion survive: at
+`qd_frac` 0.30 the menus cost, at 0.60 they pay, and the 0.60 that pays here is
+REFUSED on one of the five corpus drawings. What changed is that the pipeline
+stopped needing one answer. `csail_schedule.select_profile` conducts the four
+(`qd_frac` x menus) combinations PER PROGRAMME and ships the fastest one
+`scene_check` certifies, so `allocate.CLUSTER` and `writing.QD_FRAC` stay where
+they are as the starting point of a search rather than as a verdict. The logo
+ships this section's third column — **77.792 s, 82.4 mm, 39.90 rad** — as
+`out/csail_schedule_full.json`, and that file now carries all four outcomes
+beside it. `docs/BENCH.md` has the per-drawing grid.
+
 ## Lever 4 is built: see docs/IDLE.md (2026-08-19)
 
 "Tuck poses" above — ranked 4th, worth −65 % of the pause and −15.1 s of clock —
