@@ -3,7 +3,9 @@
 World frame ("canvas"): z = 0 is the paper plane, z up, origin at the
 paper corner, sheet extends +x, +y — for BOTH rigs.
 
-TWO rigs live here:
+FOUR rigs are selectable; two of them are built here and two in
+`rig_final6.py` (which reflects this one's geometry and cannot be imported
+from here at module scope without a cycle):
 
   FLEET_FINAL   the 3-arm FINAL INSTALLATION from the authoritative drawing
                 (docs/FINAL_RIG.md, aris_sixarm/rig_final.py): arm 13 upright
@@ -18,9 +20,16 @@ TWO rigs live here:
                 reuses physical arms 13, 31, 2), so it is a separate dict,
                 never a subset.
 
-`FLEET`/`SHEET` are the ACTIVE rig — the final one.  Modules that accept a
-`fleet=` argument default to it; passing `FLEET_SIXARM` reproduces the legacy
-behaviour bit for bit (tests pin that).
+  rig_final6.FLEET_FINAL6      two of those units mirrored back to back: six
+                arms, one continuous 1.8034 x 3.63064 m canvas.
+  rig_final6.FLEET_FINAL6_OPT  the same six with both side poles lengthened
+                20 cm and both side arms re-clamped at canvas z 0.576.
+
+`FLEET`/`SHEET` are the ACTIVE rig, which DEFAULTS to the 3-arm final one so
+that every published number still reproduces.  `activate(name)` (or the
+`ARIS_RIG` env var, read by `aris_sixarm/__init__.py`) switches it; modules
+that accept a `fleet=` argument default to whatever is active, and passing
+`FLEET_SIXARM` reproduces the legacy behaviour bit for bit (tests pin that).
 """
 from dataclasses import dataclass
 
@@ -121,13 +130,116 @@ FLEET_SIXARM = {
     97: ArmSpec(97, "R-inv-back", "inv", (2.3038, 0.3505), 0.0, True, (0.58, 0.40, 0.74)),
 }
 
-FLEET = FLEET_FINAL             # the ACTIVE rig
+# the ACTIVE rig — see `activate` below.  A COPY, not `FLEET_FINAL` itself:
+# `activate` mutates this dict in place (it is the object half the package
+# holds a reference to), and the four registries must survive that.
+FLEET = dict(FLEET_FINAL)
 SHEET = SHEET_FINAL
+ACTIVE_RIG = "final"
+
+# ===========================================================================
+# THE ACTIVE RIG IS A CHOICE, AND IT IS MADE IN ONE PLACE
+# ===========================================================================
+# Four rigs now exist and they are not variations of one number: they differ in
+# WHICH ARMS EXIST, in where those arms are bolted, and in how big the paper is.
+# Every module downstream reads `FLEET` and `SHEET`, so switching rigs is
+# switching those two — and the only honest way to do it is at import time,
+# before anything has captured either.
+#
+#   final        the 3-arm FINAL INSTALLATION from the drawing (the DEFAULT).
+#                Every historical number in this repo and every pinned test was
+#                earned on it; it stays the default so that all of them still
+#                reproduce by running the command that produced them.
+#   final6       the real installation: two of those units mirrored back to
+#                back, six arms, ONE continuous 1.8034 x 3.63064 m canvas
+#                (rig_final6.MERGE_WEBS), the side arms as drawn.
+#   final6_opt   the same six arms with BOTH side poles lengthened 20 cm and
+#                both side arms re-clamped at canvas z 0.576 — the optimum of
+#                docs/ARM2_HEIGHT.md, adopted by the user.  ASSUMES THE TWO
+#                POLE EXTENSIONS ARE PHYSICALLY INSTALLED.
+#   sixarm       the legacy six-arm preset, kept verbatim for regression.
+#
+# Two ways in, and they are the same door:
+#   ARIS_RIG=final6_opt python3 scripts/whatever.py     (import time, total)
+#   fleet.activate("final6_opt")                        (in process, for tests)
+# The env var is the one to use from a script, because a script's `from
+# aris_sixarm.fleet import SHEET` runs before its first line does and only the
+# env var is earlier than that; `aris_sixarm/__init__.py` is what reads it.
+RIG_NAMES = ("final", "final6", "final6_opt", "sixarm")
+
+
+def rig(name):
+    """-> (fleet dict, sheet) for a named rig.  Nothing is mutated."""
+    if name == "final":
+        return FLEET_FINAL, SHEET_FINAL
+    if name == "sixarm":
+        return FLEET_SIXARM, SHEET_SIXARM
+    if name in ("final6", "final6_opt"):
+        # imported HERE, not at module scope: `rig_final6` reads `ArmSpec` from
+        # this module, so a top-level import would be a cycle
+        from . import rig_final6
+        return ((rig_final6.FLEET_FINAL6_OPT if name == "final6_opt"
+                 else rig_final6.FLEET_FINAL6),
+                rig_final6.SHEET_FINAL6)
+    raise ValueError(f"unknown rig {name!r}; want one of {RIG_NAMES}")
+
+
+# the modules that bind `SHEET` INTO THEIR OWN NAMESPACE at import time.  A
+# rebind of `fleet.SHEET` does not reach them, so `activate` walks this list —
+# explicitly, so that a module which starts doing it has to be added here and
+# cannot be silently missed.  (Everything else either reads `fleet.SHEET`
+# lazily inside a function — `planner`, `allocate` — or takes it as an
+# argument.)  Scripts are NOT on this list and cannot be: they import before
+# they can call anything, which is what `ARIS_RIG` is for — and `bench` bakes
+# SHEET into DEFAULT ARGUMENTS as well, which are evaluated at def time and
+# which nothing can rebind afterwards, so a bench run must use the env var.
+_SHEET_BINDERS = ("aris_sixarm.atlas", "aris_sixarm.viz.scene",
+                  "aris_sixarm.bench")
+
+
+def activate(name):
+    """Make a named rig the ACTIVE one, in this process. -> the fleet dict.
+
+    `FLEET` is mutated IN PLACE rather than rebound, because half the package
+    did `from .fleet import FLEET` and holds the dict object itself; mutating
+    it is the only edit all of them see.  `SHEET` is a tuple and cannot be
+    mutated, so it is rebound here and in `_SHEET_BINDERS`.
+
+    Prefer `ARIS_RIG` in anything with a `__main__`.  This exists for tests and
+    for a caller that has not yet imported the modules that bind SHEET.
+    """
+    import sys
+    fl, sheet = rig(name)
+    global SHEET, ACTIVE_RIG
+    FLEET.clear()
+    FLEET.update(fl)
+    SHEET = tuple(sheet)
+    ACTIVE_RIG = name
+    for m in _SHEET_BINDERS:
+        mod = sys.modules.get(m)
+        if mod is not None and hasattr(mod, "SHEET"):
+            mod.SHEET = SHEET
+    al = sys.modules.get("aris_sixarm.allocate")
+    if al is not None:                      # a module-level derived constant
+        al.ACTIVE = [aid for aid, s in FLEET.items() if s.active]
+    bench = sys.modules.get("aris_sixarm.bench")
+    if bench is not None and hasattr(bench, "HATCH_ARM"):
+        bench.HATCH_ARM = next(a for a in FLEET if FLEET[a].mount == "inv")
+    return FLEET
 
 
 def sheet_for(spec):
     """The paper an arm draws on, decided by the spec's rig — so a legacy
     six-arm spec plans against the legacy 3.607 x 1.961 sheet whatever the
-    active rig is, and vice versa."""
-    return SHEET_SIXARM if getattr(spec, "rig", "sixarm") == "sixarm" \
-        else SHEET_FINAL
+    active rig is, and vice versa.
+
+    A MIRRORED-rig spec (`rig_final6.Arm6Spec`) draws on the COMBINED canvas.
+    Under `MERGE_WEBS` that is one continuous surface from the canvas origin,
+    which is exactly what `planner.clip_to_sheet` measures against.
+    """
+    if getattr(spec, "rig", "sixarm") == "sixarm":
+        return SHEET_SIXARM
+    if hasattr(spec, "unit"):
+        from . import rig_final6
+        return rig_final6.SHEET_FINAL6
+    return SHEET_FINAL

@@ -46,6 +46,18 @@ Q_READY_INV_FINAL = np.array(   # arm 31, hover over canvas (0.55, 1.05)
     [-0.6858, -1.2181, 1.0783, -2.5881, -2.1652, 1.5101, 0.9886])
 Q_READY_WALL = np.array(        # arm 2, hover over canvas (1.50, 1.20)
     [1.5988, 1.4251, -1.0822, -2.3822, -2.4899, 2.2478, 1.7795])
+# EXTENDED-POLE BUILD (rig_final6.FLEET_FINAL6_OPT): the side arm's base drops
+# 0.20 m to canvas z 0.576, which drags Q_READY_WALL's pen 0.100 m BELOW the
+# paper — the same failure mode as the legacy Q_READY_INV on the final rig, and
+# the reason that pose exists.  Re-derived 2026-08-21 by the identical recipe
+# (hover 0.10 m over the paper, 16 tool yaws x ik.Q7_GRID x 4 branches, gated by
+# validate.check_pose with the EXTENDED-pole frame boxes active, best
+# min(margin, 2.5 sigma)) over the arm's own half of the canvas, y <= 1.35 so
+# that the park pose stays clear of the mirror plane where the other three
+# hanging arms live: hover canvas (1.00, 0.99), margin 0.680, sigma 0.272,
+# min chain z 0.21 m, min frame clearance 0.557 m.
+Q_READY_WALL_LOW = np.array(    # arm 2 / 97 at canvas z 0.576
+    [-0.3733, -0.8839, 1.0723, -2.2148, 2.1269, 3.5589, 2.1750])
 
 # --- tool chain (metres, along tool z) ---
 D_FLANGE = 0.107      # J7 -> flange

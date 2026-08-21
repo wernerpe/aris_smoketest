@@ -22,6 +22,15 @@ The one thing that is NOT exact is what lies BEYOND each unit's own web, and
 this script refuses to invent it: the cross-web and seam regions are reported
 as REACH-BOUND ONLY (inside the sweep radius, never scored).
 
+SUPERSEDED, AND KEPT AS THE BEFORE PICTURE.  The user has since merged the webs
+and lengthened both side poles, and `scripts/run_atlas6.py` sweeps all six arms
+over the whole continuous canvas for real — seam included, no mirroring, the
+extended poles in the obstacle set (out/atlas_final6_opt.png,
+docs/MERGED_CANVAS.md).  This preview is what the AS-DRAWN two-web layout looked
+like, and its headline — cross-unit overlap 0.00 %, the middle cluster buys no
+redundancy — is the number the real sweep moved to 8.46 % of the canvas and
+74.91 % of the seam strip.
+
     python3 scripts/make_atlas6_preview.py   # -> out/atlas_final6_preview.png
 """
 import argparse
@@ -257,7 +266,7 @@ def build(png_path, atlas_dir):
         f"  unit-B arms within {RMAX:.2f} m of web A:\n"
         f"      17 → {lensA[17]} cells   71 → {lensA[71]}   "
         f"97 → {lensA[97]} ({lensA[97]*4e-4:.3f} m²)\n"
-        f"  IF MERGE_WEBS=True the {r6.SEAM_M*100:.1f} cm seam adds\n"
+        f"  MERGED, the {r6.SEAM_M*100:.1f} cm seam adds\n"
         f"  {1.8034*r6.SEAM_M:.3f} m² of paper, of which "
         f"{100*(seam_cnt>=1).mean():.0f} % lies inside\n"
         f"  ≥1 arm's sweep radius and {100*(seam_cnt>=2).mean():.0f} % inside ≥2 — "
@@ -279,7 +288,9 @@ def build(png_path, atlas_dir):
         f"    0.33 cm, so touching pads ⇒ 0.66 cm gap.\n"
         f"  · unit-B ids 17 / 71 / 97 assumed from the\n"
         f"    legacy six-arm registry — no drawing says.\n"
-        f"  · MERGE_WEBS = {r6.MERGE_WEBS} (two webs + seam) — your call.\n"
+        f"  · this preview assumes TWO webs with a seam.\n"
+        f"    MERGE_WEBS is now {r6.MERGE_WEBS}; the merged\n"
+        f"    canvas is swept for real by run_atlas6.py.\n"
         f"  · unit-B base rotations realised as PROPER\n"
         f"    rotations S·R·S (a reflection is improper).\n"
     )

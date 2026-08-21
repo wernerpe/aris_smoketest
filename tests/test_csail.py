@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
@@ -1020,3 +1021,90 @@ if __name__ == "__main__":
     print(f"\n{'ALL PASS' if not fails else f'{fails} FAILURES'} "
           f"in {time.time() - t0:.1f} s")
     sys.exit(1 if fails else 0)
+
+
+# ==========================================================================
+# the refusal path is a path, and it has to survive its own edge case
+# ==========================================================================
+def test_a_refusal_during_the_entry_taxi_reports_instead_of_raising():
+    """`unrunnable` must sort the edge that starts from nowhere.
+
+    A blocked progress index BEFORE the first stroke is the entry taxi — the
+    move from wherever the arm stands to its first segment — and it has no
+    source segment, so `unrunnable` emits `(None, j)` for it.  Mixed with the
+    ordinary `(i, j)` edges from later blocks, `sorted` compared `None` with an
+    int and raised `TypeError` *inside the refusal path*: a six-arm conduct that
+    had correctly diagnosed which transits were impossible died with a type
+    error instead of handing the sequencer the blacklist it had just computed.
+    `sequence_arm` already understood `i is None` (it forbids the START row of
+    the cost matrix); only the sort did not.
+    """
+    from aris_sixarm import idle
+    dt = 0.1
+    progs = {7: dict(phases=[
+        dict(kind="stroke", seg=0, t0=1.0, t1=2.0),      # first ink at t=1.0
+        dict(kind="transit", seg=0, t0=2.0, t1=3.0),
+        dict(kind="stroke", seg=1, t0=3.0, t1=4.0),
+        dict(kind="transit", seg=1, t0=4.0, t1=5.0),
+        dict(kind="stroke", seg=2, t0=5.0, t1=6.0)])}
+    orders = {7: [5, 2, 9]}
+    blocks = {(7, 3): [2,        # t = 0.2 s: before any ink -> the entry taxi
+                       45,       # t = 4.5 s: the transit out of segment 1
+                       ]}
+    tr, dr = idle.unrunnable(progs, blocks, dt, orders)
+    assert tr == {7: [(None, 5), (2, 9)]}                # sorted, None first
+    assert dr == {}
+    # and the two halves of the fix agree: the key orders, `sequence_arm`
+    # consumes.  A `(None, j)` edge forbids the START row, an `(i, j)` edge the
+    # (i, j) block — neither is dropped.
+    assert idle.edge_key((None, 5)) < idle.edge_key((0, 0))
+    assert sorted({(None, 3), (2, 3), (3, 2)}, key=idle.edge_key) \
+        == [(None, 3), (2, 3), (3, 2)]
+    # ink is still ink: a block inside a stroke is not a tour edge
+    tr2, dr2 = idle.unrunnable(progs, {(7, 3): [35]}, dt, orders)
+    assert tr2 == {} and dr2 == {7: [1]}
+
+
+def test_rotating_the_logo_is_a_placement_and_not_a_distortion():
+    """`to_sheet(rotate_deg=90)` turns the logo; it never reshapes it.
+
+    The canvas stopped being the logo's shape when the two units were merged:
+    the CSAIL logo is 1.31x wider than tall and the merged canvas is 2.01x
+    taller than wide, so upright the logo's WIDTH binds and two thirds of the
+    paper is unusable at any size.  Turned 90 degrees the same width limit buys
+    a logo 1.31x longer — 1.71x the area — and the aspect ratio must survive
+    that untouched, because it is a logo.
+    """
+    px = [dict(pts=np.array([[0.0, 0.0], [200.0, 0.0], [200.0, 100.0],
+                             [0.0, 100.0], [0.0, 0.0]]), color="grey",
+               kind="outline")]
+    tall = (1.0, 3.0)                                  # a canvas 3x taller
+    up, i0 = trace.to_sheet(px, tall, margin=0.05)
+    turned, i90 = trace.to_sheet(px, tall, margin=0.05, rotate_deg=90.0)
+
+    # the bounding box swaps, the aspect ratio does not
+    assert i0["rotate_deg"] == 0.0 and i90["rotate_deg"] == 90.0
+    assert i0["logo_w"] / i0["logo_h"] == pytest.approx(2.0)
+    assert i90["logo_w"] / i90["logo_h"] == pytest.approx(0.5)
+    # width binds either way on this canvas, so turning it buys area
+    # width binds both ways here, so the linear scale grows by the aspect ratio
+    # (2x) and the AREA by its square (4x) — the same lever that takes the CSAIL
+    # logo from 2.16 m2 upright to 3.71 m2 on its side (aspect 1.31, area 1.71x)
+    assert i0["logo_w"] == pytest.approx(i90["logo_w"]) == pytest.approx(0.9)
+    assert i0["logo_h"] == pytest.approx(0.45)
+    assert i90["logo_h"] == pytest.approx(4.0 * i0["logo_h"]) == pytest.approx(1.8)
+    assert (i90["logo_w"] * i90["logo_h"]) == pytest.approx(
+        4.0 * i0["logo_w"] * i0["logo_h"])
+    # still centred, still inside the margin, still one closed loop of 5 points
+    for p, sheet in ((turned[0]["pts"], tall),):
+        assert (p[:, 0].max() + p[:, 0].min()) / 2 == pytest.approx(sheet[0] / 2)
+        assert (p[:, 1].max() + p[:, 1].min()) / 2 == pytest.approx(sheet[1] / 2)
+        assert p[:, 0].min() > 0.049 and p[:, 0].max() < sheet[0] - 0.049
+        assert p[:, 1].min() > 0.049 and p[:, 1].max() < sheet[1] - 0.049
+    assert len(turned) == len(up) == 1
+    assert len(turned[0]["pts"]) == len(up[0]["pts"])
+    # 360 degrees is the identity, and the path LENGTH is scale-only
+    _, i360 = trace.to_sheet(px, tall, margin=0.05, rotate_deg=360.0)
+    assert i360["logo_w"] == pytest.approx(i0["logo_w"])
+    assert trace.plen(turned[0]["pts"]) == pytest.approx(
+        2.0 * trace.plen(up[0]["pts"]))

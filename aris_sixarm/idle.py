@@ -283,11 +283,20 @@ def _capsules(progs, pens, dt, fleet=None):
                                         pens=pens, fleet=fleet)
 
 
-def _conduct(progs, pens, dt, safety, calib, sweep, verbose, specs=None):
-    """Sample, build capsule paths, conduct. -> (sch, paths, samp)."""
+def _conduct(progs, pens, dt, safety, calib, sweep, verbose, specs=None,
+             search_max_n=coordination.PRIORITY_SEARCH_MAX):
+    """Sample, build capsule paths, conduct. -> (sch, paths, samp).
+
+    `search_max_n` goes straight through to `coordination.coordinate`: the
+    number of MOVING arms below which every priority order is enumerated.  It
+    is exposed here because it is the one conductor knob whose cost is
+    super-exponential in the fleet size — the prefix walk is up to 1956 DP
+    solves at six moving arms against 64 at four — and six arms drawing at once
+    is now a rig somebody actually runs, not a hypothetical.
+    """
     samp, paths = _capsules(progs, pens, dt, fleet=specs)
     sch = coordination.coordinate(paths, safety=safety, calib=calib, sweep=sweep,
-                                  verbose=verbose)
+                                  search_max_n=search_max_n, verbose=verbose)
     return sch, paths, samp
 
 
@@ -342,8 +351,23 @@ def unrunnable(progs, blocks, dt, orders=None):
                                                    int(order[k + 1])))
             else:                            # the exit lift or the retreat
                 draws.setdefault(a, set()).add(k)
-    return ({a: sorted(v) for a, v in transits.items()},
+    return ({a: sorted(v, key=edge_key) for a, v in transits.items()},
             {a: sorted(v) for a, v in draws.items()})
+
+
+def edge_key(e):
+    """Sort key for a tour edge, INCLUDING the one that starts from nowhere.
+
+    `unrunnable` emits `(None, j)` for a block hit during the entry taxi — the
+    move from wherever the arm is standing to its first segment, which has no
+    source segment.  `sorted` on a mix of `(None, j)` and `(i, j)` raises
+    `TypeError: '<' not supported between instances of 'int' and 'NoneType'`,
+    and it raises it INSIDE THE REFUSAL PATH: a conductable-looking run dies
+    with a type error instead of reporting the refusal it had already
+    diagnosed.  `sequence_arm` already understands `i is None` (it forbids the
+    START row of the cost matrix); only the sort did not.
+    """
+    return tuple(-1 if x is None else int(x) for x in e)
 
 
 def _refusal(exc, progs, dt, orders, specs=None):
@@ -359,7 +383,8 @@ def _refusal(exc, progs, dt, orders, specs=None):
     note = ""
     if tr:
         note = ("; the impossible indices are pen-up transits: "
-                + ", ".join(f"arm {a} " + " ".join(f"{i}->{j}" for i, j in v)
+                + ", ".join(f"arm {a} " + " ".join(
+                    f"{'start' if i is None else i}->{j}" for i, j in v)
                             for a, v in tr.items())
                 + " — re-sequencing without those edges may run")
     elif dr:
@@ -418,6 +443,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
             transit_speed=writing.TRANSIT_SPEED, qd_frac=writing.QD_FRAC,
             h_inv=H_INV_DEFAULT, safety=coordination.SAFETY_M,
             calib=coordination.CALIB_M, sweep=coordination.SWEEP_K,
+            search_max_n=coordination.PRIORITY_SEARCH_MAX,
             on_programs=None, orders=None, verbose=True):
     """Freeze the timelines, conduct them, and spend the idle time better.
 
@@ -451,7 +477,8 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
     passes, taxi, retreats = [], {}, {}
     margin = float(safety + calib)
     try:
-        sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep, verbose, specs)
+        sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep,
+                                    verbose, specs, search_max_n)
     except RuntimeError as exc:
         # FREEZING CAN MAKE A SCHEDULE IMPOSSIBLE, WHERE GOING HOME ONLY MADE IT
         # SLOW.  An arm parked on top of the ink another arm still has to draw
@@ -487,7 +514,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                           only=set(want) | set(sent_home), prev=progs, **prog_kw)
         try:
             sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep,
-                                        verbose, specs)
+                                        verbose, specs, search_max_n)
         except RuntimeError as exc2:
             raise _refusal(exc2, progs, dt, orders, specs)
         retreats = dict(want)
@@ -520,7 +547,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                            only=set(want), prev=progs, **prog_kw)
             try:
                 sj, paj, saj = _conduct(pj, pens, dt, safety, calib, sweep,
-                                        verbose, specs)
+                                        verbose, specs, search_max_n)
             except RuntimeError:          # a slower taxi is never worth a refusal
                 sj = dict(duration=float("inf"), pause_total=float("inf"))
             keep = _better(sj, sch)
@@ -565,7 +592,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                            only=set(want), prev=progs, **prog_kw)
             try:
                 sr, par, sar = _conduct(pr, pens, dt, safety, calib, sweep,
-                                        verbose, specs)
+                                        verbose, specs, search_max_n)
             except RuntimeError:
                 sr = dict(duration=float("inf"), pause_total=float("inf"))
             was = float(sch["duration"])

@@ -6,7 +6,7 @@ reachability/controllability atlas, and the multi-arm stroke planner —
 extracted from the sprawling upstream `Aris_Kindt` branches into one clean,
 tested codebase.
 
-**THE ACTIVE RIG IS THE FINAL 3-ARM INSTALLATION** (2026-08): arm 13 upright
+**THE DEFAULT RIG IS THE FINAL 3-ARM INSTALLATION** (2026-08): arm 13 upright
 on the table, arm 31 hanging under the frame's central beam, arm 2
 side-mounted with J1 horizontal, drawing a 1.80 × 1.70 m paper web inside a
 steel cage that the planner now carries as verified collision geometry.
@@ -15,6 +15,21 @@ Every number and its provenance: `docs/FINAL_RIG.md`; machine-readable:
 this README's historical numbers were earned on lives on as
 `fleet.FLEET_SIXARM` (regression-pinned); prose below that speaks of six
 arms describes that era.
+
+**THE REAL INSTALLATION IS TWO OF THOSE UNITS, MIRRORED** (2026-08-21) — six
+arms, ONE continuous 1.8034 × 3.63064 m canvas across the seam, and both side
+poles lengthened 20 cm so arms 2 and 97 hang at canvas z 0.576. It is a named
+config, not the default, and one environment variable installs it everywhere:
+
+```
+ARIS_RIG=final6_opt python3 scripts/run_atlas6.py
+ARIS_RIG=final6_opt python3 scripts/csail_schedule.py --arms all ...
+```
+
+`docs/MERGED_CANVAS.md` is that rig — the config, the six-arm atlas
+(union strict-GO **75.93 %**, seam strip **88.00 %** with **74.91 %** of it
+reachable from BOTH units), and what the CSAIL pipeline does on it. Every
+output flags the two ~20 cm pole extensions, which are **not drawn steel**.
 
 ## Layout
 
@@ -428,6 +443,126 @@ switch off one piece of the policy each.
 
 `out/csail_final.png` is the end state: ink in pen colours, the 13 unreachable
 spans dashed.
+
+## The real installation: six arms, one continuous canvas (2026-08-21)
+
+Two user decisions turned the mirrored layout from a preview into a rig the
+pipeline runs end to end — `docs/MERGED_CANVAS.md` is the whole story, this is
+the summary.
+
+1. **The canvas is CONTINUOUS across the middle**: `rig_final6.MERGE_WEBS =
+   True`, one drawable surface **1.8034 × 3.63064 m** spanning both units and
+   the 23.064 cm strip between their webs.
+2. **Both side arms are re-clamped 20 cm lower on 20 cm of new pole** (canvas
+   z 0.576) — `docs/ARM2_HEIGHT.md`'s optimum, applied to arms 2 and 97.
+   **That steel is not in the drawing; every number below assumes it is fitted.**
+
+`fleet.py` now selects among four rigs, and the 3-arm one stays the DEFAULT so
+every published number above still reproduces:
+
+```
+ARIS_RIG=final6_opt python3 scripts/run_atlas6.py     # or final6 / final / sixarm
+```
+
+### The atlas — a real sweep, not a mirror (`scripts/run_atlas6.py`)
+
+All six arms over the whole canvas, 2 cm grid, the standing gates, the 15° tilt
+cone, both frames' 62–67 boxes per arm. 16 562 cells. The old symmetry preview
+could not answer this: it mirrored one unit's web and reported the seam and the
+cross-web region as *reach-bound only, never scored*.
+
+| | as drawn | **extended poles** |
+|---|---:|---:|
+| union strict-GO | 69.13 % | **75.93 %** |
+| ≥ 2 arms | 7.86 % | **25.47 %** |
+| cross-unit (an A arm and a B arm) | 3.99 % | **8.46 %** |
+| most arms over one cell | 2 | **4** |
+| arm 2 / arm 97 | 9.89 % each | **22.47 / 22.39 %** |
+| **seam strip** GO | 77.47 % | **88.00 %** |
+| **seam strip** ≥ 2 arms | 41.67 % | **77.20 %** |
+| **seam strip** cross-unit | 41.30 % | **74.91 %** |
+
+The seam strip is now the best-covered band on the canvas, and three quarters
+of it is reachable from *both* units — against the preview's headline of
+**0.00 %** cross-unit overlap. Arms 13, 31, 17 and 71 are unaffected by the
+longer poles **to the cell**.
+
+### Placement — and the logo turns 90° (`scripts/csail_place.py --rotate 0,90`)
+
+`trace.to_sheet(rotate_deg=…)` turns the logo before fitting it, which matters
+because the logo is 1.31× wider than tall and the canvas is 2.01× taller than
+wide: the same width limit buys a 90° logo **1.71× the area**. `--base-width
+auto` also fixed a silently dead knob — the old constant is the *legacy* sheet's
+margin-limited width, so on this canvas every "scale" collapsed onto one logo
+(visible in `out/csail_placement_final.json`: seven scales, one width).
+
+The standing rule (largest within 1 pp of the best real coverage) picks **90°,
+0.842 × 1.102 m at (−0.20, +0.20), 98.9 % drawn** — 2.1× the area of the best
+0° candidate at the same coverage. What binds is the canvas's **short** axis:
+0.26 m of the 1.8034 m width is dead at every y (feed roll left, guide rods and
+paper curl right), leaving ≈ 1.54 m usable against 3.63 m of length.
+
+### The middle band: redundancy is not concurrency (`scripts/middle_band_diag.py`)
+
+The seam's ≥2-arm coverage is owned by exactly the two pairs that cannot be in
+it at the same time. Capsule clearance between the atlas's own certified poses,
+margin 80 mm:
+
+| pair | | pose pairs ≥ 80 mm | median |
+|---|---|---:|---:|
+| **31 vs 71** | cross-unit, both inverted | **33.9 %** | **21 mm** |
+| **2 vs 97** | cross-unit, both side | **45.9 %** | 63 mm |
+| the four other pairs | | 93.7–95.1 % | 250 mm |
+
+and in each unit's own half the side/inverted pair drops to **83.6 %**, because
+the 20 cm drop puts the side arm 20 cm closer to its own neighbour as well as
+20 cm further across the seam. **The coverage the extended poles buy and the
+contention they create are the same fact.**
+
+It shows: **twelve** pipeline configurations were conducted, four execution
+profiles each, and every seam-centred two-pass run was refused — always on
+`phase 1`, the pass that must GO HOME so the next can start from the ready
+pose. A single pass freezes in place and conducts. Then `scene_check` vetoed
+even that, on a 40.9 mm frame clearance during a pen-up: the two frames' back-
+left corner posts stand together at the left end of the seam, and an inverted
+elbow finds them. Moving the logo 0.20 m right fixed it (56.1 mm).
+
+### The shipped run — six arms, one canvas, ink across the seam
+
+```
+ARIS_RIG=final6_opt python3 scripts/csail_schedule.py --arms all --max-probes 5 \
+    --rotate 90 --target-width 0.8417 --offset 0.0 0.0 \
+    --atlas out/atlas_final6_opt --tag _final6 \
+    --draw-speed 0.15 --transit-speed 0.30 --fps 12 --substeps 4 \
+    --final out/csail_final6_final.png --select-profile --program
+
+ARIS_RIG=final6_opt /home/franka/git/franka_manipulation_station/.venv/bin/python \
+    scripts/csail_drawing_demo.py --schedule out/csail_schedule_final6.npz \
+    --summary out/csail_schedule_final6.json --out out/csail_final6.html \
+    --zip out/csail_final6.zip
+```
+
+0.842 × 1.102 m turned 90°, centred **on the mirror plane**. 38 certified
+segments, **86.97 %** of 9.83 m drawn. Of the four execution profiles, three
+certified and the fourth was pruned on its own floor; **qd0.60 ships at
+50.125 s**. `scene_check` **PASS** — 81.8 mm minimum inter-arm clearance
+(margin 80), 65.6 mm frame clearance (margin 50), 38/38 segments re-validated.
+Animation: 602 frames @ 12 fps = 50.1 s, pen tip on the commanded curve to
+**0.169 mm**, 16.2 MiB zipped (budget 28).
+
+| arm | unit | ink | segments | metres | in the seam strip |
+|---|---|---|---:|---:|---:|
+| 97 | B | grey | 13 | 2.738 | 0.822 |
+| 71 | B | orange | 11 | 2.292 | 0.385 |
+| 31 | A | orange | 7 | 2.241 | 0.683 |
+| 2 | A | orange | 7 | 1.278 | 0.605 |
+| 13 / 17 | A / B | — | 0 | 0.000 | — |
+
+**2.4946 m — 29.18 % of all the ink — lies inside the old 23.064 cm seam
+strip, and 6 of the 38 segments (21.44 % of the ink) cross a former web edge.**
+On the two-web layout that paper does not exist and neither does that ink; all
+four hanging arms contribute, two from each unit. The two floor arms draw
+nothing, which is geometry: they sit 1.5 m from any placement worth having.
 
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 

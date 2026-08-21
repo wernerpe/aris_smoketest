@@ -51,6 +51,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from aris_sixarm import (allocate, coordination, idle, pwl, scene_check,  # noqa: E402
                          sequence, trace, writing)
+from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
                             program_json, totals)
@@ -127,6 +128,7 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
                 jit_frac=a.jit_frac, draw_speed=a.draw_speed,
                 transit_speed=a.transit_speed, qd_frac=a.qd_frac,
                 h_inv=H_INV_DEFAULT, safety=a.safety, calib=a.calib,
+                search_max_n=a.search_max_n,
                 orders={x: res["sequence"][x]["order"] for x in res["arms"]},
                 on_programs=cross_check, verbose=True)
             break
@@ -143,7 +145,7 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
                 for x, edges in exc.transits.items():
                     forbid.setdefault(x, set()).update(edges)
                 print(f"  re-sequencing without "
-                      + ", ".join(f"arm {x}: {sorted(v)}"
+                      + ", ".join(f"arm {x}: {sorted(v, key=idle.edge_key)}"
                                   for x, v in forbid.items())
                       + f" (attempt {attempt + 2} of {tries + 1})")
             elif policy != idle.POLICY_HOME:
@@ -162,7 +164,8 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
                 raise
             allocate.resequence(res, q_start=q_start,
                                 return_home=policy == idle.POLICY_HOME,
-                                forbid={x: sorted(v) for x, v in forbid.items()})
+                                forbid={x: sorted(v, key=idle.edge_key)
+                                        for x, v in forbid.items()})
     progs, samp, paths, sch = out["progs"], out["samp"], out["paths"], out["sch"]
     worst_tip = max((progs[aid]["dense_tip_err"] for aid in res["arms"]),
                     default=0.0)
@@ -861,6 +864,13 @@ def main(argv=None):
     # transits with them before this script ever freezes a timeline.
     ap.add_argument("--safety", type=float, default=coordination.SAFETY_M)
     ap.add_argument("--calib", type=float, default=coordination.CALIB_M)
+    ap.add_argument("--search-max-n", type=int,
+                    default=coordination.PRIORITY_SEARCH_MAX,
+                    help="moving arms below which EVERY priority order is "
+                         "enumerated.  The prefix walk is 64 DP solves at four "
+                         "moving arms and up to 1956 at six, so on a six-arm "
+                         "rig this is the knob between an exhaustive search and "
+                         "busiest-first with promotion on refusal")
     ap.add_argument("--pause", type=float, default=2.0,
                     help="seconds of every-arm-parked between two passes, "
                          "while a human swaps the pens")
@@ -963,7 +973,10 @@ def main(argv=None):
         balanced=any(B["res"].get("balance") for B in built),
         idle_policy=a.idle_policy, jit=not a.no_jit, retreat=not a.no_retreat,
         jit_frac=a.jit_frac,
+        rig=fleet_mod.ACTIVE_RIG, sheet=[float(SHEET[0]), float(SHEET[1])],
+        arms=[int(x) for x in sorted(FLEET)],
         logo=dict(w=info["logo_w"], h=info["logo_h"],
+                  rotate_deg=float(info.get("rotate_deg", 0.0)),
                   center=[float(x) for x in info["center"]],
                   offset=[float(x) for x in info["offset"]]),
         phases=[], sequencer=phases[0].get("sequencer", "opt"))

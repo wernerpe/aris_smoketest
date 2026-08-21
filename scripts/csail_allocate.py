@@ -29,6 +29,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 from aris_sixarm import allocate, idle, pwl, trace, writing   # noqa: E402
+from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
@@ -53,6 +54,23 @@ def _dense(pts, ds=0.0015):
 
 
 # ---------------------------------------------------------------------------
+def _figsize(w_in, extra_h=0.0, max_h=12.5):
+    """A figure shaped like the CANVAS, not like the last rig's canvas.
+
+    The final 3-arm web is 1.80 x 1.70 m (square-ish, landscape figure); the
+    merged six-arm canvas is 1.80 x 3.63 m (portrait, and twice as long).  A
+    fixed figsize leaves one of them a strip of ink in a field of white, and a
+    figsize that only follows the aspect makes the other one 20 inches tall —
+    so the WIDTH is asked for and the HEIGHT is capped, whichever binds.
+    -> (figsize, legend columns), because a 6-inch-wide portrait figure cannot
+    carry a three-column legend either.
+    """
+    h = w_in * SHEET[1] / SHEET[0]
+    if h > max_h:
+        h, w_in = max_h, max_h * SHEET[0] / SHEET[1]
+    return (max(w_in, 6.2), max(4.0, h) + extra_h), (1 if w_in < 8.0 else 2)
+
+
 def allocation_png(phases, strokes, path):
     """One sheet, coloured by the arm that draws it; a phase per line style.
 
@@ -61,7 +79,8 @@ def allocation_png(phases, strokes, path):
     orange after is the whole point of drawing in two passes.  Phase 2 is
     dashed so the two are still tellable apart at a glance.
     """
-    fig, ax = plt.subplots(figsize=(14.2, 8.8))
+    figsize, ncol = _figsize(9.6, 2.6)
+    fig, ax = plt.subplots(figsize=figsize)
     sheet_axes(ax)
     used_arms = sorted({a for p in phases for a in p["arms"]})
     for ph in phases:
@@ -118,7 +137,7 @@ def allocation_png(phases, strokes, path):
         handles.append(Line2D([], [], color="#555555", lw=2.4, ls=(0, (6, 2))))
         labels.append("phase 2 (after the pen swap); solid = phase 1")
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.015),
-              ncol=2, fontsize=9, framealpha=0.94, borderpad=0.8,
+              ncol=ncol, fontsize=9, framealpha=0.94, borderpad=0.8,
               labelspacing=0.5, columnspacing=2.0)
     ax.set_title(f"CSAIL logo — allocation to {len(used_arms)} arms in "
                  f"{len(phases)} pass{'' if len(phases) == 1 else 'es'} "
@@ -126,7 +145,7 @@ def allocation_png(phases, strokes, path):
                  f"{T['n_segments']} certified segments); colour = arm",
                  fontsize=11.5)
     fig.tight_layout()
-    fig.savefig(path, dpi=135)
+    fig.savefig(path, dpi=135, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -138,7 +157,8 @@ def final_png(phases, strokes, path, title=None):
     colour, because that is what is on the paper; what nobody reached stays a
     dashed ghost so the holes are visible rather than merely absent.
     """
-    fig, ax = plt.subplots(figsize=(13.0, 7.6))
+    figsize, ncol = _figsize(9.0, 1.7)
+    fig, ax = plt.subplots(figsize=figsize)
     sheet_axes(ax)
     for ph in phases:
         for d in ph["dropped"]:
@@ -168,13 +188,13 @@ def final_png(phases, strokes, path, title=None):
         labels.append(f"nothing left empty — {T['traced']:.2f} m traced, "
                       f"{T['traced']:.2f} m certified")
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02),
-              ncol=3, fontsize=9.5, framealpha=0.94, borderpad=0.7)
+              ncol=ncol, fontsize=9.5, framealpha=0.94, borderpad=0.7)
     ax.set_title(title or ("CSAIL logo — the paper when the arms stop "
                            f"({100 * T['covered']:.2f} % of {T['traced']:.2f} m "
                            "traced, every metre plan_stroke-certified)"),
                  fontsize=12)
     fig.tight_layout()
-    fig.savefig(path, dpi=140)
+    fig.savefig(path, dpi=140, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -357,6 +377,7 @@ def program_json(phases, strokes, info, path):
     for p in phases:
         pens.update({str(a): round(1000 * p["pens"][a], 1) for a in p["arms"]})
     doc = dict(
+        rig=fleet_mod.ACTIVE_RIG, arms_in_fleet=[int(x) for x in sorted(FLEET)],
         sheet=list(SHEET), h_inv=H_INV_DEFAULT, n_phases=len(phases),
         two_pass=len(phases) > 1, pens_mm=pens,
         logo={k: ([float(x) for x in v] if isinstance(v, (tuple, list))
@@ -400,7 +421,19 @@ def add_args(ap):
                     help="csail_placement_*.json from scripts/csail_place.py")
     ap.add_argument("--target-width", type=float, default=None)
     ap.add_argument("--offset", type=float, nargs=2, default=None, metavar=("DX", "DY"))
+    ap.add_argument("--rotate", type=float, default=None,
+                    help="degrees to turn the logo before fitting it (a "
+                         "PLACEMENT variant, not a distortion — the aspect "
+                         "ratio never moves).  Default: whatever --placement "
+                         "chose, else 0")
     ap.add_argument("--no-prefilter", action="store_true")
+    ap.add_argument("--atlas", default=None,
+                    help="directory holding atlas_arm<id>.npz for the PREFILTER "
+                         "(default: --out).  It must be a sweep of the ACTIVE "
+                         "rig at the pen the run uses — a prefilter read off "
+                         "another rig's atlas silently refuses strokes this one "
+                         "can draw.  If any arm's file is missing the prefilter "
+                         "turns itself off and every stroke is probed")
     # these two are the SEQUENCER's cost model as much as the timeline's: the
     # transit it prices is the transit `writing.arm_program` will lay down, so
     # they have to be the same numbers in both places (see run_allocation).
@@ -501,21 +534,26 @@ def run_allocation(a, verbose=False, split=None):
     phase is a full `allocate.allocate` result with `name`, `ink` and its own
     stroke subset attached.
     """
-    tw, off = a.target_width, a.offset
+    tw, off, rot = a.target_width, a.offset, getattr(a, "rotate", None)
     if a.placement:
         doc = json.loads(Path(a.placement).read_text())["chosen"]
         tw = tw if tw is not None else doc["target_width"]
         off = off if off is not None else doc["offset"]
+        rot = rot if rot is not None else doc.get("rotate_deg", 0.0)
+    rot = 0.0 if rot is None else float(rot)
     pens = parse_pens(getattr(a, "pens", None))
     t0 = time.time()
     px, _ = trace.trace_logo(a.image)
     strokes, info = trace.to_sheet(px, SHEET, margin=a.margin, target_width=tw,
-                                   offset=tuple(off or (0.0, 0.0)))
+                                   offset=tuple(off or (0.0, 0.0)),
+                                   rotate_deg=rot)
     if not info["fits"]:
         raise SystemExit(f"placement does not fit the sheet: {info}")
     print(f"traced {len(strokes)} strokes, {trace.total_length(strokes):.2f} m, "
           f"logo {info['logo_w']:.3f} x {info['logo_h']:.3f} m at "
-          f"({info['center'][0]:.3f}, {info['center'][1]:.3f})  ({time.time() - t0:.2f} s)")
+          f"({info['center'][0]:.3f}, {info['center'][1]:.3f})"
+          + (f", rotated {rot:.0f} deg" if rot else "")
+          + f"  ({time.time() - t0:.2f} s)")
     if pens:
         print("  pens: " + "  ".join(f"arm {k} = {1000 * v:.0f} mm"
                                      for k, v in sorted(pens.items())))
@@ -536,7 +574,8 @@ def run_allocation(a, verbose=False, split=None):
               seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
               return_home=getattr(a, "idle_policy",
                                   idle.POLICY_FREEZE) == idle.POLICY_HOME,
-              atlas_dir=None if a.no_prefilter else str(Path(a.out)))
+              atlas_dir=None if a.no_prefilter
+              else str(Path(getattr(a, "atlas", None) or a.out)))
     if not getattr(a, "two_pass", False):
         res = allocate.allocate(strokes, **kw)
         res.update(name="single pass", ink=None, strokes=strokes)

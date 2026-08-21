@@ -40,7 +40,7 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
-from aris_sixarm.fleet import FLEET, SHEET                      # noqa: E402
+from aris_sixarm.fleet import ACTIVE_RIG, FLEET, SHEET          # noqa: E402
 
 # the logo's own two inks (trace.GREY_RGB / trace.ORANGE_RGB), inlined so
 # this file imports nothing that needs the system python's numpy stack
@@ -84,14 +84,45 @@ def _resolve_panda(parser):
         return parser.AddModels(str(hits[0]))[0]
 
 
+def frame_boxes():
+    """The steel the arms are bolted to, canvas frame. -> [(name, lo, hi)].
+
+    On a SIX-ARM rig this is BOTH units' collision model — the same 68 boxes
+    every planner gate ran against, including the two lengthened side poles —
+    so the animation shows the arms inside the cage they were certified in
+    rather than floating over an invented tabletop.  It is also the only place
+    a viewer can see that the two frames abut, that the canvas spans the seam,
+    and how much of the middle band is steel.  On the 3-arm rig it is that
+    unit's 34 boxes.  Empty on the legacy layout, which has no box model.
+    """
+    from aris_sixarm import rig_final, rig_final6 as r6
+    if ACTIVE_RIG in ("final6", "final6_opt"):
+        boxes = r6.frame_boxes6_canvas(
+            zmin=-10, boxes_w=(r6.FRAME_BOXES6_OPT_W_CM
+                               if ACTIVE_RIG == "final6_opt" else None))
+    elif ACTIVE_RIG == "final":
+        boxes = rig_final.frame_boxes_canvas(zmin=-10)
+    else:
+        return []
+    return [(b["name"].replace(":", "_"), b["lo"], b["hi"]) for b in boxes]
+
+
 def build_scene(pen_ext, inks):
-    """Six welded pandas, each with ITS OWN pen, + paper/table.
+    """Six welded pandas, each with ITS OWN pen, + paper + both frames.
 
     The pen is not decoration: its length is the `pen_ext` the segment was
     planned and validated with, so drawing it at a fixed 110 mm while arm 2
     holds 300 mm would show a robot reaching 19 cm short of the ink it is
     laying.  One cylinder per (arm, ink) is registered at the same pose, and
     the animation shows exactly one of them at a time — that is the pen swap.
+
+    THE URDF IS ONE PANDA, INSTANTIATED ONCE PER ARM AND WELDED.  There is no
+    six-arm URDF and there does not need to be: each `arm<id>` model instance
+    is drake's stock `panda_arm_hand.urdf` welded to the world at that arm's
+    `T_world_base()` — the same 4x4 the planner used — so the scene is exactly
+    `fleet.FLEET` and cannot drift from it.  The frames come in as world
+    visual geometry from the same box model the gates ran against
+    (`frame_boxes`), not as URDF links, because nothing in them moves.
     """
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
@@ -115,10 +146,20 @@ def build_scene(pen_ext, inks):
     plant.RegisterVisualGeometry(
         world, RigidTransform([SHEET[0] / 2, SHEET[1] / 2, -PAPER_T / 2]),
         Box(SHEET[0], SHEET[1], PAPER_T), "paper", [0.99, 0.99, 0.96, 1.0])
-    plant.RegisterVisualGeometry(
-        world, RigidTransform([SHEET[0] / 2, SHEET[1] / 2, -PAPER_T - TABLE_T / 2]),
-        Box(SHEET[0] + 0.30, SHEET[1] + 0.30, TABLE_T), "table",
-        [0.45, 0.31, 0.19, 1.0])
+    fb = frame_boxes()
+    if fb:
+        for name, lo, hi in fb:
+            size = [max(float(h - l), 1e-4) for l, h in zip(lo, hi)]
+            plant.RegisterVisualGeometry(
+                world, RigidTransform([float(l + h) / 2
+                                       for l, h in zip(lo, hi)]),
+                Box(*size), f"frame_{name}", [0.60, 0.63, 0.65, 0.30])
+    else:
+        plant.RegisterVisualGeometry(
+            world,
+            RigidTransform([SHEET[0] / 2, SHEET[1] / 2, -PAPER_T - TABLE_T / 2]),
+            Box(SHEET[0] + 0.30, SHEET[1] + 0.30, TABLE_T), "table",
+            [0.45, 0.31, 0.19, 1.0])
     for aid, spec in FLEET.items():
         plant.RegisterVisualGeometry(
             world, RigidTransform(spec.T_world_base()[:3, 3]), Sphere(0.045),
@@ -222,7 +263,10 @@ def main():
     meshcat.SetProperty("/Axes", "visible", False)
     meshcat.SetProperty("/Background", "top_color", [0.93, 0.94, 0.97])
     meshcat.SetProperty("/Background", "bottom_color", [0.78, 0.80, 0.85])
-    meshcat.SetCameraPose([SHEET[0] / 2, -2.30, 2.55],
+    # look down the canvas's LONG axis from outside it, far enough back that
+    # the whole thing is in frame whichever rig is active
+    _d = max(2.30, 0.85 * SHEET[1])
+    meshcat.SetCameraPose([SHEET[0] / 2, SHEET[1] / 2 - _d, 0.55 + 0.55 * _d],
                           [SHEET[0] / 2, SHEET[1] / 2, 0.10])
     diagram.ForcedPublish(context)          # so the geometry paths exist
 

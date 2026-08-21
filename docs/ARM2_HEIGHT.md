@@ -275,6 +275,34 @@ Limits of this study:
    `side_bracket` boxes, and lengthening `side_boom` — then regenerating the
    URDF and re-running `scripts/run_atlas.py`.
 
+## ADOPTED, 2026-08-21 — and re-measured, because this study did not model the pole
+
+The user took the recommendation for **both** side arms (2 in unit A, 97 in
+unit B by mirror symmetry). It lives as `rig_final6.FLEET_FINAL6_OPT` +
+`rig_final6.FRAME_BOXES6_OPT_W_CM`, installed by `ARIS_RIG=final6_opt` — and
+`rig_final.py`, the drawing, is still not modified.
+
+**The numbers in §3 are not the numbers of the adopted build.** This sweep slid
+the three clamped boxes and left `side_boom` at its drawn length, so the bracket
+hung 20 cm past the end of a pole that was not there — which is exactly the
+thing that cannot be built. The adopted build lengthens `side_boom` downward by
+20 cm, which is 20 cm of new obstacle for every other arm, and it was re-swept
+from scratch on the merged six-arm canvas (`scripts/run_atlas6.py`,
+`docs/MERGED_CANVAS.md`):
+
+- the extra profile costs the other four arms **exactly zero cells** (13, 31,
+  17 and 71 are cell-for-cell identical with the pole and without it), which
+  extends §6's neighbour result to the longer pole;
+- on the continuous 1.8034 × 3.63064 m canvas the move takes union strict-GO
+  **69.13 → 75.93 %**, cells reachable by ≥ 2 arms **7.86 → 25.47 %**, and each
+  side arm **9.89 → ~22.4 %** of the whole canvas (17.9 → 38.8 % of its own web,
+  which reproduces this study's 18.0 → 38.8 % on the single web);
+- and it does the thing a single web could not be asked about at all: the seam
+  strip goes **77.47 → 88.00 %** GO with cross-unit coverage **41.30 → 74.91 %**.
+
+Also new, and needed: `frames.Q_READY_WALL_LOW`. The drawn ready pose puts the
+pen **0.100 m below the paper** once the base drops 0.20 m.
+
 ## Reproduce
 
 ```

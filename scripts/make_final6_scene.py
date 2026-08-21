@@ -24,6 +24,7 @@ import trimesh
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 from aris_sixarm import atlas, rig_final, rig_final6 as r6  # noqa: E402
+from aris_sixarm.fleet import ACTIVE_RIG  # noqa: E402
 from aris_sixarm.viz import robot_model  # noqa: E402
 
 BOX_COLOR = {"A": 0x9AA0A6, "B": 0x8B9096}      # two greys, one per unit
@@ -104,10 +105,15 @@ overhang the leg lines by 0.33 cm, so pads touching would hold the structural
 faces 0.66 cm apart. Knob: <code>rig_final6.GAP_CM</code>.<br>
 2. * <b>Unit B arm ids 17 / 71 / 97</b> are ASSUMED (the legacy registry's
 other three physical arms). No drawing names them.<br>
-3. <b>Web seam</b>: <code>MERGE_WEBS = {r6.MERGE_WEBS}</code> &rarr; two webs
-with a <b>{r6.SEAM_M * 100:.2f} cm</b> gap between them, not one continuous
-surface. Flip the flag if it should be one web &mdash; the seam strip is then
-UNSCORED until a real sweep runs.<br>
+3. <b>Web seam</b>: <code>MERGE_WEBS = {r6.MERGE_WEBS}</code> &rarr;
+{"ONE continuous surface spanning both units and the "
+ f"<b>{r6.SEAM_M * 100:.2f} cm</b> strip between the webs (swept for real by "
+ "<code>scripts/run_atlas6.py</code>). What is still assumed is physical: that "
+ "the paper is flat and drawable over that strip, which lies on the two "
+ "frames' abutting top rails and not on a tabletop."
+ if r6.MERGE_WEBS else
+ f"two webs with a <b>{r6.SEAM_M * 100:.2f} cm</b> gap between them, not one "
+ "continuous surface. Flip the flag if it should be one web."}<br>
 4. Unit-B base rotations are realised as <b>proper</b> rotations
 (S&middot;R&middot;S): a reflection is improper and no arm can be built
 left-handed. Confirm each real base plate's yaw.<br>
@@ -129,8 +135,14 @@ def build(html_path, atlas_dir):
     vis["/Background"].set_property("top_color", [0.95, 0.95, 0.97])
     vis["/Background"].set_property("bottom_color", [0.85, 0.85, 0.90])
 
-    # --- the two webs ----------------------------------------------------
-    for name, ((x0, y0), (w, h)) in zip(("webA", "webB"), r6.webs()):
+    # --- the drawable surface: two webs, or one merged canvas ------------
+    # `r6.webs()` returns ONE rectangle under MERGE_WEBS and TWO without it, so
+    # it is enumerated rather than zipped against a fixed pair of names — a zip
+    # against ("webA", "webB") silently drops half a two-web rig or draws only
+    # the first half of a merged one.
+    webs = r6.webs()
+    for i, ((x0, y0), (w, h)) in enumerate(webs):
+        name = f"web{chr(ord('A') + i)}" if len(webs) > 1 else "canvas"
         vis[f"paper/{name}"].set_object(
             g.Box([w, h, 0.004]), g.MeshLambertMaterial(color=0xFAFAF5))
         vis[f"paper/{name}"].set_transform(
@@ -155,11 +167,18 @@ def build(html_path, atlas_dir):
     vis["/Cameras/default/rotated/<object>"].set_property(
         "position", [2.5, 2.2, 2.7])
 
-    # --- both frames -----------------------------------------------------
-    _add_boxes(vis, r6.frame_boxes6_canvas(zmin=-10))
+    # --- both frames, in the BUILD the active rig stands in ---------------
+    # `ARIS_RIG=final6_opt` lowers the side arms 20 cm and lengthens both poles;
+    # drawing the as-drawn boxes under that rig would show two arms hanging in
+    # mid-air below the end of their own pole, which is the one picture this
+    # scene exists to prevent.
+    opt = ACTIVE_RIG == "final6_opt"
+    fleet6 = r6.FLEET_FINAL6_OPT if opt else r6.FLEET_FINAL6
+    _add_boxes(vis, r6.frame_boxes6_canvas(
+        zmin=-10, boxes_w=r6.FRAME_BOXES6_OPT_W_CM if opt else None))
 
     # --- six arms at ready, with pen holders -----------------------------
-    for aid, spec in r6.FLEET_FINAL6.items():
+    for aid, spec in fleet6.items():
         Twb = spec.T_world_base()
         col = _hex(spec.color)
         q = np.asarray(spec.q_seed, float)
@@ -172,15 +191,23 @@ def build(html_path, atlas_dir):
         vis[f"bases/arm{aid}"].set_transform(Twb)
 
     # --- coverage layer, mirrored (no new sweep) -------------------------
-    for i, (aid, spec) in enumerate(r6.FLEET_FINAL6.items()):
-        src = aid if r6.UNIT_OF[aid] == "A" else r6.TWIN[aid]
-        a, _ = atlas.load(atlas_dir, src)
-        go = atlas.strict_go(a)
-        x, y = a[:, 0].copy(), a[:, 1].copy()
-        if r6.UNIT_OF[aid] == "B":
+    for i, (aid, spec) in enumerate(fleet6.items()):
+        # PREFER THE ARM'S OWN SWEEP.  `out/atlas_final6_opt` has all six, over
+        # the whole continuous canvas; `out/atlas_final` has only unit A's
+        # three, and unit B has to be mirrored from its twin (exact, but blind
+        # to the seam and to the other unit's half).
+        try:
+            arr, _ = atlas.load(atlas_dir, aid)
+            mirrored = False
+        except FileNotFoundError:
+            arr, _ = atlas.load(atlas_dir, r6.TWIN[aid])
+            mirrored = True
+        go = atlas.strict_go(arr)
+        x, y = arr[:, 0].copy(), arr[:, 1].copy()
+        if mirrored:
             y = r6.mirror_y(y)
         col = np.array(spec.color)
-        xyz = np.column_stack([x, y, np.full(len(a), 0.004 + 0.0045 * i)])
+        xyz = np.column_stack([x, y, np.full(len(arr), 0.004 + 0.0045 * i)])
         rgb = np.where(go[:, None], col[None, :],
                        (0.35 * col + 0.55)[None, :] * 0.45)
         vis[f"coverage/arm{aid}"].set_object(

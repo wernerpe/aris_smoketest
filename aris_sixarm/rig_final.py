@@ -194,7 +194,7 @@ FRAME_BOXES_W_CM = [
 ]
 
 
-def frame_boxes_canvas(exclude_tag=None, zmin=0.0):
+def frame_boxes_canvas(exclude_tag=None, zmin=0.0, boxes=None):
     """Structure boxes in the CANVAS frame, meters.
 
     -> list of dict(name, lo (3,), hi (3,), source, tag).
@@ -206,10 +206,15 @@ def frame_boxes_canvas(exclude_tag=None, zmin=0.0):
     forbids that half-space, and checking margins against a slab 2 mm under
     the pen would veto every legitimate drawing pose.  URDF export passes -10
     to keep everything.
+    `boxes`: a W-frame box list to convert INSTEAD of this module's own.  The
+    hook a rig VARIANT hangs on — `rig_final6.boxes_with_extended_pole()`
+    hands in the same 35 boxes with the side arm's clamped stack slid down a
+    lengthened pole — so a variant never has to monkey-patch
+    `FRAME_BOXES_W_CM`, which is the drawing and stays the drawing.
     """
     o = np.array(PAPER_ORIGIN_W_CM)
     out = []
-    for b in FRAME_BOXES_W_CM:
+    for b in (FRAME_BOXES_W_CM if boxes is None else boxes):
         if exclude_tag is not None and b["tag"] == exclude_tag:
             continue
         lo = (np.array(b["lo"]) - o) / 100.0

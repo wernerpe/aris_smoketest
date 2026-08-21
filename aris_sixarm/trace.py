@@ -608,7 +608,7 @@ def trace_logo(path, upscale=UPSCALE, rdp_tol=RDP_TOL, min_px=MIN_PX,
 
 
 def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None,
-             offset=(0.0, 0.0)):
+             offset=(0.0, 0.0), rotate_deg=0.0):
     """Pixel strokes -> paper strokes in metres: one uniform scale, centred.
 
     Keeping the aspect ratio is non-negotiable (it is a logo), so the scale is
@@ -619,7 +619,23 @@ def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None,
     the placement search turns, together with `target_width`.  It is applied as
     asked and NOT clamped; `info["fits"]` reports whether the placed logo is
     still inside the margin, which is the caller's cue to reject the candidate.
+
+    `rotate_deg` TURNS THE WHOLE LOGO before it is fitted, which matters as
+    soon as the paper stops being roughly the logo's own shape.  The CSAIL
+    logo is 1.31 times wider than it is tall; the merged six-arm canvas is
+    1.8034 x 3.63064 m, i.e. twice as TALL as it is wide.  Upright, the logo's
+    width binds and two thirds of the canvas is unusable at any size; turned
+    90 degrees its long axis runs along the canvas's long axis and the same
+    width limit buys a logo 1.31x bigger in every dimension (1.71x the area).
+    Applied to the pixel polylines about their own bounding-box centre, so
+    everything after this line — the aspect-preserving fit, the margin test,
+    the offset — is untouched and sees only a differently-shaped logo.
     """
+    if rotate_deg:
+        a = np.deg2rad(float(rotate_deg))
+        R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        strokes_px = [dict(s, pts=np.asarray(s["pts"], float) @ R.T)
+                      for s in strokes_px]
     P = np.vstack([s["pts"] for s in strokes_px])
     x0, x1 = P[:, 0].min(), P[:, 0].max()
     y0, y1 = P[:, 1].min(), P[:, 1].max()
@@ -640,6 +656,7 @@ def to_sheet(strokes_px, sheet, margin=0.06, min_len=0.025, target_width=None,
         out.append(dict(pts=xy, color=s["color"], kind=s["kind"], id=len(out)))
     lw, lh = w * scale, h * scale
     info = dict(scale=scale, logo_w=lw, logo_h=lh, center=(cx, cy),
+                rotate_deg=float(rotate_deg),
                 offset=(float(offset[0]), float(offset[1])),
                 px_per_m=1.0 / scale, dropped_short=len(strokes_px) - len(out),
                 fits=bool(cx - lw / 2 >= margin - 1e-9

@@ -29,7 +29,11 @@ ROOT = Path(__file__).parents[1]
 # the registry
 # ==========================================================================
 def test_the_active_rig_is_the_final_rig():
-    assert FLEET is FLEET_FINAL and SHEET == SHEET_FINAL == (1.8034, 1.700)
+    # `FLEET` is a COPY of the registry, not the registry: `fleet.activate`
+    # mutates it in place (it is the object every `from .fleet import FLEET`
+    # holds), so the four registries have to survive being switched between.
+    assert FLEET == FLEET_FINAL and FLEET is not FLEET_FINAL
+    assert SHEET == SHEET_FINAL == (1.8034, 1.700)
     assert sorted(FLEET) == [2, 13, 31]                  # the drawing's ids
     assert FLEET[13].mount == "floor" and FLEET[31].mount == "inv" \
         and FLEET[2].mount == "wall"

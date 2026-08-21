@@ -277,6 +277,15 @@ Nothing in `rig_final.py` was changed; adopting this means editing
 `ARM_MOUNTS_W["side"]`, the three `side_*` mount boxes, `side_boom`'s length,
 and regenerating the URDF + atlas.
 
+**Adopted 2026-08-21, for BOTH units, without touching this file.** The user
+took the −20 cm recommendation for arm 2 and (by mirror symmetry) arm 97. It
+lives as `rig_final6.FLEET_FINAL6_OPT` — the same 35 boxes with the clamped
+stack slid and `side_boom` lengthened, handed to
+`rig_final.frame_boxes_canvas(boxes=…)` — and is installed by
+`ARIS_RIG=final6_opt`. `rig_final.py` stays the drawing. The re-swept numbers
+(and what the longer pole costs the other arms: nothing) are in
+`docs/MERGED_CANVAS.md`.
+
 ## Flags / ambiguities / risks
 
 1. **Arm-2 boom bottom disagrees between the two DXF model copies**: front
