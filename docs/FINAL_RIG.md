@@ -237,17 +237,70 @@ corridor), all four corners, the under-base holes of arms 31 and 2, and the
 top-center sliver between the 31/2 lobes. Left/right thirds are ~40 % dead
 each; the middle third only 14 %.
 
+## Appendix — arm 2's mount height (docs/ARM2_HEIGHT.md)
+
+Arm 2 is the only arm with a free mounting parameter: it hangs on a vertical
+2 × 3″ pole and could be re-clamped anywhere along it. Asked whether sliding
+it along z kills the dead zone under it — **it cannot, because the plate is
+already at the bottom stop.** The full study is `docs/ARM2_HEIGHT.md`;
+`scripts/arm2_height_sweep.py` → `out/arm2_height_sweep.{png,json}`.
+
+- **Arm-2-attributable dead paper today: 990 cells = 0.396 m² = 40.3 % of all
+  dead paper** — the right rod strip (578 cells, guide rods + `paper_curl`
+  clearance, *not* reach) and an under-shoulder hole (412 cells, a disc
+  r ≤ 0.34 m about canvas (1.2768, 1.2572); arm 2's shoulder is 0.333 m in −X
+  of its plate because its J1 axis is horizontal).
+- **Slide range, DXF-re-derived**: the *only* piece gripping the pole is the
+  bracket at z 155.0675–160.8338; the base plate's top is flush with the
+  pole's own lower end and the two 3.81 spacer blocks hang in air. Travel
+  **down 0.00 cm (front copy) / 2.70 cm (top copy)**; **up 65.19 cm**, clear
+  the whole way to the top beam at 226.0275. This is Flags #1 and Flags #2
+  meeting: the mount is "not stiff and stable" *because* the arm hangs off the
+  end of the pole.
+- **Every centimetre down helps, every centimetre up hurts**, monotonically.
+  Sliding up 12 cm costs 7.4 points of union coverage.
+- Best reachable without touching the pole (−2 cm): union 68.63 → 69.15 %.
+  Noise; not worth the last of the bracket engagement.
+- **Optimum −20 cm (canvas z 0.576)**: union strict-GO **68.63 → 75.12 %**,
+  arm 2 **18.0 → 38.8 %**, cells covered by ≥ 2 arms **4.1 → 18.2 %**, 587
+  dead cells (0.235 m²) recovered against 79 newly dead. Needs ≈ 20 cm more
+  pole, into a volume verified empty for 71 cm below that — and that same
+  change is what would finally make the joint stiff (≈ 28 cm of engagement
+  instead of 5.8). Arms 13 and 31 are provably unaffected (2276 → 2276,
+  2009 → 2009).
+- **Still dead afterwards**: the right rod strip (493 cells — transport
+  clearance, no base height fixes it) and an inner annulus at r ≈ 0.10–0.16
+  about the shoulder (181 cells — a wrist-fold/σ failure at a shoulder that
+  sliding along z never moves in xy).
+
+Nothing in `rig_final.py` was changed; adopting this means editing
+`ARM_MOUNTS_W["side"]`, the three `side_*` mount boxes, `side_boom`'s length,
+and regenerating the URDF + atlas.
+
 ## Flags / ambiguities / risks
 
 1. **Arm-2 boom bottom disagrees between the two DXF model copies**: front
    copy z 155.07→226.07, top copy z 152.37→226.03. Collision model uses the
-   union (152.37→226.07). Ask which is as-built.
+   union (152.37→226.07). These 4 solids are the ONLY geometry in the drawing
+   where the copies disagree (313 of 315 match to < 0.05 cm). Evidence both
+   ways: the top-copy length is 73.66 cm = **29.00 in exactly**, the same part
+   as the four arm-31 boom beams, and its top sits flush on the beam
+   underside; the front-copy version is what the PDF actually prints
+   (pixel-verified) but is a round *metric* 71.00 cm in an all-imperial rig
+   and over-runs 0.04 cm into the top beam. Ask which is as-built — it is the
+   difference between 0.00 and 2.70 cm of free travel for the arm-2 plate
+   (docs/ARM2_HEIGHT.md).
 2. **The drawing itself warns about arm 2's mount**: MTEXT *"Arm 2 side
    position: conection base plate to boom pole is not stiff and stable."*
    A compliant mount means the surveyed base pose may not hold under load —
    the calibration margin term for arm 2 should NOT be reduced below 30 mm
    until the mount is stiffened or surveyed under load. Surface this to the
-   fabricator.
+   fabricator. **The geometry says exactly why**: the only piece gripping the
+   pole is a 5.77 cm bracket (z 155.0675–160.8338) at the pole's very bottom
+   end; the base plate's top edge is flush with where the pole stops and the
+   two 3.81 spacer blocks are bolted to nothing. Lengthening the pole ~20 cm
+   downward fixes the stiffness AND is worth +6.5 points of union coverage —
+   see the appendix above.
 3. The 91,6 annotation says "to surface (drawing paper)" but geometrically
    measures to the **tabletop** (91.40 to the paper top). We anchor arm 2 by
    the plate solids, not this dim, so nothing depends on the reading — but
