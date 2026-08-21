@@ -1,10 +1,20 @@
 # aris_sixarm
 
-Motion analysis & planning for the **Aris Kindt** installation: six Franka FR3 arms
-drawing on a shared horizontal paper plane. This repo consolidates the validated
-kinematic conventions, the fleet model, the reachability/controllability atlas, and
-(next) the multi-arm stroke planner — extracted from the sprawling upstream
-`Aris_Kindt` branches into one clean, tested codebase.
+Motion analysis & planning for the **Aris Kindt** installation. This repo
+consolidates the validated kinematic conventions, the fleet model, the
+reachability/controllability atlas, and the multi-arm stroke planner —
+extracted from the sprawling upstream `Aris_Kindt` branches into one clean,
+tested codebase.
+
+**THE ACTIVE RIG IS THE FINAL 3-ARM INSTALLATION** (2026-08): arm 13 upright
+on the table, arm 31 hanging under the frame's central beam, arm 2
+side-mounted with J1 horizontal, drawing a 1.80 × 1.70 m paper web inside a
+steel cage that the planner now carries as verified collision geometry.
+Every number and its provenance: `docs/FINAL_RIG.md`; machine-readable:
+`aris_sixarm/rig_final.py`; URDFs: `assets/final_rig/`. The six-arm layout
+this README's historical numbers were earned on lives on as
+`fleet.FLEET_SIXARM` (regression-pinned); prose below that speaks of six
+arms describes that era.
 
 ## Layout
 

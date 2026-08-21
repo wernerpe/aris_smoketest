@@ -105,7 +105,7 @@ DXF copies) — Flags #5.
 
 ## Structure / collision model
 
-`rig_final.FRAME_BOXES_W_CM` — 34 conservative AABBs that provably enclose
+`rig_final.FRAME_BOXES_W_CM` — 35 conservative AABBs that provably enclose
 every drawn member. Key modeling choices:
 
 - **table_block**: everything below the tabletop (legs, feet, top+bottom rail
@@ -124,10 +124,11 @@ every drawn member. Key modeling choices:
   directly behind the mounting plate) + clamp blocks straddling the axis
   height + gussets. Bottom z taken as the **union** of the two DXF copies
   (Flags #1).
-- **paper transport**: the feed roll (Ø≈20.2, canvas x −0.205→+0.001,
-  z −0.012→0.194) sits **flush against the paper's left edge** — it, not
-  reach, will bound the drawable strip there. Guide rods / winder / crank at
-  the right edge stay ≥ 0.095 m outside the sheet.
+- **paper transport**: the feed roll (Ø≈20.2 + R 7.0 end flanges, canvas
+  x −0.214→+0.001, z −0.012→0.194) sits **flush against the paper's left
+  edge** — it, not reach, bounds the drawable strip there. Guide rods /
+  winder / crank sit ≥ 0.09 m beyond the right edge; the **rising paper web
+  itself** (up to 2.9 cm over the rods) is boxed as `paper_curl`.
 - **8 hung devices** (cameras or lights — purpose not stated) under the top
   beams, canvas z ≥ 1.53.
 
@@ -137,15 +138,104 @@ in exactly one box (verified independently, see Verification).
 
 ## Pen holder / tool
 
-*(pending — CAD extraction in progress; this section is filled by the
-pen-holder campaign step. The legacy gate-validated tool chain — hand TCP =
-flange + 0.1034, `PEN_EXT` = 0.110 below TCP — stays untouched as the
-`sixarm` config; the final-rig tool is a NEW config alongside it.)*
+Source: `Pen holder cad(1).zip` — all native SolidWorks (no neutral formats;
+the SW-2024/25 container was reverse-engineered to tessellations + assembly
+transforms; meters confirmed by the pencil's own 174.6 mm and the base
+plate's 226×190 drawing callouts).
+
+**The holder is CLAMPED BETWEEN THE FRANKA HAND'S FINGERS** — the hand is
+present and stock (flange→hand chain unchanged, so `TCP_D` stays the solver
+convention), the fingertips are custom/drilled, finger half-width **28.5 mm**
+(URDF fingers fixed there). The zip holds TWO rig generations:
+
+| build | status | flange→tip (panda_hand frame) | pen axis |
+|---|---|---|---|
+| **10° "natural hold"** (assembly complete, Mar 2026) | fully determined | **(−8.0, 0.0, +148.7) mm** = TCP + (−8.0, 0, +45.3) mm | tilted **10.0°** about y_hand |
+| **23° clutch** (newest parts, no assembly file) | protrusion ADJUSTABLE — tip **not determined by CAD** | at the 10° build's 21 mm protrusion: (−18.0, 0, 145.7) mm; to reach the upstream 0.209 m: ~90 mm protrusion → **(−44.9, 0, 209.0) mm, 45 mm off-axis** | tilted 23.0° (file says "22 deg" — flagged) |
+
+**Neither build reproduces the scalar tool model** (`PEN_EXT` = 0.110 below
+TCP = 213.4 mm from the flange, on-axis). The planning default REMAINS the
+gate-validated real-touchdown value — a measurement outranks a CAD whose
+deployed configuration is unconfirmed — and the CAD's own numbers are pinned
+alongside it in `frames.py` (`TIP_HAND_HOLDER10`, `PEN_TILT_HOLDER10`,
+`PEN_EXT_HOLDER10`).
+
+Collision: the final-rig pen capsule and the URDF tool cylinder use the
+**union envelope of both builds** — r = 0.05 m, z −0.033…+0.210 in the hand
+frame (`rig_final.PEN_R_FINAL`, `rig_final.TOOL`) — which covers the 10°
+housing (max radius 30 mm), the clutch extended to 0.209 m (45 mm off-axis +
+pencil), and the sharpened-pencil butt behind the flange plane. Visual: the
+CAD-extracted mesh `assets/final_rig/meshes/penholder_rig10_panda_hand_frame.stl`
+on each hand.
+
+Tool flags (also in Flags below): which build ships is UNCONFIRMED (newest
+files say 23° clutch + "Fat Franka Finger", whose cradle geometry is not
+fully resolved); clutch protrusion is a per-pencil setting AND wears with the
+consumable Conté à Paris pencil; a full-length pencil interferes with the
+wrist (butt 23 mm behind the flange plane) — pencils must be sharpened
+shorter.
 
 ## Verification
 
-*(pending — independent re-derivation agent diffing the drawings against
-`rig_final.py`; table lands here.)*
+An independent agent re-derived the geometry from the DXF/PDF with its OWN
+SAB/ACIS parser (exact vertices + NURBS control-point hulls + rational
+circles; scripts kept separate from the extraction's), then diffed
+`rig_final.py`. Position tolerance 0.05 cm; box containment tolerance
+0.01 cm, conservative direction only.
+
+| quantity | independent derivation | rig_final.py | Δ (cm) | verdict |
+|---|---|---|---|---|
+| world-frame offset | DXF + (241.282, 148.140, 155.275) | same | 0 | PASS |
+| arm 13 plate + J1 pose | (109.2886, 14.068, 64.7378), +Z, front +Y | (109.289, 14.068, 64.738) | ≤0.001 | PASS |
+| arm 31 plate + J1 pose | dim 45.7377 / marker 152.429 / plate bottom 155.8678, −Z, front +X | (45.737, 152.426, 155.868) | ≤0.003 | PASS |
+| arm 2 plate + J1 pose | face 182.2301 / 152.4711 / 141.2678 (ring 141.2786), −X, front −Z | (182.230, 152.471, 141.268) | ≤0.011 | PASS |
+| all three base rotations | consistent with plate asymmetry + depicted chains | ARM_R_W | — | PASS |
+| paper origin/size/top | (21.2463, 26.748, 63.6678); 180.340 × 170.000; tabletop 63.4678 | same | ≤0.0004 | PASS |
+| arm IDs | MTEXT "13 floor, 31 left upside down, 2 right side" | 13/31/2 | — | PASS |
+| two-copy boom discrepancy | side boom z 155.0678 (front) vs 152.3677 (top copy); unique to the side boom | union 152.37–226.07 | — | CONFIRMED |
+| 11 dimension entities | all consistent with the model ≤0.02 | — | — | PASS |
+
+**Containment findings (all folded back into the boxes, conservative
+direction):** the 8 hung-device boxes sat ~4 cm outboard of the drawn devices
+(knob/lens details protrude 4.9 cm inboard) → extended inboard; the
+guide-rod box missed the Ø2 couplers (X −1.23, z +0.5) and two Y-segments
+toward crank/winder → extended; the feed-roll END FLANGES (exact R = 7.0
+circles) reach the outer wall X = 0.0 → box X-lo moved to −0.15; six
+0.02–0.04 cm beam-pair/rail nicks (down_boom_E, down_gusset_W/E, side_boom,
+side_gusset, top_slab) → padded 0.05; the levelling-foot pads overhang the
+table block by 0.33 → widened; and the PAPER WEB ITSELF rises 2.9 cm over
+the guide rods (solid 5D2) → new `paper_curl` box. After the fixes every
+drawn member above the paper plane is inside a box (the deliberately unboxed
+items are the decorative robot depictions and the J1-axis marker solids,
+which sit where the real robots go); the only below-plane geometry outside a
+box was the 0.33 cm foot-pad overhang, now enclosed.
+
+The URDF is generated from `rig_final.py` and separately checked:
+`tests/test_final_rig.py` pins every URDF box/weld to the module at 2e-6 m,
+and `scripts/check_final_rig_urdf.py` (station venv) loads both URDFs in
+pydrake, FK-checks one dimension-anchored quantity per arm, and holds
+drake's FK of the vendored URDF against `frames.fk` to 6e-12.
+
+## What the final rig can draw (atlas, 2 cm grid, tilt ≤ 15°, pen 0.110)
+
+`scripts/run_atlas.py --out out/atlas_final`; map:
+`out/atlas_final/final_dead_zones.png`; masks: `out/atlas_final/coverage.npz`.
+
+| quantity | value |
+|---|---|
+| sheet cells (1.8034 × 1.700 m) | 7826 |
+| union REACHABLE | 84.9 % |
+| union STRICT-GO (margin ≥ 0.30, σ ≥ 0.14, frame boxes active) | **68.6 %** |
+| arm 13 (up) strict-GO | 29.1 % — the whole front half-disc |
+| arm 31 (down) strict-GO | 25.7 % — back-left annulus |
+| arm 2 (side) strict-GO | 18.0 % — back-right lobe, with a reach-without-GO ring under its mount |
+| cells strict-GO by ≥ 2 arms | 4.1 % — thin handoff bands where the three lobes meet (~(0.7, 0.75)) |
+
+**Dead zones** (nobody strict-GO): the left strip x ≲ 0.12 m (feed roll +
+wrist margin + arm-31 boom), the right strip x ≳ 1.70 m (reach + guide-rod
+corridor), all four corners, the under-base holes of arms 31 and 2, and the
+top-center sliver between the 31/2 lobes. Left/right thirds are ~40 % dead
+each; the middle third only 14 %.
 
 ## Flags / ambiguities / risks
 

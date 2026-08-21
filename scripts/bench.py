@@ -72,7 +72,10 @@ from csail_schedule import build_phases                               # noqa: E4
 # lengths are on the fleet whatever it is asked to draw, so the corpus uses the
 # ones the installation is standing with rather than a set chosen per drawing.
 # Everything else here is a default from the module that owns it.
-PENS = {2: 0.300, 31: 0.200, 71: 0.200, 97: 0.200}
+# FINAL RIG: every arm carries the same pen holder (clamped by the hand's
+# fingers); the gate-validated tool length is the default for all three.
+# The legacy fixture was {2: 0.300, 31: 0.200, 71: 0.200, 97: 0.200}.
+PENS = {}
 
 # THE ONE SETTING THE CORPUS CHANGES, AND THE CORPUS IS WHY IT EXISTS.  The
 # shipped `--max-probes 5` is a budget PER STROKE, and every CSAIL stroke is
