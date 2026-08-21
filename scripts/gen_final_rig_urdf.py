@@ -29,13 +29,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC_URDF = ROOT / "assets/franka_description/urdf/panda_arm_hand.urdf"
 OUT_DIR = ROOT / "assets/final_rig"
 MESH_REL = "../franka_description/meshes/visual"   # relative to OUT_DIR
-FINGER_FIX = 0.008        # m, finger joints welded at pen-grip opening
+FINGER_FIX = 0.0285       # m, finger half-width holding the holder (CAD-derived)
 
 # tool config (filled by the pen-holder CAD step; see rig_final/tool notes)
-try:
-    from aris_sixarm.rig_final import TOOL  # noqa: E402
-except ImportError:
-    TOOL = None
+from aris_sixarm.rig_final import TOOL  # noqa: E402
 
 
 def rpy_from_R(R):
@@ -152,11 +149,28 @@ def clone_arm(robot, arm_key, arm_id):
 
 
 def add_pen_holder(robot, pfx):
-    """Tool per the pen-holder CAD (TOOL config in rig_final): visual mesh if
-    converted, primitive collision envelope, tip frame link."""
+    """The pen holder (rig_final.TOOL): visual = the CAD-extracted mesh in the
+    panda_hand frame; collision = the union-envelope cylinder.  Attached as a
+    fixed link on the hand."""
     if TOOL is None:
         return
-    raise NotImplementedError("TOOL config landed; implement the attach")
+    name = f"{pfx}pen_holder"
+    link = ET.SubElement(robot, "link", name=name)
+    v = ET.SubElement(link, "visual")
+    _origin(v, xyz=(0, 0, 0))
+    g = ET.SubElement(v, "geometry")
+    ET.SubElement(g, "mesh", filename=TOOL["visual_mesh"])
+    m = ET.SubElement(v, "material", name=f"{name}_mat")
+    ET.SubElement(m, "color", rgba="0.25 0.25 0.28 1.0")
+    cc = TOOL["collision"]
+    c = ET.SubElement(link, "collision")
+    _origin(c, xyz=(0, 0, (cc["z0"] + cc["z1"]) / 2.0))
+    g = ET.SubElement(c, "geometry")
+    ET.SubElement(g, "cylinder", radius=_fmt(cc["radius"]),
+                  length=_fmt(cc["z1"] - cc["z0"]))
+    j = ET.SubElement(robot, "joint", name=f"{name}_weld", type="fixed")
+    ET.SubElement(j, "parent", link=f"{pfx}{TOOL['parent']}")
+    ET.SubElement(j, "child", link=name)
 
 
 def build(with_arms):

@@ -15,7 +15,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import ik, letters, planner, pwl  # noqa: E402
-from aris_sixarm.fleet import FLEET  # noqa: E402
+from aris_sixarm.fleet import FLEET_SIXARM as FLEET, SHEET_SIXARM  # noqa: E402
 from aris_sixarm.frames import QD_MAX, fk  # noqa: E402
 from aris_sixarm.stroke_api import (DEFAULTS, plan_stroke,  # noqa: E402
                                     polyline_length, truncate_polyline)
@@ -41,7 +41,7 @@ def inv_stroke():
     th = np.linspace(-0.6 * np.pi, 1.05 * np.pi, 400)
     return planner.clip_to_sheet(
         np.column_stack([bx + 0.66 * np.cos(th), by + 0.66 * np.sin(th)]),
-        verbose=False)
+        verbose=False, sheet=SHEET_SIXARM)
 
 
 def under_base_line():

@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from . import ik
+from . import rig_final
 from .fleet import FLEET, SHEET, H_INV_DEFAULT
 from .frames import fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin
 from .metrics import tip_jacobian, sigma_min, f_max, GATE_MARGIN, GATE_SIGMA
@@ -61,9 +62,12 @@ def _q7_window(valid_row):
     return best * _DQ7
 
 
-def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets, pen_ext=PEN_EXT):
+def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
+               boxes=()):
     """-> (margin, sigma_min, f_max, n_sol, valid_frac, q7_window, tilt_deg, q)
-    or None."""
+    or None.  `boxes`: the arm's static frame obstacles (final rig)."""
+    mount, seed = spec.mount, spec.q_seed
+    legacy_inv = mount == "inv" and getattr(spec, "rig", "sixarm") == "sixarm"
     tip_w = np.array([x, y, 0.0])
     press_b = Twb_inv[:3, :3] @ np.array([0, 0, -1.0])
     for cand in cand_sets:
@@ -88,13 +92,20 @@ def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets, pen_ext=PEN_EXT):
             continue
         sols.sort(key=lambda t: -t[0])
         for m, tilt_deg, q in sols[:6]:       # clearance-check best few
-            _, pts = fk(q)
+            T, pts = fk(q)
             pts_w = (Twb[:3, :3] @ pts.T).T + Twb[:3, 3]
             if np.any(pts_w[1:, 2] < 0.02):
                 continue
-            if mount == "inv":
+            if legacy_inv:
                 rb = np.hypot(pts[:, 0], pts[:, 1])
                 if np.any((pts[:, 2] < -0.02) & (rb < 0.12)):
+                    continue
+            if boxes:
+                tip_b = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
+                tip_w = Twb[:3, :3] @ tip_b + Twb[:3, 3]
+                P10 = np.vstack([pts_w, tip_w[None]])
+                if (rig_final.chain_static_clearance(P10, boxes)[0]
+                        < rig_final.STATIC_MARGIN):
                     continue
             J = tip_jacobian(q, pen_ext=pen_ext)
             vf = float(valid.mean())
@@ -105,19 +116,21 @@ def solve_cell(x, y, Twb, Twb_inv, mount, seed, cand_sets, pen_ext=PEN_EXT):
 
 
 def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
-              tilt_max_deg=15.0, pen_ext=PEN_EXT):
-    spec = FLEET[arm_id]
+              tilt_max_deg=15.0, pen_ext=PEN_EXT, fleet=None, sheet=None):
+    spec = (FLEET if fleet is None else fleet)[arm_id]
+    sheet = SHEET if sheet is None else sheet
+    boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     cand_sets = _candidates(tilt_max_deg)
     bx, by = spec.xy
     rows = []
     t0 = time.time()
-    for y in np.arange(0.0, SHEET[1] + 1e-9, grid):
-        for x in np.arange(0.0, SHEET[0] + 1e-9, grid):
+    for y in np.arange(0.0, sheet[1] + 1e-9, grid):
+        for x in np.arange(0.0, sheet[0] + 1e-9, grid):
             if (x - bx) ** 2 + (y - by) ** 2 > rmax ** 2:
                 continue
-            r = solve_cell(x, y, Twb, Twb_inv, spec.mount, spec.q_seed, cand_sets, pen_ext)
+            r = solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext, boxes)
             if r is not None:
                 rows.append([x, y, *r[:7], *r[7]])
     arr = np.array(rows) if rows else np.zeros((0, len(COLUMNS)))

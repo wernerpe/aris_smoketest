@@ -15,7 +15,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import allocate, sequence, writing            # noqa: E402
-from aris_sixarm.fleet import FLEET                            # noqa: E402
+from aris_sixarm.fleet import FLEET_SIXARM as FLEET            # noqa: E402
 from aris_sixarm.stroke_api import plan_stroke, reverse_plan   # noqa: E402
 from aris_sixarm.validate import validate_plan                 # noqa: E402
 

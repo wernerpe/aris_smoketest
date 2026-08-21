@@ -32,7 +32,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import (allocate, menu, planner, pwl, sequence, stroke_api,
                          trace, writing)
-from aris_sixarm.fleet import FLEET, H_INV_DEFAULT, SHEET
+from aris_sixarm.fleet import (FLEET_SIXARM as FLEET, H_INV_DEFAULT,
+                               SHEET_SIXARM as SHEET)
 
 PEN = 0.200
 SPEC = FLEET[31]

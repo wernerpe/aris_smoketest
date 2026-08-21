@@ -33,12 +33,39 @@ QD_MAX = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
 Q_READY_FLOOR = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
 # measured on arm 31, Desk fine-adjust 2026-05-29 — standard inverted seed
 Q_READY_INV = np.array([-2.2876, -1.60, -0.8564, -2.0905, 1.6853, 2.3160, 1.0468])
+# FINAL-RIG ready poses, derived 2026-08-21 (docs/FINAL_RIG.md): analytic-IK
+# hover 0.10 m above the paper in each arm's comfortable patch, best
+# min(margin, 2.5 sigma) among solutions that PASS validate.check_pose with
+# the frame boxes active (margin >= 0.30, sigma >= 0.14, frame clearance >=
+# STATIC_MARGIN + 0.02, pen above paper).  SEEDS, not measurements; replace
+# with Desk fine-adjusts once the rig stands.  The legacy Q_READY_INV is NOT
+# valid on the final rig: at h = 0.922 its tip is 6.6 mm BELOW the paper and
+# its elbow 18 mm from the boom (tests/test_final_rig.py pins the refusal).
+# Arm 13 keeps Q_READY_FLOOR (checked clean on the final rig: tip +0.39 m).
+Q_READY_INV_FINAL = np.array(   # arm 31, hover over canvas (0.55, 1.05)
+    [-0.6858, -1.2181, 1.0783, -2.5881, -2.1652, 1.5101, 0.9886])
+Q_READY_WALL = np.array(        # arm 2, hover over canvas (1.50, 1.20)
+    [1.5988, 1.4251, -1.0822, -2.3822, -2.4899, 2.2478, 1.7795])
 
 # --- tool chain (metres, along tool z) ---
 D_FLANGE = 0.107      # J7 -> flange
 D_HAND_TCP = 0.1034   # flange -> hand TCP
 TCP_D = D_FLANGE + D_HAND_TCP   # = 0.2104, the solver's d7e
 PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
+# --- FINAL RIG tool (pen holder CAD; docs/FINAL_RIG.md "Pen holder") ------
+# The holder is CLAMPED BY THE HAND'S FINGERS (custom fingertips, half-width
+# 28.5 mm); the flange->hand chain is stock, so TCP_D stays the solver
+# convention.  The CAD does NOT reproduce the scalar pen model: the complete
+# 10-deg "natural hold" build puts the tip at (-8.0, 0, +45.3) mm FROM THE
+# TCP in the hand frame with the pen axis tilted 10 deg about y_hand; the
+# newer 23-deg clutch build has ADJUSTABLE protrusion (tip not determined by
+# CAD; the upstream 0.209 m flange->tip needs ~90 mm protrusion = 45 mm off
+# axis).  PEN_EXT = 0.110 above is a REAL touchdown measurement and remains
+# the planning default until the deployed build+protrusion is confirmed;
+# these constants are the CAD's own numbers, ready for that day.
+TIP_HAND_HOLDER10 = np.array([-0.00804, 0.0, 0.14866])  # tip, panda_hand frame
+PEN_TILT_HOLDER10 = np.deg2rad(10.0)   # pen axis about y_hand (23.0 for clutch)
+PEN_EXT_HOLDER10 = 0.14866 - 0.1034    # = 0.0453: the along-z part, from TCP
 
 # --- modified DH: (alpha_{i-1}, a_{i-1}, d_i) ---
 DH = [(0, 0, 0.333), (-np.pi / 2, 0, 0), (np.pi / 2, 0, 0.316),

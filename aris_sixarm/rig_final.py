@@ -107,8 +107,9 @@ FRAME_BOXES_W_CM = [
     # everything below the tabletop as ONE enclosing block: legs, feet, rails
     # (top z 53.31-60.93 + bottom z 5.05-12.67), 45-deg corner braces, and the
     # tabletop plate itself.  Arms may never be below the paper plane anyway.
-    _B("table_block", (0, 0, 0), (218.44, 208.28, 63.468),
-       "encloses legs/feet/rails/braces/top plate (solids, front copy)"),
+    _B("table_block", (-0.4, -0.4, 0), (218.84, 208.68, 63.468),
+       "encloses legs/feet/rails/braces/top plate + levelling-foot pads "
+       "(pads overhang the leg lines by 0.33; verified)"),
     # cage corner posts, tabletop to the very top
     _B("post_FL", (0, 0, 60.93), (7.62, 7.62, 233.65), "7.62 sq posts"),
     _B("post_FR", (210.82, 0, 60.93), (218.44, 7.62, 233.65), "7.62 sq posts"),
@@ -117,8 +118,9 @@ FRAME_BOXES_W_CM = [
        "7.62 sq posts"),
     # the whole top band as one slab: perimeter beams + central double beam
     # (Y 144.831-160.071) + 4 connector plates (z 229.84-233.65)
-    _B("top_slab", (0, 0, 226.03), (218.44, 208.28, 233.65),
-       "encloses all top beams + connector plates"),
+    _B("top_slab", (0, 0, 226.03), (218.50, 208.28, 233.65),
+       "encloses all top beams + connector plates + device-R mount rails "
+       "(Groep-49 drawn 0.04 outboard; verified)"),
     # central double beam hangs BELOW nothing (it is inside the slab) but the
     # arm booms and gussets do hang below it:
     # corner brace plates at each post, z 205.71-226.03 (8 plates, 2 per post)
@@ -131,14 +133,14 @@ FRAME_BOXES_W_CM = [
     _B("brace_BR", (190.50, 180.34, 205.71), (218.44, 208.28, 226.03),
        "20.32x20.32x3.81 plates, enclosed with post corner"),
     # --- arm-31-style boom (the "down" arm) --------------------------------
-    _B("down_boom_W", (23.53, 144.83, 152.37), (31.15, 160.07, 226.03),
+    _B("down_boom_W", (23.48, 144.83, 152.37), (31.20, 160.07, 226.06),
        "west vertical beam pair straddling the central beam", "mount:down"),
-    _B("down_boom_E", (55.28, 144.83, 152.37), (62.90, 160.07, 226.03),
+    _B("down_boom_E", (55.25, 144.83, 152.37), (62.95, 160.07, 226.06),
        "east vertical beam pair straddling the central beam", "mount:down"),
-    _B("down_gusset_W", (3.21, 144.83, 205.71), (23.53, 160.07, 226.03),
+    _B("down_gusset_W", (3.16, 144.83, 205.71), (23.56, 160.07, 226.06),
        "vertical gusset 20.32x3.81x20.32 (Y band taken conservative)",
        "mount:down"),
-    _B("down_gusset_E", (62.88, 144.83, 205.71), (83.22, 160.07, 226.03),
+    _B("down_gusset_E", (62.83, 144.83, 205.71), (83.27, 160.07, 226.06),
        "vertical gusset 20.32x3.81x20.32 (Y band taken conservative)",
        "mount:down"),
     _B("down_clamps", (31.93, 144.83, 157.14), (54.53, 160.07, 166.71),
@@ -146,10 +148,10 @@ FRAME_BOXES_W_CM = [
     _B("down_plate", (31.931, 142.926, 155.868), (54.513, 161.926, 157.138),
        "base plate 22.582x19.0x1.27", "mount:down"),
     # --- arm-2-style boom (the "side" arm) ---------------------------------
-    _B("side_boom", (187.31, 144.83, 152.37), (194.93, 160.07, 226.07),
+    _B("side_boom", (187.28, 144.83, 152.37), (194.95, 160.07, 226.07),
        "vertical beam pair; bottom z is the UNION of the two DXF copies "
        "(155.07 front / 152.37 top copy) - FLAGGED", "mount:side"),
-    _B("side_gusset", (194.95, 144.83, 205.71), (215.27, 160.07, 226.03),
+    _B("side_gusset", (194.92, 144.83, 205.71), (215.32, 160.07, 226.06),
        "vertical gussets 20.32x3.81x20.32 (Y band taken conservative)",
        "mount:side"),
     _B("side_clamps", (183.50, 144.87, 132.49), (187.31, 160.07, 155.07),
@@ -163,25 +165,32 @@ FRAME_BOXES_W_CM = [
     _B("up_plate", (99.789, 0.268, 63.468), (118.789, 22.868, 64.738),
        "base plate 22.582x19.0x1.27 on the tabletop", "mount:up"),
     # --- paper transport ---------------------------------------------------
-    _B("feed_roll", (0.8, 23.5, 62.5), (21.35, 200.0, 83.1),
-       "feed roll ~O20.2, axis X~11.1 z~72.8 (curved solid, point-sampled; "
-       "padded outward, +X face kept at the measured 21.2+0.15) + brackets"),
-    _B("guide_rods", (211.6, 32.0, 63.4), (215.6, 192.1, 66.8),
-       "3 thin guide rods X~212.1/213.6/215.1, z~64.7-66.3, padded 0.5"),
+    _B("feed_roll", (-0.15, 23.5, 62.5), (21.35, 200.0, 83.1),
+       "feed roll ~O20.2 + end flanges R7.0 reaching X=0.0 (verified) + "
+       "brackets; +X face kept at the measured 21.2+0.15"),
+    _B("guide_rods", (210.3, 23.8, 63.4), (215.6, 197.7, 67.35),
+       "3 guide rods R~0.76 + O2 couplers (X-lo 210.37, z-hi 67.30, "
+       "coupler runs to the crank and winder; verified)"),
     _B("winder_box", (209.57, 197.61, 63.47), (216.57, 200.61, 68.47),
        "winder box 7x3x5"),
     _B("crank_motor", (209.38, 9.38, 63.47), (216.38, 23.82, 71.34),
        "crank/motor block"),
+    # the paper web itself, rising off the table over the guide rods to the
+    # winder (solid 5D2, X 201.586-213.994, up to z 66.33): a physical surface
+    # a pen holder must not plough through
+    _B("paper_curl", (201.5, 26.7, 63.4), (214.0, 196.8, 66.4),
+       "paper web rising over the guide rods (verified, solid 5D2)"),
     # --- 8 hung devices (cameras or lights - purpose not stated) -----------
-    _B("device_F1", (61.0, -1.0, 216.8), (85.2, 8.62, 226.58),
-       "body 10.8x7.9x6.9 z 219.72-226.58 + plate + protrusions to 216.8"),
-    _B("device_F2", (133.4, -1.0, 216.8), (157.6, 8.62, 226.58), "as F1"),
-    _B("device_B1", (61.0, 199.66, 216.8), (85.2, 209.28, 226.58), "as F1"),
-    _B("device_B2", (133.4, 199.66, 216.8), (157.6, 209.28, 226.58), "as F1"),
-    _B("device_L1", (-1.0, 27.9, 216.8), (8.62, 52.1, 226.58), "as F1"),
-    _B("device_L2", (-1.0, 100.3, 216.8), (8.62, 124.5, 226.58), "as F1"),
-    _B("device_R1", (209.82, 27.9, 216.8), (219.44, 52.1, 226.58), "as F1"),
-    _B("device_R2", (209.82, 100.3, 216.8), (219.44, 124.5, 226.58), "as F1"),
+    _B("device_F1", (61.0, -1.0, 216.8), (85.2, 13.7, 226.58),
+       "body + plate + knob/lens details protruding 4.92 inboard "
+       "(verified; box extended inboard to Y 13.7)"),
+    _B("device_F2", (133.4, -1.0, 216.8), (157.6, 13.7, 226.58), "as F1"),
+    _B("device_B1", (61.0, 194.5, 216.8), (85.2, 209.28, 226.58), "as F1"),
+    _B("device_B2", (133.4, 194.5, 216.8), (157.6, 209.28, 226.58), "as F1"),
+    _B("device_L1", (-1.0, 27.9, 216.8), (13.7, 52.1, 226.58), "as F1"),
+    _B("device_L2", (-1.0, 100.3, 216.8), (13.7, 124.5, 226.58), "as F1"),
+    _B("device_R1", (204.7, 27.9, 216.8), (219.5, 52.1, 226.58), "as F1"),
+    _B("device_R2", (204.7, 100.3, 216.8), (219.5, 124.5, 226.58), "as F1"),
 ]
 
 
@@ -210,6 +219,102 @@ def frame_boxes_canvas(exclude_tag=None, zmin=0.0):
         out.append(dict(name=b["name"], lo=lo, hi=hi,
                         source=b["source"], tag=b["tag"]))
     return out
+
+
+# --- static clearance policy (docs/DECISIONS.md, FINAL RIG table) --------
+# Distinct from the INTER-ARM margin (two moving arms + schedule slop,
+# safety 0.05 + calib 0.03): against STATIC steel the operating term follows
+# the established static-surface convention (Z_PAPER = 0.02 against the
+# tabletop), plus the same 0.03 calibration term — the drawing is a plan, not
+# an as-built survey, and the drawing itself warns arm 2's mount is "not
+# stiff and stable".  Shrink CALIB_STATIC per-rig the day a survey lands.
+Z_STATIC = 0.02
+CALIB_STATIC = 0.03
+STATIC_MARGIN = Z_STATIC + CALIB_STATIC
+
+# capsules for static checks: the conductor's chain topology (a test pins
+# them against coordination.CAPSULES) MINUS the base column (0,1) — the base
+# is bolted to its mount by construction, and its capsule radius would
+# false-positive against the very plate it is bolted to.  Radii mirror
+# coordination.LINK_R / WRIST_R / PEN_R.
+PEN_R_FINAL = 0.05    # pen capsule radius, FINAL rig: the UNION envelope of
+                      # both holder builds (10-deg: tip 8 mm off axis; 23-deg
+                      # clutch at 0.209 flange->tip: 45 mm off axis + pencil)
+STATIC_CAPSULES = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
+                   (5, 7, 0.07), (7, 8, 0.07), (8, 9, PEN_R_FINAL))
+
+# the holder as URDF tool geometry (visual mesh extracted from the SolidWorks
+# CAD, panda_hand frame; collision cylinder = the same union envelope)
+TOOL = dict(
+    parent="panda_hand",
+    visual_mesh="meshes/penholder_rig10_panda_hand_frame.stl",
+    collision=dict(type="cylinder", radius=PEN_R_FINAL, z0=-0.033, z1=0.210),
+    source="Pen holder cad(1).zip: 10-deg natural-hold assembly (complete); "
+           "collision is the union with the 23-deg clutch build extended to "
+           "the 0.209 m flange->tip reading",
+)
+
+
+def _point_box_d(P, lo, hi):
+    """(...,3) points vs one box -> (...,) distance (0 inside)."""
+    d = np.maximum(np.maximum(lo - P, P - hi), 0.0)
+    return np.linalg.norm(d, axis=-1)
+
+
+def segment_box_clearance(A, B, boxes, iters=36):
+    """(N,3),(N,3) segments -> (N,) exact min distance to the box set.
+
+    Per box, d(t) = dist(A + t(B-A), box) is convex in t (each coordinate
+    deficit is a max of affines; a norm of nonnegative convex components is
+    convex), so ternary search finds the true minimum.  A Lipschitz bound
+    (d >= min(d(A), d(B)) - |B-A|/2) prunes pairs that cannot come close, so
+    the search only runs where it matters.
+    """
+    A = np.asarray(A, float).reshape(-1, 3)
+    B = np.asarray(B, float).reshape(-1, 3)
+    if not boxes:
+        return np.full(len(A), np.inf)
+    lo = np.stack([b["lo"] for b in boxes])
+    hi = np.stack([b["hi"] for b in boxes])
+    dA = _point_box_d(A[:, None], lo, hi)          # (N, M)
+    dB = _point_box_d(B[:, None], lo, hi)
+    L = np.linalg.norm(B - A, axis=1)              # (N,)
+    ends = np.minimum(dA, dB)
+    out = ends.copy()
+    # pairs whose Lipschitz bound could beat the endpoint distance
+    ni, mi = np.nonzero(ends - 0.5 * L[:, None] < out.min(axis=1)[:, None])
+    if len(ni):
+        a, d = A[ni], (B - A)[ni]
+        blo, bhi = lo[mi], hi[mi]
+        t0 = np.zeros(len(ni))
+        t1 = np.ones(len(ni))
+        for _ in range(iters):
+            m1 = t0 + (t1 - t0) / 3.0
+            m2 = t1 - (t1 - t0) / 3.0
+            f1 = _point_box_d(a + m1[:, None] * d, blo, bhi)
+            f2 = _point_box_d(a + m2[:, None] * d, blo, bhi)
+            take1 = f1 <= f2
+            t1 = np.where(take1, m2, t1)
+            t0 = np.where(take1, t0, m1)
+        dmin = _point_box_d(a + (0.5 * (t0 + t1))[:, None] * d, blo, bhi)
+        np.minimum.at(out, (ni, mi), dmin)
+    return out.min(axis=1)
+
+
+def chain_static_clearance(P, boxes, capsules=STATIC_CAPSULES):
+    """(N,10,3) world chain points (frames.fk's 9 + pen tip) -> (N,)
+    min over capsules of (segment-to-box-set distance minus capsule radius).
+    Compare against STATIC_MARGIN."""
+    P = np.asarray(P, float)
+    if P.ndim == 2:
+        P = P[None]
+    if not boxes:
+        return np.full(len(P), np.inf)
+    worst = np.full(len(P), np.inf)
+    for i, j, r in capsules:
+        d = segment_box_clearance(P[:, i], P[:, j], boxes) - r
+        worst = np.minimum(worst, d)
+    return worst
 
 
 def box_clearance(points, boxes):

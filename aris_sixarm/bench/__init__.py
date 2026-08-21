@@ -45,10 +45,11 @@ import numpy as np
 from ..fleet import FLEET, SHEET
 
 # The one placement decision the corpus makes, and it is made HERE rather than
-# per drawing: the hatching patch sits on arm 71, which is an inverted arm with
-# a 200 mm pen and three neighbours — the same shape of neighbourhood the logo's
-# orange pass has, without being the logo's geometry.
-HATCH_ARM = 71
+# per drawing: the hatching patch sits on the ACTIVE fleet's first inverted
+# arm (final rig: arm 31 under the boom; legacy: also 31) — an arm with
+# overhead structure and neighbours, the same shape of neighbourhood a dense
+# pass has, without being any particular drawing's geometry.
+HATCH_ARM = next(a for a in FLEET if FLEET[a].mount == "inv")
 
 
 def _poly(p0, p1, n=17):
@@ -71,6 +72,10 @@ def hatch(sheet=SHEET, seed=1, arm=HATCH_ARM, n_lines=43, width=0.70,
     argument keeps every generator's signature the same.
     """
     x0, y0 = FLEET[arm].xy
+    # clamp the patch onto the sheet (the final rig's arm 31 stands near the
+    # left edge; the patch stays in ITS territory but on the paper)
+    x0 = float(np.clip(x0, 0.04 + 0.5 * width, sheet[0] - 0.04 - 0.5 * width))
+    y0 = float(np.clip(y0, 0.04 + 0.5 * height, sheet[1] - 0.04 - 0.5 * height))
     xs = (x0 - 0.5 * width, x0 + 0.5 * width)
     ys = np.linspace(y0 - 0.5 * height, y0 + 0.5 * height, int(n_lines))
     ys = ys[(ys > 0.02) & (ys < sheet[1] - 0.02)]
@@ -103,7 +108,7 @@ def scatter(sheet=SHEET, seed=2, n=70, lo=0.06, hi=0.20):
                          length_m=(lo, hi))
 
 
-def starburst(sheet=SHEET, seed=3, n_rays=24, r_in=0.06, r_out=0.90):
+def starburst(sheet=SHEET, seed=3, n_rays=24, r_in=0.06, r_out=None):
     """Rays out of the middle of the sheet. -> (strokes, meta).
 
     The middle is the waist between the four inverted bases — the hardest place
@@ -113,6 +118,8 @@ def starburst(sheet=SHEET, seed=3, n_rays=24, r_in=0.06, r_out=0.90):
     gives the sequencer something to fix.
     """
     cx, cy = 0.5 * sheet[0], 0.5 * sheet[1]
+    if r_out is None:                 # scale to the sheet, capped at the
+        r_out = min(0.90, 0.5 * min(sheet) - 0.05)   # corpus's original 0.90
     strokes = []
     for i in range(int(n_rays)):
         th = 2.0 * np.pi * i / int(n_rays)
@@ -126,7 +133,7 @@ def starburst(sheet=SHEET, seed=3, n_rays=24, r_in=0.06, r_out=0.90):
                          centre=(float(cx), float(cy)))
 
 
-def spiral(sheet=SHEET, seed=4, turns=4.75, r_in=0.08, r_out=0.88, ds=0.01):
+def spiral(sheet=SHEET, seed=4, turns=4.75, r_in=0.08, r_out=None, ds=0.01):
     """ONE continuous Archimedean spiral, just under 15 m. -> (strokes, meta).
 
     A single stroke has no whole-segment move available to it at all — there is
@@ -145,6 +152,8 @@ def spiral(sheet=SHEET, seed=4, turns=4.75, r_in=0.08, r_out=0.88, ds=0.01):
     reported in `docs/BENCH.md`; raising it is a planner question, not this one.
     """
     cx, cy = 0.5 * sheet[0], 0.5 * sheet[1]
+    if r_out is None:
+        r_out = min(0.88, 0.5 * min(sheet) - 0.05)
     th_max = 2.0 * np.pi * float(turns)
     b = (r_out - r_in) / th_max
     th = np.linspace(0.0, th_max, 20000)

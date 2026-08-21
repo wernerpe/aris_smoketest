@@ -34,6 +34,7 @@ import traceback
 
 import numpy as np
 
+from . import rig_final
 from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, fk_many,
                      joint_margin_many, tip_pos_many)
 from .metrics import sigma_min_many as _sigma_min_many, tip_jacobian_many
@@ -166,11 +167,20 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
             worst["min_chain_z"] = float(z.min())
             for i in np.flatnonzero(z < Z_CLEAR - eps):
                 add("paper_clearance", i, z[i], Z_CLEAR)
-            if spec.mount == "inv":
+            if spec.mount == "inv" and getattr(spec, "rig", "sixarm") == "sixarm":
                 rb = np.hypot(p[:, :, 0], p[:, :, 1])
                 hit = (p[:, :, 2] < BOOM_Z) & (rb < BOOM_R)
                 for i in np.flatnonzero(hit.any(axis=1)):
                     add("boom_keepout", i, float(rb[i][hit[i]].min()), BOOM_R)
+            boxes = spec.static_obstacles() \
+                if hasattr(spec, "static_obstacles") else []
+            if boxes:
+                tips = tip_pos_many(qs, pen_ext) @ Rwb.T + twb
+                P10 = np.concatenate([pw, tips[:, None, :]], axis=1)
+                c = rig_final.chain_static_clearance(P10, boxes)
+                worst["min_frame_clearance"] = float(c.min())
+                for i in np.flatnonzero(c < rig_final.STATIC_MARGIN - eps):
+                    add("frame_keepout", i, float(c[i]), rig_final.STATIC_MARGIN)
 
         # ---- 5. the clock --------------------------------------------------
         if times is not None:
@@ -236,13 +246,22 @@ def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
         if tip[2] < -eps:
             V.append(dict(kind="pen_below_paper", index=0, value=float(tip[2]),
                           limit=0.0))
-        if spec.mount == "inv":
+        if spec.mount == "inv" and getattr(spec, "rig", "sixarm") == "sixarm":
             rb = np.hypot(p[0, :, 0], p[0, :, 1])
             hit = (p[0, :, 2] < BOOM_Z) & (rb < BOOM_R)
             worst["boom_r"] = float(rb[hit].min()) if hit.any() else float("inf")
             if hit.any():
                 V.append(dict(kind="boom_keepout", index=0,
                               value=worst["boom_r"], limit=BOOM_R))
+        boxes = spec.static_obstacles() \
+            if hasattr(spec, "static_obstacles") else []
+        if boxes:
+            P10 = np.concatenate([pw, tip[None, None, :]], axis=1)
+            c = float(rig_final.chain_static_clearance(P10, boxes)[0])
+            worst["min_frame_clearance"] = c
+            if c < rig_final.STATIC_MARGIN - eps:
+                V.append(dict(kind="frame_keepout", index=0, value=c,
+                              limit=rig_final.STATIC_MARGIN))
     except Exception:                                  # never raise (see module doc)
         V.append(dict(kind="validator_error", index=-1, value=0.0, limit=0.0,
                       traceback=traceback.format_exc()))

@@ -35,12 +35,21 @@ import numpy as np
 
 from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk
 from .fleet import FLEET, H_INV_DEFAULT
+from .rig_final import STATIC_MARGIN
 from .validate import check_pose as validate_pose, validate_plan
 
 # same envelope as the conductor, restated here on purpose: if someone widens
 # a capsule there and the two disagree, this check is supposed to notice.
 RADII = ((0, 1, 0.09), (1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
          (5, 7, 0.07), (7, 8, 0.07), (8, 9, 0.03))
+# FINAL-RIG pen capsule: the holder envelope union (r 0.05), restated from
+# rig_final.PEN_R_FINAL on purpose — a test pins the two together.
+RADII_FINAL = RADII[:-1] + ((8, 9, 0.05),)
+
+
+def _radii_for(fleet_dict, arms):
+    final = any(getattr(fleet_dict[a], "rig", "sixarm") == "final" for a in arms)
+    return RADII_FINAL if final else RADII
 
 # REPORTED, NOT GATED, AND DELIBERATELY SO.  `validate.check_pose` measures the
 # pen tip against the paper plane, which nothing did before: the paper-clearance
@@ -103,18 +112,51 @@ def segment_distance(p0, p1, q0, q1):
     return np.minimum(interior, edge)
 
 
-def pair_clearance(Pi, Pj):
+def pair_clearance(Pi, Pj, radii=RADII):
     """Min capsule clearance between two arms, for chain points (...,10,3).
 
     Broadcasts over any leading axis, so a whole timeline costs one call.
     """
-    ia = np.array([c[0] for c in RADII])
-    ib = np.array([c[1] for c in RADII])
-    rr = np.array([c[2] for c in RADII])
+    ia = np.array([c[0] for c in radii])
+    ib = np.array([c[1] for c in radii])
+    rr = np.array([c[2] for c in radii])
     a0, a1 = Pi[..., ia, :][..., :, None, :], Pi[..., ib, :][..., :, None, :]
     b0, b1 = Pj[..., ia, :][..., None, :, :], Pj[..., ib, :][..., None, :, :]
     d = segment_distance(a0, a1, b0, b1) - rr[:, None] - rr[None, :]
     return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+
+
+def static_clearance_lb(P, boxes, step=0.02):
+    """LOWER BOUND on capsule-to-frame-box clearance — own derivation.
+
+    The planner minimises distance along each capsule segment analytically
+    (ternary search on a convex profile, `rig_final.segment_box_clearance`);
+    here the same quantity is bounded by SAMPLING the segment every <= `step`
+    metres and subtracting the 1-Lipschitz displacement residual, so the two
+    code paths share nothing but the geometry itself.  The base-column capsule
+    (0,1) is skipped for the same reason the planner skips it: the base is
+    bolted to its mount by construction.
+
+    P: (...,10,3) world chain points.  -> (...,) clearance lower bound.
+    """
+    if not boxes:
+        return np.full(np.asarray(P).shape[:-2], np.inf)
+    lo = np.stack([b["lo"] for b in boxes])
+    hi = np.stack([b["hi"] for b in boxes])
+    P = np.asarray(P, float)
+    out = np.full(P.shape[:-2], np.inf)
+    for (i, j, r) in RADII_FINAL[1:]:              # skip the base column
+        a, b = P[..., i, :], P[..., j, :]
+        L = float(np.max(np.linalg.norm(b - a, axis=-1)))
+        K = max(2, int(np.ceil(L / step)) + 1)
+        ts = np.linspace(0.0, 1.0, K)
+        pts = a[..., None, :] + ts[:, None] * (b - a)[..., None, :]
+        d = np.maximum(np.maximum(lo - pts[..., None, :], pts[..., None, :] - hi),
+                       0.0)
+        dist = np.sqrt(np.sum(d * d, -1)).min(-1)          # over boxes
+        slack = np.linalg.norm(b - a, axis=-1) / (2 * (K - 1))
+        out = np.minimum(out, dist.min(-1) - r - slack)
+    return out
 
 
 def pen_len(pen_ext, arm):
@@ -125,7 +167,7 @@ def pen_len(pen_ext, arm):
 
 
 def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-                 verbose=True):
+                 verbose=True, fleet=None):
     """A whole fleet standing still, all at once. -> report dict.
 
     A POSE IS A CLAIM EVEN WHEN NOTHING IS MOVING.  Two of them are load-bearing
@@ -140,19 +182,21 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
 
     No sweep slack is subtracted, because nothing sweeps.
     """
+    fl = FLEET if fleet is None else fleet
     arms = sorted(q_by_arm)
-    P = {a: _chain(np.asarray(q_by_arm[a], float).reshape(7), FLEET[a], h_inv,
+    P = {a: _chain(np.asarray(q_by_arm[a], float).reshape(7), fl[a], h_inv,
                    pen_len(pen_ext, a)) for a in arms}
+    rr = _radii_for(fl, arms)
     per_pair, worst, worst_at = {}, np.inf, None
     for i, ai in enumerate(arms):
         for aj in arms[i + 1:]:
-            d = float(pair_clearance(P[ai], P[aj]))
+            d = float(pair_clearance(P[ai], P[aj], rr))
             per_pair[(ai, aj)] = d
             if d < worst:
                 worst, worst_at = d, (ai, aj)
     poses, bad, dipped = {}, 0, []
     for a in arms:
-        rep = validate_pose(np.asarray(q_by_arm[a], float).reshape(7), FLEET[a],
+        rep = validate_pose(np.asarray(q_by_arm[a], float).reshape(7), fl[a],
                             h_inv, pen_len(pen_ext, a))
         kinds = [v["kind"] for v in rep["violations"]]
         hard = [k for k in kinds if k != PEN_PAPER]
@@ -177,7 +221,8 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
 
 
 def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
-                   pen_ext=PEN_EXT, sub=2, progress=None, verbose=True):
+                   pen_ext=PEN_EXT, sub=2, progress=None, verbose=True,
+                   fleet=None):
     """Verify a merged timeline. -> report dict (`ok` gates the animation).
 
     `qtraj` is {arm_id: (M,7)} exactly as it will be played back; `sub` sets how
@@ -204,18 +249,20 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
             fine[a] = Q
     F = len(next(iter(fine.values())))
 
-    P = {a: np.array([_chain(q, FLEET[a], h_inv, pen_len(pen_ext, a))
+    fl = FLEET if fleet is None else fleet
+    P = {a: np.array([_chain(q, fl[a], h_inv, pen_len(pen_ext, a))
                       for q in fine[a]]) for a in arms}
     stepd = {a: np.concatenate([[0.0], np.linalg.norm(np.diff(P[a], axis=0),
                                                       axis=2).max(1)]) for a in arms}
 
+    rr = _radii_for(fl, arms)
     worst, worst_at = np.inf, None
     per_pair = {}
     for i, ai in enumerate(arms):
         for aj in arms[i + 1:]:
             # ...minus the sweep back to the previous fine sample, so the bound
             # holds between samples and not only at them
-            lo = (pair_clearance(P[ai], P[aj])
+            lo = (pair_clearance(P[ai], P[aj], rr)
                   - 0.55 * (stepd[ai] + stepd[aj]))
             k = int(np.argmin(lo))
             per_pair[(ai, aj)] = float(lo[k])
@@ -225,6 +272,21 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
 
     lim = {a: float(min(np.min(np.asarray(fine[a]) - FR3_MIN),
                         np.min(FR3_MAX - np.asarray(fine[a])))) for a in arms}
+
+    # STATIC STRUCTURE: every frame of every arm against the rig's frame
+    # boxes — covers the transits and hovers no per-segment validator sees.
+    # Same sweep residual as the inter-arm check, same lower-bound logic.
+    frame_clear, frame_bad = {}, []
+    for a in arms:
+        boxes = (fl[a].static_obstacles()
+                 if hasattr(fl[a], "static_obstacles") else [])
+        if not boxes:
+            continue
+        lb = static_clearance_lb(P[a], boxes) - 0.55 * stepd[a]
+        k = int(np.argmin(lb))
+        frame_clear[a] = (float(lb[k]), float(k * dt / max(sub, 1)))
+        if lb[k] < STATIC_MARGIN:
+            frame_bad.append(a)
 
     mono = True
     if progress is not None:
@@ -241,7 +303,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
     # are about the configuration alone.
     frozen, frozen_bad, frozen_dip = {}, 0, []
     for a in arms:
-        rep_p = validate_pose(np.asarray(qtraj[a], float)[-1], FLEET[a], h_inv,
+        rep_p = validate_pose(np.asarray(qtraj[a], float)[-1], fl[a], h_inv,
                               pen_len(pen_ext, a))
         kinds = [v["kind"] for v in rep_p["violations"]]
         hard = [k for k in kinds if k != PEN_PAPER]
@@ -254,7 +316,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
         for a, segs in programs.items():
             for k, s in enumerate(segs):
                 pl = s["plan"]
-                rep = validate_plan(np.asarray(pl["pts"], float), FLEET[a],
+                rep = validate_plan(np.asarray(pl["pts"], float), fl[a],
                                     np.asarray(pl["qs"], float),
                                     times=np.asarray(pl["times"], float),
                                     h_inv=None, pen_ext=pen_len(pen_ext, a))
@@ -262,7 +324,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                 seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
 
     ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
-              and min(lim.values()) > 0.0)
+              and min(lim.values()) > 0.0 and not frame_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
                                               per_pair.items()},
@@ -271,7 +333,10 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                n_segments=len(seg_reports), segments_failed=int(seg_bad),
                segments=seg_reports, frozen=frozen,
                frozen_failed=int(frozen_bad),
-               frozen_pen_below_paper=sorted(frozen_dip))
+               frozen_pen_below_paper=sorted(frozen_dip),
+               frame_clearance={int(a): v for a, v in frame_clear.items()},
+               frame_margin=float(STATIC_MARGIN),
+               frame_failed=sorted(frame_bad))
     if verbose:
         print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
               f"{len(arms)} arms, {len(per_pair)} pairs")
@@ -281,6 +346,12 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                  f"{worst_at[1]}" if worst_at else ""))
         print(f"  per-arm plan validation: {len(seg_reports) - seg_bad}/"
               f"{len(seg_reports)} segments ok; progress monotone: {mono}")
+        if frame_clear:
+            wa = min(frame_clear, key=lambda a: frame_clear[a][0])
+            print(f"  min frame clearance {frame_clear[wa][0] * 1000:.1f} mm "
+                  f"(margin {STATIC_MARGIN * 1000:.0f} mm), arm {wa} at "
+                  f"t={frame_clear[wa][1]:.2f} s"
+                  + (f"; FAIL: arms {frame_bad}" if frame_bad else ""))
         print(f"  frozen poses: {len(arms) - frozen_bad}/{len(arms)} pass the "
               "joint-limit, paper and boom gates"
               + ("" if not frozen_bad else "  <- "

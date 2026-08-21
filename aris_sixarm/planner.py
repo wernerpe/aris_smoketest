@@ -31,6 +31,7 @@ s* — the natural split point for multi-arm allocation.
 import numpy as np
 
 from . import ik
+from . import rig_final
 from .frames import fk, rotx, PEN_EXT, joint_margin, FR3_MIN, FR3_MAX
 from .metrics import tip_jacobian, sigma_min as _sigma_min
 
@@ -57,7 +58,8 @@ def resample(points, ds=0.01):
     return np.column_stack([np.interp(s, t, p[:, 0]), np.interp(s, t, p[:, 1])]), s / L
 
 
-def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False):
+def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False,
+                  sheet=None):
     """Keep the LONGEST CONTIGUOUS in-sheet run of a polyline.
 
     A plain boolean mask would concatenate the disjoint in-sheet pieces of a
@@ -72,9 +74,10 @@ def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False):
     (stroke_api reports it as `clip_s`).
     """
     from .fleet import SHEET
+    sheet = SHEET if sheet is None else sheet
     pts = np.asarray(pts, float)
-    m = ((pts[:, 0] > border) & (pts[:, 0] < SHEET[0] - border)
-         & (pts[:, 1] > border) & (pts[:, 1] < SHEET[1] - border))
+    m = ((pts[:, 0] > border) & (pts[:, 0] < sheet[0] - border)
+         & (pts[:, 1] > border) & (pts[:, 1] < sheet[1] - border))
     runs, i = [], 0
     while i < len(m):
         if m[i]:
@@ -164,14 +167,23 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
     keep = m >= HARD_MARGIN
     idx, q, m = idx[keep], q[keep], m[keep]
 
-    # (d) clearance: the paper, and the inverted arms' own boom cylinder
+    # (d) clearance: the paper, the legacy arms' own boom cylinder, and the
+    #     FINAL RIG's frame structure (rig_final boxes, exact capsule dist)
     if clearance and len(idx):
-        _, p = ik.fk_batch(q)                      # (K,9,3) chain points
+        T, p = ik.fk_batch(q)                      # (K,9,3) chain points
         pw = p @ Twb[:3, :3].T + Twb[:3, 3]
         keep = pw[:, 1:, 2].min(axis=1) >= Z_PAPER
-        if spec.mount == "inv":
+        if spec.mount == "inv" and getattr(spec, "rig", "sixarm") == "sixarm":
             rb = np.hypot(p[:, :, 0], p[:, :, 1])
             keep &= ~np.any((p[:, :, 2] < BOOM_Z) & (rb < BOOM_R), axis=1)
+        boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") \
+            else []
+        if boxes:
+            tip = T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
+            tip_w = tip @ Twb[:3, :3].T + Twb[:3, 3]
+            P10 = np.concatenate([pw, tip_w[:, None, :]], axis=1)
+            keep &= (rig_final.chain_static_clearance(P10, boxes)
+                     >= rig_final.STATIC_MARGIN)
         idx, q, m = idx[keep], q[keep], m[keep]
 
     # (e) controllability: analytic tip Jacobians, one batched SVD
@@ -206,6 +218,8 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
     marg = np.full((Ns, n_q7, N_BRANCH), -1.0)
     sig = np.full((Ns, n_q7, N_BRANCH), -1.0)
     seed = spec.q_seed
+    boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") \
+        else []
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
     for i, (x, y) in enumerate(pts_xy):
@@ -219,13 +233,21 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
                 if m < HARD_MARGIN:
                     continue
                 if clearance:
-                    _, p = fk(q)
+                    T, p = fk(q)
                     pw = (Twb[:3, :3] @ p.T).T + Twb[:3, 3]
                     if np.any(pw[1:, 2] < Z_PAPER):     # 2 cm above the paper
                         continue
-                    if spec.mount == "inv":             # own boom cylinder
-                        rb = np.hypot(p[:, 0], p[:, 1])
+                    if spec.mount == "inv" and \
+                            getattr(spec, "rig", "sixarm") == "sixarm":
+                        rb = np.hypot(p[:, 0], p[:, 1])  # own boom cylinder
                         if np.any((p[:, 2] < BOOM_Z) & (rb < BOOM_R)):
+                            continue
+                    if boxes:
+                        tip = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
+                        tip_w = Twb[:3, :3] @ tip + Twb[:3, 3]
+                        P10 = np.vstack([pw, tip_w[None]])
+                        if (rig_final.chain_static_clearance(P10, boxes)[0]
+                                < rig_final.STATIC_MARGIN):
                             continue
                 s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext))
                 if s < HARD_SIGMA:

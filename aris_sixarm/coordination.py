@@ -79,6 +79,7 @@ import numpy as np
 
 from .frames import PEN_EXT, fk_many
 from .fleet import FLEET, H_INV_DEFAULT
+from .rig_final import PEN_R_FINAL
 
 LINK_R = 0.09        # m, capsule radius for base/upper arm/forearm
 WRIST_R = 0.07       # m, wrist + hand
@@ -138,8 +139,9 @@ def seg_seg_dist(p0, p1, q0, q1):
 class ArmPath:
     """One arm's frozen path, pre-chewed for the collision image."""
 
-    def __init__(self, arm_id, q, dt, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
-        spec = FLEET[arm_id]
+    def __init__(self, arm_id, q, dt, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+                 spec=None):
+        spec = FLEET[arm_id] if spec is None else spec
         self.arm, self.dt = arm_id, float(dt)
         self.q = np.asarray(q, float).reshape(-1, 7)
         if len(self.q) < 2:                       # a parked arm still occupies space
@@ -149,6 +151,11 @@ class ArmPath:
         self.A = np.ascontiguousarray(P[:, [c[0] for c in CAPSULES], :], np.float32)
         self.B = np.ascontiguousarray(P[:, [c[1] for c in CAPSULES], :], np.float32)
         self.r = np.array([c[2] for c in CAPSULES], np.float32)
+        if getattr(spec, "rig", "sixarm") == "final":
+            # the pen capsule carries the HOLDER envelope union (both CAD
+            # builds, clutch extended): r 0.05, not the bare-pen 0.03
+            self.r = self.r.copy()
+            self.r[-1] = PEN_R_FINAL
         self.center = P.mean(axis=1).astype(np.float32)
         self.radius = (np.linalg.norm(P - P.mean(axis=1, keepdims=True), axis=2).max(1)
                        + self.r.max()).astype(np.float32)
@@ -157,7 +164,7 @@ class ArmPath:
         self.motion = float(self.step.sum())
 
 
-def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None):
+def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None, fleet=None):
     """{arm: (N,7)} -> {arm: ArmPath}, each built with THAT ARM's pen.
 
     The pen is the last capsule of the chain, so the length is geometry and not
@@ -167,7 +174,8 @@ def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None):
     `frames.PEN_EXT`.
     """
     pens = pens or {}
-    return {a: ArmPath(a, q, dt, h_inv, float(pens.get(a, PEN_EXT)))
+    fl = FLEET if fleet is None else fleet
+    return {a: ArmPath(a, q, dt, h_inv, float(pens.get(a, PEN_EXT)), fl[a])
             for a, q in q_by_arm.items()}
 
 

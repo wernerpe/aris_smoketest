@@ -111,7 +111,7 @@ SPLIT_COARSE_CUTS = 2     # of them tried while RANKING (segment, receiver, side
 SPLIT_REFINE = 5          # bisection steps that then place the winner's cut
 
 
-def active_arms(active_override=None):
+def active_arms(active_override=None, fleet=None):
     """Which arms this run may use -> list of arm ids, in registry order.
 
     `fleet.FLEET`'s `active` flags are a record of TODAY'S RIG (arms 2 and 71
@@ -127,27 +127,28 @@ def active_arms(active_override=None):
     five arms when six were asked for is the kind of thing that only shows up
     in a coverage number nobody re-derives.
     """
+    fl = FLEET if fleet is None else fleet
     if active_override is None:
-        return list(ACTIVE)
+        return [aid for aid, sp in fl.items() if sp.active]
     if isinstance(active_override, str):
         if active_override != "all":
             raise ValueError(f"active_override={active_override!r}; want 'all', "
                              "a list of arm ids, or a {arm_id: bool} mapping")
-        return list(FLEET)
+        return list(fl)
     if isinstance(active_override, dict):
-        flags = {aid: s.active for aid, s in FLEET.items()}
-        unknown = set(active_override) - set(FLEET)
+        flags = {aid: s.active for aid, s in fl.items()}
+        unknown = set(active_override) - set(fl)
         if unknown:
             raise ValueError(f"active_override names arms not in the fleet: "
                              f"{sorted(unknown)}")
         flags.update({a: bool(v) for a, v in active_override.items()})
-        return [aid for aid in FLEET if flags[aid]]
+        return [aid for aid in fl if flags[aid]]
     want = list(active_override)
-    unknown = set(want) - set(FLEET)
+    unknown = set(want) - set(fl)
     if unknown:
         raise ValueError(f"active_override names arms not in the fleet: "
                          f"{sorted(unknown)}")
-    return [aid for aid in FLEET if aid in set(want)]
+    return [aid for aid in fl if aid in set(want)]
 
 def pen_opts(opts, pens, arm):
     """`opts` with THIS ARM's pen length substituted. -> a fresh dict.
@@ -2197,7 +2198,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_split=MIN_SPLIT_M, splice=SPLIT_OVERLAP_M,
              split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
              draw_speed=DRAW_SPEED, q_start=None, return_home=True,
-             cluster=CLUSTER, menu_opts=None):
+             cluster=CLUSTER, menu_opts=None, fleet=None):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -2251,10 +2252,11 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     """
     if arms is not None and active_override is not None:
         raise ValueError("pass arms= or active_override=, not both")
-    arms = list(arms) if arms is not None else active_arms(active_override)
-    specs = {a: FLEET[a] for a in arms}
+    fl = FLEET if fleet is None else fleet
+    arms = list(arms) if arms is not None else active_arms(active_override, fl)
+    specs = {a: fl[a] for a in arms}
     if pens is not None:
-        unknown = set(pens) - set(FLEET)
+        unknown = set(pens) - set(fl)
         if unknown:
             raise ValueError(f"pens names arms not in the fleet: {sorted(unknown)}")
     aopts = {a: pen_opts(opts, pens, a) for a in arms}
@@ -2390,7 +2392,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                 else 0.0)
         out["programs"][a] = seq.pop("programme")
         out["sequence"][a] = seq
-        out["transit"][a] = transit_metres(out["programs"][a], FLEET[a].xy)
+        out["transit"][a] = transit_metres(out["programs"][a], fl[a].xy)
         out["transit_time"][a] = seq["cost"]
     out["timing"]["sequence"] = time.time() - t3
     out["timing"]["total"] = time.time() - t0

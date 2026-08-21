@@ -45,7 +45,7 @@ import traceback
 
 import numpy as np
 
-from . import pacing, planner, pwl, smooth
+from . import fleet, pacing, planner, pwl, smooth
 from .frames import PEN_EXT
 from .validate import validate_plan
 
@@ -239,7 +239,8 @@ def prepare(pts_xy, spec, o, depth=0):
         # before anyone notices only 4 m of it is on the sheet.  Clip coarsely
         # first, at whatever step keeps the array bounded.
         coarse, _ = planner.resample(poly, L_in / o["max_steps"])
-        kept = planner.clip_to_sheet(coarse, verbose=False)
+        kept = planner.clip_to_sheet(coarse, verbose=False,
+                                     sheet=fleet.sheet_for(spec))
         if len(kept) < 2:
             return None, _degenerate("off_sheet", spec, depth, notes=notes,
                                      arc_len=L_in)
@@ -254,7 +255,8 @@ def prepare(pts_xy, spec, o, depth=0):
         return None, _degenerate("too_short", spec, depth, notes=notes, arc_len=L_in)
     clip_s = (0.0, 1.0)
     if o["clip_to_sheet"]:
-        kept, sl = planner.clip_to_sheet(pts, verbose=False, return_slice=True)
+        kept, sl = planner.clip_to_sheet(pts, verbose=False, return_slice=True,
+                                         sheet=fleet.sheet_for(spec))
         if len(kept) < 2:
             return None, _degenerate("off_sheet", spec, depth, notes=notes,
                                      arc_len=L_in)

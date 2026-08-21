@@ -11,7 +11,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import allocate, coordination, scene_check, trace   # noqa: E402
 from aris_sixarm.allocate import Interval            # noqa: E402
-from aris_sixarm.fleet import FLEET, SHEET           # noqa: E402
+from aris_sixarm.fleet import (FLEET as FLEET_ACTIVE,        # noqa: E402
+                               FLEET_SIXARM as FLEET, SHEET_SIXARM as SHEET)
+
+
+def ArmPath6(arm_id, *a, **kw):
+    """coordination.ArmPath pinned to the LEGACY fleet these tests were
+    written on (the active registry is the 3-arm final rig)."""
+    return coordination.ArmPath(arm_id, *a, spec=FLEET[arm_id], **kw)
 from aris_sixarm.frames import FR3_MAX, FR3_MIN   # noqa: E402
 from aris_sixarm.validate import validate_plan       # noqa: E402
 
@@ -163,23 +170,29 @@ def test_active_override_does_not_touch_the_registry():
     other caller in the process means by "the fleet".
     """
     before = {a: s.active for a, s in FLEET.items()}
-    assert allocate.active_arms() == allocate.ACTIVE == [13, 17, 31, 97]
-    assert allocate.active_arms("all") == [13, 17, 31, 2, 71, 97]     # registry order
-    assert allocate.active_arms([97, 13]) == [13, 97]                 # order normalised
-    assert allocate.active_arms({2: True}) == [13, 17, 31, 2, 97]     # patch one flag
-    assert allocate.active_arms({13: False, 71: True}) == [17, 31, 71, 97]
+    # the ACTIVE registry is the FINAL RIG (3 arms, all up)
+    assert allocate.active_arms() == allocate.ACTIVE == [13, 31, 2]
+    assert allocate.active_arms("all") == [13, 31, 2]
+    # the LEGACY fleet is an argument away, bit for bit
+    assert allocate.active_arms(fleet=FLEET) == [13, 17, 31, 97]
+    assert allocate.active_arms("all", FLEET) == [13, 17, 31, 2, 71, 97]
+    assert allocate.active_arms([97, 13], FLEET) == [13, 97]          # order normalised
+    assert allocate.active_arms({2: True}, FLEET) == [13, 17, 31, 2, 97]
+    assert allocate.active_arms({13: False, 71: True}, FLEET) == [17, 31, 71, 97]
     assert {a: s.active for a, s in FLEET.items()} == before, "the registry moved"
+    assert {a: s.active for a, s in FLEET_ACTIVE.items()} == \
+        {13: True, 31: True, 2: True}, "the final registry moved"
 
     for bad in ("some", [13, 999], {42: True}):
         try:
-            allocate.active_arms(bad)
+            allocate.active_arms(bad, FLEET)
         except ValueError:
             continue
         raise AssertionError(f"active_override={bad!r} should have been rejected")
 
     # the entry point refuses the ambiguous call rather than picking a winner
     try:
-        allocate.allocate([], arms=[13], active_override="all")
+        allocate.allocate([], arms=[13], active_override="all", fleet=FLEET)
     except ValueError:
         pass
     else:
@@ -188,19 +201,21 @@ def test_active_override_does_not_touch_the_registry():
 
 def test_active_override_reaches_the_partition_enumeration():
     """Six arms means 62 pen partitions, and the allocation must use all six."""
-    assert len(allocate.partitions(allocate.active_arms("all"))) == 62
+    assert len(allocate.partitions(allocate.active_arms("all", FLEET))) == 62
     strokes = [dict(id=0, color="grey", kind="outline",
                     pts=np.array([[0.0, 0.0], [1.0, 0.0]])),
                dict(id=1, color="orange", kind="outline",
                     pts=np.array([[0.0, 1.0], [1.0, 1.0]]))]
     ivmap = {0: [Interval(0.0, 1.0, 71)], 1: [Interval(0.0, 1.0, 2)]}
-    arms = allocate.active_arms("all")
+    arms = allocate.active_arms("all", FLEET)
     colors, cover, table = allocate.best_partition(strokes, ivmap, arms)
     # only the two parked arms can cover anything, so the partition has to give
     # them the two different pens — which the four-arm fleet cannot do at all
     assert colors[71] == "grey" and colors[2] == "orange"
     assert cover["dropped_len"] < 1e-9
-    assert allocate.best_partition(strokes, ivmap, allocate.ACTIVE)[1]["dropped_len"] > 1.9
+    assert allocate.best_partition(strokes, ivmap,
+                                   allocate.active_arms(fleet=FLEET)
+                                   )[1]["dropped_len"] > 1.9
 
 
 def test_capsule_distance_agrees_with_the_independent_one():
@@ -238,9 +253,9 @@ def test_a_parked_arm_is_an_obstacle_for_everyone():
     """
     q0 = np.asarray(FLEET[31].q_seed, float)
     moving = np.linspace(q0, q0 + 0.25, 40)
-    paths = {31: coordination.ArmPath(31, moving, 0.02),
-             97: coordination.ArmPath(97, q0[None, :], 0.02),
-             71: coordination.ArmPath(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
+    paths = {31: ArmPath6(31, moving, 0.02),
+             97: ArmPath6(97, q0[None, :], 0.02),
+             71: ArmPath6(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
     res = coordination.coordinate(paths, verbose=False)
     assert not paths[97].moves and paths[31].moves
     assert res["order"][0] == 97, \
@@ -263,8 +278,8 @@ def test_capsule_length_follows_the_pen():
     plan-level check and still schedule a collision.
     """
     q = np.repeat(np.asarray(FLEET[31].q_seed, float)[None, :], 3, axis=0)
-    short = coordination.ArmPath(31, q, 0.01, pen_ext=0.110)
-    long_ = coordination.ArmPath(31, q, 0.01, pen_ext=0.300)
+    short = ArmPath6(31, q, 0.01, pen_ext=0.110)
+    long_ = ArmPath6(31, q, 0.01, pen_ext=0.300)
     # capsule index -1 is (chain point 8 -> pen tip); its far end is B[-1]
     tip_s, tip_l = short.B[0][-1], long_.B[0][-1]
     assert abs(float(np.linalg.norm(tip_l - tip_s)) - 0.190) < 1e-6, \
@@ -275,10 +290,10 @@ def test_capsule_length_follows_the_pen():
     # and `arm_paths` hands each arm its own, defaulting the ones it is not told
     # (arm 97 sits at a different base, so it is compared against its OWN
     # default-pen path, not against arm 31's)
-    paths = coordination.arm_paths({31: q, 97: q}, 0.01, pens={31: 0.300})
+    paths = coordination.arm_paths({31: q, 97: q}, 0.01, pens={31: 0.300}, fleet=FLEET)
     assert np.allclose(paths[31].B[0][-1], tip_l)
     assert np.allclose(paths[97].B[0][-1],
-                       coordination.ArmPath(97, q, 0.01, pen_ext=0.110).B[0][-1])
+                       ArmPath6(97, q, 0.01, pen_ext=0.110).B[0][-1])
     # scene_check reads the same mapping, scalar or per-arm
     assert scene_check.pen_len(0.2, 31) == 0.2
     assert scene_check.pen_len({31: 0.300}, 31) == 0.300
@@ -296,7 +311,7 @@ def test_allocation_plans_and_validates_with_the_arm_s_own_pen():
     """
     pts = np.column_stack([np.linspace(1.20, 1.34, 15), np.full(15, 1.12)])
     strokes = [dict(pts=pts, color="grey", kind="outline", id=0)]
-    res = allocate.allocate(strokes, arms=[31], pens={31: 0.300},
+    res = allocate.allocate(strokes, arms=[31], pens={31: 0.300}, fleet=FLEET,
                             colors={31: "grey"}, verbose=False)
     assert res["pens"][31] == 0.300
     segs = res["programs"][31]
@@ -438,9 +453,9 @@ def test_priority_search_returns_the_minimum_makespan_order():
 
     # real geometry, real ArmPath, both code paths through `coordinate`
     q0 = np.asarray(FLEET[31].q_seed, float)
-    paths = {31: coordination.ArmPath(31, np.linspace(q0, q0 + 0.25, 40), 0.02),
-             97: coordination.ArmPath(97, q0[None, :], 0.02),
-             71: coordination.ArmPath(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
+    paths = {31: ArmPath6(31, np.linspace(q0, q0 + 0.25, 40), 0.02),
+             97: ArmPath6(97, q0[None, :], 0.02),
+             71: ArmPath6(71, np.linspace(q0, q0 + 0.1, 20), 0.02)}
     searched = coordination.coordinate(paths, verbose=False)
     guessed = coordination.coordinate(paths, priority_search=False, verbose=False)
     assert searched["duration"] <= guessed["duration"] + 1e-9, \
@@ -528,7 +543,7 @@ def test_balancing_cannot_change_what_is_drawn():
     strokes = [dict(pts=np.column_stack([np.linspace(1.74, 1.87, 14),
                                          np.full(14, y)]),
                     color="grey", kind="outline", id=i) for i, y in enumerate(ys)]
-    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+    kw = dict(arms=[31, 71], fleet=FLEET, pens={31: 0.200, 71: 0.200},
               colors={31: "grey", 71: "grey"}, verbose=False)
     raw = allocate.allocate(strokes, balance=False, **kw)
     v1 = allocate.allocate(strokes, balance=True, split=False, **kw)
@@ -630,7 +645,7 @@ def test_a_split_certifies_both_halves_and_keeps_the_coverage():
     strokes = [dict(pts=np.column_stack([np.linspace(1.55, 2.05, 60),
                                          np.full(60, 1.64)]),
                     color="grey", kind="line", id=0)]
-    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+    kw = dict(arms=[31, 71], fleet=FLEET, pens={31: 0.200, 71: 0.200},
               colors={31: "grey", 71: "grey"}, verbose=False)
     v1 = allocate.allocate(strokes, split=False, **kw)
     v2 = allocate.allocate(strokes, split=True, **kw)
@@ -689,7 +704,7 @@ def test_splitting_beats_not_splitting_on_a_constructed_instance():
     strokes = [dict(pts=np.column_stack([np.linspace(1.50, 2.20, 48),
                                          np.full(48, y)]),
                     color="grey", kind="line", id=i) for i, y in enumerate(ys)]
-    kw = dict(arms=[31, 71], pens={31: 0.200, 71: 0.200},
+    kw = dict(arms=[31, 71], fleet=FLEET, pens={31: 0.200, 71: 0.200},
               colors={31: "grey", 71: "grey"}, verbose=False)
     v1 = allocate.allocate(strokes, split=False, **kw)
     v2 = allocate.allocate(strokes, split=True, **kw)
@@ -805,8 +820,8 @@ def test_a_frozen_arm_is_an_obstacle_all_the_way_to_the_horizon():
     q0 = np.asarray(FLEET[31].q_seed, float)
     qa = np.linspace(q0, q0 + np.array([0.4, 0.1, 0, 0.1, 0, 0, 0]), 12)
     qb = np.linspace(q0, q0 + np.array([0.0, 0.2, 0, 0.2, 0, 0, 0]), 30)
-    pa = coordination.ArmPath(31, qa, 0.02)
-    pb = coordination.ArmPath(71, qb, 0.02)
+    pa = ArmPath6(31, qa, 0.02)
+    pb = ArmPath6(71, qb, 0.02)
     D = coordination.clearance_matrix(pa, pb)
     row = np.minimum(D[-1, :-1], D[-1, 1:]) - coordination.SWEEP_K * pb.step
     got = idle.tube_clearance(pa.q[-1], 31, 0.110, pb, 0)
@@ -847,22 +862,23 @@ def test_a_retreat_is_offered_only_on_genuine_interference():
 
     def neighbour(cx):
         s = _short_segment(71, cx, 1.331)
-        return coordination.ArmPath(71, np.asarray(s["plan"]["qs"], float), 1 / 48.)
+        return ArmPath6(71, np.asarray(s["plan"]["qs"], float), 1 / 48.)
 
     tight, clear = neighbour(1.85), neighbour(2.00)
-    gap_t = idle.tube_clearance(q_frozen, 31, 0.110, tight, 0)
-    gap_c = idle.tube_clearance(q_frozen, 31, 0.110, clear, 0)
+    gap_t = idle.tube_clearance(q_frozen, 31, 0.110, tight, 0, spec=FLEET[31])
+    gap_c = idle.tube_clearance(q_frozen, 31, 0.110, clear, 0, spec=FLEET[31])
     assert gap_t < 0.08 <= gap_c, \
         (f"the fixture is not what the test needs: {1000 * gap_t:.1f} mm and "
          f"{1000 * gap_c:.1f} mm against an 80 mm margin")
 
     assert idle.frozen_interference(q_frozen, 31, 0.110, {71: clear}, {71: 0},
-                                    0.08) == {}
+                                    0.08, spec=FLEET[31]) == {}
     assert idle.plan_retreat(spec, q_frozen, 31, 0.110, {71: clear}, {71: 0},
                              0.08) is None, \
         "a retreat was offered to an arm that is 153 mm clear of everything"
 
-    hit = idle.frozen_interference(q_frozen, 31, 0.110, {71: tight}, {71: 0}, 0.08)
+    hit = idle.frozen_interference(q_frozen, 31, 0.110, {71: tight}, {71: 0}, 0.08,
+                                   spec=FLEET[31])
     assert set(hit) == {71}
     got = idle.plan_retreat(spec, q_frozen, 31, 0.110, {71: tight}, {71: 0}, 0.08)
     assert got is not None, "no retreat found for a pose 4 mm from another arm"
@@ -871,7 +887,7 @@ def test_a_retreat_is_offered_only_on_genuine_interference():
     assert got["clearance"] >= 0.08, \
         f"the retreat is still inside the tube ({1000 * got['clearance']:.1f} mm)"
     assert idle.frozen_interference(got["q"], 31, 0.110, {71: tight}, {71: 0},
-                                    0.08) == {}
+                                    0.08, spec=FLEET[31]) == {}
     assert got["dq"] < 0.5 * home_dq, \
         (f"the 'minimal' retreat moves {got['dq']:.2f} rad where going home "
          f"would move {home_dq:.2f} rad")
@@ -960,7 +976,7 @@ def test_freeze_in_place_beats_going_home_on_a_two_arm_scene():
     pens = {a: 0.110 for a in FLEET}
     dt = 1 / 48.
 
-    runs = {p: idle.conduct(segs, pens, dt, policy=p, verbose=False)
+    runs = {p: idle.conduct(segs, pens, dt, policy=p, verbose=False, specs=FLEET)
             for p in (idle.POLICY_FREEZE, idle.POLICY_HOME)}
     fre, hom = runs[idle.POLICY_FREEZE], runs[idle.POLICY_HOME]
 
@@ -981,7 +997,7 @@ def test_freeze_in_place_beats_going_home_on_a_two_arm_scene():
         qtraj = {a: r["samp"][a]["q"][np.clip(r["sch"]["progress"][a][:M], 0,
                                              r["samp"][a]["n"] - 1)]
                  for a in FLEET}
-        rep = scene_check.check_timeline(qtraj, dt, r["sch"]["margin"],
+        rep = scene_check.check_timeline(qtraj, dt, r["sch"]["margin"], fleet=FLEET,
                                          pen_ext=pens, verbose=False)
         assert rep["ok"], (f"{name}: scene_check refused (clearance "
                            f"{1000 * rep['min_clearance']:.1f} mm, "

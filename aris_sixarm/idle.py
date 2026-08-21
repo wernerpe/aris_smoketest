@@ -94,7 +94,7 @@ def _h(h_inv):
 # is a static pose clear of what is left of another arm's path?
 # ==========================================================================
 def tube_clearance(q, arm, pen, other, j0=0, sweep=coordination.SWEEP_K,
-                   h_inv=H_INV_DEFAULT):
+                   h_inv=H_INV_DEFAULT, spec=None):
     """Clearance from ONE pose to the tail of another arm's path. -> metres.
 
     `other` is an `ArmPath`; `j0` is the first progress index it has not yet
@@ -105,7 +105,7 @@ def tube_clearance(q, arm, pen, other, j0=0, sweep=coordination.SWEEP_K,
     which is the whole point of standing still.
     """
     pa = coordination.ArmPath(arm, np.asarray(q, float)[None, :], other.dt,
-                              _h(h_inv), pen)
+                              _h(h_inv), pen, spec)
     D = coordination.clearance_matrix(pa, other)[0]           # (n_other,)
     if len(D) < 2:
         return float(D.min())
@@ -115,7 +115,8 @@ def tube_clearance(q, arm, pen, other, j0=0, sweep=coordination.SWEEP_K,
 
 
 def frozen_interference(q, arm, pen, paths, tails, margin,
-                        sweep=coordination.SWEEP_K, h_inv=H_INV_DEFAULT):
+                        sweep=coordination.SWEEP_K, h_inv=H_INV_DEFAULT,
+                        spec=None):
     """Which arms' remaining tubes a frozen pose sits inside. -> {arm: clearance}.
 
     `tails[b]` is the first index of b's path that b has not yet reached.  Only
@@ -126,7 +127,7 @@ def frozen_interference(q, arm, pen, paths, tails, margin,
     for b, pb in paths.items():
         if b == arm:
             continue
-        c = tube_clearance(q, arm, pen, pb, tails.get(b, 0), sweep, h_inv)
+        c = tube_clearance(q, arm, pen, pb, tails.get(b, 0), sweep, h_inv, spec)
         if c < margin:
             out[b] = c
     return out
@@ -207,7 +208,7 @@ def plan_retreat(spec, q_frozen, arm, pen, paths, tails, margin,
     wait it implies exactly as before.
     """
     before = frozen_interference(q_frozen, arm, pen, paths, tails, margin,
-                                 sweep, h_inv)
+                                 sweep, h_inv, spec)
     if not before:                  # nothing to get out of the way of
         return None
     cands = retreat_candidates(spec, q_frozen, h_inv, pen, ups, backs)
@@ -217,13 +218,13 @@ def plan_retreat(spec, q_frozen, arm, pen, paths, tails, margin,
             c["refused"] = "pose: " + ",".join(v["kind"] for v in rep["violations"])
             continue
         hit = frozen_interference(c["q"], arm, pen, paths, tails, margin,
-                                  sweep, h_inv)
+                                  sweep, h_inv, spec)
         if hit:
             c["refused"] = "still inside " + ",".join(str(b) for b in sorted(hit))
             continue
         worst = min((tube_clearance(c["q"], arm, pen, pb, tails.get(b, 0), sweep,
-                                    h_inv) for b, pb in paths.items() if b != arm),
-                    default=float("inf"))
+                                    h_inv, spec) for b, pb in paths.items()
+                     if b != arm), default=float("inf"))
         return dict(q=c["q"], tag=c["tag"], dq=c["dq"], clearance=float(worst),
                     before={int(b): float(v) for b, v in before.items()},
                     tried=len(cands))
@@ -275,16 +276,16 @@ def _better(new, old, eps=1e-9):
     return float(new["pause_total"]) <= float(old["pause_total"]) + eps
 
 
-def _capsules(progs, pens, dt):
+def _capsules(progs, pens, dt, fleet=None):
     """Sample every frozen timeline onto the conducting clock. -> (samp, paths)."""
     samp = {a: writing.uniform_samples(p, dt) for a, p in progs.items()}
     return samp, coordination.arm_paths({a: s["q"] for a, s in samp.items()}, dt,
-                                        pens=pens)
+                                        pens=pens, fleet=fleet)
 
 
-def _conduct(progs, pens, dt, safety, calib, sweep, verbose):
+def _conduct(progs, pens, dt, safety, calib, sweep, verbose, specs=None):
     """Sample, build capsule paths, conduct. -> (sch, paths, samp)."""
-    samp, paths = _capsules(progs, pens, dt)
+    samp, paths = _capsules(progs, pens, dt, fleet=specs)
     sch = coordination.coordinate(paths, safety=safety, calib=calib, sweep=sweep,
                                   verbose=verbose)
     return sch, paths, samp
@@ -345,7 +346,7 @@ def unrunnable(progs, blocks, dt, orders=None):
             {a: sorted(v) for a, v in draws.items()})
 
 
-def _refusal(exc, progs, dt, orders):
+def _refusal(exc, progs, dt, orders, specs=None):
     """Turn `coordinate`'s RuntimeError into one a caller can act on."""
     free = getattr(exc, "free", None)
     paths = getattr(exc, "paths", None)
@@ -377,7 +378,8 @@ def _refusal(exc, progs, dt, orders):
                 continue
             bad = frozen_interference(p["q_end"], a, p.get("pen", PEN_EXT),
                                       {b: pb for b, pb in paths.items()
-                                       if b != a}, {}, margin, sweep)
+                                       if b != a}, {}, margin, sweep,
+                                      spec=specs.get(a) if specs else None)
             if bad:
                 stuck.append(f"arm {a} cannot stop clear of "
                              + ",".join(f"{b} ({1000 * v:.0f} mm)"
@@ -389,7 +391,7 @@ def _refusal(exc, progs, dt, orders):
     return Unconductable(str(exc) + note, tr, dr, blocks)
 
 
-def _blocking_freezes(progs, paths, pens, margin, sweep, h_inv):
+def _blocking_freezes(progs, paths, pens, margin, sweep, h_inv, specs=None):
     """Frozen poses that sit in ANOTHER arm's tube anywhere. -> {arm: {b: gap}}.
 
     The conservative reading of "remaining tube", and the only one available
@@ -403,7 +405,8 @@ def _blocking_freezes(progs, paths, pens, margin, sweep, h_inv):
         if p["duration"] <= 0.0 or "q_end" not in p:
             continue
         hit = frozen_interference(p["q_end"], a, pens.get(a, PEN_EXT), paths,
-                                  {b: 0 for b in paths}, margin, sweep, h_inv)
+                                  {b: 0 for b in paths}, margin, sweep, h_inv,
+                                  spec=specs.get(a) if specs else None)
         if hit:
             out[a] = hit
     return out
@@ -448,7 +451,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
     passes, taxi, retreats = [], {}, {}
     margin = float(safety + calib)
     try:
-        sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep, verbose)
+        sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep, verbose, specs)
     except RuntimeError as exc:
         # FREEZING CAN MAKE A SCHEDULE IMPOSSIBLE, WHERE GOING HOME ONLY MADE IT
         # SLOW.  An arm parked on top of the ink another arm still has to draw
@@ -457,9 +460,9 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
         # measure — against every other arm's whole path, because a conductor
         # that has refused has told us nothing about who goes where when.
         if not retreat or policy == POLICY_HOME:
-            raise _refusal(exc, progs, dt, orders)
-        samp, paths = _capsules(progs, pens, dt)
-        blocked = _blocking_freezes(progs, paths, pens, margin, sweep, h_inv)
+            raise _refusal(exc, progs, dt, orders, specs)
+        samp, paths = _capsules(progs, pens, dt, fleet=specs)
+        blocked = _blocking_freezes(progs, paths, pens, margin, sweep, h_inv, specs)
         if verbose:
             print(f"  conductor refused ({exc}); {len(blocked)} frozen pose(s) "
                   "sit in another arm's tube — offering each a retreat")
@@ -478,15 +481,15 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                 # a great deal better than six.
                 parks[a], _ = POLICY_HOME, sent_home.append(a)
         if not want and not sent_home:
-            raise _refusal(exc, progs, dt, orders)
+            raise _refusal(exc, progs, dt, orders, specs)
         progs = _programs(specs, segs_by_arm, pens, q_start, parks, None,
                           {a: g["q"] for a, g in want.items()},
                           only=set(want) | set(sent_home), prev=progs, **prog_kw)
         try:
             sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep,
-                                        verbose)
+                                        verbose, specs)
         except RuntimeError as exc2:
-            raise _refusal(exc2, progs, dt, orders)
+            raise _refusal(exc2, progs, dt, orders, specs)
         retreats = dict(want)
         passes.append(dict(name="rescue", makespan=float(sch["duration"]),
                            pause=float(sch["pause_total"]), kept=True,
@@ -517,7 +520,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                            only=set(want), prev=progs, **prog_kw)
             try:
                 sj, paj, saj = _conduct(pj, pens, dt, safety, calib, sweep,
-                                        verbose)
+                                        verbose, specs)
             except RuntimeError:          # a slower taxi is never worth a refusal
                 sj = dict(duration=float("inf"), pause_total=float("inf"))
             keep = _better(sj, sch)
@@ -562,7 +565,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                            only=set(want), prev=progs, **prog_kw)
             try:
                 sr, par, sar = _conduct(pr, pens, dt, safety, calib, sweep,
-                                        verbose)
+                                        verbose, specs)
             except RuntimeError:
                 sr = dict(duration=float("inf"), pause_total=float("inf"))
             was = float(sch["duration"])
