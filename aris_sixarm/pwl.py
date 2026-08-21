@@ -55,10 +55,18 @@ _TRAVEL_Q = 1e6          # travel quantum (1e-6 rad), for an EXACT lexicographic
 # travel, -13 % of knots, both gates untouched.  It also costs the CLOCK, which
 # is the one thing this project is allowed to optimise.  Constraining the band
 # path raises |dq/ds|; `writing.draw_duration` then stretches the ink until no
-# joint exceeds `qd_frac` (0.30) of its velocity limit; and drawing is the
-# dominant term in the makespan floor.  On the shipped CSAIL run the busiest
-# grey arm's draw time went 20.2 -> 30.9 s over the SAME 2.00 m of ink, and the
-# two-pass floor went 84.3 -> 93.2 s.  docs/REDUNDANCY.md has the measurement.
+# joint exceeds `qd_frac` of its velocity limit; and drawing is the dominant
+# term in the makespan floor.  On the shipped CSAIL run the busiest grey arm's
+# draw time went 20.2 -> 30.9 s over the SAME 2.00 m of ink, and the two-pass
+# floor went 84.3 -> 93.2 s.  docs/REDUNDANCY.md has the measurement.
+#
+# AND THAT MEASUREMENT IS AS MUCH ABOUT `writing.QD_FRAC` = 0.30 AS ABOUT THE
+# BAND.  The stretch is what the cap scales: the speed below which no plan is
+# joint-limited anywhere is v* = length / need, and it is LINEAR in `qd_frac`,
+# so the cap sets the range of draw speeds over which this argument bites at
+# all.  At the rig's own 0.02 m/s it barely bites even at 0.30 (docs/BENCH.md's
+# speed sweep: 1 to 2 of ~57 segments capped, ink 1.006x the material's time),
+# which is why the verdict above is a verdict at 0.12 m/s and says so.
 OBJECTIVE = "maximin_sigma"      # default band objective; see `_dense_dp`
 TRAVEL_MODE = "time"             # how an edge is charged; see `_edge_travel`
 OBJECTIVES = ("min_travel", "maximin_sigma")

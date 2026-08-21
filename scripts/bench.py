@@ -87,7 +87,10 @@ class Args:
         self.fps, self.substeps, self.subcheck = 12.0, 4, 2
         self.draw_speed = writing.DRAW_SPEED_FLEET
         self.transit_speed = writing.TRANSIT_SPEED
-        self.qd_frac = 0.3
+        # the module default, like everything else here: the corpus measures
+        # the pipeline as it ships, and `writing.QD_FRAC` is a fixture of the
+        # conductor (see the comment on it) rather than a per-drawing knob
+        self.qd_frac = writing.QD_FRAC
         self.safety, self.calib = coordination.SAFETY_M, coordination.CALIB_M
         self.idle_policy = idle.POLICY_FREEZE
         self.no_jit = self.no_retreat = False
@@ -134,7 +137,17 @@ def run_one(name, a, split=True, verbose=False, seq_opts=None):
     kw = dict(opts=None, verbose=verbose, pens=PENS, active_override="all",
               sequencer="opt", max_probes=5, probe_ref_m=PROBE_REF_M,
               balance=True, split=split,
-              draw_speed=a.draw_speed, seq_opts=dict(seq_opts or {}),
+              draw_speed=a.draw_speed,
+              # THE CAP HAS TO REACH BOTH HALVES OR THE ROW MEASURES NEITHER.
+              # `a.qd_frac` paces the frozen timeline the conductor runs; the
+              # ALLOCATOR prices its candidate assignments and its tours with
+              # `seq_opts`, and left out of it, it silently used
+              # `writing.QD_FRAC` instead — so a row asked for a cap other
+              # than the module's would allocate at one and conduct at the
+              # other.  `csail_allocate.py` has always passed both; this is
+              # the same two lines.
+              seq_opts=dict(dict(transit_speed=a.transit_speed,
+                                 qd_frac=a.qd_frac), **(seq_opts or {})),
               return_home=a.idle_policy == idle.POLICY_HOME,
               atlas_dir=str(ROOT / "out"))
     def alloc(cut, tag=""):
@@ -348,7 +361,8 @@ randomness use `np.random.default_rng(seed)` with the seed pinned in
 
 The fleet is the rig as it stands — all six arms, `2:300 31:200 71:200 97:200`
 mm pens, 80 mm margin (50 safety + 30 calibration), freeze-in-place idle policy,
-0.12 m/s draw and 0.80 m/s transit — because a pen is a fixture and not a knob.
+0.12 m/s draw, 0.80 m/s transit and the joint-velocity cap the conductor
+ships with (`writing.QD_FRAC`) — because a pen is a fixture and not a knob.
 `scene_check` has a veto on every row below; a drawing it refuses is printed as
 REFUSED rather than quietly dropped.
 

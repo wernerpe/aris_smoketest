@@ -375,6 +375,41 @@ QD_FRAC = 0.30              # fraction of the FR3 joint-velocity limit a
 #   every millimetre of per-step motion is a millimetre off the margin.
 #   Drawing is paced by `draw_speed` and then stretched, by the same rule, if
 #   the redundancy resolution asks a joint to move faster than this.
+#
+#   0.60 IS THE NUMBER THE MEASUREMENT SAYS, AND 0.30 IS THE NUMBER HERE.
+#   Both halves of that are deliberate, and neither was written down before
+#   2026-08-20.  THE MEASUREMENT (`README.md`, "Pacing is a clearance
+#   budget"): the first cut of the conductor ran transits as 1.2 s joint-space
+#   lines and moved the elbow 295 mm between two frames, so the sweep slack
+#   alone exceeded the 80 mm margin four times over and the schedule was
+#   infeasible; capping every move at 60 % of the FR3 joint velocity limit
+#   brings that displacement to <= 32 mm and the problem becomes easy.  0.30
+#   is a SECOND halving on top of that, which no measurement asked for, and it
+#   is not free: `draw_duration` stretches the ink until no joint exceeds this
+#   fraction, and the critical speed v* = length / need below which the cap
+#   never binds is LINEAR in it.  On the shipped CSAIL two-pass run at the
+#   0.12 m/s animation speed the whole piece is 104.0 s at 0.30 and 84.4 s at
+#   0.60 — 18.9 % of the makespan, at identical coverage (99.2139 %) and with
+#   `scene_check` PASS either way (82.1 mm and 82.7 mm).  At the rig's own
+#   0.02 m/s the cap barely matters: the smallest v* on the logo is 0.0149 m/s
+#   at 0.30, where 2 of 58 segments still cap (ink 1.006x the material's
+#   time), against 0.0299 m/s at 0.60, where none do.
+#
+#   ADOPTING 0.60 WAS TRIED ON 2026-08-20 AND THE CORPUS REFUSED IT, so the
+#   halving stays until the refusal does.  The logo passes and `bench`'s
+#   `scatter` passes and gets 26 % faster; `bench`'s `spiral` conducts in
+#   89.4 s at 0.30 and CANNOT BE CONDUCTED AT ALL at 0.60 — and spiral is one
+#   of the three rows that are exact end to end (`sequence.EXACT_MAX_N`), so
+#   that is a reproducible answer and not a budget flake.  The mechanism is
+#   not the pacing but what the pacing buys: `allocate.rebalance` prices in
+#   SECONDS, halving the transit term changes which assignment is cheapest
+#   (six cuts proposed, where at 0.30 the conductor handed all nine back and
+#   the spiral shipped uncut), and the arms then finish in poses they
+#   cannot stop clear of — "arm 2 cannot stop clear of 97 (-94 mm)", with the
+#   unsplit alternative and conductor v1's go-home both refused after it.  So
+#   this is blocked on the ALLOCATION being conductable at 0.60, not on the
+#   cap being safe.  Pass `--qd-frac 0.6` per run, exactly as `README.md`'s
+#   demo recipe does, until that is fixed.  docs/BENCH.md has both halves.
 
 
 def _dq_time(q0, q1, frac=QD_FRAC, tmin=0.0):

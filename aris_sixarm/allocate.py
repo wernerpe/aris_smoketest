@@ -64,6 +64,15 @@ written for.
              `writing` will execute, not paper distance).  Exact for up to 16
              segments.  The transit MOTION is still roadmap item 3's RRT; what
              is optimised here is the schedule that motion has to fill.
+  PRICE      BALANCE and ORDER are the same cost model looked at twice — the
+             balancer's price for a bag is the tour the sequencer will find in
+             it — so they are no longer chosen separately.  `cost_model`
+             returns ONE object with both halves on it (`load` and `sequence`),
+             and it is the only thing in this module that knows whether the
+             fiber menus are on.  Before it existed, the balancer priced every
+             candidate with the single-variant DP while `--cluster` sequenced
+             with the cluster DP, and the balancer balanced a load the
+             sequencer then moved (see section 4b-i).
 
 Every chosen segment is re-planned from scratch at the end; a segment whose
 clean re-plan is not "ok" is not shipped as one.
@@ -707,6 +716,13 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
     pen-up half is `sequence.solve` on the same cost matrix the real sequencing
     pass uses, so this is not an estimate of the arm's programme — it is the
     programme, costed before it is committed to.
+
+    THAT IDENTITY IS ONLY TRUE OF THE SEQUENCER THIS FUNCTION CALLS.  With the
+    fiber menus on (`CLUSTER`) the pass that actually runs is
+    `sequence_arm_cluster`, whose DP chooses variants as well as orders and
+    therefore reaches a different tour and a different number of seconds; use
+    `cluster_arm_load` for that, or better, let `cost_model` hand you the
+    matching pair (see the section below).
     """
     if not len(segs):
         return 0.0
@@ -716,6 +732,215 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
                              return_home=return_home)
     r = sequence.solve(C, len(segs), exact_max_n, budget)
     return float(sum(draw_s) + r["cost"])
+
+
+def _stack_cluster_ends(es):
+    """One-segment `sequence.cluster_endpoints` dicts -> the many-segment one.
+
+    The block for segment i is `base[i] : base[i+1]`, laid down in segment
+    order and never re-ordered inside, so concatenating per-segment dicts and
+    recomputing `base`/`seg` reproduces `cluster_endpoints` over the same
+    menus exactly — the same reason `_stack_ends` works for the plain path,
+    and the reason a candidate bag can be re-priced without re-solving one IK.
+    """
+    keys = ("ent_q", "exi_q", "ent_xy", "exi_xy", "ent_h", "exi_h",
+            "surcharge", "var", "dirn")
+    if not es:
+        out = {k: np.zeros((0, 7)) if k.endswith("_q") or k.endswith("_h")
+               else np.zeros((0, 2)) if k.endswith("_xy") else np.zeros(0)
+               for k in keys}
+        return dict(out, seg=np.zeros(0, int), base=np.zeros(1, int), nv=[],
+                    n=0, N=0)
+    out = {k: np.concatenate([e[k] for e in es]) for k in keys}
+    nv = [int(e["nv"][0]) for e in es]
+    base = np.concatenate([[0], np.cumsum([2 * k for k in nv])]).astype(int)
+    seg = np.concatenate([np.full(int(e["N"]), i, int)
+                          for i, e in enumerate(es)])
+    return dict(out, seg=seg, base=base, nv=nv, n=len(es), N=int(base[-1]))
+
+
+def cluster_arm_load(spec, segs, draw_s, menus,
+                     transit_speed=writing.TRANSIT_SPEED,
+                     qd_frac=writing.QD_FRAC, h_inv=H_INV_DEFAULT,
+                     pen_ext=None, ends=None, exact_max_n=sequence.EXACT_MAX_N,
+                     budget=sequence.TIME_BUDGET, q_start=None,
+                     return_home=True, w_surcharge=sequence.W_SURCHARGE):
+    """`arm_load`, priced with the DP that will actually sequence this bag. -> s
+
+    Same contract, same units, and the same claim — it is the programme costed
+    before it is committed to — but over the (segment, direction, VARIANT)
+    state space, because that is what `sequence_arm_cluster` will search.
+
+    THE NUMBER IS THE SEQUENCER'S OWN OBJECTIVE, DECOMPOSED.  `cluster_solve`
+    minimises transit seconds plus the interior surcharge of the variant each
+    segment is entered on (`sequence.cluster_cost_matrix`: the surcharge is
+    extra DRAW time, charged at `w_surcharge / qd_frac`, exactly as
+    `writing.draw_duration` will stretch the ink for it) plus an infinitesimal
+    reconfiguration tie-break.  This returns the ink the allocator already
+    measured, plus the transit the DP chose, plus the surcharge the DP agreed
+    to pay for its choice; the 1e-7-per-radian tie-break is the one term left
+    out, and it tops out around 1e-5 s over a whole tour.
+
+    `draw_s` is the ink time of the plan the allocator certified, which is the
+    band DP's own free-ended optimum, i.e. the menu variant with surcharge 0
+    when the band is being scored on travel (`--band-objective min_travel`,
+    which is what `--cluster` is measured with).  So the surcharge added here
+    is a DELTA against the ink already counted rather than a second charge for
+    it.  Under `maximin_sigma` that identification is approximate — the free
+    band optimises clearance and takes travel as a tie-break — and it is
+    reported here rather than hidden, because the sign of the error is
+    conservative: a variant is priced at no less than it costs.
+    """
+    if not len(segs):
+        return 0.0
+    pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
+    C, T, e = sequence.cluster_cost_matrix(spec, menus, transit_speed, qd_frac,
+                                           h_inv, pen, q_start=q_start,
+                                           return_home=return_home, ends=ends,
+                                           w_surcharge=w_surcharge)
+    r = sequence.cluster_solve(C, T, e, exact_max_n, budget)
+    base, sur = np.asarray(e["base"], int), np.asarray(e["surcharge"], float)
+    nodes = [int(base[k]) + 2 * int(v) + (0 if d > 0 else 1)
+             for k, v, d in zip(r["order"], r["variants"], r["dirs"])]
+    extra = (w_surcharge / max(qd_frac, 1e-6)) * float(sur[nodes].sum())
+    return float(sum(draw_s) + r["cost"] + extra)
+
+
+# ===========================================================================
+# 4b-i. the costing hook: one object prices a bag AND sequences it
+# ===========================================================================
+# THE DEFECT THIS EXISTS TO MAKE IMPOSSIBLE.  `rebalance` decides who draws
+# what by pricing candidate bags in seconds, and `allocate` then hands each
+# arm's bag to a sequencer.  Those were two independent choices of cost model:
+# the balancer always priced with `sequence.solve` while the pass that ran
+# could be `sequence_arm_cluster`, whose DP moves the tour the balancer had
+# just balanced.  Measured on the CSAIL logo at the rig's own 0.02 m/s draw
+# speed (`docs/BENCH.md`), that is not a rounding difference — the orange
+# phase's imbalance goes 1.40x with the defaults to 1.49x with
+# `min_travel + cluster`, and the whole residual penalty of the feature pair
+# at rig speed is that one arm in that one phase.
+#
+# So the two are no longer allowed to be chosen separately.  A `CostModel` is
+# the pair — `load` and `sequence` are the same DP over the same inputs — and
+# `allocate` constructs exactly one and gives it to both stages.  Adding a
+# third sequencing model means implementing both halves of one object, which
+# is the property being bought: allocation and sequencing cannot disagree
+# unless somebody writes two DPs into one class on purpose.
+def _seg_key(seg, arm):
+    """A menu's identity: which arm, and which polyline it will enumerate.
+
+    `menu.stroke_menu` reads the segment's `pts`, and those are a function of
+    (stroke, s-range, direction) alone (`_entry` -> `_segment_points`), so this
+    is the whole of what a cached menu depends on besides the arm's own spec
+    and planner options — which are fixed for the run.
+    """
+    s0, s1 = seg["s_range"]
+    return (int(arm), int(seg["stroke_id"]), round(float(s0), 9),
+            round(float(s1), 9), int(seg["direction"]))
+
+
+class SegmentCost:
+    """Price and sequence with the (segment, direction) DP.  The shipped model.
+
+    Exactly what this pipeline did before the hook existed: `arm_load` for the
+    price, `sequence_arm` for the order.  Both call `sequence.cost_matrix` and
+    `sequence.solve` on the same segments, so the price is the tour, to the
+    float, unless a reversal the DP asked for will not certify.
+    """
+
+    cluster = False
+    name = "segment"
+
+    def menus(self, arm, spec, segs, opts=None):
+        return None
+
+    def load(self, arm, spec, segs, draw_s, menus=None, **kw):
+        kw.pop("opts", None)          # the same signature the cluster model
+        return arm_load(spec, segs, draw_s, **kw)     # accepts; it needs opts
+
+    def sequence(self, arm, segs, spec, sequencer=SEQUENCER, opts=None,
+                 seq_opts=None, forbid=None, verbose=False):
+        return sequence_arm(segs, spec, sequencer, opts, seq_opts, forbid)
+
+
+class ClusterCost:
+    """Price and sequence with the (segment, direction, variant) cluster DP.
+
+    THE MENUS ARE BUILT ONCE AND SHARED.  A menu is a property of a span and an
+    arm, not of the bag that span currently sits in, so the same `menu.Menu`
+    object serves every candidate assignment the balancer prices AND the final
+    sequencing pass — which is what makes the price and the programme the same
+    computation rather than two computations that ought to agree.  It is also
+    what makes the fix affordable: enumerating a menu costs about one plan
+    call, and the balancer already pays one to certify the same span for the
+    same arm.
+
+    The lattices are kept while the allocation runs (they are what makes
+    `materialize` cheap) and dropped by `allocate` before the result is
+    returned, exactly as before.
+    """
+
+    cluster = True
+    name = "cluster"
+
+    def __init__(self, menu_opts=None, verbose=False):
+        self.menu_opts = dict(menu_opts or {})
+        # a menu is enumerated ONE span at a time here (that is what makes it
+        # cacheable), so `build_menus`'s own per-call line would print once per
+        # segment per arm; the summary is printed by `sequence` instead
+        self.verbose = bool(self.menu_opts.pop("verbose", verbose))
+        self.menu_opts["verbose"] = False
+        self._menus = {}
+        self.n_built = 0
+
+    def menus(self, arm, spec, segs, opts=None):
+        """One `menu.Menu` per segment, memoised on (arm, span). -> list."""
+        out = []
+        for s in segs:
+            k = _seg_key(s, arm)
+            m = self._menus.get(k)
+            if m is None:
+                m, _stat = build_menus([s], spec, opts, **self.menu_opts)
+                m = m[0]
+                self._menus[k] = m
+                self.n_built += 1
+            out.append(m)
+        return out
+
+    def load(self, arm, spec, segs, draw_s, menus=None, **kw):
+        if menus is None:
+            menus = self.menus(arm, spec, segs, kw.get("opts"))
+        kw.pop("opts", None)
+        return cluster_arm_load(spec, segs, draw_s, menus, **kw)
+
+    def sequence(self, arm, segs, spec, sequencer=SEQUENCER, opts=None,
+                 seq_opts=None, forbid=None, verbose=False):
+        if sequencer not in ("opt", "transit") or not len(segs):
+            return sequence_arm(segs, spec, sequencer, opts, seq_opts, forbid)
+        mus = self.menus(arm, spec, segs, opts)
+        if verbose or self.verbose:
+            sizes = [len(m) for m in mus]
+            n_plan = sum(1 for m in mus if isinstance(m, menu.PlanMenu))
+            print(f"    menus: {len(mus) - n_plan} enumerated, {n_plan} fell "
+                  f"back to the certified plan; sizes {sizes}")
+        r = sequence_arm_cluster(segs, spec, mus, opts, seq_opts, forbid,
+                                 verbose=verbose)
+        r["menus"] = mus
+        return r
+
+
+def cost_model(cluster=None, menu_opts=None, verbose=False):
+    """The costing hook for this run. -> `SegmentCost` or `ClusterCost`.
+
+    One call site decides which sequencer a run uses, and the object it returns
+    is the only thing that knows: `allocate` prices with it and sequences with
+    it, so the two cannot be configured apart.
+    """
+    if isinstance(cluster, (SegmentCost, ClusterCost)):
+        return cluster
+    return (ClusterCost(menu_opts, verbose) if bool(CLUSTER if cluster is None
+                                                    else cluster)
+            else SegmentCost())
 
 
 def load_score(loads):
@@ -1046,7 +1271,8 @@ class _Pricer:
     """
 
     def __init__(self, arms, colors, ivmap, specs, aopts, pens, draw_speed,
-                 seq, min_seg, h_inv, q_start, return_home):
+                 seq, min_seg, h_inv, q_start, return_home, cost=None):
+        self.cost = cost_model(cost)
         self.arms = sorted(arms)
         self.colors, self.ivmap = colors, ivmap
         self.specs, self.aopts, self.pens = specs, aopts, pens
@@ -1058,7 +1284,7 @@ class _Pricer:
         self.q_start = dict(q_start or {})
         self.return_home = bool(return_home)
         self._entry, self._ends, self._draw, self._load = {}, {}, {}, {}
-        self._probe = {}
+        self._probe, self._cends = {}, {}
         self.n_replans = self.n_probes = 0
         self.reach = None      # {(stroke id, arm): bool} from the atlas prefilter
 
@@ -1148,20 +1374,46 @@ class _Pricer:
                                                self.h_inv, self.pens[arm])
         return self._ends[k]
 
+    def menu(self, arm, it, ent):
+        """This arm's fiber menu for exactly this span (cluster model only)."""
+        return self.cost.menus(arm, self.specs[arm], [ent], self.aopts[arm])[0]
+
+    def cluster_ends(self, arm, it, ent):
+        k = _span_key(it, arm)
+        if k not in self._cends:
+            self._cends[k] = sequence.cluster_endpoints(
+                self.specs[arm], [self.menu(arm, it, ent)], self.h_inv,
+                self.pens[arm])
+        return self._cends[k]
+
     def load(self, arm, pairs):
-        """Nominal seconds arm `arm` needs for these (item, entry) pairs."""
+        """Nominal seconds arm `arm` needs for these (item, entry) pairs.
+
+        Priced by THIS RUN'S cost model (`cost_model`), which is the same
+        object that will sequence the bag once the balancer has stopped moving
+        it.  Whichever model that is, the memoisation below is on the span and
+        the bag, so switching models changes what is computed and not how often.
+        """
         if not pairs:
             return 0.0
         pairs = sorted(pairs, key=lambda p: _span_key(p[0], arm))
         ck = (arm, tuple(_span_key(it, arm) for it, _ in pairs))
         if ck not in self._load:
-            self._load[ck] = arm_load(
-                self.specs[arm], [e for _, e in pairs],
-                [self.draw_s(arm, it, e) for it, e in pairs],
-                self.ts, self.qf, self.h_inv, self.pens[arm],
-                ends=_stack_ends([self.ends(arm, it, e) for it, e in pairs]),
-                exact_max_n=self.exact, budget=self.budget,
-                q_start=self.q_start.get(arm), return_home=self.return_home)
+            segs = [e for _, e in pairs]
+            draw = [self.draw_s(arm, it, e) for it, e in pairs]
+            kw = dict(transit_speed=self.ts, qd_frac=self.qf, h_inv=self.h_inv,
+                      pen_ext=self.pens[arm], exact_max_n=self.exact,
+                      budget=self.budget, q_start=self.q_start.get(arm),
+                      return_home=self.return_home)
+            if self.cost.cluster:
+                kw["menus"] = [self.menu(arm, it, e) for it, e in pairs]
+                kw["ends"] = _stack_cluster_ends(
+                    [self.cluster_ends(arm, it, e) for it, e in pairs])
+            else:
+                kw["ends"] = _stack_ends([self.ends(arm, it, e)
+                                          for it, e in pairs])
+            self._load[ck] = self.cost.load(arm, self.specs[arm], segs, draw,
+                                            **kw)
         return self._load[ck]
 
     def loads(self, items):
@@ -1357,7 +1609,7 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
               h_inv=H_INV_DEFAULT, verbose=False, q_start=None,
               return_home=True, split=True, min_split=MIN_SPLIT_M,
               splice=SPLIT_OVERLAP_M, split_rounds=SPLIT_ROUNDS,
-              split_budget=SPLIT_BUDGET, reach=None):
+              split_budget=SPLIT_BUDGET, reach=None, cost=None):
     """The probe data + the placed spans -> a re-assignment. -> (placed, info).
 
     ALLOCATION v2.  The loop is (move | swap | split) until nothing improves:
@@ -1380,11 +1632,18 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
     than return a programme that gave ink back.  `split=False` recovers
     allocation v1 exactly: one pass of steps 1-2 and no cutting.
 
+    `cost` is the run's costing hook (`cost_model`) — the object that will also
+    SEQUENCE the bags this function hands out.  Passing the same one to both is
+    what stops the balancer from balancing a tour the sequencer then moves; a
+    caller that leaves it None gets the module default, which is the model the
+    module-level `CLUSTER` switch names.
+
     `placed` grows when a span is cut, so it is both mutated in place and
     returned; the caller reads its programmes out of the result either way.
     """
     pricer = _Pricer(arms, colors, ivmap, specs, aopts, pens, draw_speed,
-                     dict(seq_opts or {}), min_seg, h_inv, q_start, return_home)
+                     dict(seq_opts or {}), min_seg, h_inv, q_start,
+                     return_home, cost=cost)
     pricer.reach = reach
     items = [dict(it) for it in placed]
     lengths = {int(it["stroke"]["id"]): polyline_length(it["stroke"]["pts"])
@@ -1435,7 +1694,8 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
         moves=moves, rounds=len(moves), splits=splits, n_splits=len(splits),
         n_movable=int(n_movable), n_replans=int(pricer.n_replans),
         n_probes=int(pricer.n_probes), split_calls=int(spent),
-        draw_speed=float(draw_speed),
+        draw_speed=float(draw_speed), cost_model=pricer.cost.name,
+        n_menus=int(getattr(pricer.cost, "n_built", 0)),
         min_split_m=float(min_split), splice_m=float(splice),
         coverage_lost_m=float(lost), split_enabled=bool(split),
         n_segments_before=len(owner0), n_segments_after=len(items),
@@ -2068,6 +2328,12 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     t2b = time.time()
     bal = None
     pen_m = {a: pen_of(pens, a) for a in arms}
+    # ONE COST MODEL FOR THE WHOLE RUN.  The balancer below and the sequencing
+    # pass at the bottom of this function are handed the same object, so the
+    # seconds a bag is priced at are the seconds the DP that draws it will
+    # reach.  See the section-4b-i commentary for what this closes.
+    cost = cost_model(cluster and sequencer in ("opt", "transit"), menu_opts,
+                      verbose)
     if balance and placed:
         placed, bal = rebalance(placed, arms, colors, ivmap, specs, aopts,
                                 pen_m, draw_speed, seq_opts, min_seg,
@@ -2075,7 +2341,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                                 return_home=return_home, split=split,
                                 min_split=min_split, splice=splice,
                                 split_rounds=split_rounds,
-                                split_budget=split_budget, reach=pre)
+                                split_budget=split_budget, reach=pre,
+                                cost=cost)
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
@@ -2104,22 +2371,23 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         sq["return_home"] = bool(return_home)
         if q_start is not None and a in q_start:
             sq["q_start"] = np.asarray(q_start[a], float)
-        use_cluster = cluster and sequencer in ("opt", "transit") and programs[a]
-        if use_cluster:
-            mopts = dict(menu_opts or {})
-            mopts.setdefault("verbose", verbose)
-            mus, mstat = build_menus(programs[a], specs[a], aopts[a], **mopts)
-            seq = sequence_arm_cluster(programs[a], specs[a], mus, aopts[a], sq,
-                                       verbose=verbose)
+        seq = cost.sequence(a, programs[a], specs[a], sequencer, aopts[a], sq,
+                            verbose=verbose)
+        mus = seq.pop("menus", None)
+        if mus is not None:
             # the lattices and their sheet decompositions are the memory-heavy
             # part (a 38-sheet band is tens of MB); the variant metadata that
             # `resequence` needs is not, so the menus are kept and the lattices
             # are not.  A later re-materialisation rebuilds, deterministically.
             out["menus"][a] = [m.drop_lattice() if hasattr(m, "drop_lattice")
                                else m for m in mus]
-            out["menu_stats"][a] = mstat
-        else:
-            seq = sequence_arm(programs[a], specs[a], sequencer, aopts[a], sq)
+            out["menu_stats"][a] = dict(
+                n_menu=sum(1 for m in mus if not isinstance(m, menu.PlanMenu)),
+                n_plan=sum(1 for m in mus if isinstance(m, menu.PlanMenu)),
+                sizes=[len(m) for m in mus],
+                n_variants=int(sum(len(m) for m in mus)),
+                mean_variants=float(np.mean([len(m) for m in mus])) if mus
+                else 0.0)
         out["programs"][a] = seq.pop("programme")
         out["sequence"][a] = seq
         out["transit"][a] = transit_metres(out["programs"][a], FLEET[a].xy)

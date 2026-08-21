@@ -53,9 +53,27 @@ choices — which spans, which arm, where to cut — are a function of the input
 alone: no randomness, every iteration order sorted, every tie broken on values
 the caller can see. So is the sequencer, up to `sequence.EXACT_MAX_N` = 16
 segments per arm, where Held-Karp is exact. ABOVE 16 it is a local search under
-a wall-clock budget, and on the two dense drawings (`hatch`, `duotone`) some
-arms carry more than 16 pieces, so those two rows can move by a fraction of a
-second between machines. The splits, the coverage and the floor do not.
+a WALL-CLOCK budget (`sequence.TIME_BUDGET` = 2 s per arm), and on the two
+dense drawings (`hatch`, `duotone`) some arms carry more than 16 pieces. Three
+of the five rows are exact end to end and reproduce bit for bit — measured,
+not assumed: the busiest arm carries 14 segments on `scatter`, 11 on `spiral`
+and 8 on `starburst`, and every arm of all three reports `held_karp`. `hatch`
+(70 on one arm) and `duotone` do not, and this used to say they moved "by a
+fraction of a second".
+
+**They move by more than that, and it is measured rather than assumed
+(2026-08-20).** Two IDENTICAL `hatch` allocations, launched side by side on one
+32-core machine so that each got less of a core than a lone run does, came back
+with different answers: arm 31 carried 9 segments in one and 6 in the other,
+the splits differed, and the floors were **335.70 s and 336.44 s** — one of
+them the committed 335.7 s to the digit and one of them not. The budget is
+wall clock, so what an arm above 16 segments gets is however much 2 s of CPU
+happens to buy; the coverage is invariant (it is a type, not a measurement)
+but the splits and the floor are not, and a different allocation is a
+different problem for the conductor. Both dense rows should therefore be run
+at the concurrency the reference was taken at, and a difference in either of
+them is not evidence about a code change until it has been reproduced alone.
+The three exact rows carry the regression signal.
 
 
 ## The 2026-08-20 refactor did not move a digit of this corpus, on purpose
@@ -95,8 +113,12 @@ machine.
 `reconfig_rad` — Σ‖q_exit − q_entry_next‖∞ over consecutive segments, the
 null-space swing between strokes that the floored transit beats hide and the
 quantity the fiber menus exist to lower (`sequence.reconfiguration`). Turning
-`--cluster` on cuts that quantity by 65 % on the CSAIL logo and costs 47 % of
-the clock, which is why it is off.
+`--cluster` on cuts that quantity by **6.7 %** on the CSAIL logo (46.93 →
+43.78 rad) and costs **18.6 %** of the clock, which is why it is off. (The
+−65 % and −47 % this line used to quote were taken before `menu.MAX_SURCHARGE`
+existed and do not reproduce from the committed code; see "Reproduction note"
+below and `docs/CONCURRENCY.md`, which now carries all three measurements side
+by side.)
 
 ## Results (2026-08-20, allocation v2 (splitting), 31706 s for all five)
 
@@ -107,6 +129,19 @@ the clock, which is why it is off.
 | starburst | radial rays from the sheet centre (the waist between the inverted bases) | 20.2 | 87.70 | **162.3 s** | 153.7 s | 0.95 | 2 | 6 | 13353 s |
 | spiral | one continuous spiral | 14.4 | 85.57 | **89.4 s** | 83.4 s | 0.93 | 0 (+9 reverted) | 12 | 3657 s |
 | duotone | two-colour interleaved bands | 29.8 | 82.35 | **268.5 s** | 260.5 s | 0.97 | 5 | 41 | 10539 s |
+
+**Re-verified on 2026-08-20 under the cost-model refactor, without re-running
+all five.** The costing hook (below) changes the `--cluster` path only; with the
+shipped defaults it calls the same `arm_load` on the same arguments and the same
+`sequence_arm` after it. That is asserted rather than argued: an
+allocation digest — coverage, per-arm loads, moves, splits, order, directions,
+per-segment lengths — diffed empty against a pristine checkout of the previous
+commit, and the two corpus rows re-conducted end to end, `scatter` and `spiral`,
+reproducing **every column of this table exactly** (41.416667 s and 89.395833 s
+of makespan, 85.0 mm and 82.1 mm of clearance, 1 split and 0 (+9 reverted), to
+the float). `hatch` and `duotone` were not re-run: see the determinism note
+above for why a difference in either would not have been evidence about a code
+change in the first place.
 
 `floor` is the busiest arm's own nominal programme summed over the phases — its ink plus its pen-ups, every other arm assumed free — and no schedule can beat it. It is what the ALLOCATOR moves. `eff` = floor / makespan is what the CONDUCTOR moves: 1.00 means nobody ever waited. `solo %` is the share of the run with exactly one pen on the paper, the quantity `docs/SOLO_TIME.md` diagnosed and the one stroke splitting exists to lower. `splits` counts the cuts the conductor KEPT; a bracketed number is cuts it handed back, because `csail_schedule.build_phases` conducts the unsplit allocation as well and ships the faster of the two.
 
@@ -265,3 +300,105 @@ argument that put them there no longer applies and `allocate.arm_load` is the
 thing to fix. **DEMO-ANIMATION programs at 0.12–0.15 m/s:** same two defaults,
 and raise `--qd-frac` from 0.30 to 0.60, which is worth −18.9 % of makespan on
 the defaults alone at unchanged coverage and clearance.
+
+*Both halves of that recommendation were acted on the same day. The first is
+built and measured below; the second was tried, and the corpus refused it.*
+
+
+## The pricing defect is repaired (2026-08-20, second pass)
+
+**What was wrong.** `allocate.rebalance` decides who draws what by pricing
+candidate bags in seconds, and `allocate` then hands each arm's bag to a
+sequencer — and those were two independent choices of cost model.
+`allocate.arm_load` always priced with the single-variant `sequence.solve`,
+while `--cluster` sequenced with the (segment, direction, VARIANT) DP, which
+reaches a tour the price never saw. The balancer was balancing a load the
+sequencer then moved.
+
+**What replaced it.** `allocate.cost_model` returns ONE object carrying both
+halves (`load` and `sequence`), and `allocate` constructs exactly one and gives
+it to the balancer and to the sequencing pass, so the two cannot be configured
+apart (`allocate.py` section 4b-i). The menus are memoised per (arm, span) and
+shared between pricing and sequencing, which is what makes it affordable: the
+CSAIL two-pass allocation goes **22.7 → 33.2 s** of wall clock with
+`--cluster`, and is unchanged without it. **The shipped default path is
+byte-identical** — same tour, same splits, same floors — which is asserted two
+ways: an allocation digest diffed against a pristine checkout of the previous
+commit, and this table's own `0.02 m/s defaults` cell reproducing 254.445 s /
+582.43 s of ink / 89.02 s of transit / 2-of-58 capped to the digit.
+
+**What it is worth, at `qd_frac` 0.30 and every speed in the sweep.** The floor
+is computed exactly, per cell, at that cell's own draw speed (`--floor-cell`);
+coverage is **99.2139 %** in all twelve cells below, asserted per cell:
+
+| draw speed | defaults | cluster, single-variant pricing | cluster, cluster pricing | gap before | gap after |
+|---|---|---|---|---|---|
+| 0.02 m/s | 254.445 s | 260.440 s | **256.678 s** | +2.36 % | **+0.88 %** |
+| 0.05 m/s | 118.284 s | 132.585 s | **126.215 s** | +12.09 % | **+6.70 %** |
+| 0.08 m/s | 90.927 s | 107.111 s | **99.326 s** | +17.80 % | **+9.24 %** |
+| 0.12 m/s | 81.789 s | 93.663 s | **90.716 s** | +14.52 % | **+10.92 %** |
+
+Roughly half the penalty, at every speed, and it is the half that was an
+accounting error rather than a real cost. **It does not flip the rig-speed
+verdict on its own.** At 0.02 m/s the estimated makespans are 278.5 s against
+288.0 s (floor + `speed_sweep.OFFSET_S`, error bar ±3.5 s): **+3.4 %, down
+from +4.8 %, and still a loss.** The phase-2 imbalance this was diagnosed
+through moves with it but not all the way — 1.403x for the defaults, and
+1.491x → **1.474x** with the features — because the residue is a reach
+constraint and not a pricing one: arms 2 and 97 carry ~150 s of the orange
+pass each and arms 31 and 71 cannot reach most of it at any price.
+
+**Where it does flip a verdict is at the animation's own speed, once the cap
+is out of the way.** Conducted, both phases, `scene_check` PASS, coverage
+identical, at `--qd-frac 0.6`:
+
+| 0.12 m/s, qd_frac 0.60 | makespan | transit | reconfiguration | clearance |
+|---|---|---|---|---|
+| defaults | 84.396 s | 64.65 s | 46.32 rad | 82.7 mm |
+| min_travel + cluster, single-variant pricing | 84.771 s | 58.57 s | 41.32 rad | 84.0 mm |
+| min_travel + cluster, **cluster pricing** | **77.792 s** | **57.01 s** | **39.90 rad** | 82.4 mm |
+
+−8.2 % against the same features priced the old way, and −7.8 % against the
+shipped defaults. The mechanism is visible in the phases: the grey pass now
+conducts its SPLIT allocation in 27.77 s, where before the cuts were handed
+back and the unsplit alternative ran in 34.75 s — the cuts had been chosen
+against a tour the cluster DP was never going to run.
+
+
+## `qd_frac` = 0.60 was tried as the default, and the corpus refused it
+
+The table above says doubling the cap is worth 18.9 % of the demo makespan, and
+that 0.30 is a halving no measurement asked for (`writing.QD_FRAC` now carries
+the whole argument). It was adopted, re-certified, and put back.
+
+**What passed.** The shipped CSAIL two-pass run conducts in **84.396 s** at
+0.12 m/s against 104.021 s at 0.30 — **−18.9 %** — at identical coverage
+(99.2139 %) and `scene_check` **PASS** at **82.7 mm** against the 80 mm margin
+(82.1 mm at 0.30, so the clearance improves). `bench`'s `scatter` passes too
+and gains more than the logo does: 41.4 → **30.6 s** (−26.1 %), clearance
+85.0 → **87.1 mm**, same coverage, same 69 segments, same single split.
+
+**What refused.** `bench`'s `spiral` conducts in 89.4 s at 0.30 and **cannot be
+conducted at all** at 0.60 — REFUSED after the whole ladder: four re-sequences
+around the transits the conductor named impossible, conductor v1's go-home, and
+the unsplit allocation with its own go-home after that. It is one of the three
+rows that are exact end to end, so this reproduces; it is not a
+wall-clock-budget flake. And the control is clean: the same code at 0.30 gives
+back the committed row to the float (89.395833 s, 82.1 mm, 0 splits kept and 9
+handed back), so the only thing that changed between PASS and REFUSED is the
+cap.
+
+**And the reason is not the pacing.** The refusal is a FROZEN POSE problem, not
+a swept-slack one: `arm 2 cannot stop clear of 97 (-94 mm)`, with the unsplit
+alternative and conductor v1's go-home both refused after it. The cap does not
+move a pose — it moves the ALLOCATION. `rebalance` prices in seconds, halving
+the transit term changes which assignment is cheapest, and the spiral goes from
+0 cuts kept to 6 proposed; the arms then finish in poses they cannot stop clear
+of. So raising this is blocked on the allocation being conductable at 0.60, not
+on 0.60 being unsafe — which is a different piece of work
+(`coordination.hard_blocks` → `allocate.resequence` already carries a
+conductor's refusal back to the allocator for pen-up edges; it does not carry
+one back for a FINISHING POSE).
+
+`--qd-frac 0.6` per run still does what it always did, and `README.md`'s demo
+recipe still passes it.

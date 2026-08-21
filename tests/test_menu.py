@@ -12,10 +12,16 @@ that could quietly stop being true:
   4. materialising a variant lazily gives back the plan eager planning gives,
      to the float, certificate included;
   5. with one variant per segment the whole cluster apparatus REDUCES to the
-     sequencer it replaced — same matrix, same tour, same seconds.
+     sequencer it replaced — same matrix, same tour, same seconds;
+  6. and the price the ALLOCATOR puts on a bag is the tour the sequencer will
+     actually reach in it — for whichever of the two models the run is using,
+     because one object carries both (`allocate.cost_model`).
 
 (5) is the one that makes the rest safe to ship: it says the new code path is a
-generalisation of the old one and not a rewrite of it.
+generalisation of the old one and not a rewrite of it.  (6) is the one that
+keeps them honest afterwards: the balancer used to price every candidate with
+the single-variant DP while `--cluster` sequenced with the cluster DP, so it
+balanced a load the sequencer then moved.
 """
 import sys
 from pathlib import Path
@@ -24,8 +30,9 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from aris_sixarm import allocate, menu, planner, pwl, sequence, stroke_api, trace
-from aris_sixarm.fleet import FLEET, SHEET
+from aris_sixarm import (allocate, menu, planner, pwl, sequence, stroke_api,
+                         trace, writing)
+from aris_sixarm.fleet import FLEET, H_INV_DEFAULT, SHEET
 
 PEN = 0.200
 SPEC = FLEET[31]
@@ -447,3 +454,126 @@ def test_menus_never_lose_a_segment(csail_menus):
         assert m.status == "ok" and len(m) >= 1
         p = m.materialize(0)
         assert p["status"] == "ok"
+
+
+# --------------------------------------------------------------------------
+# 6. the allocator and the sequencer price the same bag the same way
+# --------------------------------------------------------------------------
+def _bag(segs):
+    """The fixture's segments, given the identity a cached menu is keyed on."""
+    return [dict(s, stroke_id=i) for i, s in enumerate(segs)]
+
+
+_SEQ_KW = dict(transit_speed=0.80, qd_frac=0.30, pen_ext=PEN,
+               q_start=None, return_home=True)
+
+
+@pytest.mark.parametrize("cluster", [False, True])
+def test_the_price_the_allocator_pays_is_the_tour_that_will_be_drawn(
+        csail_menus, cluster):
+    """The costing hook's whole reason to exist (`allocate.cost_model`).
+
+    `rebalance` decides who draws what by pricing candidate bags in seconds,
+    and `allocate` then hands each arm's bag to a sequencer.  Those used to be
+    two independent choices of cost model — the balancer always priced with
+    `sequence.solve`, while the pass that ran could be the cluster DP — so the
+    balancer balanced a load the sequencer then moved.  Here BOTH halves come
+    off one object, and this pins the identity for each model it offers: the
+    seconds a bag is priced at are the seconds its own DP reaches on it.
+    """
+    _menus, raw, opts = csail_menus
+    segs = _bag(raw)
+    model = allocate.cost_model(cluster)
+    assert model.cluster is cluster
+    draw = [writing.segment_draw_time(SPEC, s, 0.12, _SEQ_KW["qd_frac"],
+                                      H_INV_DEFAULT, PEN) for s in segs]
+
+    price = model.load(31, SPEC, segs, draw, **_SEQ_KW)
+    seq = model.sequence(31, segs, SPEC, "opt", opts, dict(_SEQ_KW))
+    assert seq["n_refused"] == 0, \
+        "a refused reversal makes the tour differ from the one that was priced"
+
+    if not cluster:
+        assert price - sum(draw) == pytest.approx(seq["cost"], abs=1e-9)
+        return
+
+    # the cluster price is the DP's own objective, decomposed: transit, plus
+    # the interior surcharge of the variant each segment is entered on, which
+    # is extra DRAW time and is charged at the same `w_surcharge / qd_frac`
+    # `sequence.cluster_cost_matrix` charges it at
+    mus = model.menus(31, SPEC, segs, opts)
+    sur = sum(float(mus[k].variants[v]["surcharge"])
+              for k, v in zip(seq["order"], seq["variants"]))
+    extra = (sequence.W_SURCHARGE / _SEQ_KW["qd_frac"]) * sur
+    assert price - sum(draw) - extra == pytest.approx(seq["cluster_cost"],
+                                                      abs=1e-9)
+
+
+def test_pricing_a_cluster_bag_with_the_single_variant_dp_is_a_different_number(
+        csail_menus):
+    """And the defect the hook closes was worth closing.
+
+    If the two models happened to agree on every bag, threading one object
+    through both stages would be tidiness rather than a fix.  They do not: the
+    cluster DP may choose the fiber each stroke is entered on, so it reaches a
+    tour the single-variant DP cannot, and pricing one bag under both models
+    gives two different numbers.  That difference is exactly what the balancer
+    used to be blind to (`docs/BENCH.md`: 1.40x -> 1.49x phase-2 imbalance at
+    the rig's own draw speed).
+    """
+    _menus, raw, opts = csail_menus
+    segs = _bag(raw)
+    draw = [writing.segment_draw_time(SPEC, s, 0.12, _SEQ_KW["qd_frac"],
+                                      H_INV_DEFAULT, PEN) for s in segs]
+    flat = allocate.cost_model(False).load(31, SPEC, segs, draw, **_SEQ_KW)
+    clus = allocate.cost_model(True).load(31, SPEC, segs, draw, opts=opts,
+                                          **_SEQ_KW)
+    assert clus < flat - 1e-6, \
+        (f"the cluster model priced this bag at {clus:.4f} s and the "
+         f"single-variant model at {flat:.4f} s; if these are equal the "
+         "balancer cannot be blind to the difference and this test is stale")
+
+
+def test_the_allocation_records_which_model_priced_it():
+    """A result carries the name of the model that balanced it, not a guess."""
+    assert allocate.cost_model(None).name == (
+        "cluster" if allocate.CLUSTER else "segment")
+    assert allocate.cost_model(True).name == "cluster"
+    assert allocate.cost_model(False).name == "segment"
+    # a model instance passes through unchanged, so `rebalance` and `allocate`
+    # cannot end up holding two of them
+    m = allocate.cost_model(True)
+    assert allocate.cost_model(m) is m
+
+
+def test_per_span_cluster_endpoints_stack_into_the_whole_bag_exactly(
+        csail_menus):
+    """What makes pricing with the cluster DP affordable at all.
+
+    The balancer re-prices a bag once per candidate move, and a bag is a set of
+    SPANS: solving the hover IK for every variant of every segment each time
+    would make the cluster model cost what the cluster model was accused of
+    costing.  `allocate._stack_cluster_ends` assembles the many-segment node
+    list out of memoised one-segment ones, and that is only legitimate if it
+    reproduces `sequence.cluster_endpoints` on the whole bag — field for field,
+    not approximately.
+    """
+    menus, _segs, _opts = csail_menus
+    full = sequence.cluster_endpoints(SPEC, menus, pen_ext=PEN)
+    stacked = allocate._stack_cluster_ends(
+        [sequence.cluster_endpoints(SPEC, [m], pen_ext=PEN) for m in menus])
+    assert set(stacked) == set(full)
+    for k, v in full.items():
+        got = stacked[k]
+        if isinstance(v, np.ndarray):
+            assert np.asarray(got).shape == v.shape, f"{k}: shape"
+            assert np.array_equal(np.asarray(got), v), f"{k}: values"
+        else:
+            assert list(got) == list(v) if isinstance(v, list) else got == v, k
+
+    C0, _T0, _e0 = sequence.cluster_cost_matrix(SPEC, menus, pen_ext=PEN)
+    C1, _T1, _e1 = sequence.cluster_cost_matrix(SPEC, menus, pen_ext=PEN,
+                                                ends=stacked)
+    assert np.array_equal(np.isfinite(C0), np.isfinite(C1))
+    fin = np.isfinite(C0)
+    assert np.array_equal(C0[fin], C1[fin])

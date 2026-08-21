@@ -90,38 +90,74 @@ and that a one-variant menu reproduces `sequence.cost_matrix` cell for cell and
 `held_karp`'s tour node for node.
 
 **It does what it was built to do.** On the shipped CSAIL two-pass run, at
-**identical coverage (99.2139 %)**, identical segment count and identical ink:
+**identical coverage (99.2139 %)**, identical segment count and identical ink.
+Three columns, because the numbers this section first published have since
+stopped reproducing — twice over, and for two different reasons — and saying
+so is the point:
 
-| | old | new | change |
+| | as published, 2026-08-20 | the committed code, `qd_frac` 0.30 | today: `--qd-frac 0.6` + cluster-aware pricing |
 |---|---|---|---|
-| transit (both phases, all arms) | 96.02 s | **81.84 s** | **−14.8 %** |
-| reconfiguration Σ‖q_exit − q_entry_next‖∞ | 46.93 rad | **16.41 rad** | **−65.0 %** |
-| min clearance | 82.1 mm | 86.0 mm | +4.8 % |
-| coverage | 99.2139 % | 99.2139 % | — |
+| transit (both phases, all arms) | 96.02 → **81.84 s** (−14.8 %) | 96.02 → 101.82 s (+6.0 %) | 64.65 → **57.01 s** (−11.8 %) |
+| reconfiguration Σ‖q_exit − q_entry_next‖∞ | 46.93 → **16.41 rad** (−65.0 %) | 46.93 → 43.77 rad (−6.7 %) | 46.32 → **39.90 rad** (−13.9 %) |
+| min clearance | 82.1 → 86.0 mm | 82.1 → 83.0 mm | 82.7 → **82.4 mm** |
+| makespan | 104.0 → **153.5 s** (+47.6 %) | 104.0 → 123.4 s (+18.6 %) | 84.4 → **77.8 s** (−7.8 %) |
+| coverage | 99.2139 % | 99.2139 % | 99.2139 % |
 
-**And it is off by default, because the makespan went the other way: 104.0 →
-153.5 s.** The reason is the same one that keeps the min-travel band objective
-off (`docs/REDUNDANCY.md`): the premise "interior draw time is invariant across
-variants" is FALSE. A variant is a different path through the band, so it has a
-different |dq/ds|, and `writing.draw_duration` stretches the ink until no joint
-exceeds `qd_frac` = 0.30 of its limit. Pinning fibers to save 14 s of transit
-across the fleet moved the busiest grey arm's DRAW time 20.2 → 30.9 s over the
-same 2.00 m, and the floor is what the makespan is made of. Two attempts to
-repair it in place are recorded because both failed: costing the band edge in
-SECONDS rather than radians (`pwl._edge_travel(mode="time")`, which makes the
-menu's surcharge a real draw-time price the DP can pay) recovered a third of
-the loss, and capping the admissible surcharge (`menu.MAX_SURCHARGE`) recovered
-none of it — because even ONE pinned variant is a constraint the free band DP
-would not have chosen. Both knobs are in the code and both are measured.
+**Why the first column does not reproduce: a repair landed after it was
+taken.** `menu.MAX_SURCHARGE` = 0.05 s prunes variants by the interior draw
+time they cost, so a menu now offers 2.0–3.0 variants per segment against
+4.6–6.0 in the stored `out/csail_schedule_new.json`. Fewer fibers to choose
+between is less reconfiguration bought — and much less ink spent buying it,
+which is why the makespan column moved the same way. The −65 % and the +48 %
+were true of the code that produced them and are true of nothing since;
+`docs/BENCH.md` has the diagnosis.
 
-**What would have to change for it to pay.** The band would have to be
-re-planned per variant against a draw-time objective rather than scored by a
-lattice proxy, and `allocate.arm_load` — which prices a candidate assignment
-with the single-variant sequencer — would have to price with the cluster model,
-or the balancer balances loads the sequencer then moves. Neither is a
-half-day's work, and neither is worth starting until the draw speed stops being
-joint-limited: at `qd_frac` = 0.30 the ink is the constraint, and every one of
-these levers is spending ink time to buy pen-up time.
+**Why the second column is what it is.** The premise "interior draw time is
+invariant across variants" is FALSE: a variant is a different path through the
+band, so it has a different |dq/ds|, and `writing.draw_duration` stretches the
+ink until no joint exceeds `qd_frac` of its velocity limit. Pinning fibers to
+save 14 s of transit across the fleet moved the busiest grey arm's DRAW time
+20.2 → 30.9 s over the same 2.00 m, and the floor is what the makespan is made
+of. Two attempts to repair it in place are recorded because both failed:
+costing the band edge in SECONDS rather than radians
+(`pwl._edge_travel(mode="time")`, which makes the menu's surcharge a real
+draw-time price the DP can pay) recovered a third of the loss, and capping the
+admissible surcharge (`menu.MAX_SURCHARGE`) recovered none of it — because
+even ONE pinned variant is a constraint the free band DP would not have chosen.
+Both knobs are in the code and both are measured.
+
+**And why the third column exists: both of the things this section said would
+have to change, changed.** It named two, and neither has anything to do with
+the menus:
+
+1. **The cap.** "At `qd_frac` = 0.30 the ink is the constraint, and every one
+   of these levers is spending ink time to buy pen-up time" — so the levers
+   were being judged against a cap that was itself the bottleneck, and 0.30 is
+   half the cap the measurement behind it used (`writing.QD_FRAC` carries the
+   argument; `docs/BENCH.md` carries both the 18.9 % it is worth and the row
+   of the corpus that refused it, which is why it is still 0.30 and why the
+   third column above is measured at `--qd-frac 0.6` rather than at a
+   default). On the defaults alone the cap is 104.0 → 84.4 s.
+2. **The pricing.** "`allocate.arm_load` — which prices a candidate assignment
+   with the single-variant sequencer — would have to price with the cluster
+   model, or the balancer balances loads the sequencer then moves." **Built:**
+   `allocate.cost_model` is one object carrying both the price and the tour
+   (`allocate.py` section 4b-i), and `allocate` constructs exactly one and
+   hands it to the balancer and to the sequencing pass, so the two cannot be
+   configured apart. On this run it is worth **84.771 → 77.792 s** with every
+   other flag held fixed — and the mechanism is visible in the phases. The
+   grey pass conducts the SPLIT allocation now, at **27.77 s**; before the fix
+   the same pass shipped its UNSPLIT alternative at 34.75 s, because
+   `build_phases` conducts both and ships the faster and the cuts had been
+   chosen against a tour the cluster DP was never going to run.
+
+So the makespan objection is gone at the animation's own draw speed **once the
+cap is out of the way** — and the cap is not out of the way by default, which
+is the honest statement of where this stands. `--cluster` remains off: at the
+shipped `qd_frac` = 0.30 it still costs 10.9 % of the floor at 0.12 m/s and
+0.9 % at the rig's 0.02 m/s (down from 14.5 % and 2.4 % before the pricing
+fix), and a default is flipped by a re-run of the whole corpus, not by one
+logo. `docs/BENCH.md`'s sweep has the current A/B at every speed.
 
 Turn it on with `--cluster` (`allocate.CLUSTER`).
 

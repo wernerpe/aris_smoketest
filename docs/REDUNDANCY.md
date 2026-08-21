@@ -227,9 +227,13 @@ against 90.
 true of the BAND. What the band does not know is that `writing.draw_duration`
 stretches every stroke until no joint exceeds `qd_frac` = 0.30 of its velocity
 limit, and that drawing — not transit — is the dominant term in the makespan
-floor. A shorter path through the band is a more *constrained* path, it has a
-larger |dq/ds|, and the ink slows down to match. Measured on the shipped CSAIL
-run, at identical coverage, identical segments and identical metres:
+floor. (0.30 is half the cap the measurement behind it actually used; raising
+it to 0.60 is worth 18.9 % of the makespan on this very run, and was tried and
+refused on 2026-08-20 — see `writing.QD_FRAC` and `docs/BENCH.md`. Everything
+below is measured at 0.30, which is still what ships.) A shorter path through
+the band is a more *constrained* path, it has a larger |dq/ds|, and the ink
+slows down to match. Measured on the shipped CSAIL run, at identical coverage,
+identical segments and identical metres:
 
 | | maximin σ | gated min-travel |
 |---|---|---|
