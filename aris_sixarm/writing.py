@@ -21,7 +21,7 @@ import json
 
 import numpy as np
 
-from . import ik, letters, planner
+from . import ik, letters, paper, planner
 from .fleet import FLEET, H_INV_DEFAULT
 from .frames import (FR3_MIN, FR3_MAX, PEN_EXT, QD_MAX, joint_margin, rotx,
                      tip_pos)
@@ -510,6 +510,150 @@ def exit_time(q_exit, q_hover_exit, q_home, qd_frac=QD_FRAC):
             _dq_time(q_hover_exit, q_home, qd_frac, T_HOME_F))
 
 
+# --------------------------------------------------------------------------
+# ...AND WHAT IT IS ALLOWED TO FLY THROUGH ON THE WAY
+# --------------------------------------------------------------------------
+# THE PAPER IS AN OBSTACLE, AND UNTIL 2026-08-21 NOTHING SAID SO.  The three
+# beats above are straight lines in joint space between poses that are each
+# certified on their own, and `transit_time` prices them without ever asking
+# what the line does in between.  On the shipped `csail_final6` timeline what
+# it does, three times, is go through the table — 253.6 mm of pen tip and
+# 156.1 mm of wrist below the canvas, once with a conductor pause holding the
+# arm down there for three quarters of a second.
+#
+# `paper.route` is the answer: it certifies the straight line and, when the
+# line is refused, returns VIA-CONFIGURATIONS that are themselves gated IK
+# solutions.  The beats below carry those vias as extra waypoints, and every
+# one of them is priced with the same `_dq_time` cap as the move it replaced,
+# so a routed transit is still velocity-capped and the seconds it costs are
+# seconds the sequencer sees (`sequence.cost_matrix` calls straight into here).
+#
+# A beat is a list of (seconds, q) steps.  With no vias it is one step and the
+# arithmetic is bit-identical to `transit_time`'s, which is what keeps every
+# pinned number in the corpus reproducible on a transit that never needed
+# fixing — 39 of the shipped run's 42 pen-up blocks are exactly that case.
+PAPER_SAFE = True           # route pen-ups around the paper plane
+
+
+def _beat(qs, qd_frac=QD_FRAC, floor=0.0):
+    """A chain of configurations -> [(seconds, q)], total >= `floor`.
+
+    Each hop is capped at `qd_frac` of the joint velocity limits exactly as a
+    single-hop move would be; the floor (the lift/lower beat minimum, or the
+    pen-tip hop at `transit_speed`) applies to the beat AS A WHOLE and is spread
+    proportionally, so inserting a via never makes the arm move faster than the
+    un-routed move would have.
+    """
+    qs = [np.asarray(q, float).reshape(7) for q in qs]
+    ts = [_dq_time(a, b, qd_frac, 0.0) for a, b in zip(qs[:-1], qs[1:])]
+    tot = float(sum(ts))
+    if floor > tot:
+        ts = [floor / len(ts)] * len(ts) if tot <= 1e-12 else \
+            [t * (floor / tot) for t in ts]
+    return list(zip([float(x) for x in ts], qs[1:]))
+
+
+def _route(spec, q0, q1, pen_ext, h_inv, tip_floor, qd_frac, floor,
+           paper_safe=True, q_home=None):
+    """One certified pen-up move as a beat. -> ([(s, q), ...], mode) | None.
+
+    `None` is a REFUSAL and callers must propagate it: `sequence.cost_matrix`
+    turns it into an infinite edge so the tour never proposes the move, and
+    `arm_program` raises rather than lay a path it cannot certify.
+    """
+    if not paper_safe:
+        return _beat([q0, q1], qd_frac, floor), "unchecked"
+    r = paper.route(spec, q0, q1, pen_ext=pen_ext, h_inv=h_inv,
+                    tip_floor=tip_floor, q_home=q_home)
+    if r is None:
+        return None
+    return _beat([q0] + list(r["vias"]) + [q1], qd_frac, floor), r["mode"]
+
+
+def transit_beats(spec, q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
+                  z_exit=LIFT_Z, z_entry=LIFT_Z, pen_ext=PEN_EXT,
+                  h_inv=H_INV_DEFAULT, transit_speed=TRANSIT_SPEED,
+                  qd_frac=QD_FRAC, paper_safe=PAPER_SAFE, q_home=None):
+    """`transit_time`, with the paper as an obstacle. -> dict | None.
+
+    -> dict(lift, travel, lower, total, steps, modes) where each of the three
+    beats is a list of (seconds, q) steps and `total` is what the transit costs.
+    `None` when the crossing cannot be certified at all — the honest answer, and
+    the one that lets the sequencer pick a different order instead of flying it.
+
+    The three beats keep different floors because they are doing different
+    things: a lift STARTS with the pen on the paper and a lower ENDS there, so
+    both are allowed inside the contact band, while the travel between two
+    hovers has no business near the plane at all and keeps `paper.TIP_CLEAR` —
+    capped by the hover the arm actually reached, since `lifted_or_lower` gives
+    up height near the edge of reach.
+    """
+    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, -paper.TIP_TOL,
+                  qd_frac, T_LIFT_F, paper_safe)
+    if lift is None:
+        return None
+    trav = _route(spec, q_hover_exit, q_hover_entry, pen_ext, h_inv,
+                  paper.travel_floor(z_exit, z_entry), qd_frac,
+                  max(T_TRAVEL_MIN, hop / max(transit_speed, 1e-9)),
+                  paper_safe, q_home)
+    if trav is None:
+        return None
+    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, -paper.TIP_TOL,
+                 qd_frac, T_LOWER_F, paper_safe)
+    if low is None:
+        return None
+    beats = [lift[0], trav[0], low[0]]
+    return dict(lift=lift[0], travel=trav[0], lower=low[0],
+                steps=[s for b in beats for s in b],
+                total=float(sum(s[0] for b in beats for s in b)),
+                modes=(lift[1], trav[1], low[1]))
+
+
+def enter_beats(spec, q_home, q_hover_entry, q_entry, pen_ext=PEN_EXT,
+                h_inv=H_INV_DEFAULT, qd_frac=QD_FRAC, paper_safe=PAPER_SAFE):
+    """Ready pose -> hover -> the first segment's entry. -> dict | None."""
+    # NEITHER END OF THIS ONE IS IN CONTACT.  The arm starts in its ready pose,
+    # high over the paper, and finishes at a hover — so the trip in keeps the
+    # FLYING floor, not the contact band.  Giving it the contact band (which the
+    # first cut did) would have let an entry swing through the canvas with
+    # nothing at construction time objecting.
+    home = _route(spec, q_home, q_hover_entry, pen_ext, h_inv,
+                  paper.travel_floor(LIFT_Z, LIFT_Z), qd_frac, T_HOME_F,
+                  paper_safe)
+    if home is None:
+        return None
+    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, -paper.TIP_TOL,
+                 qd_frac, T_LOWER_F, paper_safe)
+    if low is None:
+        return None
+    return dict(home=home[0], lower=low[0], steps=home[0] + low[0],
+                total=float(sum(s[0] for s in home[0] + low[0])),
+                modes=(home[1], low[1]))
+
+
+def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=PEN_EXT,
+               h_inv=H_INV_DEFAULT, qd_frac=QD_FRAC, paper_safe=PAPER_SAFE):
+    """Last exit -> hover -> the ready pose. -> dict | None.
+
+    THE TRIP HOME IS A TRANSIT LIKE ANY OTHER, and on the shipped timeline it
+    is two of the three that went through the table: arms 2 and 97 both dive on
+    their way to `q_seed`, because that pose is a metre away and on the far side
+    of a branch change.  It gets the same treatment and the same refusal.
+    """
+    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, -paper.TIP_TOL,
+                  qd_frac, T_LIFT_F, paper_safe)
+    if lift is None:
+        return None
+    home = _route(spec, q_hover_exit, q_home, pen_ext, h_inv,
+                  paper.travel_floor(LIFT_Z, LIFT_Z), qd_frac, T_HOME_F,
+                  paper_safe)
+    if home is None:
+        return None
+    return dict(lift=lift[0], home=home[0], steps=lift[0] + home[0],
+                total=float(sum(s[0] for s in lift[0] + home[0])),
+                modes=(lift[1], home[1]))
+
+
 def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT,
                     pen_ext=PEN_EXT):
     """`lifted_config`, retrying at lower heights. -> (q, height_used).
@@ -531,10 +675,21 @@ PARK_FREEZE = "freeze"      # stop at the hover pose above the last stroke
 PARK_HOME = "home"          # the old behaviour: transit back to `spec.q_seed`
 
 
+class PaperRefused(RuntimeError):
+    """A pen-up move that cannot be flown without entering the paper.
+
+    Raised by `arm_program` rather than returning a timeline that would have to
+    be vetoed downstream.  `sequence.cost_matrix` prices the same refusal as an
+    infinite edge, so an order the sequencer chooses can never raise this for a
+    transit — it is the entry, the go-home and the retreat, whose endpoints the
+    tour does not get to choose, that can still hit it.
+    """
+
+
 def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
                 h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
                 pen_ext=PEN_EXT, q_start=None, park=PARK_FREEZE, retreat=None,
-                taxi_stretch=0.0, verbose=False):
+                taxi_stretch=0.0, paper_safe=PAPER_SAFE, verbose=False):
     """One arm's frozen nominal timeline from its allocated segments.
 
     `segs` are `allocate.allocate`'s programme entries, already in the order the
@@ -601,7 +756,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                     phases=[], ink=[], duration=0.0, lifts=[], dense_tip_err=0.0,
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
                     taxi_s=0.0, retreat_s=0.0, q_end=q0, park=str(park),
-                    pen=float(pen_ext), fallbacks=0)
+                    pen=float(pen_ext), paper_modes=[], paper_vias=0,
+                    fallbacks=0)
 
     dense = []
     for k, s in enumerate(segs):
@@ -627,31 +783,50 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                            pen_ext=pen_ext) for D in dense]
     hox = [lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,
                            pen_ext=pen_ext) for D in dense]
-    beats = [list(enter_time(q0, hov[0][0], dense[0]["qd"][0], qd_frac))]
+    q_home = np.asarray(spec.q_seed, float).reshape(7)
+
+    def need(beat, what, k):
+        """Refuse rather than lay down a move the paper gate would not pass."""
+        if beat is None:
+            raise PaperRefused(f"arm {getattr(spec, 'arm_id', '?')}: {what} at "
+                               f"segment {k} cannot clear the paper plane")
+        return beat
+
+    ent = need(enter_beats(spec, q0, hov[0][0], dense[0]["qd"][0], pen_ext,
+                           h_inv, qd_frac, paper_safe), "entry", 0)
+    beats, modes = [ent["steps"]], [ent["modes"]]
     hops = []
     for k, D in enumerate(dense):
         if k + 1 < len(dense):
             hop = float(np.linalg.norm(dense[k + 1]["pts"][0] - D["pts"][-1]))
             hops.append(hop)
-            beats.append(list(transit_time(D["qd"][-1], hox[k][0], hov[k + 1][0],
-                                           dense[k + 1]["qd"][0], hop,
-                                           transit_speed, qd_frac)))
+            b = need(transit_beats(spec, D["qd"][-1], hox[k][0], hov[k + 1][0],
+                                   dense[k + 1]["qd"][0], hop, hox[k][1],
+                                   hov[k + 1][1], pen_ext, h_inv, transit_speed,
+                                   qd_frac, paper_safe, q_home), "transit", k)
         elif park == PARK_HOME:
-            beats.append(list(exit_time(D["qd"][-1], hox[k][0], spec.q_seed,
-                                        qd_frac)))
+            b = need(exit_beats(spec, D["qd"][-1], hox[k][0], q_home, pen_ext,
+                                h_inv, qd_frac, paper_safe), "go-home", k)
         else:                                     # freeze: lift, and stop
-            beats.append([_dq_time(D["qd"][-1], hox[k][0], qd_frac, T_LIFT_F)])
-    transit_s = float(sum(sum(b) for b in beats))
+            r = _route(spec, D["qd"][-1], hox[k][0], pen_ext, h_inv,
+                       -paper.TIP_TOL, qd_frac, T_LIFT_F, paper_safe)
+            b = need(None if r is None else dict(steps=r[0], modes=(r[1],)),
+                     "final lift", k)
+        beats.append(b["steps"])
+        modes.append(b["modes"])
+    transit_s = float(sum(s[0] for b in beats for s in b))
     stretch = max(0.0, float(taxi_stretch))
     kf = 1.0 + stretch / transit_s if transit_s > 1e-12 and stretch else 1.0
     taxi_s = transit_s * (kf - 1.0)
 
     lifts.append(hov[0][1])
     add(0.0, q0)
-    t += kf * beats[0][0]
-    add(t, hov[0][0])
-    t += kf * beats[0][1]
-    add(t, dense[0]["qd"][0], 0, 0.0)
+    for i, (dt_, q_) in enumerate(beats[0]):
+        t += kf * dt_
+        if i == len(beats[0]) - 1:
+            add(t, q_, 0, 0.0)
+        else:
+            add(t, q_)
 
     draw_len = transit_len = 0.0
     for k, D in enumerate(dense):
@@ -673,27 +848,32 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
 
         b, t0 = beats[k + 1], t
         lifts.append(hox[k][1])
-        t += kf * b[0]
-        add(t, hox[k][0])
         if k + 1 < len(dense):
             lifts.append(hov[k + 1][1])
             transit_len += hops[k]
-            t += kf * b[1]
-            add(t, hov[k + 1][0])
-            t += kf * b[2]
-            add(t, dense[k + 1]["qd"][0], k + 1, 0.0)
-        elif park == PARK_HOME:
-            t += kf * b[1]
-            add(t, spec.q_seed)
+        for i, (dt_, q_) in enumerate(b):
+            t += kf * dt_
+            if i == len(b) - 1 and k + 1 < len(dense):
+                add(t, q_, k + 1, 0.0)
+            else:
+                add(t, q_)
         phases.append(dict(kind="transit", seg=k, t0=float(t0), t1=float(t)))
 
     retreat_s = 0.0
     if retreat is not None and park != PARK_HOME:
         q_ret = np.asarray(retreat, float).reshape(7)
-        retreat_s = _dq_time(hox[-1][0], q_ret, qd_frac, T_LIFT_F)
+        z_ret = float(paper.chain_tip_z(q_ret[None, :], spec, pen_ext, h_inv)[1][0])
+        r = _route(spec, hox[-1][0], q_ret, pen_ext, h_inv,
+                   paper.travel_floor(hox[-1][1], z_ret), qd_frac, T_LIFT_F,
+                   paper_safe)
+        need(None if r is None else dict(steps=r[0]), "retreat", len(dense) - 1)
+        retreat_s = float(sum(s[0] for s in r[0]))
         t0 = t
-        t += retreat_s
-        add(t, q_ret)
+        for dt_, q_ in r[0]:
+            t += dt_
+            add(t, q_)
+        beats.append(r[0])          # keep `paper_vias` counting the retreat too
+        modes.append((r[1],))
         phases.append(dict(kind="retreat", seg=len(dense) - 1, t0=float(t0),
                            t1=float(t)))
 
@@ -705,6 +885,9 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 retreat_s=float(retreat_s), q_end=np.array(Q[-1], float),
                 park=str(park), pen=float(pen_ext),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
+                paper_modes=[m for mm in modes for m in mm],
+                paper_vias=int(sum(len(b) for b in beats)
+                               - sum(len(mm) for mm in modes)),
                 fallbacks=int(sum(D["fallbacks"] for D in dense)))
 
 

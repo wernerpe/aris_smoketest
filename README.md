@@ -31,6 +31,17 @@ ARIS_RIG=final6_opt python3 scripts/csail_schedule.py --arms all ...
 reachable from BOTH units), and what the CSAIL pipeline does on it. Every
 output flags the two ~20 cm pole extensions, which are **not drawn steel**.
 
+`docs/PAPER_PLANE.md` is the correction to it. The first `csail_final6` release
+put three pen-up transits **through the canvas** — worst pen tip 253.6 mm under
+the paper, worst wrist 156.1 mm, one of them held there for three quarters of a
+second by a conductor pause — because the paper was certified against every
+stroke and against no transit. It is now an obstacle at both layers: pen-up
+moves are routed around it with certified via-configurations
+(`aris_sixarm/paper.py`, priced through `sequence.cost_matrix`), and
+`scene_check` gates every arm's tip and chain against it at every instant. The
+same document has the dead-zone tiers (the atlas overstates death by **7.04 pp**)
+and the attribution of the 86.97 % coverage.
+
 ## Layout
 
 ```

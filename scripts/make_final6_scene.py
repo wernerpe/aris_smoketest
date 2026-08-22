@@ -23,12 +23,26 @@ import trimesh
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import atlas, rig_final, rig_final6 as r6  # noqa: E402
+from aris_sixarm import atlas, dead as dead_mod, rig_final  # noqa: E402
+from aris_sixarm import rig_final6 as r6  # noqa: E402
 from aris_sixarm.fleet import ACTIVE_RIG  # noqa: E402
 from aris_sixarm.viz import robot_model  # noqa: E402
 
 BOX_COLOR = {"A": 0x9AA0A6, "B": 0x8B9096}      # two greys, one per unit
 BOX_OPACITY = 0.42
+
+# THE DEAD-ZONE TIERS ARE TWO COLOURS BECAUSE THEY ARE TWO CLAIMS.
+# Dark red is paper no arm can certify at the gates the PLANNER itself uses:
+# geometry, and nothing about a different allocation or a slower pen recovers
+# it.  Orange is paper the strict atlas (margin 0.30, sigma 0.14) disowns but
+# the planner (0.15, 0.10) can reach — real paper that the headline "24.07 %
+# dead" number counts as lost.  Keeping them apart is the whole point of the
+# layer; a single red blob would repeat the overstatement it exists to correct.
+DEAD_COLOR = 0x8B0000          # solid dark red — permissive-dead
+STRICT_ONLY_COLOR = 0xFF8C00   # orange — strict-only-dead
+UNDRAWN_COLOR = 0xE0217D       # the undrawn spans of the shipped programme
+Z_DEAD = 0.0020                # just over the paper, under the coverage clouds
+Z_UNDRAWN = 0.0320             # over everything: it is the highlight
 
 
 def _hex(rgb):
@@ -71,6 +85,88 @@ def _add_holder(vis, path, T_world_hand, color):
                                  np.asarray(m.faces, np.uint32)),
         g.MeshLambertMaterial(color=color))
     vis[path].set_transform(T_world_hand)
+
+
+def _cells(vis, path, mask, xs, ys, grid, color, z):
+    """One dead tier as a dense point cloud, one sprite per 2 cm atlas cell."""
+    iy, ix = np.nonzero(mask)
+    if not len(iy):
+        return 0
+    xyz = np.column_stack([xs[ix], ys[iy], np.full(len(iy), z)])
+    rgb = np.tile(np.array([[(color >> 16 & 255) / 255.0,
+                             (color >> 8 & 255) / 255.0,
+                             (color & 255) / 255.0]]), (len(iy), 1))
+    vis[path].set_object(
+        g.PointCloud(position=xyz.T.astype(np.float32),
+                     color=rgb.T.astype(np.float32), size=float(grid)))
+    return len(iy)
+
+
+def _spans(vis, path, spans, color, z):
+    """The undrawn spans as line segments lying on the paper."""
+    segs = []
+    for sp in spans:
+        P = np.asarray(sp["pts"], float).reshape(-1, 2)
+        for a, b in zip(P[:-1], P[1:]):
+            segs.append([a[0], a[1], z])
+            segs.append([b[0], b[1], z])
+    if not segs:
+        return 0
+    V = np.asarray(segs, np.float32).T
+    vis[path].set_object(g.LineSegments(
+        g.PointsGeometry(V), g.LineBasicMaterial(color=color, linewidth=6)))
+    return len(segs) // 2
+
+
+def dead_legend(T, att, probe):
+    c = T["counts"]
+    by = att["by_cause_m"]
+    tot = max(att["total_m"], 1e-9)
+    rows = "".join(
+        f"<tr><td>{k}</td><td align=right>{v:.3f} m</td>"
+        f"<td align=right>{100 * v / tot:.1f} %</td></tr>"
+        for k, v in sorted(by.items(), key=lambda kv: -kv[1]))
+    sp = ("" if "span_probe_certified_m" not in att else
+          "<hr style='margin:6px 0'><b>And 'other' is not a shrug</b>: every "
+          "leftover span was handed back to the real planner and "
+          f"<b>{att['span_probe_certified_m']:.3f} m</b> of it certified. A "
+          "cell being GO does not make a STROKE through it certifiable &mdash; "
+          "the planner needs a continuous band from end to end, and these "
+          "spans have an infeasible endpoint or no surviving q7 fiber.")
+    pr = ("" if probe is None else
+          f"Probe check: {probe['n']} permissive-dead cells sampled "
+          f"(every {probe['stride']}th, {100 * probe['length']:.0f} mm stroke), "
+          f"<b>{probe['n_certified']}</b> certified by the real planner.<br>")
+    return f"""
+<div style="position:fixed;top:12px;right:12px;z-index:1000;
+background:rgba(255,255,255,0.95);border:1px solid #bbb;border-radius:8px;
+padding:10px 14px;font:12px/1.5 sans-serif;color:#222;max-width:420px">
+<b>DEAD ZONES &mdash; two tiers, because they mean two things</b><br>
+<span style="color:#8B0000">&#9632;</span> <b>permissive-dead</b>
+{c['dead_permissive']} cells ({c['dead_permissive_pct']:.2f} %) &mdash; no arm
+certifies even at the PLANNER's own hard gates (margin
+{dead_mod.PERMISSIVE_MARGIN:.2f}, &sigma;<sub>min</sub>
+{dead_mod.PERMISSIVE_SIGMA:.2f}). Geometry; nothing recovers it.<br>
+<span style="color:#FF8C00">&#9632;</span> <b>strict-only-dead</b>
+{c['strict_only_dead']} cells ({c['strict_only_dead_pct']:.2f} %) &mdash;
+reachable at the planner's gates, refused by the atlas's
+({dead_mod.STRICT_MARGIN:.2f} / {dead_mod.STRICT_SIGMA:.2f}). Real paper the
+headline dead number throws away.<br>
+{pr}
+<hr style="margin:6px 0">
+<b>Atlas-strict dead</b> {c['dead_strict_pct']:.2f} % &rarr;
+<b>truly dead</b> {c['dead_permissive_pct']:.2f} %. The strict sweep overstates
+death by {c['strict_only_dead_pct']:.2f} pp of the canvas.<br>
+<hr style="margin:6px 0">
+<span style="color:#E0217D">&#9632;</span> <b>undrawn_ink</b> &mdash; the
+{att['n_spans']} spans of the shipped CSAIL programme that were traced and
+never drawn, {att['total_m']:.3f} m of {100 * (1 - 0.869704):.2f} %:<br>
+<table style="font:11px/1.4 sans-serif">{rows}</table>
+<i>conductor refusal: {att['conductor_refusal_m']:.3f} m &mdash;
+{att['conductor_refusal_note']}</i>
+{sp}
+</div>
+"""
 
 
 def legend():
@@ -129,7 +225,8 @@ removes 0 cells). Toggle layers: Open Controls &rarr; Scene.
 """
 
 
-def build(html_path, atlas_dir):
+def build(html_path, atlas_dir, dead=None, dropped=None, attribution=None,
+          probe=None, coverage=True):
     links, joints = robot_model.load_model()
     vis = meshcat.Visualizer()
     vis["/Background"].set_property("top_color", [0.95, 0.95, 0.97])
@@ -190,8 +287,21 @@ def build(html_path, atlas_dir):
             g.Sphere(0.035), g.MeshLambertMaterial(color=col))
         vis[f"bases/arm{aid}"].set_transform(Twb)
 
+    # --- dead zones, under the coverage clouds ---------------------------
+    n_dead = n_so = n_sp = 0
+    if dead is not None:
+        n_dead = _cells(vis, "dead_zones/permissive_dead",
+                        dead["dead_permissive"], dead["xs"], dead["ys"],
+                        dead["grid"], DEAD_COLOR, Z_DEAD)
+        n_so = _cells(vis, "dead_zones/strict_only_dead",
+                      dead["strict_only_dead"], dead["xs"], dead["ys"],
+                      dead["grid"], STRICT_ONLY_COLOR, Z_DEAD + 0.0008)
+    if dropped:
+        n_sp = _spans(vis, "undrawn_ink/spans", dropped, UNDRAWN_COLOR,
+                      Z_UNDRAWN)
+
     # --- coverage layer, mirrored (no new sweep) -------------------------
-    for i, (aid, spec) in enumerate(fleet6.items()):
+    for i, (aid, spec) in (enumerate(fleet6.items()) if coverage else []):
         # PREFER THE ARM'S OWN SWEEP.  `out/atlas_final6_opt` has all six, over
         # the whole continuous canvas; `out/atlas_final` has only unit A's
         # three, and unit B has to be mirrored from its twin (exact, but blind
@@ -214,12 +324,16 @@ def build(html_path, atlas_dir):
             g.PointCloud(position=xyz.T.astype(np.float32),
                          color=rgb.T.astype(np.float32), size=0.016))
 
-    html = vis.static_html().replace("</body>", legend() + "</body>")
+    extra = "" if dead is None and not dropped else dead_legend(
+        dead, attribution, probe)
+    html = vis.static_html().replace("</body>", legend() + extra + "</body>")
     Path(html_path).parent.mkdir(parents=True, exist_ok=True)
     open(html_path, "w").write(html)
     print(f"{html_path}  ({len(html) / 1e6:.1f} MB)  "
           f"6 arms, {len(r6.frame_boxes6_canvas(zmin=-10))} frame boxes, "
-          f"mirror plane canvas y = {r6.MIRROR_PLANE_CANVAS_Y:.6f} m")
+          f"mirror plane canvas y = {r6.MIRROR_PLANE_CANVAS_Y:.6f} m"
+          + (f", dead {n_dead} + strict-only {n_so} cells, "
+             f"{n_sp} undrawn segments" if dead is not None or n_sp else ""))
 
 
 if __name__ == "__main__":

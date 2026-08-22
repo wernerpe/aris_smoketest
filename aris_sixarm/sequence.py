@@ -51,10 +51,12 @@ import time
 
 import numpy as np
 
+from . import paper
 from .fleet import H_INV_DEFAULT
 from .frames import PEN_EXT, QD_MAX
-from .writing import (QD_FRAC, T_HOME_F, T_LIFT_F, T_LOWER_F, T_TRAVEL_MIN,
-                      TRANSIT_SPEED, dq_time_many, lifted_or_lower)
+from .writing import (LIFT_Z, QD_FRAC, T_HOME_F, T_LIFT_F, T_LOWER_F,
+                      T_TRAVEL_MIN, TRANSIT_SPEED, dq_time_many,
+                      lifted_or_lower)
 
 EXACT_MAX_N = 16         # segments solved exactly by Held-Karp
 TIME_BUDGET = 2.0        # s of local search per arm, above EXACT_MAX_N
@@ -96,9 +98,111 @@ def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
     return dict(q=q, xy=xy, hover=hov, z=z, n=n)
 
 
+def _leg_surcharge(spec, Q0, Q1, tip_floor, floor, qd_frac, h_inv, pen_ext,
+                   q_home=None):
+    """Extra seconds for routing each (Q0[i] -> Q1[i]) move. -> (K,).
+
+    A TRANSIT IS THREE MOVES AND ALL THREE CAN NEED A DETOUR.  The first cut of
+    this priced only the hover-to-hover crossing, on the assumption that a lift
+    off the paper and a lower onto it are short and vertical and never in
+    trouble.  Mostly true, and when it is not, `arm_program` inserts a via there
+    too and the timeline pays seconds the matrix never charged — which the
+    pipeline's own cross-check caught immediately: "sequencer priced transits
+    the timeline does not pay: arm 2: 1.1225 s".  Every leg `writing` routes is
+    now priced by the same call with the same floors, including the two the
+    depot pays (ready pose -> first entry, last exit -> ready pose).
+    """
+    Q0 = np.asarray(Q0, float).reshape(-1, 7)
+    Q1 = np.asarray(Q1, float).reshape(-1, 7)
+    K = len(Q0)
+    out = np.zeros(K)
+    tf = np.broadcast_to(np.asarray(tip_floor, float).reshape(-1), (K,))
+    fl = np.broadcast_to(np.asarray(floor, float).reshape(-1), (K,))
+    for i in range(K):
+        ok, _, _ = paper.move_ok(spec, Q0[i], Q1[i], pen_ext, h_inv,
+                                 tip_floor=float(tf[i]))
+        if ok:
+            continue
+        r = paper.route(spec, Q0[i], Q1[i], pen_ext=pen_ext, h_inv=h_inv,
+                        tip_floor=float(tf[i]), q_home=q_home)
+        if r is None:
+            out[i] = np.inf
+            continue
+        qs = [Q0[i]] + list(r["vias"]) + [Q1[i]]
+        direct = float(_row_time(Q0[i][None, :], Q1[i][None, :], qd_frac, 0.0)[0])
+        routed = float(sum(_row_time(np.asarray(u)[None, :],
+                                     np.asarray(v)[None, :], qd_frac, 0.0)[0]
+                           for u, v in zip(qs[:-1], qs[1:])))
+        out[i] = max(0.0, max(fl[i], routed) - max(fl[i], direct))
+    return out
+
+
+def _paper_surcharge(spec, exi_h, ent_h, same, floor, qd_frac, h_inv, pen_ext):
+    """What routing each crossing around the paper adds. -> (N,N) seconds.
+
+    THE SEQUENCER HAS TO PAY FOR THE DETOUR IT CAUSES.  A hover-to-hover move
+    that dives through the canvas is not free to fix: `paper.route` climbs and
+    flies over, and those via-configurations are extra joint-space seconds.  If
+    the matrix priced the straight line the tour would be chosen against a
+    fiction and `arm_program` would then lay down — and charge the fleet for —
+    something the sequencer never considered.  So every cell that needs a
+    detour carries its cost, and every cell that CANNOT be routed at all
+    carries `inf`, which is how an unflyable crossing stops being an ordering
+    the search can propose rather than an exception it hits later.
+
+    THE HOVER HEIGHTS ARE MEASURED, NOT LOOKED UP.  Both this and the fiber
+    variant hand in nothing but the two hover poses; the height each one
+    actually reached is the FK tip z of the pose itself.  That is what lets the
+    plain and the cluster matrices share one definition of the surcharge, which
+    is the property `tests/test_menu.py` pins when it asserts a one-variant
+    menu reproduces `cost_matrix` cell for cell.
+
+    Only the crossings that violate cost anything: the screen is ONE batched FK
+    over every cell's sampled line, and `paper.route` memoises, so on the CSAIL
+    logo (13 segments, 26 nodes) it is milliseconds and zero in all but a
+    handful of cells.
+    """
+    N = len(exi_h)
+    out = np.zeros((N, N))
+    if N == 0:
+        return out
+    z_exi = paper.chain_tip_z(exi_h, spec, pen_ext, h_inv)[1]
+    z_ent = paper.chain_tip_z(ent_h, spec, pen_ext, h_inv)[1]
+    tip_floor = np.minimum(np.minimum(z_exi[:, None], z_ent[None, :]),
+                           paper.TIP_CLEAR)
+
+    # ---- one batched screen over every cell -------------------------------
+    K = paper.SAMPLES
+    f = np.linspace(0.0, 1.0, K).reshape(1, 1, K, 1)
+    L = exi_h[:, None, None, :] * (1.0 - f) + ent_h[None, :, None, :] * f
+    cz, tz = paper.chain_tip_z(L.reshape(-1, 7), spec, pen_ext, h_inv)
+    cz = cz.reshape(N, N, K).min(-1)
+    tz = tz.reshape(N, N, K).min(-1)
+    bad = (~same) & ((cz < paper.CHAIN_CLEAR - paper.EPS)
+                     | (tz < tip_floor - paper.EPS))
+
+    q_home = np.asarray(spec.q_seed, float).reshape(7)
+    for a, b in zip(*np.where(bad)):
+        r = paper.route(spec, exi_h[a], ent_h[b], pen_ext=pen_ext, h_inv=h_inv,
+                        tip_floor=float(tip_floor[a, b]), q_home=q_home)
+        if r is None:
+            out[a, b] = np.inf
+            continue
+        qs = [exi_h[a]] + list(r["vias"]) + [ent_h[b]]
+        direct = float(_row_time(exi_h[a][None, :], ent_h[b][None, :],
+                                 qd_frac, 0.0)[0])
+        routed = float(sum(_row_time(np.asarray(u)[None, :],
+                                     np.asarray(v)[None, :], qd_frac, 0.0)[0]
+                           for u, v in zip(qs[:-1], qs[1:])))
+        # the hop floor is already inside `travel`; charge only the difference
+        fl = float(floor[a, b])
+        out[a, b] = max(0.0, max(fl, routed) - max(fl, direct))
+    return out
+
+
 def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
                 h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT, q_start=None,
-                return_home=True):
+                return_home=True, paper_safe=True):
     """Every transit time an ordering could possibly pay. -> (2n+1, 2n+1).
 
     Node `2i + d` is segment i drawn forward (d = 0) or backward (d = 1); node
@@ -139,17 +243,34 @@ def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
     hop = np.linalg.norm(ent_xy[None, :, :] - exi_xy[:, None, :], axis=-1)
     floor = np.maximum(T_TRAVEL_MIN, hop / max(transit_speed, 1e-9))
     travel = dq_time_many(exi_h, ent_h, qd_frac, floor)      # (N,N)
+    if paper_safe:                       # the lift and the lower are routed too
+        lift = lift + _leg_surcharge(spec, exi_q, exi_h, -paper.TIP_TOL,
+                                     T_LIFT_F, qd_frac, h_inv, pen_ext)
+        lower = lower + _leg_surcharge(spec, ent_h, ent_q, -paper.TIP_TOL,
+                                       T_LOWER_F, qd_frac, h_inv, pen_ext)
 
     C = np.full((N + 1, N + 1), np.inf)
     C[:N, :N] = lift[:, None] + travel + lower[None, :]
     seg = np.arange(N) // 2
     C[:N, :N][seg[:, None] == seg[None, :]] = np.inf         # no self-succession
+    if paper_safe:
+        C[:N, :N] += _paper_surcharge(
+            spec, exi_h, ent_h, seg[:, None] == seg[None, :], floor, qd_frac,
+            h_inv, pen_ext)
     q0 = np.asarray(spec.q_seed if q_start is None else q_start, float)
     depot = np.repeat(q0[None, :], N, axis=0)
     C[N, :N] = _row_time(depot, ent_h, qd_frac, T_HOME_F) + lower
-    C[:N, N] = lift + (_row_time(exi_h, np.repeat(np.asarray(spec.q_seed, float)
-                                                  [None, :], N, axis=0),
-                                 qd_frac, T_HOME_F) if return_home else 0.0)
+    home = np.repeat(np.asarray(spec.q_seed, float)[None, :], N, axis=0)
+    C[:N, N] = lift + (_row_time(exi_h, home, qd_frac, T_HOME_F)
+                       if return_home else 0.0)
+    if paper_safe:                       # ...and so are the two depot legs
+        C[N, :N] += _leg_surcharge(spec, depot, ent_h,
+                                   paper.travel_floor(LIFT_Z, LIFT_Z),
+                                   T_HOME_F, qd_frac, h_inv, pen_ext)
+        if return_home:
+            C[:N, N] += _leg_surcharge(spec, exi_h, home,
+                                       paper.travel_floor(LIFT_Z, LIFT_Z),
+                                       T_HOME_F, qd_frac, h_inv, pen_ext)
     return C
 
 
@@ -560,7 +681,8 @@ def cluster_endpoints(spec, menus, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
 def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
                         qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
                         q_start=None, return_home=True, ends=None,
-                        w_reconfig=W_RECONFIG, w_surcharge=W_SURCHARGE):
+                        w_reconfig=W_RECONFIG, w_surcharge=W_SURCHARGE,
+                        paper_safe=True):
     """Every transit an ordering-and-variant choice could pay. -> (C, T, ends).
 
     `C` is the pure transit seconds, built by the SAME four array operations
@@ -582,17 +704,33 @@ def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
     hop = np.linalg.norm(ent_xy[None, :, :] - exi_xy[:, None, :], axis=-1)
     floor = np.maximum(T_TRAVEL_MIN, hop / max(transit_speed, 1e-9))
     travel = dq_time_many(exi_h, ent_h, qd_frac, floor)
+    if paper_safe:
+        lift = lift + _leg_surcharge(spec, exi_q, exi_h, -paper.TIP_TOL,
+                                     T_LIFT_F, qd_frac, h_inv, pen_ext)
+        lower = lower + _leg_surcharge(spec, ent_h, ent_q, -paper.TIP_TOL,
+                                       T_LOWER_F, qd_frac, h_inv, pen_ext)
 
     C = np.full((N + 1, N + 1), np.inf)
     C[:N, :N] = lift[:, None] + travel + lower[None, :]
     same = e["seg"][:, None] == e["seg"][None, :]
     C[:N, :N][same] = np.inf                  # one node per segment, per tour
+    if paper_safe:
+        C[:N, :N] += _paper_surcharge(spec, exi_h, ent_h, same, floor, qd_frac,
+                                      h_inv, pen_ext)
     q0 = np.asarray(spec.q_seed if q_start is None else q_start, float)
     depot = np.repeat(q0[None, :], N, axis=0)
     C[N, :N] = _row_time(depot, ent_h, qd_frac, T_HOME_F) + lower
-    C[:N, N] = lift + (_row_time(exi_h, np.repeat(np.asarray(spec.q_seed, float)
-                                                  [None, :], N, axis=0),
-                                 qd_frac, T_HOME_F) if return_home else 0.0)
+    home = np.repeat(np.asarray(spec.q_seed, float)[None, :], N, axis=0)
+    C[:N, N] = lift + (_row_time(exi_h, home, qd_frac, T_HOME_F)
+                       if return_home else 0.0)
+    if paper_safe:
+        C[N, :N] += _leg_surcharge(spec, depot, ent_h,
+                                   paper.travel_floor(LIFT_Z, LIFT_Z),
+                                   T_HOME_F, qd_frac, h_inv, pen_ext)
+        if return_home:
+            C[:N, N] += _leg_surcharge(spec, exi_h, home,
+                                       paper.travel_floor(LIFT_Z, LIFT_Z),
+                                       T_HOME_F, qd_frac, h_inv, pen_ext)
 
     # the tie-break: reconfiguration on the edge, surcharge on the node entered
     T = np.zeros((N + 1, N + 1))

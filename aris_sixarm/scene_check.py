@@ -33,6 +33,7 @@ allowed to condition on.
 """
 import numpy as np
 
+from . import paper
 from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import STATIC_MARGIN
@@ -62,6 +63,32 @@ def _radii_for(fleet_dict, arms):
 # rig owner to answer (a shorter pen, a different ready pose, or a survey that
 # says the table is lower than the model thinks).
 PEN_PAPER = "pen_below_paper"
+
+# ==========================================================================
+# ...AND THE GATE THAT SHOULD HAVE EXISTED WHEN THAT COMMENT WAS WRITTEN
+# ==========================================================================
+# The note above is about a POSE.  What it did not cover, and what nothing
+# covered, is the MOTION between poses: a pen-up transit is a straight line in
+# joint space and no check in this repo ever looked at what that line does on
+# the way.  On the shipped `csail_final6` timeline three of forty-two pen-up
+# blocks go through the table — pen tip 253.6 mm under the canvas (arm 97
+# heading home, t = 49.33 s), a chain point 156.1 mm under it (arm 2
+# mid-transit, t = 29.43 s) — and one of them is held down there by a
+# conductor pause for three quarters of a second.  `scene_check` passed that
+# timeline, and passed it on the same run in which it correctly caught a 40.9 mm
+# frame clip, because the paper was the one piece of the scene it did not model.
+#
+# It does now, and it is a HARD gate, unlike `PEN_PAPER`.  The distinction that
+# makes that safe is contact: the pen is *supposed* to be on the paper while
+# drawing and passes through z = 0 at the ends of every lift and lower, so the
+# tip is gated at the contact band and the CHAIN — which is never in contact,
+# and sits one pen length up even when the tip is down — at the paper's own
+# 2 cm keep-out.  Measured that way the shipped timeline misses by 175-254 mm
+# and a correctly routed one clears by tens of millimetres, so the gate
+# discriminates by two orders of magnitude rather than by a hair.
+PAPER_CHAIN = paper.CHAIN_CLEAR      # m, chain points (1..8) above the paper
+PAPER_TIP = paper.TIP_TOL            # m, how far under the tip may ever be
+PAPER_STEP = 0.005                   # m of per-point motion the check refines to
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -222,7 +249,7 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
 
 def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                    pen_ext=PEN_EXT, sub=2, progress=None, verbose=True,
-                   fleet=None):
+                   fleet=None, drawing=None):
     """Verify a merged timeline. -> report dict (`ok` gates the animation).
 
     `qtraj` is {arm_id: (M,7)} exactly as it will be played back; `sub` sets how
@@ -288,6 +315,57 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
         if lb[k] < STATIC_MARGIN:
             frame_bad.append(a)
 
+    # THE PAPER: every arm's tip and chain, at every instant, including the
+    # transits and hovers no per-segment validator ever sees.  The residual is
+    # PER POINT — each body's own displacement between two fine samples, not
+    # the worst body's — because the tip travels slowly along the paper while
+    # it draws and charging it the elbow's sweep would refuse the ink for being
+    # ink.
+    paper_clear, paper_bad = {}, []
+    for a in arms:
+        # AUTO-REFINE UNTIL THE RESIDUAL IS SMALL, so the verdict is a property
+        # of the trajectory and not of the rate it was handed in at.  The
+        # residual is a 1-Lipschitz bound on 3D displacement, which over-charges
+        # a pen tip SLIDING ALONG the paper (large step, no vertical motion);
+        # at the animation's own 12 fps that alone can read 14.7 mm of false
+        # dip.  Refining to <= PAPER_STEP of per-point motion caps it at about
+        # 2.8 mm, an order below the tip floor, and the numbers stop moving.
+        Q = np.asarray(fine[a], float)
+        ex = 1
+        if len(Q) > 1:
+            mv = float(np.max(np.linalg.norm(np.diff(P[a], axis=0), axis=2)))
+            ex = int(np.clip(np.ceil(mv / PAPER_STEP), 1, 32))
+        if ex > 1:
+            g = np.linspace(0, len(Q) - 1, (len(Q) - 1) * ex + 1)
+            i0 = np.clip(g.astype(int), 0, len(Q) - 2)
+            fr = (g - i0)[:, None]
+            Pa = np.array([_chain(q, fl[a], h_inv, pen_len(pen_ext, a))
+                           for q in Q[i0] * (1 - fr) + Q[i0 + 1] * fr])
+        else:
+            Pa = P[a]
+        d = np.concatenate([np.zeros((1, Pa.shape[1])),
+                            np.linalg.norm(np.diff(Pa, axis=0), axis=2)])
+        chain = (Pa[:, 1:9, 2] - 0.55 * d[:, 1:9]).min(axis=1)
+        tip = Pa[:, 9, 2] - 0.55 * d[:, 9]
+        kc, kt = int(np.argmin(chain)), int(np.argmin(tip))
+        step_t = dt / (max(sub, 1) * ex)
+        up = None
+        if drawing is not None:
+            # map each refined sample back to the scheduled step it lies in,
+            # rather than assuming the refinement is a clean integer repeat of
+            # the schedule (it is not: `fine` has (M-1)*sub+1 samples, not M*sub)
+            dm = np.asarray(drawing[a], bool)
+            src = np.clip((np.arange(len(tip)) / (max(sub, 1) * ex)).astype(int),
+                          0, len(dm) - 1)
+            up = ~dm[src]
+        paper_clear[a] = dict(
+            chain=float(chain[kc]), chain_t=float(kc * step_t),
+            tip=float(tip[kt]), tip_t=float(kt * step_t), refine=int(ex),
+            tip_penup=(float(tip[up].min()) if up is not None and up.any()
+                       else None))
+        if chain[kc] < PAPER_CHAIN or tip[kt] < -PAPER_TIP:
+            paper_bad.append(a)
+
     mono = True
     if progress is not None:
         for a, p in progress.items():
@@ -324,7 +402,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                 seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
 
     ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
-              and min(lim.values()) > 0.0 and not frame_bad)
+              and min(lim.values()) > 0.0 and not frame_bad and not paper_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
                                               per_pair.items()},
@@ -336,7 +414,11 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                frozen_pen_below_paper=sorted(frozen_dip),
                frame_clearance={int(a): v for a, v in frame_clear.items()},
                frame_margin=float(STATIC_MARGIN),
-               frame_failed=sorted(frame_bad))
+               frame_failed=sorted(frame_bad),
+               paper_clearance={int(a): v for a, v in paper_clear.items()},
+               paper_chain_margin=float(PAPER_CHAIN),
+               paper_tip_margin=float(PAPER_TIP),
+               paper_failed=sorted(paper_bad))
     if verbose:
         print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
               f"{len(arms)} arms, {len(per_pair)} pairs")
@@ -352,6 +434,15 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                   f"(margin {STATIC_MARGIN * 1000:.0f} mm), arm {wa} at "
                   f"t={frame_clear[wa][1]:.2f} s"
                   + (f"; FAIL: arms {frame_bad}" if frame_bad else ""))
+        wp = min(paper_clear, key=lambda a: paper_clear[a]["chain"])
+        wt = min(paper_clear, key=lambda a: paper_clear[a]["tip"])
+        print(f"  paper clearance: chain {paper_clear[wp]['chain'] * 1000:.1f} mm "
+              f"(margin {PAPER_CHAIN * 1000:.0f} mm) arm {wp} at "
+              f"t={paper_clear[wp]['chain_t']:.2f} s; tip "
+              f"{paper_clear[wt]['tip'] * 1000:.1f} mm (floor "
+              f"{-PAPER_TIP * 1000:.0f} mm) arm {wt} at "
+              f"t={paper_clear[wt]['tip_t']:.2f} s"
+              + (f"; FAIL: arms {paper_bad}" if paper_bad else ""))
         print(f"  frozen poses: {len(arms) - frozen_bad}/{len(arms)} pass the "
               "joint-limit, paper and boom gates"
               + ("" if not frozen_bad else "  <- "

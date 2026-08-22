@@ -200,9 +200,16 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
     qtraj = {aid: samp[aid]["q"][np.clip(sch["progress"][aid][:M], 0,
                                          samp[aid]["n"] - 1)] for aid in FLEET}
     t0 = time.time()
+    # the drawing mask is REPORTED, never gated: it separates "the pen tip is
+    # low because it is drawing" from "the pen tip is low mid-flight", which is
+    # the one number a human reading the paper-clearance line wants.
+    draw_mask = {aid: samp[aid]["seg"][np.clip(sch["progress"][aid][:M], 0,
+                                               samp[aid]["n"] - 1)] >= 0
+                 for aid in FLEET}
     rep = scene_check.check_timeline(
         qtraj, dt, sch["margin"], programs=res["programs"], pen_ext=pens,
-        progress={k: v[:M] for k, v in sch["progress"].items()}, sub=a.subcheck)
+        progress={k: v[:M] for k, v in sch["progress"].items()}, sub=a.subcheck,
+        drawing=draw_mask)
     print(f"  checked in {time.time() - t0:.1f} s")
     if not rep["ok"]:
         # THE POSE AN ARM STOPS IN IS A CHOICE, AND IT IS THE POLICY'S CHOICE.
@@ -1010,6 +1017,10 @@ def main(argv=None):
             per_pair=rep["per_pair"], scene_check_ok=bool(rep["ok"]),
             n_segments_validated=int(rep["n_segments"]),
             segments_failed=int(rep["segments_failed"]),
+            paper_clearance={str(k): v for k, v in
+                             rep.get("paper_clearance", {}).items()},
+            paper_failed=[int(x) for x in rep.get("paper_failed", [])],
+            frame_failed=[int(x) for x in rep.get("frame_failed", [])],
             arm_metres={str(x): float(sum(s["length"] for s in res["programs"][x]))
                         for x in res["arms"]},
             arm_segments={str(x): len(res["programs"][x]) for x in res["arms"]},
