@@ -28,7 +28,8 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import allocate, idle, pwl, trace, writing   # noqa: E402
+from aris_sixarm import (allocate, idle, paper, pwl, rig_final,  # noqa: E402
+                         trace, writing)
 from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
@@ -468,6 +469,13 @@ def add_args(ap):
                          "arms not named keep frames.PEN_EXT (110 mm).  A pen "
                          "is a fixture: it is the same length in both phases, "
                          "only the ink changes at the swap")
+    ap.add_argument("--frame-safe", action="store_true",
+                    help="certify every pen-up against the rig's STEEL as well "
+                         "as the paper, and route around it.  Off by default: "
+                         "`paper.route` has only ever frame-checked a detour it "
+                         "was inserting, so a direct transit that grazes a frame "
+                         "box is priced at zero and only scene_check ever sees "
+                         "it (see aris_sixarm/paper.FRAME_SAFE)")
     ap.add_argument("--two-pass", action="store_true",
                     help="draw grey, stop for a human to swap the pens, then "
                          "draw orange.  Lifts the one-colour-per-arm constraint "
@@ -542,6 +550,16 @@ def run_allocation(a, verbose=False, split=None):
         rot = rot if rot is not None else doc.get("rotate_deg", 0.0)
     rot = 0.0 if rot is None else float(rot)
     pens = parse_pens(getattr(a, "pens", None))
+    # A MODULE FLAG BECAUSE IT IS A PROPERTY OF THE GEOMETRY, NOT OF A CALL.
+    # Both halves of the cost model have to agree about it — `sequence`'s matrix
+    # and `writing`'s timeline reach `paper` by different routes — so it is set
+    # once, here, before anything plans, rather than threaded through six
+    # signatures that could disagree.  The memo is keyed on it either way.
+    if bool(getattr(a, "frame_safe", False)) != paper.FRAME_SAFE:
+        paper.FRAME_SAFE = bool(getattr(a, "frame_safe", False))
+        paper.clear_cache()
+        print(f"  pen-ups are certified against the frame too "
+              f"(margin {1000 * rig_final.STATIC_MARGIN:.0f} mm)")
     t0 = time.time()
     px, _ = trace.trace_logo(a.image)
     strokes, info = trace.to_sheet(px, SHEET, margin=a.margin, target_width=tw,

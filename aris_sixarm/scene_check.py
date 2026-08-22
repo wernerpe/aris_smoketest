@@ -89,6 +89,8 @@ PEN_PAPER = "pen_below_paper"
 PAPER_CHAIN = paper.CHAIN_CLEAR      # m, chain points (1..8) above the paper
 PAPER_TIP = paper.TIP_TOL            # m, how far under the tip may ever be
 PAPER_STEP = 0.005                   # m of per-point motion the check refines to
+FRAME_STEP = 0.005                   # ...and the same for the frame gate, which
+#   was rate-dependent until the two-pass work found it refusing clear transits
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -302,16 +304,46 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
 
     # STATIC STRUCTURE: every frame of every arm against the rig's frame
     # boxes — covers the transits and hovers no per-segment validator sees.
-    # Same sweep residual as the inter-arm check, same lower-bound logic.
-    frame_clear, frame_bad = {}, []
+    # Same lower-bound logic as the inter-arm check, and — since the two-pass
+    # work — the same AUTO-REFINEMENT as the paper gate below, for the same
+    # reason and with the same consequence if it is left out.
+    #
+    # THE VERDICT HAS TO BE A PROPERTY OF THE TRAJECTORY, NOT OF THE RATE IT
+    # WAS HANDED IN AT.  `0.55 * stepd[a]` is a 1-Lipschitz sweep residual, and
+    # it scales with the sampling step: at `sub=2` it charges an arm nearly
+    # 4.5 mm of phantom approach that is not in the motion at all.  That is not
+    # academic — it is what refused the two-pass logo eight times over.  Arm 71
+    # in the orange pass reads 49.1 mm against a 50 mm margin at `sub=2` and
+    # 53.5 mm at `sub=8`, the SAME timeline at the same instant (t = 22.75 s);
+    # the transit was always clear and the check was charging it for being
+    # sampled coarsely.  `docs/MERGED_CANVAS.md` §3.3's 40.9 mm veto is very
+    # likely the same artefact.  Refining to <= FRAME_STEP of per-point motion
+    # caps the residual under a tenth of the margin and the numbers stop moving.
+    frame_clear, frame_bad, frame_refine = {}, [], {}
     for a in arms:
         boxes = (fl[a].static_obstacles()
                  if hasattr(fl[a], "static_obstacles") else [])
         if not boxes:
             continue
-        lb = static_clearance_lb(P[a], boxes) - 0.55 * stepd[a]
+        Pa, res, ex = P[a], 0.55 * stepd[a], 1
+        Q = np.asarray(fine[a], float)
+        if len(Q) > 1:
+            mv = float(np.max(np.linalg.norm(np.diff(P[a], axis=0), axis=2)))
+            ex = int(np.clip(np.ceil(mv / FRAME_STEP), 1, 32))
+        if ex > 1:
+            g = np.linspace(0, len(Q) - 1, (len(Q) - 1) * ex + 1)
+            i0 = np.clip(g.astype(int), 0, len(Q) - 2)
+            fr = (g - i0)[:, None]
+            Pa = np.array([_chain(q, fl[a], h_inv, pen_len(pen_ext, a))
+                           for q in Q[i0] * (1 - fr) + Q[i0 + 1] * fr])
+            res = 0.55 * float(np.max(np.linalg.norm(np.diff(Pa, axis=0),
+                                                     axis=2), initial=0.0))
+        lb = static_clearance_lb(Pa, boxes) - res
         k = int(np.argmin(lb))
-        frame_clear[a] = (float(lb[k]), float(k * dt / max(sub, 1)))
+        # report the time on the SCHEDULED clock whatever the refinement was
+        frame_clear[a] = (float(lb[k]),
+                          float(k * dt / (max(sub, 1) * max(ex, 1))))
+        frame_refine[a] = int(ex)
         if lb[k] < STATIC_MARGIN:
             frame_bad.append(a)
 
@@ -414,6 +446,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                frozen_pen_below_paper=sorted(frozen_dip),
                frame_clearance={int(a): v for a, v in frame_clear.items()},
                frame_margin=float(STATIC_MARGIN),
+               frame_refine={int(a): int(v) for a, v in frame_refine.items()},
                frame_failed=sorted(frame_bad),
                paper_clearance={int(a): v for a, v in paper_clear.items()},
                paper_chain_margin=float(PAPER_CHAIN),

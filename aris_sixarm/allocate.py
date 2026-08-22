@@ -94,6 +94,32 @@ DRAW_SPEED = writing.DRAW_SPEED_FLEET    # m/s the material allows; a CAP, and
 #   the redundancy resolution asks a joint to move faster than it may.
 BALANCE_ROUNDS = 200                     # accepted moves the balancer may make
 
+# A BAG WITH NO PAPER-LEGAL TOUR IS INFINITELY EXPENSIVE, NOT AN EXCEPTION.
+# `sequence.cost_matrix` prices a pen-up `paper.route` refuses as `inf`
+# (`docs/PAPER_PLANE.md` §2.1), so a bag of spans each of which this arm can
+# certify AS INK can still have no order in which the arm can FLY between them —
+# `held_karp` then raises "no feasible order over n segments".  That is the
+# right answer for the pass that has to commit to an order, and the wrong one
+# for `balance_loads`, which is a PRICING function: it asks "what would this
+# arm's programme cost if it held these spans", and the honest answer to an
+# unflyable bag is "more than any alternative", not a traceback that takes the
+# whole allocation down with it.  Priced as `inf`, the bag simply loses every
+# comparison and the balancer moves the offending span to an arm that can fly
+# to it — which is what `load_score` is ordered to let it do.
+#
+# It took two colours per arm to expose this.  With one pen per arm the bags
+# were small and every arm's spans clustered in its own reach; giving every arm
+# BOTH inks doubles the candidate bags, and the first one the balancer priced
+# (arm 97's five orange spans) contained a span the arm can ink and cannot
+# reach.  Not the lower onto it — that is `direct`, as is the lift off it — but
+# every hover-to-hover CROSSING into it, from the depot and from all four of the
+# arm's other spans, in both directions: in-degree 0 in its own cost matrix.
+UNFLYABLE = float("inf")
+UNFLYABLE_ROUNDS = 2      # times the cover may be re-run without a span an arm
+#   certifies as ink and cannot fly to.  Each round costs a cover and its clean
+#   re-plans; two is enough for every phase measured, and `prune_unflyable`
+#   after the balancer is what makes the result correct rather than this cap.
+
 # ---- allocation v2: splitting as a balancing move -------------------------
 MIN_SPLIT_M = 0.05        # m; the shortest piece a split may create.  Not the
 #   same floor as MIN_SEG_M (0.025): that one asks "is this worth a pen-up at
@@ -610,6 +636,70 @@ def _entry(st, sp, plan):
                 length=float(polyline_length(pts)), plan=plan)
 
 
+def _sub_matrix(C, idx, n):
+    """`sequence.cost_matrix` restricted to the segments `idx`, depot last."""
+    nodes = [k for i in idx for k in (2 * i, 2 * i + 1)] + [2 * n]
+    return C[np.ix_(nodes, nodes)]
+
+
+def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
+                    budget=sequence.TIME_BUDGET):
+    """Drop the spans that make this arm's bag impossible to fly. -> (keep, drop).
+
+    Both are lists of indices into `segs`.  `keep` is guaranteed to have a
+    finite tour; `drop` is the ink this arm must give back.
+
+    CERTIFYING THE INK IS NOT CERTIFYING THE APPROACH, and until the paper
+    became an obstacle nothing here had to tell the two apart.  `plan_stroke`
+    walks the redundancy band and proves every sample of the STROKE clears its
+    gates.  The pen-up that flies to the span is a different motion, priced by
+    `sequence.cost_matrix` and — since `docs/PAPER_PLANE.md` — routed around the
+    paper by `paper.route`, which is allowed to REFUSE.  A span can pass the
+    first test and fail the second: the arm can draw the line and cannot get
+    its pen there without putting a link through the table.
+
+    That is not hypothetical; it is what stopped the first two-pass allocation
+    on this rig dead.  Arm 97's piece of stroke 26 is certified ink that
+    `replan_segment` gives back end to end, and EVERY crossing into its hover is
+    refused — from each of the arm's own four other spans, in both directions,
+    and from its ready pose — because each one dives 137 to 189 mm of chain
+    below the paper and no shape on the router's height ladder recovers it.  The
+    span therefore has IN-DEGREE 0 in the arm's own transit matrix, Held-Karp
+    reports "no feasible order over 5 segments", and one unreachable span makes
+    every ordering of the other four unreachable with it.
+
+    WHY THE TEST IS THE TOUR AND NOT A PER-SPAN PREDICATE.  The tempting cheap
+    gate is "can the arm fly from its ready pose to this span", and it is wrong:
+    arm 71's orange bag in this same phase has two spans the depot cannot reach
+    and a perfectly good 14.5 s tour that reaches them from its other spans.
+    Only the tour knows.  So the tour is what is asked, and the spans blamed are
+    the ones with no finite predecessor or no finite successor — the ones no
+    order could have used — with a shortest-span fallback for the rarer case
+    where every node has a neighbour and there is still no Hamiltonian path.
+    """
+    n = len(segs)
+    if n == 0:
+        return [], []
+    C = sequence.cost_matrix(spec, segs, **mat)
+    idx, drop = list(range(n)), []
+    while idx:
+        S = _sub_matrix(C, idx, n)
+        try:
+            sequence.solve(S, len(idx), exact_max_n, budget)
+            break
+        except RuntimeError:
+            fin, m = np.isfinite(S), len(idx)
+            bad = [k for k in range(m)
+                   if not (fin[:, 2 * k].any() or fin[:, 2 * k + 1].any())
+                   or not (fin[2 * k, :].any() or fin[2 * k + 1, :].any())]
+            if not bad:            # no isolated node, and still no tour
+                bad = [min(range(m),
+                           key=lambda k: (segs[idx[k]]["length"], k))]
+            for k in sorted(bad, reverse=True):
+                drop.append(idx.pop(k))
+    return idx, sorted(drop)
+
+
 def replan_same_span(st, sp, spec, opts=None, min_seg=MIN_SEG_M, tol=1e-12):
     """Re-plan EXACTLY this span for another arm. -> (entry, n_plan_calls).
 
@@ -731,7 +821,10 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
     C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
                              ends=ends, pen_ext=pen, q_start=q_start,
                              return_home=return_home)
-    r = sequence.solve(C, len(segs), exact_max_n, budget)
+    try:
+        r = sequence.solve(C, len(segs), exact_max_n, budget)
+    except RuntimeError:
+        return UNFLYABLE
     return float(sum(draw_s) + r["cost"])
 
 
@@ -799,7 +892,10 @@ def cluster_arm_load(spec, segs, draw_s, menus,
                                            h_inv, pen, q_start=q_start,
                                            return_home=return_home, ends=ends,
                                            w_surcharge=w_surcharge)
-    r = sequence.cluster_solve(C, T, e, exact_max_n, budget)
+    try:
+        r = sequence.cluster_solve(C, T, e, exact_max_n, budget)
+    except RuntimeError:
+        return UNFLYABLE
     base, sur = np.asarray(e["base"], int), np.asarray(e["surcharge"], float)
     nodes = [int(base[k]) + 2 * int(v) + (0 if d > 0 else 1)
              for k, v, d in zip(r["order"], r["variants"], r["dirs"])]
@@ -945,7 +1041,9 @@ def cost_model(cluster=None, menu_opts=None, verbose=False):
 
 
 def load_score(loads):
-    """The balancer's objective for one assignment. -> (max load, sum of squares).
+    """The balancer's objective for one assignment.
+
+    -> (arms with no flyable tour, max load, sum of squares).
 
     Compared lexicographically and strictly, so it is a POTENTIAL: every
     accepted move (relocation, swap or split) lowers it, which is what makes
@@ -953,10 +1051,28 @@ def load_score(loads):
     module scope because the split search in `_split_search` has to be scored on
     exactly the same ruler as `balance_loads`, and two rulers that disagree by a
     rounding convention would let the two moves undo each other for ever.
+
+    FEASIBILITY IS THE FIRST TERM BECAUSE `inf` IS NOT AN ORDERING.  A bag with
+    no paper-legal tour prices at `UNFLYABLE` (see the constant), and if that
+    number went straight into the max the score of every assignment containing
+    one would be `(inf, inf)` — all equal, all incomparable, and the balancer's
+    strict `<` would find no move at all.  It is exactly what happened the first
+    time the two-pass allocation was run on this rig: arm 97's orange bag was
+    unflyable and the pass reported "0 moves and 0 splits taken, busiest arm
+    inf s -> inf s".  Counting the unflyable arms FIRST gives that plateau a
+    gradient — handing the offending span to an arm that can reach it takes the
+    count from 1 to 0 and strictly wins, whatever it does to the seconds — and
+    the remaining two terms are the old ruler, computed over the arms that have
+    a tour, so they still break ties among assignments that are all feasible.
+    THE OLD NUMBERS ARE UNCHANGED: when every bag is flyable the first term is
+    0 for every candidate and the comparison falls through to the same
+    `(max, sum of squares)` it always was, to the same rounding.
     """
     v = sorted(loads.values(), reverse=True)
-    return (round(v[0], 9) if v else 0.0,
-            round(float(sum(x * x for x in v)), 6))
+    bad = int(sum(1 for x in v if not np.isfinite(x)))
+    fin = [x for x in v if np.isfinite(x)]
+    return (bad, round(fin[0], 9) if fin else 0.0,
+            round(float(sum(x * x for x in fin)), 6))
 
 
 def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
@@ -1004,7 +1120,7 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
         return load_score(L), L
 
     key, L = score(owner)
-    info = dict(loads_before=dict(L), max_before=key[0], moves=[], rounds=0,
+    info = dict(loads_before=dict(L), max_before=key[1], moves=[], rounds=0,
                 n_movable=int(sum(1 for o in options if len(o) > 1)))
     for _ in range(int(max_rounds)):
         src = max(arms, key=lambda a: (L[a], a))
@@ -1031,7 +1147,7 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
             break
         owner, key = best[1], best[0]
         _, L = score(owner)
-        best[2].update(max_after=key[0])
+        best[2].update(max_after=key[1])
         info["moves"].append(best[2])
         info["rounds"] += 1
         if verbose:
@@ -1039,8 +1155,8 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
             print(f"  balance {info['rounds']:>2}: {m['kind']} segment "
                   f"{m['seg']} arm {m['frm']} -> arm {m['to']}"
                   + (f" (against segment {m['other']})" if "other" in m else "")
-                  + f"; busiest arm now {key[0]:.1f} s")
-    info.update(loads_after=dict(L), max_after=key[0], n_loads=len(cache))
+                  + f"; busiest arm now {key[1]:.1f} s")
+    info.update(loads_after=dict(L), max_after=key[1], n_loads=len(cache))
     return owner, info
 
 
@@ -1480,7 +1596,7 @@ def _try_cut(items, i, side, s_cut, L, src, recv, splice, pricer):
         kind="split", seg=int(i), frm=int(src), to=int(recv), side=side,
         stroke=int(it["stroke"]["id"]), s_cut=float(s_cut),
         keep_m=float(e_keep["length"]), give_m=float(e_give["length"]),
-        max_after=float(key[0]))
+        max_after=float(key[1]))
 
 
 def _bisect_cut(items, i, side, lo, hi, L, src, recv, splice, pricer, best,
@@ -1677,7 +1793,7 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
             print(f"  split {len(splits):>2}: stroke {rec['stroke']} cut at "
                   f"s={rec['s_cut']:.4f}; arm {rec['frm']} keeps "
                   f"{rec['keep_m']:.3f} m, arm {rec['to']} takes "
-                  f"{rec['give_m']:.3f} m; busiest arm now {key[0]:.1f} s")
+                  f"{rec['give_m']:.3f} m; busiest arm now {key[1]:.1f} s")
 
     lost = coverage_lost(cover0, merged_spans(items), lengths)
     if lost > 1e-9:
@@ -1690,8 +1806,8 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
     loads_after = pricer.loads(items)
     info = dict(
         loads_before=loads_before or {}, loads_after=loads_after,
-        max_before=load_score(loads_before or {})[0],
-        max_after=load_score(loads_after)[0],
+        max_before=load_score(loads_before or {})[1],
+        max_after=load_score(loads_after)[1],
         moves=moves, rounds=len(moves), splits=splits, n_splits=len(splits),
         n_movable=int(n_movable), n_replans=int(pricer.n_replans),
         n_probes=int(pricer.n_probes), split_calls=int(spent),
@@ -2301,35 +2417,96 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         cover = cover_all(strokes, ivmap, colors, min_seg, gap_tol)
         table = []
 
-    # the colours are fixed now, so the holes are finally known in the terms
-    # that matter — the union of the arms carrying the right ink
-    t_rep = time.time()
-    cover, n_repair = repair_gaps(strokes, ivmap, colors, cover, specs, aopts,
-                                  min_seg, gap_tol, rounds=repair_rounds,
-                                  min_len=float((opts or {}).get("min_length", 0.02)),
-                                  budget=repair_budget, verbose=verbose)
-    t_repair = time.time() - t_rep
+    pen_m = {a: pen_of(pens, a) for a in arms}
 
-    # ---- clean re-plans -------------------------------------------------
-    t2 = time.time()
+    def _mat(a):
+        """`sequence.cost_matrix` kwargs for arm `a`, as this run will call it."""
+        m = {k: (seq_opts or {})[k] for k in ("transit_speed", "qd_frac",
+                                              "h_inv") if k in (seq_opts or {})}
+        m.update(pen_ext=pen_m[a], q_start=(q_start or {}).get(a),
+                 return_home=bool(return_home))
+        return m
+
+    # ---- cover, repair, re-plan — retried without the spans nobody can fly to
+    # A SPAN AN ARM CANNOT REACH IS NOT THAT ARM'S SPAN, and the cover is where
+    # that belongs: banning it there lets `greedy_cover` hand the paper to
+    # somebody else instead of leaving a hole the size of the whole span.  On
+    # this logo arm 97's piece of stroke 26 is 0.182 m; banned, arms 2 and 71
+    # take all but the 0.050 m neither of them certifies, so the retry is worth
+    # 0.132 m of ink over simply dropping what the arm cannot fly to.
+    # `prune_unflyable` after the balancer is the guarantee; this is the
+    # optimisation, and it is capped because each round re-plans the cover.
+    banned, t_repair, t_replan, n_repair = set(), 0.0, 0.0, 0
     programs = {a: [] for a in arms}
     n_replan, placed = 0, []
-    for ps in cover["per_stroke"]:
-        st, L = ps["stroke"], ps["L"]
-        for span in place_cuts(ps["chosen"], L, overlap):
-            plan, sp = replan_segment(st["pts"], span, specs[span["arm"]],
-                                      aopts[span["arm"]], min_seg=min_seg)
-            n_replan += sp["replans"]
-            if plan is None:
+
+    def _flyable_ivmap():
+        """`ivmap` without the (arm, stroke) pairs the arm cannot fly to."""
+        if not banned:
+            return ivmap
+        return {k: [v for v in vs if (v.arm, k) not in banned]
+                for k, vs in ivmap.items()}
+
+    for _round in range(UNFLYABLE_ROUNDS + 1):
+        iv_ok = _flyable_ivmap()
+        if banned:
+            cover = cover_all(strokes, iv_ok, colors, min_seg, gap_tol)
+        # the colours are fixed now, so the holes are finally known in the terms
+        # that matter — the union of the arms carrying the right ink
+        t_rep = time.time()
+        cover, n_repair = repair_gaps(
+            strokes, iv_ok, colors, cover, specs, aopts, min_seg, gap_tol,
+            rounds=repair_rounds,
+            min_len=float((opts or {}).get("min_length", 0.02)),
+            budget=repair_budget, verbose=verbose)
+        t_repair += time.time() - t_rep
+        if banned:
+            # GAP REPAIR PROBES, SO IT CAN INVENT A SPAN THE BAN NEVER SAW.  It
+            # is handed the filtered `ivmap`, but it answers by asking arms
+            # about the HOLES directly and certifying whatever comes back — and
+            # the hole a banned arm just left is exactly the window it will be
+            # offered.  Without this the arm is handed its own unreachable
+            # paper straight back, one round after it was taken away.
+            for ps in cover["per_stroke"]:
+                sid = int(ps["stroke"]["id"])
+                ps["chosen"] = [v for v in ps["chosen"]
+                                if (v.arm, sid) not in banned]
+
+        # ---- clean re-plans ---------------------------------------------
+        t2 = time.time()
+        n_replan, placed = 0, []
+        for ps in cover["per_stroke"]:
+            st, L = ps["stroke"], ps["L"]
+            for span in place_cuts(ps["chosen"], L, overlap):
+                plan, sp = replan_segment(st["pts"], span, specs[span["arm"]],
+                                          aopts[span["arm"]], min_seg=min_seg)
+                n_replan += sp["replans"]
+                if plan is None:
+                    continue
+                placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
+                                   entry=_entry(st, sp, plan)))
+        t_replan += time.time() - t2
+
+        fresh = set()
+        for a in arms:
+            mine = [i for i, it in enumerate(placed) if it["arm"] == a]
+            if not mine:
                 continue
-            placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
-                               entry=_entry(st, sp, plan)))
-    t_replan = time.time() - t2
+            _, bad = prune_unflyable(specs[a], [placed[i]["entry"] for i in mine],
+                                     _mat(a))
+            for k in bad:
+                it = placed[mine[k]]
+                fresh.add((a, int(it["stroke"]["id"])))
+        if not fresh or fresh <= banned:
+            break
+        print("  !! " + ", ".join(f"arm {a} certifies the ink of stroke {s} "
+                                  "and cannot fly to it" for a, s in sorted(fresh))
+              + "; re-covering without it")
+        banned |= fresh
 
     # ---- load balancing -------------------------------------------------
     t2b = time.time()
     bal = None
-    pen_m = {a: pen_of(pens, a) for a in arms}
     # ONE COST MODEL FOR THE WHOLE RUN.  The balancer below and the sequencing
     # pass at the bottom of this function are handed the same object, so the
     # seconds a bag is priced at are the seconds the DP that draws it will
@@ -2337,7 +2514,11 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     cost = cost_model(cluster and sequencer in ("opt", "transit"), menu_opts,
                       verbose)
     if balance and placed:
-        placed, bal = rebalance(placed, arms, colors, ivmap, specs, aopts,
+        # THE BALANCER MAY NOT OFFER BACK WHAT THE COVER JUST BANNED.  Its
+        # alternatives come out of `ivmap`, so handed the raw one it would
+        # happily relocate stroke 26 to the arm that cannot fly to it and undo
+        # the retry above one move later.
+        placed, bal = rebalance(placed, arms, colors, _flyable_ivmap(), specs, aopts,
                                 pen_m, draw_speed, seq_opts, min_seg,
                                 verbose=verbose, q_start=q_start,
                                 return_home=return_home, split=split,
@@ -2348,11 +2529,36 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
+
+    # THE GUARANTEE, AFTER EVERY MOVE THE BALANCER MADE.  The retry above bans
+    # a span from an arm before the cover so somebody else can have the paper;
+    # this is what makes the bag the arm is finally handed one it can actually
+    # fly, whatever the balancer's relocations, swaps and splits did to it.  A
+    # span released here is not re-offered — the cover is behind us — so it
+    # falls to `leftover` and is reported as dropped like any other hole.
+    unflyable = []
+    for a in arms:
+        segs = programs[a]
+        if not segs:
+            continue
+        keep, bad = prune_unflyable(specs[a], segs, _mat(a))
+        if not bad:
+            continue
+        for k in bad:
+            e = segs[k]
+            unflyable.append(dict(arm=int(a), stroke_id=int(e["stroke_id"]),
+                                  s_range=[float(x) for x in e["s_range"]],
+                                  length_m=float(e["length"])))
+            print(f"  !! arm {a} cannot fly to its own stroke {e['stroke_id']} "
+                  f"span {np.round(e['s_range'], 4).tolist()} "
+                  f"({e['length']:.4f} m); giving it back")
+        programs[a] = [segs[i] for i in keep]
     t_balance = time.time() - t2b
 
     dropped = leftover(strokes, programs, gap_tol)
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
+               unflyable=unflyable, banned=sorted(banned),
                sequencer=sequencer, pens=pen_m, balance=bal,
                draw_speed=float(draw_speed),
                timing=dict(prefilter=t_pre, probe=t_probe, repair=t_repair,

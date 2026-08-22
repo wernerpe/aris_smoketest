@@ -504,6 +504,105 @@ def test_balancing_lowers_the_busiest_arm():
     assert again == out and info2["rounds"] == 0
 
 
+def load_score_bad(load_fn, owner):
+    """How many arms hold a bag they cannot fly, under this assignment."""
+    return allocate.load_score(
+        {a: load_fn(a, tuple(i for i, x in enumerate(owner) if x == a))
+         for a in set(owner) | {0, 1}})[0]
+
+
+def test_balancing_escapes_a_bag_with_no_flyable_tour():
+    """An arm that cannot FLY its bag must lose the span, not stall the pass.
+
+    `sequence.cost_matrix` prices a pen-up `paper.route` refuses as `inf`, so a
+    bag of spans an arm certifies AS INK can still have no order the arm can fly
+    (`allocate.prune_unflyable`).  `arm_load` prices such a bag `UNFLYABLE`, and
+    the question this pins is what the balancer then does with it.
+
+    The trap is that `inf` is not an ordering.  Scored on the old
+    `(max, sum of squares)` ruler every assignment containing an unflyable arm
+    is `(inf, inf)` — all equal, none strictly better — and the balancer's
+    strict `<` finds no move at all.  That is not hypothetical: the first
+    two-pass allocation on `final6_opt` reported "0 moves and 0 splits taken,
+    busiest arm inf s -> inf s" and shipped nothing.  Counting the unflyable
+    arms FIRST is what gives that plateau a gradient.
+
+    Unflyability is COMBINATIONAL, which is the shape the real defect has: arm 0
+    can fly segment 0 and can fly segment 1, and cannot fly a bag holding both —
+    exactly arm 97, which certifies its piece of stroke 26 and cannot cross to
+    it from any of its other four orange spans.  So the escape exists (hand one
+    of the two to arm 1) but it is the WRONG move by seconds alone: it takes the
+    busiest FINITE load from 0.0 s to 11.0 s.  A balancer ranking on seconds
+    first would sit on the plateau for ever, which is what this pins.
+    """
+    size = [1.0, 1.0, 10.0]
+    options = [{0, 1}, {0, 1}, {0, 1}]
+    owner = [0, 0, 0]
+
+    def load_fn(arm, idx):
+        if arm == 0 and 0 in idx and 1 in idx:
+            return allocate.UNFLYABLE      # arm 0 cannot fly these two together
+        return sum(size[i] for i in idx)
+
+    assert load_score_bad(load_fn, owner) == 1, "the instance starts unflyable"
+    out, info = allocate.balance_loads(owner, options, load_fn)
+    assert load_score_bad(load_fn, out) == 0, \
+        "the balancer stalled on the unflyable plateau instead of escaping it"
+    assert np.isfinite(info["max_after"]) and info["rounds"] >= 1
+    # it really did have to give up seconds to do it: the score it escaped from
+    # had a busiest FINITE arm of 0.0 s and the one it landed on cannot
+    assert info["max_after"] > info["max_before"] - 1e-9
+
+    # and the ruler is unchanged where every bag IS flyable: same arity-3 tuple,
+    # but the two terms that used to be the whole score still decide it
+    a = allocate.load_score({0: 3.0, 1: 5.0})
+    b = allocate.load_score({0: 4.0, 1: 4.0})
+    assert a[0] == b[0] == 0 and a[1] == 5.0 and b[1] == 4.0 and b < a
+    # an unflyable assignment loses to every feasible one, however lopsided
+    assert allocate.load_score({0: 1e9, 1: 0.0}) \
+        < allocate.load_score({0: allocate.UNFLYABLE, 1: 0.0})
+
+
+def test_prune_unflyable_drops_only_the_unreachable_span():
+    """The bag-level test, on a matrix whose one bad span is known by name.
+
+    `prune_unflyable` asks the TOUR rather than a per-span predicate, and this
+    pins why: segment 2 below is reachable from nowhere (in-degree 0, the shape
+    arm 97's piece of stroke 26 has on the real rig) and must go, while segment
+    1 is unreachable from the DEPOT only and must stay — a cheap "can the arm
+    get there from its ready pose" gate would throw it away, and on the real
+    orange phase that gate would have cost arm 71 two spans it draws perfectly
+    well from its other work.
+    """
+    n = 3
+    N = 2 * n
+    C = np.full((N + 1, N + 1), 1.0)
+    for i in range(n):                     # a segment cannot follow itself
+        C[2 * i:2 * i + 2, 2 * i:2 * i + 2] = np.inf
+    C[N, 2:4] = np.inf                     # depot cannot reach segment 1 ...
+    C[:, 4:6] = np.inf                     # ... and NOTHING can reach segment 2
+
+    segs = [dict(length=1.0), dict(length=1.0), dict(length=0.5)]
+    calls = {}
+
+    def fake_cost_matrix(spec, s, **kw):
+        calls["n"] = len(s)
+        return C
+
+    real = allocate.sequence.cost_matrix
+    allocate.sequence.cost_matrix = fake_cost_matrix
+    try:
+        keep, drop = allocate.prune_unflyable(None, segs, {})
+    finally:
+        allocate.sequence.cost_matrix = real
+
+    assert drop == [2], f"pruned {drop}, want only the unreachable segment 2"
+    assert keep == [0, 1], f"kept {keep}; segment 1 is reachable from segment 0"
+    # and what survives really does have a tour
+    sub = allocate._sub_matrix(C, keep, n)
+    assert np.isfinite(allocate.sequence.solve(sub, len(keep))["cost"])
+
+
 def _covered(r):
     """{stroke id: merged covered spans} of a shipped allocation.
 

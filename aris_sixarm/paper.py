@@ -72,6 +72,29 @@ TIP_CLEAR = 0.02           # m, the pen tip while flying
 TIP_TOL = 0.010            # m, the contact band (lift/lower/ink)
 EPS = 1e-9
 
+# THE SAME HOLE, ONE OBSTACLE OVER.  This module made the paper a thing a pen-up
+# is certified against, and left the STEEL exactly where it found it: `route`
+# asks `path_frame_clearance` only about a detour it is INSERTING, never about
+# the direct move (see `legs_ok`).  So a transit that clears the paper and
+# grazes a frame box is priced at zero seconds by `sequence.cost_matrix`, flown
+# by `writing.arm_program`, and discovered only by `scene_check` at the end —
+# which is the defect `docs/PAPER_PLANE.md` §1.1 describes, with "the paper"
+# replaced by "the frame".
+#
+# It is not a rare corner.  Every two-pass configuration tried on `final6_opt`
+# — five placements x three execution profiles, split and unsplit — was refused
+# by `scene_check` on ONE arm's pen-up against the frame, at 34.1, 37.4, 45.2,
+# 49.1 and 49.4 mm against a 50 mm margin.  Eight refusals, and not one of them
+# is a transit anybody priced.
+#
+# `FRAME_SAFE` closes it: the direct move is held to `rig_final.STATIC_MARGIN`
+# too, so a frame-grazing pen-up is routed around the steel exactly as a
+# paper-breaking one is routed around the table, and refused honestly when no
+# shape on the ladder clears both.  It is OFF by default, because every
+# published number in this repo was earned with it off and the corpus has to
+# stay reproducible by the command that produced it; `--frame-safe` turns it on.
+FRAME_SAFE = False
+
 # Extra hover heights `route` climbs to when a direct move is refused.  Low
 # first: a via costs joint-space seconds and the sequencer pays them, so the
 # cheapest certified escape wins.  The top of the ladder is 40 cm, well above
@@ -91,10 +114,14 @@ def clear_cache():
 
 
 def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
+    # FRAME_SAFE is part of the question, so it is part of the key: the same
+    # pair has a different answer with the steel gated in, and a memo that
+    # forgot that would hand a run the other run's route.
     return (id(spec), float(pen_ext), float(h_inv),
             np.round(np.asarray(q0, float), 9).tobytes(),
             np.round(np.asarray(q1, float), 9).tobytes(),
-            round(float(tip_floor), 9), round(float(chain_floor), 9))
+            round(float(tip_floor), 9), round(float(chain_floor), 9),
+            bool(FRAME_SAFE))
 
 
 # --------------------------------------------------------------------------
@@ -158,11 +185,24 @@ def effective_floors(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
 
 def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, n=SAMPLES):
-    """Does the straight move keep both floors? -> (ok, chain, tip)."""
+    """Does the straight move keep its floors? -> (ok, chain, tip).
+
+    "Fine as it is, do not route it" — which is why `FRAME_SAFE` has to be
+    answered HERE and not only in `route`.  `sequence._leg_surcharge` and
+    `_paper_surcharge` call this first and skip the router entirely when it says
+    yes, so a frame-grazing move that clears the paper would never reach the
+    ladder and the sequencer would price it at zero while `writing._route`
+    routed it — the exact disagreement `csail_schedule.cross_check` exists to
+    catch.  Both sides ask the same question, so both get the same answer.
+    """
     tip_floor, chain_floor = effective_floors(spec, q0, q1, pen_ext, h_inv,
                                               tip_floor, chain_floor)
     cz, tz = line_clearance(spec, q0, q1, pen_ext, h_inv, n)
-    return bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS), cz, tz
+    ok = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
+    if ok and FRAME_SAFE:
+        ok = bool(frame_clearance(line_samples(q0, q1, n), spec, pen_ext, h_inv)
+                  >= rig_final.STATIC_MARGIN - EPS)
+    return ok, cz, tz
 
 
 def path_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, n=SAMPLES):
@@ -338,11 +378,14 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         qs = [q0] + list(seq) + [q1]
         cz, tz = path_clearance(spec, qs, pen_ext, h_inv, n)
         ok = cz >= chain_floor - EPS and tz >= tip_floor - EPS
-        # The frame is only asked about a route we are INSERTING.  A direct move
-        # that already clears the paper is left exactly as it was — routing is
-        # not the place to start refusing transits the rest of the pipeline has
-        # always flown, and `scene_check` still has the last word on the frame.
-        if ok and frame and seq:
+        # With FRAME_SAFE off the frame is only asked about a route we are
+        # INSERTING, and a direct move that already clears the paper is left
+        # exactly as it was — routing is not the place to start refusing
+        # transits the rest of the pipeline has always flown.  With it on the
+        # direct move is asked too, which is the whole point: `scene_check`
+        # having the last word on the frame is no use to a tour that was
+        # costed, chosen and frozen before anybody looked.
+        if ok and frame and (seq or FRAME_SAFE):
             ok = path_frame_clearance(spec, qs, pen_ext, h_inv, n) \
                 >= rig_final.STATIC_MARGIN - EPS
         return ok, cz, tz
@@ -354,7 +397,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             _CACHE[ck] = out
         return out
 
-    ok, cz, tz = legs_ok([], frame=False)
+    ok, cz, tz = legs_ok([], frame=FRAME_SAFE)
     if ok:
         return done([], "direct", cz, tz, 1)
 
