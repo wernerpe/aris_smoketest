@@ -73,7 +73,21 @@ DEFAULTS = dict(
     j_start=None,          # pin the entry q7 index (fiber menus; see menu.py)
     j_end=None,            # pin the exit  q7 index
     sheet_id=None,         # pin the IK sheet; REQUIRED whenever j_start/j_end are
+    tilt_max_deg=0.0,      # pen-tilt cone half-angle (deg); see below
 )
+
+# PEN TILT IS OPT-IN AND THE DEFAULT IS THE PEN POINTING STRAIGHT DOWN.
+# `tilt_max_deg = 0` is not merely the recommended setting, it is a different
+# code path: nothing below ever consults `aris_sixarm/tilt.py`, so a stroke
+# planned with the default is planned by exactly the pipeline this module has
+# always been.  Above zero, `tilt.plan_adaptive` plans the stroke FLAT FIRST
+# through this same entry point's internals and only opens the tilt axis where
+# the flat attempt was not enough, returning the flat result whenever tilt
+# fails to improve on it — so the flag can add certified strokes and cannot
+# remove one.  See docs/TILT_EXPLORATION.md for what it buys (arm 2's comfort
+# donut: 0 of 4 test strokes certify at the strict gate without it, 4 of 4
+# with a 15-degree cone) and what it costs (a rescue is 110-280 ms against a
+# 13-57 ms flat plan; strokes that never need it pay nothing measurable).
 
 SPLIT_REASONS = ("start_infeasible", "empty_fiber", "sheet_collapse",
                  "chase_failed")
@@ -165,6 +179,12 @@ def plan_stroke(pts_xy, spec, opts=None, _depth=0):
     o = dict(DEFAULTS)
     o.update(opts or {})
     try:
+        if float(o.get("tilt_max_deg", 0.0)) > 0 and _depth == 0:
+            # _depth guards the recursion: a split's head is re-planned through
+            # this entry point, and `tilt.plan_adaptive` reaches `prepare` /
+            # `plan_from_ctx` directly, so only the outermost call may branch.
+            from . import tilt as _tilt
+            return _tilt.plan_adaptive(pts_xy, spec, o["tilt_max_deg"], opts=o)
         return _plan(pts_xy, spec, o, _depth)
     except Exception as exc:                       # the exception barrier
         return dict(status="bug", reason="exception", error=f"{type(exc).__name__}: {exc}",
