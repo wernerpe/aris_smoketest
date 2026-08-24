@@ -239,6 +239,17 @@ What a tilted plan changes downstream, checked rather than assumed:
   and not read off a plan field; it belongs in `validate_plan` behind the same
   flag. (Use `arctan2`, not `arccos` — `arccos` is ill-conditioned exactly
   where a flat plan lives and reports ~1e-8 rad of phantom lean.)
+
+  **DONE** (2026-08-24, `docs/FULL_COVERAGE.md`). `validate_plan` takes
+  `tilt_max_deg`, defaulting to **0** — so every plan written before tilt
+  existed is now checked against the perpendicular pen it was actually asked
+  for, and only a plan that was granted a cone may use one. The lean is
+  re-derived from `frames.fk` (`validate._pen_lean_deg`), never read off the
+  plan; `scene_check` passes each segment's own cone, and `tilt.plan_adaptive`
+  records the cone the plan NEEDS rather than the one the run allowed, so
+  turning the flag on cannot weaken the certificate of a stroke that did not
+  lean. Folding the tip, the pen axis and the chain points into ONE `fk_many`
+  call made the check free (it was three calls).
 * **The back-out extends by one argument.** `pwl.chase_cc` takes poses and a
   commanded q7 and knows nothing about where the poses came from, so the entire
   certification machinery — gates, branch consistency, tip-error report —
@@ -256,16 +267,45 @@ What a tilted plan changes downstream, checked rather than assumed:
   Interpolate `(tx, ty)` as a **vector** — interpolating (θ, φ) across the apex
   would swing the azimuth through half a turn while the lean passes through
   zero, spinning the pen on the paper for nothing.
+
+  **STILL UNDONE, and now said out loud rather than inferred from a missing
+  key** (`tilt._flat_shaped_fields`). A tilted plan ships as the sharp
+  polyline the DP certified, with every window zero. It costs nothing in the
+  certificate — `chase` walks the same 5 mm samples under the same gates
+  either way, and the flat pipeline already ships sharp polylines when
+  rounding fails to certify — it costs `|dq/ds|` at the knots and therefore
+  the clock. On the spans the feature exists for (50 mm and 10 mm rescues at
+  the edge of an arm's reach) that is a few knots on a few centimetres. On a
+  long tilted stroke it would matter and the generalisation would have to come
+  first. What WAS done: `writing.densify` and `writing.lifted_config` take a
+  tilt, so the frame fill and the hover pose are solved at the plan's
+  orientation instead of silently at `rotx(pi)`, and the tilt vector — not the
+  angles — is what gets interpolated.
 * **RTff needs nothing.** Force projection uses the waypoint quaternion, so a
   tilted drawing is already executable per the upstream RTff design.
 * **The allocator would need to be told.** `allocate.atlas_cells` keeps only
   tilt-0 permissive cells today, so the donut cells this unlocks are invisible
   to placement and colour partitioning until that filter learns about the flag.
+
+  **STILL TRUE, and deliberately not done.** The atlas is the PREFILTER, and a
+  prefilter that under-reports only costs probe time — every stroke it lets
+  through is probed for real, and `--no-prefilter` recovers the full search. So
+  the 100 % run of `docs/FULL_COVERAGE.md` reaches the tilt planner through
+  `opts["tilt_max_deg"]` on the probe path and leaves the atlas alone. What
+  that means in practice: **tilt cannot yet win a stroke the atlas prefiltered
+  away.** It did not need to here.
 * **Gate plumbing is a real gap.** `plan_stroke` cannot be asked for a strict
   margin — `pwl.MARGIN_GATE` / `pwl.SIGMA_GATE` are module constants, so an
   `opts["margin_gate"]` is silently ignored. Every strict-gate comparison here
   therefore runs both sides through `tilt.plan_adaptive`.
   `tests/test_tilt.py::test_strict_gates_are_not_a_plan_stroke_option` pins it.
+
+  **FIXED** (2026-08-24). `margin_gate` and `sigma_gate` are `DEFAULTS` entries
+  and reach all three places a gate has to arrive: the band DP
+  (`pwl.plan_pwl`), the 5 mm certification chase (`smooth.certify`) and the
+  independent validator. The test that pinned the bug now pins the behaviour
+  (`test_strict_gates_reach_plan_stroke`). The defaults are the shipping
+  constants, so no published number moved.
 
 ---
 

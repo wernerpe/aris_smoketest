@@ -67,6 +67,8 @@ DEFAULTS = dict(
     split_back=0.010,      # m pulled back from s* before re-planning the head
     validate=True,
     keep_debug=False,      # attach the lattice/sheet objects (memory-heavy)
+    margin_gate=pwl.MARGIN_GATE,   # rad, joint-limit comfort demanded of every
+    sigma_gate=pwl.SIGMA_GATE,     # sample; see "THE GATES ARE ARGUMENTS" below
     objective=pwl.OBJECTIVE,   # band objective; see `_sheet_pass`
     travel_mode=pwl.TRAVEL_MODE,          # how min_travel charges an edge
     fallback_objective="maximin_sigma",   # tried when the first certifies nothing
@@ -76,6 +78,22 @@ DEFAULTS = dict(
     tilt_max_deg=0.0,      # pen-tilt cone half-angle (deg); see below
 )
 
+# THE GATES ARE ARGUMENTS, NOT MODULE CONSTANTS.  `margin_gate` and
+# `sigma_gate` used to be accepted into `opts` and then SILENTLY IGNORED: the
+# band search read `pwl.MARGIN_GATE` / `pwl.SIGMA_GATE` off the module and the
+# dense certification read them again, so "plan this stroke at the strict
+# comfort gate" was a question this entry point could not be asked — it
+# answered the permissive one and said nothing.  A silently-dropped gate is the
+# worst kind of wrong number: every strict-gate comparison in
+# docs/TILT_EXPLORATION.md had to route around this module to be trustworthy,
+# and `tests/test_tilt.py` pinned the bug rather than the behaviour.  The three
+# places a gate has to arrive — the band DP (`pwl.plan_pwl`), the 5 mm
+# certification chase (`smooth.certify`) and the INDEPENDENT validator
+# (`validate.validate_plan`) — are now all handed the same two numbers, so a
+# plan that comes back "ok" at a strict gate has been searched, certified AND
+# re-derived at that gate.  The defaults are the shipping constants, so every
+# published number is unmoved.
+#
 # PEN TILT IS OPT-IN AND THE DEFAULT IS THE PEN POINTING STRAIGHT DOWN.
 # `tilt_max_deg = 0` is not merely the recommended setting, it is a different
 # code path: nothing below ever consults `aris_sixarm/tilt.py`, so a stroke
@@ -390,7 +408,9 @@ def plan_from_ctx(ctx, spec, o, depth=0):
 
     # ---- 5. the independent certificate ------------------------------------
     rep = validate_plan(dense_pts, spec, qs, times=pc["t"], h_inv=o["h_inv"],
-                        pen_ext=o["pen_ext"]) if o["validate"] else dict(ok=True)
+                        pen_ext=o["pen_ext"], margin_gate=o["margin_gate"],
+                        sigma_gate=o["sigma_gate"]) \
+        if o["validate"] else dict(ok=True)
     out = dict(base, status="ok", reason="", knots=knots, qs=qs, pts=dense_pts,
                times=pc["t"], s=sm["s"], q7=sm["q7"], sigmas=sm["sigmas"],
                margins=sm["margins"], min_sigma=float(sm["min_sigma"]),
@@ -448,6 +468,7 @@ def _sheet_pass(poly, spec, o, lat, order, ds_dense, md, Ns, fiber_cut,
                                       dict(sheet=int(o["sheet_id"])))
     for cand in order[:max(1, o["max_sheets"])]:
         r = pwl.plan_pwl(lat, cand, jump=planner.JUMP_THRESH,
+                         sigma_gate=o["sigma_gate"], margin_gate=o["margin_gate"],
                          objective=objective, j_start=o.get("j_start"),
                          j_end=o.get("j_end"),
                          travel_mode=o.get("travel_mode", pwl.TRAVEL_MODE))
@@ -482,14 +503,15 @@ def _certify_sheet(poly, spec, o, lat, sheet, res, ds_dense):
     stroke, un-rounding is the repair, and `smooth.certify`'s own bisection has
     already tried the intermediate windows.
     """
+    gates = dict(sigma_gate=o["sigma_gate"], margin_gate=o["margin_gate"])
     curve = smooth.smooth_q7_of_s(res["knots"], frac=o["smooth_frac"])
     sm = smooth.certify(poly, spec, curve, lat=lat, sheet=sheet, ds=ds_dense,
-                        h_inv=o["h_inv"], pen_ext=o["pen_ext"])
+                        h_inv=o["h_inv"], pen_ext=o["pen_ext"], **gates)
     if sm.get("certified"):
         return sm, "rounded"
     sharp = curve.with_windows(np.zeros(len(curve.windows)))
     sm2 = smooth.certify(poly, spec, sharp, lat=lat, sheet=sheet, ds=ds_dense,
-                         h_inv=o["h_inv"], pen_ext=o["pen_ext"])
+                         h_inv=o["h_inv"], pen_ext=o["pen_ext"], **gates)
     if sm2.get("certified"):
         return sm2, "sharp"
     far = sm2 if int(sm2.get("cut_index", -1)) > int(sm.get("cut_index", -1)) else sm
@@ -553,6 +575,10 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
       s and the PWL knots reflect to 1 - s;
       the corner windows reverse with the corners they belong to.
 
+    The pen's LEAN is pointwise too, so a tilted plan reverses on exactly the
+    same argument as a flat one: the same set of configurations, walked the
+    other way, leans the same amount at each of them.
+
     THE CLOCK IS THE ONE THING THAT IS RE-DERIVED, not flipped, because it is
     not a per-sample field but the integral of one: `pacing.pace` divides the
     step by the speed the joint-velocity limits allow there, so the reversed
@@ -571,12 +597,21 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
     o = dict(DEFAULTS)
     o.update(opts or {})
     out = dict(plan)
-    for k in ("qs", "pts", "sigmas", "margins", "stroke", "q7"):
+    # `tilt` and `lean` are PER-SAMPLE fields of a tilted plan (n_dense x 2 and
+    # n_dense) and reverse with the samples they belong to.  Leaving them out
+    # of this list left a reversed plan carrying forward-ordered lean next to
+    # reversed joints — silent, and exactly the kind of mismatch the pen-cone
+    # check in `validate_plan` below now catches.
+    for k in ("qs", "pts", "sigmas", "margins", "stroke", "q7", "tilt", "lean"):
         if k in plan:
             out[k] = np.asarray(plan[k], float)[::-1].copy()
     out["s"] = 1.0 - np.asarray(plan["s"], float)[::-1]
-    kn = np.asarray(plan["knots"], float)
-    out["knots"] = np.column_stack([1.0 - kn[::-1, 0], kn[::-1, 1]])
+    # A FLAT knot row is (s, q7); a TILTED one is (s, q7, tx, ty).  Only the
+    # first column is an arc length, so only it reflects — the rest are values
+    # AT that knot and ride along.  Naming column 1 explicitly used to drop the
+    # two tilt columns on the floor without a word.
+    kn = np.atleast_2d(np.asarray(plan["knots"], float))
+    out["knots"] = np.column_stack([1.0 - kn[::-1, 0], kn[::-1, 1:]])
     out["windows"] = np.asarray(plan["windows"], float)[::-1].copy()
     a, b = plan.get("clip_s", (0.0, 1.0))
     out["clip_s"] = (1.0 - float(b), 1.0 - float(a))
@@ -594,7 +629,10 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
         out.pop(k, None)                     # debug objects belong to the original
     if validate and spec is not None:
         rep = validate_plan(out["pts"], spec, qs, times=out["times"],
-                            h_inv=o["h_inv"], pen_ext=o["pen_ext"])
+                            h_inv=o["h_inv"], pen_ext=o["pen_ext"],
+                            margin_gate=o["margin_gate"],
+                            sigma_gate=o["sigma_gate"],
+                            tilt_max_deg=float(plan.get("tilt_max_deg", 0.0)))
         out["validation"] = rep
         if not rep["ok"]:
             out.update(status="bug", reason="validation_failed")

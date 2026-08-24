@@ -69,7 +69,9 @@ aris_sixarm/
                    v2 balances on SECONDS by move | swap | SPLIT, cutting a span
                    on the busiest arm and handing one piece to an arm that
                    certifies it; active_override = a hypothetical fleet, never
-                   a registry edit
+                   a registry edit; and `merge_remainders`, which lets an arm
+                   draw a span AND the ink lying against it as one segment —
+                   the move that took the logo to 100 % (docs/FULL_COVERAGE.md)
   bench/           five generated drawings the pipeline is regression-tested on,
                    none of them the CSAIL logo  (docs/BENCH.md)
   coordination.py  CONDUCTOR v1: capsule model, pairwise collision images over
@@ -102,12 +104,21 @@ tests/
   test_planner_robustness.py   regressions distilled from the fuzz campaign
   test_csail.py    tracer / allocator / conductor / idle-policy regressions
   test_sequence.py per-arm sequencing: reversal, cost model, exact + fallback
+  test_tilt.py     pen tilt: the equivalences that make it safe to ship flag-gated
+  test_validate_cone.py  the validator's pen-cone gate, and that its DEFAULT is
+                   the perpendicular pen every pre-tilt plan was asked for
+  test_merge_spans.py  the segment merge, and the two spans that used to be
+                   the last 59.9 mm of the logo
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
   CONCURRENCY.md   where the 148 s of pause came from, and what each lever bought
   IDLE.md          the idle policy: freeze / retreat / just-in-time taxi
   SOLO_TIME.md     how much of the run is one arm alone, and why
   BENCH.md         the standing regression table over five non-CSAIL drawings
+  TWO_PASS.md      one pen swap, both inks for every arm: 86.97 % -> 99.3907 %
+  TILT_EXPLORATION.md  pen tilt as a planning axis: what it buys, what it costs
+  FULL_COVERAGE.md the last 59.9 mm -> 100.0000 %, and why the fix was the
+                   allocator rather than the pen tilt everyone expected
 ```
 
 ## Key facts

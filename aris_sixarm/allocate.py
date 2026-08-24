@@ -760,6 +760,204 @@ def replan_segment(pts, span, spec, opts=None, backoff=BACKOFF_M,
     return None, dict(span, s0=s0, s1=s1, lost=lost, replans=tries)
 
 
+def merge_remainders(strokes, programs, specs, aopts, min_seg=MIN_SEG_M,
+                     gap_tol=GAP_TOL_M, mat_of=None, tol=1e-9, rounds=3,
+                     verbose=False):
+    """A segment and the ink lying against it, re-planned and drawn as ONE.
+
+    -> (n_merged, records); `programs` is edited in place.
+
+    THE MINIMUM SEGMENT LENGTH IS A RULE ABOUT PEN-UPS, AND IT WAS BEING
+    APPLIED TO INK.  A span shorter than `min_seg` is not worth a pen-up, a
+    hover, a transit and a seam — that is true, and it is why `greedy_cover`,
+    `probe_stroke` and `repair_gaps` all refuse to place one.  But a remainder
+    lying END TO END with a span an arm is ALREADY drawing does not cost a
+    pen-up: the arm draws four more centimetres before it lifts.  The minimum
+    was gating the wrong thing, and the price was visible on the shipped
+    programme — stroke 30's middle 10.2 mm was dropped as `degenerate/
+    too_short` while the arm holding the ink either side of it stopped 10 mm
+    short and lifted off.
+
+    The same argument covers a second case with the same shape, and the logo
+    shows both.  Stroke 26's 49.7 mm hole was closed by `repair_gaps` — as a
+    SEPARATE segment for an arm that was already drawing the 227 mm lying
+    immediately below it, so the arm drew up to s = 0.6213, lifted, hovered,
+    lowered 3 mm away and carried on.  Two touching segments of ONE arm on ONE
+    stroke are the merged case with the hole already filled in, and the pen-up
+    between them buys nothing at all.
+
+    So there are two passes and one idea — ask an arm to draw a span and the
+    ink lying against it as a single segment:
+
+      (a) ABSORB a hole no arm would take as a segment of its own into the
+          segment whose endpoint it touches;
+      (b) COALESCE two segments of the same arm on the same stroke that touch
+          (or overlap at a handoff splice) into one.
+
+    (a) can leave the segment that grew touching the next one along, so the two
+    run to a fixed point rather than once each.  Three things make this an
+    allocator improvement rather than a patch:
+
+      IT IS ONE RE-PLAN, NOT A SPLICE.  The merged span goes back through
+      `replan_same_span`, so what ships is a single certified plan over the
+      whole span — one continuous walk of the redundancy band, with the same
+      gates, the same 5 mm chase and the same independent certificate as any
+      other segment.  Nothing is stitched, and no micro-segment is created:
+      the 25 mm floor still governs every STANDALONE piece, which is the
+      question it was written to answer.
+
+      IT RUNS LAST, SO IT ONLY EVER ADDS.  The cover, the repair pass and the
+      balancer all get first refusal.  A remainder still uncovered here is one
+      no arm would take as a segment of its own, so absorbing it cannot take
+      paper away from a better placement — and a merge that does not certify
+      leaves the original segments exactly as they were.  Coalescing likewise
+      cannot move ink between arms: both pieces already belong to the arm that
+      ends up drawing them.
+
+      A LONGER SEGMENT IS A DIFFERENT SEGMENT TO FLY TO.  The endpoint moves,
+      so the arm's hover moves, so the tour that was proved flyable is not
+      automatically the tour it now has.  Each merge is therefore accepted only
+      if `prune_unflyable` still finds the arm a tour with the merged span in
+      it (`mat_of`); otherwise it is rolled back.  Skipping that check is how
+      an improvement to coverage turns into a lost segment somewhere else.
+    """
+    by_id = {st["id"]: st for st in strokes}
+    recs = []
+
+    def _accept(arm, keep, what):
+        """Commit `keep` as arm `arm`'s bag if the arm can still fly it."""
+        if mat_of is not None:
+            _, bad = prune_unflyable(specs[arm], keep, mat_of(arm))
+            if bad:
+                if verbose:
+                    print(f"  merge: arm {arm} {what} certifies and breaks its "
+                          f"own tour; rolled back")
+                return False
+        programs[arm] = keep
+        return True
+
+    def _replan(st, arm, s0, s1, direction):
+        sp = dict(s0=float(min(s0, s1)), s1=float(max(s0, s1)), arm=arm,
+                  direction=int(direction), source="merge")
+        new, _n = replan_same_span(st, sp, specs[arm], aopts[arm],
+                                   min_seg=min_seg, tol=tol)
+        return new, sp
+
+    def _rec(kind, arm, st, was, sp, gained, new):
+        recs.append(dict(kind=kind, arm=int(arm), stroke_id=int(st["id"]),
+                         was=[float(x) for x in was],
+                         now=[float(sp["s0"]), float(sp["s1"])],
+                         gained_m=float(gained),
+                         max_lean_deg=float(
+                             new["plan"].get("max_lean_deg", 0.0) or 0.0)))
+        return recs[-1]
+
+    def absorb_holes():
+        """(a) a hole nobody would place, drawn by the segment beside it."""
+        n = 0
+        # LARGEST HOLE FIRST: a merge changes the segment its neighbour would
+        # have merged with, so the order decides who gets the paper, and the
+        # metres that matter should not lose the coin toss to a millimetre.
+        for hole in sorted(leftover(strokes, programs, gap_tol),
+                           key=lambda h: -h["length"]):
+            st = by_id.get(hole["stroke_id"])
+            if st is None:
+                continue
+            a, b = hole["s_range"]
+            cands = []
+            for arm, segs in programs.items():
+                for i, e in enumerate(segs):
+                    if int(e["stroke_id"]) != int(st["id"]):
+                        continue
+                    lo, hi = min(*e["s_range"]), max(*e["s_range"])
+                    if abs(hi - a) <= gap_tol or abs(lo - b) <= gap_tol:
+                        cands.append((float(hi - lo), int(arm), i, lo, hi))
+            for _, arm, i, lo, hi in sorted(cands):
+                e = programs[arm][i]
+                new, sp = _replan(st, arm, min(lo, a), max(hi, b),
+                                  e["direction"])
+                if new is None:
+                    continue
+                keep = list(programs[arm])
+                keep[i] = new
+                if not _accept(arm, keep, f"stroke {st['id']} "
+                                          f"+{1000 * hole['length']:.1f} mm"):
+                    continue
+                n += 1
+                r = _rec("hole", arm, st, (lo, hi), sp, hole["length"], new)
+                print(f"  merge: arm {arm} extends stroke {st['id']} "
+                      f"[{lo:.4f},{hi:.4f}] -> [{sp['s0']:.4f},{sp['s1']:.4f}], "
+                      f"+{1000 * hole['length']:.1f} mm of ink, no extra pen-up"
+                      + (f" (lean {r['max_lean_deg']:.1f} deg)"
+                         if r["max_lean_deg"] > 0 else ""))
+                break
+        return n
+
+    def coalesce_adjacent():
+        """(b) two touching segments of ONE arm on ONE stroke, drawn as one."""
+        n = 0
+        for arm in list(programs):
+            changed = True
+            while changed:
+                changed = False
+                segs = programs[arm]
+                by_stroke = {}
+                for i, e in enumerate(segs):
+                    by_stroke.setdefault(int(e["stroke_id"]), []).append(i)
+                for sid, idx in by_stroke.items():
+                    if len(idx) < 2:
+                        continue
+                    st = by_id.get(sid)
+                    if st is None:
+                        continue
+                    L = polyline_length(st["pts"])
+                    span = {i: (min(*segs[i]["s_range"]),
+                                max(*segs[i]["s_range"])) for i in idx}
+                    order = sorted(idx, key=lambda i: span[i][0])
+                    for i, j in zip(order, order[1:]):
+                        # touching (or overlapping at a splice) in arc length
+                        if span[j][0] - span[i][1] > gap_tol / max(L, 1e-9):
+                            continue
+                        # max(), not span[j][1]: `order` sorts on s0, so a span
+                        # NESTED inside its predecessor sorts after it and
+                        # would otherwise shorten the segment it merged into —
+                        # a merge that LOSES ink, which is the one thing this
+                        # pass must never do.
+                        new, sp = _replan(st, arm, span[i][0],
+                                          max(span[i][1], span[j][1]),
+                                          segs[i]["direction"])
+                        if new is None:
+                            continue
+                        keep = [e for k, e in enumerate(segs) if k not in (i, j)]
+                        keep.insert(min(i, j), new)
+                        if not _accept(arm, keep, f"stroke {sid} coalesced"):
+                            continue
+                        n += 1
+                        r = _rec("adjacent", arm, st, span[i], sp, 0.0, new)
+                        print(f"  merge: arm {arm} draws stroke {sid} "
+                              f"[{span[i][0]:.4f},{span[i][1]:.4f}] and "
+                              f"[{span[j][0]:.4f},{span[j][1]:.4f}] as ONE "
+                              f"segment [{sp['s0']:.4f},{sp['s1']:.4f}]; "
+                              f"one pen-up saved"
+                              + (f" (lean {r['max_lean_deg']:.1f} deg)"
+                                 if r["max_lean_deg"] > 0 else ""))
+                        changed = True
+                        break
+                    if changed:
+                        break
+        return n
+
+    # Absorbing a hole can leave the segment that took it touching the next one
+    # along, so the two passes are run to a fixed point rather than once each.
+    n_merged = 0
+    for _ in range(max(int(rounds), 1)):
+        got = absorb_holes() + coalesce_adjacent()
+        n_merged += got
+        if not got:
+            break
+    return n_merged, recs
+
+
 # ===========================================================================
 # 4b. load balancing: who draws it, when more than one arm may
 # ===========================================================================
@@ -2314,7 +2512,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_split=MIN_SPLIT_M, splice=SPLIT_OVERLAP_M,
              split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
              draw_speed=DRAW_SPEED, q_start=None, return_home=True,
-             cluster=CLUSTER, menu_opts=None, fleet=None):
+             cluster=CLUSTER, menu_opts=None, fleet=None, merge=True):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -2530,6 +2728,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     for it in placed:
         programs[it["arm"]].append(it["entry"])
 
+    # ---- absorb what is left into the segment beside it -------------------
+    # LAST, ON PURPOSE.  Everything above is allowed to place a remainder as a
+    # segment of its own if it is worth a pen-up; what reaches here is what
+    # none of them would take.  See `merge_remainders`.
+    n_merged, merges = merge_remainders(
+        strokes, programs, specs, aopts, min_seg=min_seg, gap_tol=gap_tol,
+        mat_of=_mat, verbose=verbose) if merge else (0, [])
+
     # THE GUARANTEE, AFTER EVERY MOVE THE BALANCER MADE.  The retry above bans
     # a span from an arm before the cover so somebody else can have the paper;
     # this is what makes the bag the arm is finally handed one it can actually
@@ -2559,6 +2765,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
                unflyable=unflyable, banned=sorted(banned),
+               merges=merges, n_merged=int(n_merged),
                sequencer=sequencer, pens=pen_m, balance=bal,
                draw_speed=float(draw_speed),
                timing=dict(prefilter=t_pre, probe=t_probe, repair=t_repair,
@@ -2657,6 +2864,27 @@ def report(res, strokes):
                  f"gap repair offered {res.get('n_repair_probes', 0)} windows to "
                  f"the arms and got {res.get('n_repair_spans', 0)} certified "
                  "spans back")
+    mg = res.get("merges") or []
+    if mg:
+        holes = [m for m in mg if m["kind"] == "hole"]
+        lean = [m for m in mg if m["max_lean_deg"] > 0]
+        lines.append(
+            f"merge: {len(mg)} segment(s) re-planned to take in the ink lying "
+            f"against them — {len(holes)} absorbed a hole nobody would place "
+            f"({1000 * sum(m['gained_m'] for m in holes):.1f} mm of ink), "
+            f"{len(mg) - len(holes)} coalesced two touching segments of one "
+            f"arm (one pen-up saved each)"
+            + (f"; {len(lean)} of them lean" if lean else ""))
+    lean_segs = [(a, s_) for a in res["arms"] for s_ in res["programs"][a]
+                 if float(s_["plan"].get("max_lean_deg", 0.0) or 0.0) > 1e-6]
+    if lean_segs:
+        worst = max(float(s_["plan"]["max_lean_deg"]) for _, s_ in lean_segs)
+        lines.append(
+            f"pen tilt: {len(lean_segs)} of "
+            f"{sum(len(res['programs'][a]) for a in res['arms'])} segments "
+            f"lean, worst {worst:.1f} deg, "
+            f"{sum(s_['length'] for _, s_ in lean_segs):.3f} m of ink — every "
+            "one certified at the cone it names and independently validated")
     pieces = {}
     for a in res["arms"]:
         for s in res["programs"][a]:

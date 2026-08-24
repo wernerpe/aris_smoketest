@@ -922,6 +922,15 @@ def _finish(poly, spec, lat, res, o, extra):
     # simplest form that works.  eps = 0 keeps every lattice step as a knot,
     # i.e. commands exactly the path the DP certified, and is the last word
     # before a split is conceded.
+    # THE CHASE MUST LAND ON BOTH ENDS OF THE STROKE.  `planner.resample` steps
+    # by a fixed ds and stops at the last WHOLE step, so chasing a 0.1373 m
+    # stroke at a raw 5 mm leaves the last 2.3 mm unplanned — and every gate
+    # here is POINTWISE, so not one of them can see a tail that was never
+    # sampled.  `stroke_api.prepare` fits the step to the length for exactly
+    # this reason and the tilt path was not doing it; the `coverage_gap` check
+    # at the bottom of this function is what found it.
+    ds_dense = stroke_api._fit_ds(stroke_api.polyline_length(poly),
+                                  o["ds_dense"])
     ch = None
     for eps in (o.get("eps_idx", 1.0), 0.0):
         knots, ki, q_seed = simplify(
@@ -929,7 +938,7 @@ def _finish(poly, spec, lat, res, o, extra):
             exact=o.get("exact", True) and eps > 0,
             margin_gate=o.get("margin_gate", MARGIN_GATE),
             sigma_gate=o.get("sigma_gate", SIGMA_GATE))
-        ch = chase(poly, spec, knots, q_seed, ds=o["ds_dense"], lat=lat,
+        ch = chase(poly, spec, knots, q_seed, ds=ds_dense, lat=lat,
                    margin_gate=o.get("margin_gate", MARGIN_GATE),
                    sigma_gate=o.get("sigma_gate", SIGMA_GATE))
         if ch.get("certified"):
@@ -943,10 +952,14 @@ def _finish(poly, spec, lat, res, o, extra):
     qs = ch["qs"]
     pc = pacing.pace(qs, ch["arc_len"], v_draw=o["v_draw"], safety=o["safety"],
                      ds_m=ch["ds"], dqds=ch["dqds"])
+    cone = float(extra["tilt_max_deg"])
     rep = validate_plan(ch["pts"], spec, qs, times=pc["t"],
-                        pen_ext=lat["pen_ext"]) if o.get("validate", True) \
+                        pen_ext=lat["pen_ext"],
+                        margin_gate=o.get("margin_gate", MARGIN_GATE),
+                        sigma_gate=o.get("sigma_gate", SIGMA_GATE),
+                        tilt_max_deg=cone) if o.get("validate", True) \
         else dict(ok=True)
-    lean, worst, inside = cone_check(qs, spec, extra["tilt_max_deg"])
+    lean, worst, inside = cone_check(qs, spec, cone)
     out = dict(extra, status="ok", reason="", knots=knots, qs=qs,
                pts=ch["pts"], times=pc["t"], s=ch["s"], q7=ch["q7"],
                tilt=ch["tilt"], sigmas=ch["sigmas"], margins=ch["margins"],
@@ -957,12 +970,61 @@ def _finish(poly, spec, lat, res, o, extra):
                max_lean_deg=float(worst), lean=lean, cone_ok=bool(inside),
                bottleneck=float(res.get("bottleneck", np.nan)),
                total_time=float(pc["total_time"]),
-               frac_slowed=float(pc["frac_slowed"]), validation=rep)
+               frac_slowed=float(pc["frac_slowed"]),
+               headroom=float(pc["headroom"]), validation=rep,
+               **_flat_shaped_fields(poly, knots, ch))
+    # coverage: an "ok" plan draws the WHOLE stroke, and `stroke_api` checks
+    # that the same way -- pointwise tip error cannot see a plan that quietly
+    # stopped short of an END, because it never samples there.
+    gap = max(float(np.linalg.norm(np.asarray(ch["pts"])[0] - poly[0])),
+              float(np.linalg.norm(np.asarray(ch["pts"])[-1] - poly[-1])))
+    out["coverage_gap"] = gap
+    if gap > 1e-6:
+        out.update(status="bug", reason="incomplete_coverage")
     if not rep["ok"]:
         out.update(status="bug", reason="validation_failed")
     if not inside:
         out.update(status="bug", reason="cone_violation")
     return out
+
+
+# CORNER ROUNDING IS THE ONE THING A TILTED PLAN DOES NOT GET, AND IT IS SAID
+# HERE RATHER THAN LEFT TO BE INFERRED FROM A MISSING KEY.  `smooth.RoundedPWL`
+# rounds a knot by fitting a quadratic Bezier in a WINDOW around it, and the
+# plan it rounds is one scalar function of s (q7).  A tilted plan is three
+# (q7, tx, ty) and wants the same windows applied per component with the tilt
+# pair interpolated as a VECTOR — interpolating (theta, phi) through the apex
+# would swing the azimuth half a turn while the lean passed through zero and
+# spin the pen on the paper for nothing.  That generalisation is real work and
+# it is NOT done: a tilted plan ships as the SHARP polyline the DP certified,
+# with every window zero.
+#
+# WHAT THAT COSTS, EXACTLY.  Nothing in the certificate: `chase` walks the same
+# 5 mm samples and enforces the same gates whether the corners are rounded or
+# not, and `stroke_api` already ships sharp polylines when rounding fails to
+# certify ("corner rounding did not certify; kept the sharp polyline").  What
+# it costs is |dq/ds| at the knots, and therefore the clock, because
+# `pacing.pace` slows the ink until no joint exceeds its velocity cap.  On the
+# spans this feature exists for -- 50 mm and 10 mm rescues at the edge of an
+# arm's reach -- that is a few knots on a few centimetres, and the measured
+# `frac_slowed` says whether it bound at all.  On a long tilted stroke it would
+# matter and the generalisation would have to be done first.
+def _flat_shaped_fields(poly, knots, ch):
+    """The keys a FLAT plan carries that the tilt path would otherwise omit.
+
+    A tilted plan is handed to `allocate`, `sequence`, `writing` and
+    `stroke_api.reverse_plan` through the same door as a flat one, so it has to
+    be shaped like one.  `windows` is the load-bearing member: `reverse_plan`
+    subscripts it without a default, so a tilt-rescued segment the sequencer
+    wanted to draw backwards used to raise `KeyError` in the middle of an
+    allocation.  Zero windows is not a placeholder -- it is the truth about
+    this plan (see the note above).
+    """
+    return dict(windows=np.zeros(len(knots)), stroke=np.asarray(poly, float),
+                clip_s=(0.0, 1.0), depth=0, sheet=-1,
+                arc_len_input=float(ch["arc_len"]),
+                notes=["tilted plan: sharp polyline, no corner rounding "
+                       "(aris_sixarm/tilt.py, _flat_shaped_fields)"])
 
 
 def _prep(pts_xy, spec, o):
@@ -981,7 +1043,17 @@ def _prep(pts_xy, spec, o):
                                      sheet=fleet.sheet_for(spec))
         if len(kept) < 2:
             return None, None
-        poly, pts = kept, kept
+        # ONLY WHEN SOMETHING WAS ACTUALLY CLIPPED, which is what
+        # `stroke_api.prepare` does and what this function claims to do.
+        # Replacing `poly` unconditionally handed the certification chase the
+        # 10 mm LATTICE resample in place of the stroke the caller asked for,
+        # so a tilted plan drew the chords of the curve rather than the curve:
+        # 0.65 mm of arc length on a 138 mm span of stroke 26, and a commanded
+        # path that cuts every corner by the lattice's chord error.  The
+        # lattice is built on `pts` either way; `poly` is the curve the plan is
+        # certified AGAINST and it has to be the one that came in.
+        if len(kept) != len(pts):
+            poly, pts = kept, kept
     return poly, pts
 
 
@@ -1052,6 +1124,16 @@ def plan_adaptive(pts_xy, spec, tilt_max_deg=15.0, n_ring=N_RING,
         r = dict(r)
         r.update(tilt_max_deg=tilt_max_deg, mode="adaptive",
                  t_total=time.perf_counter() - t_start, **kw)
+        # THE CONE A PLAN CARRIES IS THE ONE IT NEEDS, NOT THE ONE THE RUN WAS
+        # WILLING TO ALLOW.  `tilt_max_deg` travels with the plan into
+        # `validate.validate_plan` and `scene_check`, which check the lean
+        # against it; if every plan in a tilt-enabled run carried 15 degrees,
+        # turning the flag on would quietly weaken the certificate of the
+        # hundreds of strokes that never leaned.  The allowance is kept as
+        # `tilt_allowance` so the run's setting is still legible.
+        r["tilt_allowance"] = float(tilt_max_deg)
+        if float(r.get("max_lean_deg", 0.0) or 0.0) <= 0.0:
+            r["tilt_max_deg"] = 0.0
         return r
 
     poly = pts = flat_lat = None

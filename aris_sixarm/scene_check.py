@@ -426,12 +426,23 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
         for a, segs in programs.items():
             for k, s in enumerate(segs):
                 pl = s["plan"]
+                # THE CONE TRAVELS WITH THE PLAN.  A tilt-rescued segment is
+                # allowed the lean it was granted and not one degree more, and
+                # a segment that never leaned is checked against a
+                # perpendicular pen — which is every segment in every run made
+                # before `aris_sixarm/tilt.py` existed, and all but a handful
+                # in the runs made since (`tilt.plan_adaptive` records the cone
+                # the plan NEEDS, not the one the run allowed).
+                cone = float(pl.get("tilt_max_deg", 0.0) or 0.0)
                 rep = validate_plan(np.asarray(pl["pts"], float), fl[a],
                                     np.asarray(pl["qs"], float),
                                     times=np.asarray(pl["times"], float),
-                                    h_inv=None, pen_ext=pen_len(pen_ext, a))
+                                    h_inv=None, pen_ext=pen_len(pen_ext, a),
+                                    tilt_max_deg=cone)
                 seg_bad += 0 if rep["ok"] else 1
-                seg_reports.append(dict(arm=a, seg=k, ok=bool(rep["ok"])))
+                seg_reports.append(dict(
+                    arm=a, seg=k, ok=bool(rep["ok"]), cone_deg=cone,
+                    lean_deg=float(rep["worst"].get("max_lean_deg", 0.0))))
 
     ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
               and min(lim.values()) > 0.0 and not frame_bad and not paper_bad)

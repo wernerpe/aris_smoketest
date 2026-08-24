@@ -56,7 +56,8 @@ HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
 
 
 def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
-                  pen_ext=PEN_EXT, span=0.6, n_q7=25, margin_min=HOVER_MARGIN):
+                  pen_ext=PEN_EXT, span=0.6, n_q7=25, margin_min=HOVER_MARGIN,
+                  tilt=None):
     """IK pose with the pen tip at (x, y, z), R = rotx(pi), nearest to q_ref.
 
     Scans q7 around q_ref[6] (the redundancy that q_ref already picked) and
@@ -65,9 +66,37 @@ def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     filter is inside the scan and not applied afterwards, so raising it does not
     merely reject the nearest solution — it picks the nearest ACCEPTABLE one,
     which is usually a different q7 rather than no answer at all.
+
+    `tilt` LEANS THE HOVER, AND THE FLEET DOES NOT USE IT.  The hover above a
+    tilt-rescued segment's endpoint could be asked for at the same lean, which
+    would make the lift a pure translation of the tool along the paper normal.
+    It was tried and it is NOT what ships, for two reasons that turned out to
+    point the same way:
+
+      A HOVER IS A TRAVEL POSE, AND THE ROUTER'S VIAS ARE VERTICAL.
+      `paper.route` builds every detour it inserts out of `lifted_config`
+      solutions at `rotx(pi)`, so a leaning hover does not avoid reorienting
+      the pen during a transit — it only moves where the reorientation
+      happens, from the lift into the crossing.  ONE hover convention for the
+      whole fleet is worth more than a locally tidier lift.
+
+      IT COST A CONDUCT.  With leaning hovers on the 100 %-coverage
+      allocation, phase 1 was refused with "arm 31: go-home at segment 0
+      cannot clear the paper plane" — the leaning hover is a different pose to
+      leave from and `paper.route` would not fly it home.  The same allocation
+      conducts with vertical hovers.
+
+    So the pen reorients during the LIFT, with the tip off the paper and the
+    whole move swept by `scene_check`, which is the cheapest place to put it.
+    The argument is kept here rather than deleted because "why is the hover
+    above a leaning stroke not leaning" is a question worth an answer.
     """
     Twb = spec.T_world_base(h_inv)
-    R_w = rotx(np.pi)
+    if tilt is None:
+        R_w = rotx(np.pi)
+    else:
+        from .tilt import pen_rot
+        R_w = pen_rot(np.asarray(tilt, float).reshape(1, 2))[0]
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
     T_w[:3, 3] = np.array([xy[0], xy[1], z]) - pen_ext * R_w[:, 2]
@@ -140,7 +169,7 @@ MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 
 
 def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-            max_dq=MAX_DQ_FRAME):
+            max_dq=MAX_DQ_FRAME, tilt=None):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
     The DP's continuity window allows up to JUMP_THRESH rad between two
@@ -156,12 +185,30 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     re-solve the case-consistent IK at Cartesian points along the segment with
     q7 interpolated.  Returns (qs_dense (M,7), u_dense (M,)) with u the
     normalised arc position, so the caller can keep constant pen speed.
+
+    `tilt` IS THE PEN ORIENTATION AND IT HAS TO COME ALONG.  The pose this
+    re-solves at was hard-coded to `rotx(pi)` — the perpendicular pen — which
+    is right for every plan the planner has ever made and WRONG for a
+    tilt-rescued one (`aris_sixarm/tilt.py`): the plan's own samples would
+    survive verbatim and every sample inserted between them would be solved
+    for a different tool frame, so the executed stroke would rock the pen back
+    to vertical and out to the lean between every pair of commanded points.
+    Pass the plan's `tilt` field — (N,2), one lean vector per commanded sample
+    — and the fill is solved on the interpolated orientation instead.
+
+    THE INTERPOLATION IS OF THE VECTOR, never of (lean, azimuth): the chart
+    (tx, ty) is regular at the apex and the polar one is not, so interpolating
+    the angles through a zero crossing would swing the azimuth half a turn and
+    spin the pen on the paper while the lean passed through nothing.
     """
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     R_w = rotx(np.pi)
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
+    tl = None if tilt is None else np.asarray(tilt, float).reshape(-1, 2)
+    if tl is not None and len(tl) != len(qs):
+        raise ValueError(f"tilt has {len(tl)} rows for {len(qs)} samples")
     n = len(qs) - 1
     out_q, out_u, fallbacks = [qs[0]], [0.0], 0
     for i in range(n):
@@ -170,6 +217,10 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
         for m in range(1, k):
             f = m / k
             p = pts[i] + f * (pts[i + 1] - pts[i])
+            if tl is not None:
+                from .tilt import pen_rot
+                R_w = pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
+                T_w[:3, :3] = R_w
             T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - pen_ext * R_w[:, 2]
             q7 = qs[i, 6] + f * (qs[i + 1, 6] - qs[i, 6])
             q = ik.solve_cc(Twb_inv @ T_w, q7, out_q[-1])
@@ -472,7 +523,8 @@ def segment_draw_time(spec, seg, draw_speed=DRAW_SPEED_FLEET, qd_frac=QD_FRAC,
     """
     qs = np.asarray(seg["plan"]["qs"], float)
     pts = np.asarray(seg["plan"]["pts"], float)
-    qd, ud, _ = densify(qs, pts, spec, h_inv, pen_ext)
+    qd, ud, _ = densify(qs, pts, spec, h_inv, pen_ext,
+                        tilt=seg["plan"].get("tilt"))
     return draw_duration(qd, ud, seg["length"], draw_speed, qd_frac)
 
 
@@ -655,7 +707,7 @@ def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=PEN_EXT,
 
 
 def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT,
-                    pen_ext=PEN_EXT):
+                    pen_ext=PEN_EXT, tilt=None):
     """`lifted_config`, retrying at lower heights. -> (q, height_used).
 
     Near the edge of an arm's reach the 6 cm hover has no IK solution with the
@@ -665,7 +717,8 @@ def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_
     which the report says out loud rather than hiding).
     """
     for z in heights:
-        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext)
+        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                             tilt=tilt)
         if q is not None:
             return np.asarray(q, float), float(z)
     return np.asarray(q_ref, float), 0.0
@@ -763,7 +816,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     for k, s in enumerate(segs):
         qs = np.asarray(s["plan"]["qs"], float)
         pts = np.asarray(s["plan"]["pts"], float)
-        qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext)
+        tl = s["plan"].get("tilt")
+        qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext, tilt=tl)
         ref = np.column_stack([np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 0]),
                                np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 1])])
         err = tip_error_pts(qd, ref, spec, h_inv, pen_ext)
@@ -779,6 +833,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     # The taxi stretch is a FACTOR on the pen-up blocks, so the total has to be
     # known first; and knowing it first is also what keeps `transit_s` equal to
     # the number the sequencer minimised whatever the stretch turns out to be.
+    # VERTICAL, even above a leaning stroke — see `lifted_config`'s `tilt`.
     hov = [lifted_or_lower(spec, D["qd"][0], D["pts"][0], h_inv=h_inv,
                            pen_ext=pen_ext) for D in dense]
     hox = [lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,

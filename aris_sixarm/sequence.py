@@ -90,6 +90,13 @@ def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
     for i, s in enumerate(segs):
         qs = np.asarray(s["plan"]["qs"], float)
         pts = np.asarray(s["plan"]["pts"], float)
+        # "THE SAME CALL" INCLUDES THE PEN ORIENTATION IT ASKS FOR.  Both
+        # sides hover VERTICALLY, above a leaning stroke as above a flat one
+        # (`writing.lifted_config`'s `tilt` argument records why), and the
+        # cross-check in `csail_schedule` is what keeps them honest: when this
+        # function and `arm_program` briefly disagreed about that, it said so
+        # immediately — "sequencer priced transits the timeline does not pay:
+        # arm 71: 0.6230 s", on the one arm drawing a 15-degree span.
         for e, k in ((0, 0), (1, -1)):
             q[i, e], xy[i, e] = qs[k], pts[k]
             h, zz = lifted_or_lower(spec, qs[k], pts[k], h_inv=h_inv,

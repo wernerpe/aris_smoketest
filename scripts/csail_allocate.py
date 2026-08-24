@@ -344,6 +344,13 @@ def _phase_json(res):
             transit_s=float(q["cost"]), baseline_transit_s=float(q["baseline_cost"]),
             n_reversed=int(q["n_reversed"]), n_refused=int(q["n_refused"]),
             wall_s=float(q["wall"])) for a, q in res["sequence"].items()},
+        merges=[dict(kind=str(m["kind"]), arm=int(m["arm"]),
+                     stroke_id=int(m["stroke_id"]),
+                     was=[float(x) for x in m["was"]],
+                     now=[float(x) for x in m["now"]],
+                     gained_m=float(m["gained_m"]),
+                     max_lean_deg=float(m["max_lean_deg"]))
+                for m in res.get("merges", [])],
         arms={}, dropped=[])
     for aid in res["arms"]:
         out["arms"][str(aid)] = [dict(
@@ -358,6 +365,13 @@ def _phase_json(res):
             min_sigma=float(s["plan"]["min_sigma"]),
             min_margin=float(s["plan"]["min_margin"]),
             tip_err_m=float(s["plan"]["tip_err"]),
+            # THE PEN'S LEAN IS PART OF THE RECORD.  `max_lean_deg` is what the
+            # plan actually used and `tilt_cone_deg` the cone its certificate
+            # was written against — `scene_check` re-derives the first and
+            # checks it against the second, so a reader can count the tilted
+            # spans in a shipped programme without re-planning anything.
+            max_lean_deg=float(s["plan"].get("max_lean_deg", 0.0) or 0.0),
+            tilt_cone_deg=float(s["plan"].get("tilt_max_deg", 0.0) or 0.0),
             draw_time_s=float(s["plan"]["total_time"]),
             pts=np.round(s["pts"], 5).tolist(),
             q_first=list(np.round(s["plan"]["qs"][0], 6)),
@@ -481,6 +495,17 @@ def add_args(ap):
                          "draw orange.  Lifts the one-colour-per-arm constraint "
                          "ACROSS phases (not within one), so allocation becomes "
                          "two independent single-colour problems on all arms")
+    ap.add_argument("--tilt-max-deg", type=float, default=0.0,
+                    help="pen-tilt cone half-angle in degrees, as a RESCUE: "
+                         "every stroke is planned flat first and the tilt axis "
+                         "is opened only where flat did not certify, so the "
+                         "flag can add certified ink and cannot remove any "
+                         "(aris_sixarm/tilt.py, docs/TILT_EXPLORATION.md).  0 "
+                         "(the default) never consults the tilt planner at all")
+    ap.add_argument("--no-merge", action="store_true",
+                    help="do not let an arm extend a segment through the "
+                         "uncovered remainder lying against it "
+                         "(allocate.merge_remainders)")
     ap.add_argument("--max-probes", type=int, default=3,
                     help="plan calls per (stroke, arm); above 2 they walk the "
                          "largest remaining gap (see allocate.probe_stroke)")
@@ -575,7 +600,9 @@ def run_allocation(a, verbose=False, split=None):
     if pens:
         print("  pens: " + "  ".join(f"arm {k} = {1000 * v:.0f} mm"
                                      for k, v in sorted(pens.items())))
-    kw = dict(opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE)),
+    kw = dict(opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE),
+                        tilt_max_deg=float(getattr(a, "tilt_max_deg", 0.0))),
+              merge=not getattr(a, "no_merge", False),
               cluster=getattr(a, "cluster", allocate.CLUSTER),
               verbose=verbose, pens=pens,
               active_override=_override(a.arms),

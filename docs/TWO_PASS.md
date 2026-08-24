@@ -320,6 +320,18 @@ not this allocation's doing.
 
 ### What is still undrawn, and why
 
+> **SUPERSEDED, 2026-08-24 — see `docs/FULL_COVERAGE.md`.** Both spans are now
+> drawn and coverage is **100.0000 %**, at a makespan of **73.500 s** (down from
+> the 81.688 s below). Neither needed the pen tilt this section's diagnosis
+> pointed at: `allocate.merge_remainders` lets an arm draw a span AND the ink
+> lying against it as ONE segment, and both holes are absorbed by a segment
+> their arm was already drawing — arm 97 extends stroke 26 to s = 0.7571, arm
+> 31 extends stroke 30 down to s = 0.6488. No extra segment, no extra pen-up,
+> and the pen stays perpendicular. §1.2's "arm 97 cannot fly to it" is still
+> true of a STANDALONE segment there, and irrelevant to an arm that never flies
+> to it because it never stops. The rest of this section is kept as the record
+> of what was true before that.
+
 | stroke | span | metres | reason |
 |---|---|---:|---|
 | 26 | s[0.6213, 0.7571] | 0.0497 | arm 2 certifies to 0.6213 and arm 71 from 0.7571; **arm 97 can ink the gap and cannot fly to it** (§1.2) |

@@ -291,23 +291,41 @@ def test_flag_on_rescues_a_donut_stroke(final6):
     assert tilted["tip_err"] < 2e-3
 
 
-def test_strict_gates_are_not_a_plan_stroke_option(final6):
-    """A NEGATIVE result worth pinning: `margin_gate` reaches the tilt planner
-    and NOT the shipping pipeline, whose gates are module constants
-    (`pwl.MARGIN_GATE`, `pwl.SIGMA_GATE`).  Anything that wants to compare
-    flat against tilted at a strict gate has to go through `tilt.plan_adaptive`
-    for both sides, which is what the study does — asking `plan_stroke` for a
-    0.30 margin silently gets a 0.15 one."""
+def test_strict_gates_reach_plan_stroke(final6):
+    """`margin_gate` in `opts` used to be accepted and SILENTLY IGNORED — the
+    band search and the certification chase both read `pwl.MARGIN_GATE` off the
+    module — so "plan this stroke at the strict comfort gate" was a question
+    the shipping entry point could not be asked, and the version of this test
+    that shipped pinned the bug rather than the behaviour.  It now reaches all
+    three places a gate has to arrive: the band DP, the 5 mm chase, and the
+    independent validator.
+
+    The arm-2 donut arc is the witness.  At the permissive gate it certifies
+    flat with 0.158 rad of margin; asked for 0.30 it must SPLIT rather than
+    hand back the 0.158 plan with a strict label on it."""
     from aris_sixarm.metrics import GATE_MARGIN
     spec = final6[2]
     th = np.linspace(np.deg2rad(170), np.deg2rad(240), 70)
     poly = np.column_stack([1.2768 + 0.13 * np.cos(th),
                             1.2572 + 0.13 * np.sin(th)])
-    r = stroke_api.plan_stroke(poly, spec,
-                               dict(ds_lattice=0.008, margin_gate=GATE_MARGIN))
-    assert r["status"] == "ok"
-    assert r["min_margin"] < GATE_MARGIN          # the option was ignored
-    strict = tilt.plan_adaptive(poly, spec, 0.0,
+    loose = stroke_api.plan_stroke(poly, spec, dict(ds_lattice=0.008))
+    assert loose["status"] == "ok"
+    assert loose["min_margin"] < GATE_MARGIN      # the stroke IS the witness
+
+    strict = stroke_api.plan_stroke(
+        poly, spec, dict(ds_lattice=0.008, margin_gate=GATE_MARGIN))
+    assert strict["status"] == "split"            # honoured, not ignored
+    if strict.get("head") is not None:
+        assert strict["head"]["min_margin"] >= GATE_MARGIN - 1e-9
+
+    # the same question through the tilt planner, which always could ask it
+    tilted = tilt.plan_adaptive(poly, spec, 0.0,
                                 opts=dict(ds_lattice=0.008,
                                           margin_gate=GATE_MARGIN))
-    assert strict["status"] == "split"            # ... and honoured here
+    assert tilted["status"] == "split"
+
+    # and a gate the stroke DOES meet still certifies, so the plumbing is a
+    # gate and not a blanket refusal
+    ok = stroke_api.plan_stroke(
+        poly, spec, dict(ds_lattice=0.008, margin_gate=0.15))
+    assert ok["status"] == "ok" and ok["min_margin"] >= 0.15

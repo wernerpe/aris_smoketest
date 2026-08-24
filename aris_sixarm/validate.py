@@ -10,6 +10,8 @@ the clock) and re-derives every invariant from scratch:
 
   * FK the pen tip through `frames.fk` + the arm's own base transform and
     compare it with the stroke that was requested (< 2 mm);
+  * re-derive the pen's LEAN from the same FK and check it against the cone the
+    material allows (`tilt_max_deg`, default 0 = perpendicular);
   * recompute the joint margin and sigma_min from the configurations, never
     reading a planner field;
   * check continuity, the FR3 joint limits, paper clearance and the inverted
@@ -40,6 +42,11 @@ from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, fk_many,
 from .metrics import sigma_min_many as _sigma_min_many, tip_jacobian_many
 
 TIP_TOL = 2e-3           # m, pen tip must stay on the commanded curve
+CONE_GATE = 0.0          # deg, pen lean from vertical the plan may use
+CONE_EPS_DEG = 1e-6      # deg, float slack on the cone.  A PERPENDICULAR plan
+# measures 6e-11 deg of lean over the whole CSAIL corpus (arctan2, not arccos —
+# see `_pen_lean_deg`), so 1e-6 is five orders of magnitude of headroom above
+# the noise and still refuses a lean no artist would call perpendicular.
 MARGIN_GATE = 0.15       # rad, joint-limit comfort (planner.HARD_MARGIN)
 SIGMA_GATE = 0.10        # pen-tip Jacobian sigma_min (pwl.SIGMA_GATE)
 JUMP_GATE = 0.35         # rad, ||dq||_inf between dense samples
@@ -63,10 +70,26 @@ def _dist_to_polyline(P, poly):
     return np.linalg.norm(P[:, None, :] - proj, axis=2).min(axis=1)
 
 
+def _pen_lean_deg(T, Rwb):
+    """Per-sample pen lean from vertical IN WORLD (deg), from FK'd tool frames.
+
+    ARCTAN2, NEVER ARCCOS.  `arccos` of the down-component is ill-conditioned
+    exactly where a perpendicular plan lives — it reports ~1e-8 rad of phantom
+    lean for a pen that is vertical to the last bit of double precision, which
+    is enough to fail a zero-degree cone.  The two-argument arctangent of
+    (sideways, down) is conditioned the other way round and measures the same
+    angle.  Re-derived here from `frames.fk` and the arm's own base transform:
+    the plan's own `tilt`/`max_lean_deg` fields are never read.
+    """
+    axis_w = (Rwb @ np.asarray(T, float)[:, :3, 2].T).T     # pen axis in world
+    return np.rad2deg(np.arctan2(np.linalg.norm(axis_w[:, :2], axis=1),
+                                 -axis_w[:, 2]))
+
+
 def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
                   tip_tol=TIP_TOL, margin_gate=MARGIN_GATE,
                   sigma_gate=SIGMA_GATE, jump=JUMP_GATE, qd_max=QD_MAX,
-                  clearance=True, eps=EPS):
+                  clearance=True, eps=EPS, tilt_max_deg=CONE_GATE):
     """Re-derive every invariant of a planned stroke.  Never raises.
 
     Args:
@@ -81,6 +104,17 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
                checks.
       h_inv    inverted-mount height, passed to `spec.T_world_base`.
       pen_ext  pen length used by the plan (tip = TCP + pen_ext along tool z).
+      tilt_max_deg
+               the cone the MATERIAL allows the pen to lean inside, in degrees.
+               0 (the default) is the perpendicular pen the planner has always
+               commanded, so every plan written before pen tilt existed is
+               checked against the pose it was actually asked for.  A tilted
+               plan (`aris_sixarm/tilt.py`) is validated against the cone it was
+               granted and against nothing else: the tip check above is already
+               orientation-aware — `tip_pos_many` steps `pen_ext` along the tool
+               z of the FK'd pose — so a leaning pen that draws the curve passes
+               it, and WITHOUT this gate nothing downstream would ever notice a
+               plan that leaned 40 degrees to get there.
 
     Returns dict:
       ok           no violations
@@ -100,7 +134,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
 
     worst = dict(tip_err=float("nan"), min_margin=float("nan"),
                  min_sigma=float("nan"), max_step=0.0, max_qd_frac=0.0,
-                 min_chain_z=float("nan"))
+                 min_chain_z=float("nan"), max_lean_deg=float("nan"))
     try:
         qs = np.asarray(qs, float)
         if qs.ndim != 2 or qs.shape[1] != 7 or len(qs) == 0:
@@ -122,8 +156,18 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
         Twb = spec.T_world_base() if h_inv is None else spec.T_world_base(h_inv)
         Rwb, twb = Twb[:3, :3], Twb[:3, 3]
 
+        # ONE FK FOR THE WHOLE CERTIFICATE.  The tip, the pen axis and the
+        # chain points are three readings of the same forward kinematics, and
+        # this module used to call `fk_many` three times to get them (once
+        # inside `tip_pos_many`, once for the chain, once more for the frame
+        # gate's tip).  `tip_b` below is `tip_pos_many`'s body verbatim, so the
+        # numbers are bit-identical to the three-call version — pinned by
+        # tests/test_validate_cone.py::test_tip_matches_tip_pos_many.
+        T_fk, P_fk = fk_many(qs)
+        tip_b = T_fk[:, :3, 3] + T_fk[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
+
         # ---- 1. the pen drew the stroke -----------------------------------
-        tip_w = tip_pos_many(qs, pen_ext) @ Rwb.T + twb
+        tip_w = tip_b @ Rwb.T + twb
         if len(pts) == M:
             err = np.hypot(np.linalg.norm(tip_w[:, :2] - pts, axis=1), tip_w[:, 2])
         else:
@@ -134,6 +178,21 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
         worst["tip_err"] = float(err.max())
         for i in np.flatnonzero(err > tip_tol):
             add("tip_off_curve", i, err[i], tip_tol)
+
+        # ---- 1b. the pen stayed inside the cone the material allows -------
+        # THE TIP CHECK CANNOT SEE THIS.  `tip_pos_many` steps `pen_ext` along
+        # the tool z of the FK'd pose, so it is orientation-agnostic by
+        # construction: a pen leaning 40 degrees that still puts its tip on the
+        # curve passes section 1 exactly as a perpendicular one does.  Every
+        # gate downstream is likewise about the CHAIN, not the tool.  So until
+        # this gate existed, "the plan kept the lean the artist allowed" was the
+        # one invariant of a tilted plan that nothing re-derived — and it is the
+        # invariant the whole feature rests on.
+        lean = _pen_lean_deg(T_fk, Rwb)
+        worst["max_lean_deg"] = float(lean.max())
+        cone = float(tilt_max_deg)
+        for i in np.flatnonzero(lean > cone + CONE_EPS_DEG):
+            add("pen_cone", i, lean[i], cone)
 
         # ---- 2. joint limits, margin, controllability ---------------------
         lo = FR3_MIN - qs                       # > 0 => below the lower limit
@@ -161,7 +220,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
 
         # ---- 4. clearance: paper, and the inverted arms' own boom ----------
         if clearance:
-            _, p = fk_many(qs)                       # (M,9,3) chain points
+            p = P_fk                                 # (M,9,3) chain points
             pw = p @ Rwb.T + twb
             z = pw[:, 1:, 2].min(axis=1)             # lowest link, per sample
             worst["min_chain_z"] = float(z.min())
@@ -175,8 +234,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
             boxes = spec.static_obstacles() \
                 if hasattr(spec, "static_obstacles") else []
             if boxes:
-                tips = tip_pos_many(qs, pen_ext) @ Rwb.T + twb
-                P10 = np.concatenate([pw, tips[:, None, :]], axis=1)
+                P10 = np.concatenate([pw, tip_w[:, None, :]], axis=1)
                 c = rig_final.chain_static_clearance(P10, boxes)
                 worst["min_frame_clearance"] = float(c.min())
                 for i in np.flatnonzero(c < rig_final.STATIC_MARGIN - eps):
