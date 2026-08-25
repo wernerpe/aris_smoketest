@@ -15,6 +15,20 @@ strict-GO 536 -> **810 cells (+51.1 %)**, max GO radius 0.75 -> **0.86 m**,
 median margin 0.528 -> 0.624.  Certified strokes plan in ~80-280 ms with the
 phi ring (`scripts/lateral_eval.py`, `out/lateral_eval.json`).
 
+### The 22-deg holder's CAD arrived (2026-08-25) and it does NOT agree
+
+`raw_slack_file_dump/"Pen holder all parts 2026.08.19"/` — 8 printed parts as
+STL + SLDPRT, millimetres, **no assembly file**.  Machine-readable in
+`rig_final.PENHOLDER22`; extracted by
+`scripts/extract_penholder22_meshes.py`; drawn in `assets/proposed_rig/`.
+
+| Quantity | CAD says | Planner says | Status |
+|---|---|---|---|
+| Pen lean out of tool z | **23.00°**, measured as the clocking of the mount post's flats/sockets about the post axis (the file is named "22 deg") | **45.00°** = atan2(0.110, 0.110) | **OPEN.** Transform unchanged (gate-validated); the meshes are drawn along the planner's ray and the 22° of difference is parked in the fingertip cradle, which is NOT in the delivery.  If the cradle is square to the hand, the built tip is ~0.047 m lateral, not 0.110 |
+| Grip -> nose | **55.1 mm** (post axis crosses the bore 55.1 mm behind the nose) | tip is 155.6 mm from the TCP | **OPEN.** needs **100.5 mm** of ⌀7 graphite past the nose (FINAL_RIG.md's older estimate was ~90 mm) |
+| Mount | 26 x 26 x 50 mm square post, 18 x 18 x 7 mm socket each end | fingers at half-width 28.5 mm | **CONFIRMS** the existing number: 50 + 2 x 3.5 = 57 mm = the jaw gap |
+| Tool shape | a STRAIGHT tube from the grip to the tip | an **L** (bracket along hand x, then pen along tool z) | **OPEN.** the straight diagonal runs up to 55 mm from either capsule axis, 5 mm outside their r = 0.05, so the L is not an envelope for it — the proposed-rig URDF carries BOTH |
+
 ## FINAL RIG values (2026-08-21) — the drawing decides
 
 The user's final-rig files (`raw_slack_file_dump/`: the "3 arms, 1 up, 1 side,

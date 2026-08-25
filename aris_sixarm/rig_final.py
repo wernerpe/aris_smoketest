@@ -276,6 +276,171 @@ TOOL = dict(
 )
 
 
+# ===========================================================================
+# THE 22-DEG CLUTCH HOLDER AS CAD (2026-08-25 delivery)
+# ===========================================================================
+# Source: raw_slack_file_dump/"Pen holder all parts 2026.08.19"/ — eight
+# printed parts as STL + SLDPRT pairs and NO ASSEMBLY FILE (no .SLDASM), so
+# the mutual placement of the parts is INFERRED, not read.  Units in the STLs
+# are MILLIMETRES (housing 80.1 x 33.78 x 50.0 mm); everything below is metres.
+#
+# WHAT THE HOUSING ACTUALLY IS (measured, not guessed — the numbers come out
+# of `scripts/extract_penholder22_meshes.py`, which prints every one of them):
+#
+#   * a BARREL along its own +X with a through bore: OD 27.2 mm, bore 21.1 mm
+#     over x in [0, 0.036], necking to 17.0 mm at the nose x = 0 (which is
+#     exactly the clutch's 17.07 mm OD, so the clutch seats in the nose and
+#     THE PEN LEAVES AT x = 0);
+#   * an external THREAD at the far end, x in [0.072, 0.0801], OD 28.5 mm,
+#     onto which "pen holder cap v20250903" screws (its threaded recess is
+#     6 mm deep, matching);
+#   * a MOUNT POST across the barrel: a 26 x 26 mm square section, 50 mm long
+#     along the housing's own +Z, centred on the bore at x = 0.05513, with an
+#     18 x 18 x 7 mm square socket in each end.
+#
+# THE POST IS THE GRIP, AND IT PINS THE MOUNT AXIS.  50 mm of post plus 2 x
+# 3.5 mm of socket engagement is 57 mm = 2 x the 28.5 mm finger half-width the
+# 10-deg build's CAD gave (`gen_*_urdf.FINGER_FIX`), and the 10-deg holder mesh
+# spans exactly +/-0.02850 in y_hand.  So the post axis is the FINGER TRAVEL
+# axis, y_hand, and the grip centre is the point where the post axis crosses
+# the bore.
+#
+# "22 DEG" IS A CLOCKING, NOT A TILT — AND IT MEASURES 23.00.  The post's four
+# flats (and its sockets) are rotated 23.00 +/- 0.00 deg about the POST axis
+# relative to the bore direction; the post axis itself is exactly perpendicular
+# to the bore.  Mounted on the hand, that clocking is a rotation about y_hand,
+# i.e. the pen leans 23 deg out of tool-z — which is the same 23.0 deg
+# docs/FINAL_RIG.md already recorded for this build and already flagged against
+# the file's "22 deg" name.
+#
+# ...AND 23 DEG IS NOT WHAT THE PLANNER USES.  `frames`' lateral tool puts the
+# tip at TCP + R @ (0.110, 0, 0.110): a lean of 45 deg, 0.15556 m from the TCP.
+# The planning transform is GATE-VALIDATED and stays truth (`PEN_LAT_HOLDER`,
+# docs/DECISIONS.md), so the holder is DRAWN along the planner's ray and the
+# 22 deg of difference is left where it physically has to live — in the
+# fingertip cradle, whose geometry is not in this delivery.  Two consequences
+# Pete has to decide about, both flagged in docs/LAYOUT_STUDY.md:
+#   1. if the cradle is square to the hand, the built tip lands at 23 deg,
+#      i.e. ~0.047 m lateral at this reach, not 0.110;
+#   2. the grip-to-nose length is 55.13 mm, so reaching 155.56 mm needs
+#      100.4 mm of graphite protruding past the nose.
+PENHOLDER22 = dict(
+    parent="panda_hand",
+    source='raw_slack_file_dump/"Pen holder all parts 2026.08.19"/ '
+           '(STL, mm, no SLDASM — placement inferred; see docstring above)',
+    # --- housing, in its own frame (metres) ---
+    bore_yz=(0.016900, 0.025000),     # bore axis, housing (y, z)
+    nose_x=0.0,                       # the pen leaves the housing here
+    thread_x=(0.072000, 0.080100),    # external thread for the cap
+    barrel_r=0.013585,                # measured max OD/2 over x in [0, 0.036]
+    thread_r=0.014272,                # measured max OD/2 over the thread
+    cap_end_x=0.085100,               # the cap's closed face, along the bore
+    post_xy=(0.055099, 0.016894),     # post axis, housing (x, y)
+    post_z=(0.0, 0.050000),           # post extent along the housing's +Z
+    post_side=0.026000,               # square section
+    post_clock=0.401426,              # 23.00 deg, MEASURED (file says "22")
+    lead_r=0.003500,                  # clutch bore/2 = the graphite stick
+    lead_r_coll=0.005000,             # conservative envelope for the stick
+    # --- the cap, in its own frame ---
+    cap_xy=(0.018000, 0.018000),      # bore axis in the cap's own (x, y)
+    cap_seat_z=0.005000,              # recess bottom: meets the housing end
+    # --- the decimated, hand-frame visual meshes (see extract script) ---
+    visual_meshes=("meshes/penholder22_housing_hand.obj",
+                   "meshes/penholder22_cap_hand.obj"),
+    # --- THE COLLISION ENVELOPE: three cylinders COAXIAL WITH THE BORE, as
+    # (x0, x1, radius) in the housing's own frame.  Each radius is the largest
+    # distance any housing OR cap vertex reaches from the bore axis inside
+    # that band — raw CAD and decimated mesh both — so the union encloses the
+    # visual by construction, and the extract script re-proves it every run.
+    # A tighter box for the mount post was tried and REJECTED: a rotated
+    # square's x-extent grows with its side, so enlarging it to swallow the
+    # reinforcing gussets at x ~ 0.036 only drags in more bare barrel.  The
+    # middle cylinder is fat (r 0.030) because the 50 mm post genuinely
+    # reaches that far off the bore at its ends.
+    env_cylinders=((-0.001000, 0.034000, 0.013600),
+                   (0.034000, 0.074000, 0.030100),
+                   (0.074000, 0.085500, 0.018100)),
+    # --- parts DELIBERATELY not placed ---
+    omitted=("pen holder for clutches v1.00", "pen clutch - Creatcolor "
+             "monolith graphite v1.01", "pen holder spacer 5 mm",
+             "pen holder spacer 10 mm", "9657K26_Compression Spring",
+             "pen clutch - extractor"),
+    omitted_why="the first five live INSIDE the 21.1 mm bore and are invisible "
+                "from outside; their axial order is not determined without an "
+                "assembly file, and the spring is a 37 MB coil mesh.  The "
+                "extractor is a bench tool, not part of the mounted holder.",
+)
+
+
+def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
+    """(4,4) panda_hand <- housing placement, and the same for the cap.
+
+    -> (T_hand_housing, T_hand_cap, nose_along_bore, tip_along_bore).
+
+    THE PLACEMENT IS INFERRED (no assembly file).  Three assumptions, each of
+    them the only one the parts support:
+
+      1. the mount post's axis is y_hand — the fingers plug into its two end
+         sockets, and 50 mm of post + 2 x 3.5 mm engagement is exactly the
+         57 mm jaw gap the 28.5 mm finger half-width gives;
+      2. the grip centre — where the post axis crosses the bore — sits at the
+         hand TCP, the stock grasp point;
+      3. the bore points along the PLANNER's ray from the TCP to the pen tip,
+         normalize(pen_lat, 0, pen_ext), rather than along the housing's own
+         23 deg clocking.  Assumption 3 is what makes the drawing consistent
+         with the gate-validated tool transform; see PENHOLDER22's docstring
+         for what it costs.
+    """
+    d = np.array([float(pen_lat), 0.0, float(pen_ext)])
+    reach = float(np.linalg.norm(d))
+    u = d / reach                                 # TCP -> tip, unit
+    P = PENHOLDER22
+    Xh = -u                                       # housing +X points AWAY
+    Zh = np.array([0.0, 1.0, 0.0])                # post axis == finger travel
+    Yh = np.cross(Zh, Xh)
+    R = np.column_stack([Xh, Yh, Zh])
+    grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
+    tcp = np.array([0.0, 0.0, float(d_hand_tcp)])
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = tcp - R @ grip
+    # the cap: its +Z runs back along the housing's -X, its recess bottom
+    # (cap z = cap_seat_z) seated on the housing's threaded end face
+    Rc = np.array([[0.0, 0.0, -1.0],              # housing <- cap
+                   [1.0, 0.0, 0.0],
+                   [0.0, -1.0, 0.0]])
+    Tc = np.eye(4)
+    Tc[:3, :3] = Rc
+    Tc[:3, 3] = np.array([P["cap_end_x"], P["bore_yz"][0], P["bore_yz"][1]]) \
+        - Rc @ np.array([P["cap_xy"][0], P["cap_xy"][1], 0.0])
+    return T, T @ Tc, P["post_xy"][0] - P["nose_x"], reach
+
+
+def penholder22_collision(pen_ext, pen_lat, d_hand_tcp):
+    """The holder's CONSERVATIVE primitive envelope, in the panda_hand frame.
+
+    -> [("cylinder", T (4,4), (radius, length))], the cylinder's axis being
+    its own frame's z, as URDF wants it.
+
+    A 7 000-triangle concave printed part is not a collision geometry, and the
+    final rig's convention for exactly this problem is a primitive envelope
+    (`TOOL["collision"]`, one cylinder).  This one is three coaxial cylinders
+    — `PENHOLDER22["env_cylinders"]`, whose radii are measured maxima, not
+    guesses — and `scripts/extract_penholder22_meshes.py` re-proves on every
+    run that no visual vertex escapes them.
+    """
+    T_h, _, _, _ = penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp)
+    by, bz = PENHOLDER22["bore_yz"]
+    out = []
+    for x0, x1, r in PENHOLDER22["env_cylinders"]:
+        T = np.eye(4)
+        T[:3, 3] = (0.5 * (x0 + x1), by, bz)
+        # the cylinder's own z must run along the housing's x
+        T[:3, :3] = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
+        out.append(("cylinder", T_h @ T, (r, x1 - x0)))
+    return out
+
+
 def _point_box_d(P, lo, hi):
     """(...,3) points vs one box -> (...,) distance (0 inside)."""
     d = np.maximum(np.maximum(lo - P, P - hi), 0.0)

@@ -331,6 +331,101 @@ neighbours' pen height.
 The TOOL alone is worth +8.98 pp on the unchanged rig; the LAYOUT is worth
 most of the rest.
 
+## 7a. The URDF
+
+`assets/proposed_rig/installation.urdf` is this layout as a robot model: six
+namespaced Franka arms welded at `layout.FLEET_PROPOSED`'s base transforms
+(inverted, h = 0.85), their base plates and booms, the paper web, and the
+LATERAL pen holder on every hand as fixed links — `tcp` → `pen_bracket`
+(0.110 along hand x) → `pen_body` (0.110 along tool z) → a `pen_tip` frame.
+`environment.urdf` is the same file without the arms.
+
+Both are GENERATED, by `scripts/gen_proposed_rig_urdf.py`, from `layout.py`,
+`mounts.py`, `rig_final6.py` and `frames.py`; nothing geometric is typed into
+the generator, and `tests/test_proposed_rig_urdf.py` fails if the committed
+file is stale.  Three things are worth knowing about it:
+
+- **FR3 limits, not Panda.**  The vendored `panda_arm_hand.urdf` carries Panda
+  position/velocity limits — a different robot.  Every revolute limit is
+  rewritten from `frames.FR3_MIN/MAX`, `QD_MAX` and `TAU_MAX`.  The Panda
+  `drake:acceleration` hint is dropped rather than restated: this repo has no
+  FR3 source for it.
+- **The ceiling grid is a LEVEL, not a structure.**  §6a says the grid's
+  cross-members are unmodelled and the study gated nothing against them, so
+  `ceiling_grid_ref` carries visual geometry only and no collision geometry.
+  The booms are the only ceiling steel in the file.
+- **The boom is drawn round and gated square.**  `mounts.arm_mount_boxes`
+  carries the r = 0.10 cylinder as its circumscribed square column so the box
+  machinery stays conservative; the URDF writes that square as the boom's
+  collision geometry (what was certified) and the cylinder as its visual
+  (what gets built).  Each arm's own plate and boom are collision-filtered out
+  of that arm, mirroring `mounts.obstacles_for`.
+
+Verification, two independent routes, both reporting max pen-tip error ~1 nm
+against `frames`' FK composed with the fleet base transform: the test file
+walks the URDF's own chain in pure XML, and `scripts/check_proposed_rig_urdf.py`
+loads it in pydrake (station venv).
+
+### 7a.1 The real pen holder, and what it does not agree with
+
+The 2026-08-19 delivery (`raw_slack_file_dump/"Pen holder all parts
+2026.08.19"/`, 8 printed parts as STL + SLDPRT, **no assembly file**) is now
+the URDF's tool VISUAL: `scripts/extract_penholder22_meshes.py` decimates the
+housing and the cap, scales them from millimetres, bakes
+`rig_final.penholder22_T_hand` into the vertices and writes
+`assets/proposed_rig/meshes/penholder22_*_hand.obj`.  The internal stack (the
+clutch, the clutch holder, both spacers, the spring) is omitted: it lives
+inside the 21.1 mm bore, is invisible from outside, and its axial order is not
+determined without an assembly.  The extractor **re-measures** every constant
+in `rig_final.PENHOLDER22` from the CAD on each run and fails if the two ever
+part company.
+
+What the housing is, measured: a barrel with a 21.1 mm through bore (necking
+to 17.0 mm at the nose, exactly the clutch's OD, so the pen leaves at the
+nose), an external thread at the far end for the cap, and a **26 x 26 x 50 mm
+square mount post across the barrel with an 18 x 18 x 7 mm socket in each
+end**.  50 mm of post plus 2 x 3.5 mm of socket engagement is 57 mm — exactly
+the jaw gap of the 28.5 mm finger half-width the 10-degree build's CAD gave —
+so the post is what the fingers hold, and its axis is y_hand.
+
+**The "22 deg" verdict.**  It is a CLOCKING, not a tilt, and it measures
+**23.00 degrees**: the post's flats and sockets are rotated 23.00 deg about
+the POST axis relative to the bore, while the post axis itself is exactly
+perpendicular to the bore.  Mounted, that clocking is a lean about y_hand —
+the same 23.0 deg docs/FINAL_RIG.md already recorded for this build, and the
+same disagreement with the file's name.
+
+**Two things Pete has to rule on, neither of which this URDF decides:**
+
+1. **23 deg of CAD vs 45 deg of planner.**  `frames`' lateral tool puts the
+   tip at TCP + R @ (0.110, 0, 0.110) — a 45-degree lean.  The transform is
+   gate-validated and stays truth, so the meshes are drawn along the
+   planner's ray and the missing 22 deg is parked in the fingertip cradle,
+   whose geometry is not in the delivery.  If that cradle turns out to be
+   square to the hand, the built tip lands at 23 deg — about **0.047 m
+   lateral at this reach, not 0.110** — and either the constant or the
+   housing has to move.
+2. **100.5 mm of graphite.**  Grip-to-nose is 55.1 mm and the planning tip is
+   155.6 mm from the TCP, so the stick has to protrude 100.5 mm past the
+   nose.  (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
+   reading, so this is not new — but it is a lot of unsupported 7 mm
+   graphite.)
+
+Collision for the holder is NOT the mesh: three cylinders coaxial with the
+bore (`rig_final.penholder22_collision`), whose radii are the largest distance
+any vertex of either mesh reaches from that axis inside its band, so the union
+encloses the visual by construction — 0 of 6 202 vertices outside, checked on
+every extractor run and again in `tests/test_proposed_rig_urdf.py`.  A tighter
+rotated box for the post was tried and rejected: a rotated square's x-extent
+grows with its side, so enlarging it to swallow the reinforcing gussets only
+drags in more bare barrel.  The study's own L-shaped two-capsule envelope
+(`STATIC_CAPSULES_LAT`) stays in the file as well, collision-only, so anything
+checking this URDF is checking at least what the planner certified — and the
+union of the two is conservative for both models, which matters because **the
+real holder is a straight tube and the planner's tool model is an L**: the
+straight diagonal from TCP to tip runs up to 55 mm from either capsule axis,
+5 mm outside their r = 0.05.
+
 ## 8. Reproduce
 
 ```
