@@ -38,7 +38,8 @@ docstring for why that is not a stylistic choice.
 import numpy as np
 
 from . import ik, planner
-from .frames import PEN_EXT, QD_MAX, joint_margin, rotx, tip_pos_many
+from .frames import (PEN_EXT, QD_MAX, joint_margin, rotx, rotz, tip_pos_many,
+                     lat_of, tool_offset)
 from .metrics import sigma_min as _sigma_min, tip_jacobian_many
 from .pacing import dq_ds
 
@@ -86,25 +87,26 @@ def arc_length(points):
     return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
 
 
-def pen_down_poses(pts_xy, Twb_inv, pen_ext):
+def pen_down_poses(pts_xy, Twb_inv, pen_ext, phi=0.0, pen_lat=None):
     """(M,4,4) base-frame hand-TCP poses for a pen-down stroke.
 
-    The pen convention lives here and nowhere else: R = rotx(pi) points tool z
-    straight down with yaw 0 (planner.py explains why yaw is not a free axis),
-    and the tip sits `pen_ext` beyond the TCP along that z — so the TCP is
-    `pen_ext` ABOVE the paper point it is drawing.
+    The pen convention: R = rotz(phi) @ rotx(pi) points tool z straight down
+    (planner.py explains why phi is pinned to 0 for the INLINE pen, where it
+    aliases with q7), and the tip sits at TCP + R @ (pen_lat, 0, pen_ext) —
+    so the TCP is `pen_ext` ABOVE and `pen_lat` BESIDE the paper point it is
+    drawing, the lateral direction chosen by phi.
     """
     p = np.asarray(pts_xy, float)
-    R = rotx(np.pi)
+    R = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)
     T = np.tile(np.eye(4), (len(p), 1, 1))
     T[:, :3, :3] = R
     T[:, :3, 3] = np.column_stack([p[:, 0], p[:, 1], np.zeros(len(p))]) \
-        - pen_ext * R[:, 2]
+        - R @ tool_offset(pen_ext, pen_lat)
     return np.asarray(Twb_inv, float) @ T
 
 
 def chase_cc(poses, q7, q_seed, pen_ext=PEN_EXT, margin_gate=None,
-             sigma_gate=None, jump_gate=None, fallback=False):
+             sigma_gate=None, jump_gate=None, fallback=False, pen_lat=None):
     """Walk a stroke with case-consistent IK.  THE feasibility test of the
     project: search on the grid, certify against the real kinematics.
 
@@ -166,7 +168,8 @@ def chase_cc(poses, q7, q_seed, pen_ext=PEN_EXT, margin_gate=None,
         # analytic Jacobian: the chase is sequential (each solve is seeded by
         # the last), so this is the one place a per-sample call still pays —
         # but it need not be 14 forward kinematics.
-        s = _sigma_min(tip_jacobian_many(q[None], pen_ext=pen_ext)[0])
+        s = _sigma_min(tip_jacobian_many(q[None], pen_ext=pen_ext,
+                                         pen_lat=pen_lat)[0])
         if sigma_gate is not None and s < sigma_gate:
             stop, stop_i = "sigma", n
             break
@@ -686,8 +689,11 @@ class Corridor:
         self.sigma_gate, self.margin_gate, self.jump = sigma_gate, margin_gate, jump
         self.exact, self.calls, self.samples = exact, 0, 0
         self.pen_ext, self.pts = lat["pen_ext"], lat["pts"]
+        self.pen_lat = float(lat.get("pen_lat", 0.0))
+        self.phi = float(lat.get("phi", 0.0))
         self._poses = pen_down_poses(lat["pts"], np.linalg.inv(lat["Twb"]),
-                                     lat["pen_ext"])
+                                     lat["pen_ext"], phi=self.phi,
+                                     pen_lat=self.pen_lat)
         self._jidx = np.arange(free.shape[1])
 
     def _grid_ok(self, ii, jf):
@@ -707,7 +713,8 @@ class Corridor:
         self.calls += 1
         self.samples += len(ii)
         return chase_cc(self._poses[ii], np.interp(jf, self._jidx, self.q7s), q,
-                        pen_ext=self.pen_ext, margin_gate=self.margin_gate,
+                        pen_ext=self.pen_ext, pen_lat=self.pen_lat,
+                        margin_gate=self.margin_gate,
                         sigma_gate=self.sigma_gate, jump_gate=self.jump)["ok"]
 
     def __call__(self, i0, j0, i1, j1):
@@ -902,7 +909,8 @@ def backout(stroke_pts, spec, knots, lat=None, ds=0.005, sheet=None, q_seed=None
     if setup["q_seed"] is None:
         return dict(ok=False, fails=len(setup["pts"]), fallbacks=0, cut_index=-1)
     ch = chase_cc(setup["poses"], setup["q7"], setup["q_seed"],
-                  pen_ext=setup["pen_ext"], fallback=True)
+                  pen_ext=setup["pen_ext"], pen_lat=setup["pen_lat"],
+                  fallback=True)
     if not ch["n"]:
         return dict(ok=False, fails=ch["fails"], fallbacks=ch["fallbacks"],
                     cut_index=-1)
@@ -910,7 +918,8 @@ def backout(stroke_pts, spec, knots, lat=None, ds=0.005, sheet=None, q_seed=None
 
 
 def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
-                 q_seed=None, h_inv=None, pen_ext=None):
+                 q_seed=None, h_inv=None, pen_ext=None, phi=None,
+                 pen_lat=None):
     """Everything a chase needs before it can take its first step.
 
     Resamples the stroke at `ds` METRES, reads the redundancy plan off
@@ -931,9 +940,15 @@ def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
     Twb = lat["Twb"] if lat is not None else spec.T_world_base(
         H_INV_DEFAULT if h_inv is None else h_inv)
     pen_ext = (lat["pen_ext"] if lat is not None else PEN_EXT) if pen_ext is None else pen_ext
+    if phi is None:
+        phi = float(lat.get("phi", 0.0)) if lat is not None else 0.0
+    if pen_lat is None:
+        pen_lat = float(lat.get("pen_lat", 0.0)) if lat is not None \
+            else lat_of(None)
     pts, s = planner.resample(stroke_pts, ds)
     q7 = np.atleast_1d(np.asarray(q7_of_s(s), float))
-    poses = pen_down_poses(pts, np.linalg.inv(Twb), pen_ext)
+    poses = pen_down_poses(pts, np.linalg.inv(Twb), pen_ext, phi=phi,
+                           pen_lat=pen_lat)
 
     if q_seed is None and sheet is not None and lat is not None:
         j0 = int(np.argmin(np.abs(lat["q7s"] - q7[0])))
@@ -945,6 +960,7 @@ def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
         cand = ik.solve(poses[0], q7[0], spec.q_seed)
         q_seed = max(cand, key=joint_margin) if cand else None
     return dict(pts=pts, s=s, q7=q7, poses=poses, Twb=Twb, pen_ext=pen_ext,
+                pen_lat=float(pen_lat), phi=float(phi),
                 ds=ds, arc_len=arc_length(stroke_pts), q_seed=q_seed)
 
 
@@ -960,7 +976,8 @@ def chase_report(ch, setup, jump=planner.JUMP_THRESH):
     """
     qs, n = ch["qs"], ch["n"]
     pts, Twb, pen_ext = setup["pts"], setup["Twb"], setup["pen_ext"]
-    tip = tip_pos_many(qs, pen_ext) @ Twb[:3, :3].T + Twb[:3, 3]
+    tip = tip_pos_many(qs, pen_ext, setup.get("pen_lat", 0.0)) \
+        @ Twb[:3, :3].T + Twb[:3, 3]
     err = np.hypot(np.linalg.norm(tip[:, :2] - pts[:n], axis=1), tip[:, 2])
     sig, mar = ch["sigmas"], ch["margins"]
     dq = np.abs(np.diff(qs, axis=0))

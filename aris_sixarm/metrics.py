@@ -12,38 +12,52 @@ guarantee at the last Nm.
 """
 import numpy as np
 
-from .frames import TAU_MAX, tip_pos, PEN_EXT
+from .frames import (TAU_MAX, tip_pos, tool_offset, joint_axes_many, lat_of,
+                     PEN_EXT)
 
 GATE_MARGIN = 0.30   # rad, strict joint-limit comfort (IKA)
 GATE_SIGMA = 0.14    # sigma_min force-sensing floor (ika_plan dual mask)
 
 
-def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT):
+def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT, pen_lat=None):
     """3x7 position Jacobian of the pen tip (central finite differences)."""
     J = np.zeros((3, 7))
     for j in range(7):
         dq = np.zeros(7)
         dq[j] = eps
-        J[:, j] = (tip_pos(q + dq, pen_ext) - tip_pos(q - dq, pen_ext)) / (2 * eps)
+        J[:, j] = (tip_pos(q + dq, pen_ext, pen_lat)
+                   - tip_pos(q - dq, pen_ext, pen_lat)) / (2 * eps)
     return J
 
 
-def tip_jacobian_many(qs, pen_ext=PEN_EXT):
+def tip_jacobian_many(qs, pen_ext=PEN_EXT, pen_lat=None):
     """`tip_jacobian` for a whole array. (N,7) -> (N,3,7).
 
-    Where the extension has the batch entry points this is the ANALYTIC
-    geometric Jacobian, z_i x (p_tip - p_i), not a finite difference — exact,
-    and 14 forward kinematics per configuration cheaper.  The two agree to
-    ~3e-10, i.e. to the central differences' own truncation error, and
-    `tip_jacobian` above stays the reference the fast path is tested against
-    (tests/test_planner_robustness.py::test_analytic_tip_jacobian_matches_fd).
+    INLINE PEN (pen_lat == 0): where the extension has the batch entry points
+    this is the C++ ANALYTIC geometric Jacobian, z_i x (p_tip - p_i) — exact,
+    and 14 forward kinematics per configuration cheaper than the finite
+    differences.  The two agree to ~3e-10, i.e. to the central differences'
+    own truncation error, and `tip_jacobian` above stays the reference the
+    fast path is tested against.
+
+    LATERAL TOOL (pen_lat != 0): the C++ kernel only knows an along-z tip, so
+    the same geometric formula is evaluated in numpy from
+    `frames.joint_axes_many` — the tip is a different point rigidly attached
+    to the same link, and z_i x (p_tip - p_i) holds for ANY such point.
+    Tested against the finite differences of the lateral `tip_pos`
+    (tests/test_lateral.py).
     """
     qs = np.ascontiguousarray(np.asarray(qs, float).reshape(-1, 7))
+    lat = lat_of(pen_lat)
+    if not len(qs):
+        return np.zeros((0, 3, 7))
+    if lat != 0.0:
+        zs, ps, T = joint_axes_many(qs)
+        tip = T[:, :3, 3] + T[:, :3, :3] @ tool_offset(pen_ext, lat)
+        return np.cross(zs, tip[:, None, :] - ps).transpose(0, 2, 1)
     from . import ik                       # lazy: ik imports frames, not metrics
     if ik.has_batch():
         return ik._IK.tip_jacobian_batch(qs, float(pen_ext))
-    if not len(qs):
-        return np.zeros((0, 3, 7))
     return np.array([tip_jacobian(q, pen_ext=pen_ext) for q in qs])
 
 

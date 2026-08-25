@@ -34,7 +34,8 @@ allowed to condition on.
 import numpy as np
 
 from . import paper
-from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk
+from . import frames as _frames
+from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk, tool_offset
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import STATIC_MARGIN
 from .validate import check_pose as validate_pose, validate_plan
@@ -46,9 +47,15 @@ RADII = ((0, 1, 0.09), (1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
 # FINAL-RIG pen capsule: the holder envelope union (r 0.05), restated from
 # rig_final.PEN_R_FINAL on purpose — a test pins the two together.
 RADII_FINAL = RADII[:-1] + ((8, 9, 0.05),)
+# LATERAL HOLDER: an 11-point chain (9 FK + tip@9 + bracket corner@10) and a
+# TWO-capsule tool — bracket TCP->corner, pen corner->tip — restated from
+# rig_final.STATIC_CAPSULES_LAT on purpose; a test pins the two together.
+RADII_LAT = RADII[:-1] + ((8, 10, 0.05), (10, 9, 0.05))
 
 
 def _radii_for(fleet_dict, arms):
+    if _frames.PEN_LAT != 0.0:          # the ACTIVE tool is the lateral holder
+        return RADII_LAT
     final = any(getattr(fleet_dict[a], "rig", "sixarm") == "final" for a in arms)
     return RADII_FINAL if final else RADII
 
@@ -94,11 +101,18 @@ FRAME_STEP = 0.005                   # ...and the same for the frame gate, which
 
 
 def _chain(q, spec, h_inv, pen_ext):
-    """10 chain points of one configuration, in world.  Scalar `fk`, not the
-    batch path, so a bug in the batch kernel cannot hide here."""
+    """10 (inline) or 11 (lateral tool) chain points of one configuration, in
+    world.  Scalar `fk`, not the batch path, so a bug in the batch kernel
+    cannot hide here; the tool points are built here from the raw pose for
+    the same reason (`frames.tool_points_many` is the planner's helper)."""
     T, P = fk(np.asarray(q, float))
-    tip = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
-    P = np.vstack([P, tip])
+    off = tool_offset(pen_ext)              # ACTIVE tool decides the width
+    tip = T[:3, 3] + T[:3, :3] @ off
+    rows = [P, tip[None]]
+    if off[0] != 0.0:
+        corner = T[:3, 3] + T[:3, :3] @ np.array([off[0], 0.0, 0.0])
+        rows.append(corner[None])
+    P = np.vstack(rows)
     Twb = spec.T_world_base(h_inv)
     return P @ Twb[:3, :3].T + Twb[:3, 3]
 
@@ -174,7 +188,8 @@ def static_clearance_lb(P, boxes, step=0.02):
     hi = np.stack([b["hi"] for b in boxes])
     P = np.asarray(P, float)
     out = np.full(P.shape[:-2], np.inf)
-    for (i, j, r) in RADII_FINAL[1:]:              # skip the base column
+    radii = RADII_LAT if P.shape[-2] >= 11 else RADII_FINAL
+    for (i, j, r) in radii[1:]:                    # skip the base column
         a, b = P[..., i, :], P[..., j, :]
         L = float(np.max(np.linalg.norm(b - a, axis=-1)))
         K = max(2, int(np.ceil(L / step)) + 1)
@@ -377,7 +392,11 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
             Pa = P[a]
         d = np.concatenate([np.zeros((1, Pa.shape[1])),
                             np.linalg.norm(np.diff(Pa, axis=0), axis=2)])
-        chain = (Pa[:, 1:9, 2] - 0.55 * d[:, 1:9]).min(axis=1)
+        # chain = links 1..8 plus, on the lateral tool, the bracket corner
+        # (index 10) — a rigid body that is never in contact; the tip (9)
+        # keeps its own separate gate as always.
+        ccols = list(range(1, 9)) + ([10] if Pa.shape[1] >= 11 else [])
+        chain = (Pa[:, ccols, 2] - 0.55 * d[:, ccols]).min(axis=1)
         tip = Pa[:, 9, 2] - 0.55 * d[:, 9]
         kc, kt = int(np.argmin(chain)), int(np.argmin(tip))
         step_t = dt / (max(sub, 1) * ex)

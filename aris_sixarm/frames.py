@@ -64,6 +64,54 @@ D_FLANGE = 0.107      # J7 -> flange
 D_HAND_TCP = 0.1034   # flange -> hand TCP
 TCP_D = D_FLANGE + D_HAND_TCP   # = 0.2104, the solver's d7e
 PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
+
+# --- LATERAL PEN HOLDER (2026-08-25) --------------------------------------
+# The real pen holder offsets the pen LATERALLY from the wrist axis, along the
+# hand's x-axis (perpendicular to the finger-travel direction):
+#
+#     tip = TCP + R_tcp @ (PEN_LAT, 0, PEN_EXT)
+#
+# PEN_LAT_HOLDER = 0.110 is USER-SPECIFIED (2026-08-25).  The axial part stays
+# PEN_EXT = 0.110: originally carried as an assumption, now a USER-CONFIRMED
+# ESTIMATE — the user places the tip ~15 cm below the bottom of the gripper's
+# white housing; housing bottom ~0.066 m below the hand root puts the tip
+# ~0.216 m from the hand root = ~0.113 below TCP, within mm of 0.110.  Refine
+# by touchdown calibration once the holder is mounted (docs/DECISIONS.md).
+#
+# `PEN_LAT` is the ACTIVE lateral offset and it DEFAULTS TO 0.0 (the inline
+# pen every published number and every pinned test was earned with).  Switch
+# the whole stack to the lateral holder the same way rigs are switched:
+#
+#     ARIS_TOOL=lateral python3 scripts/whatever.py     (read by __init__.py)
+#     frames.activate_tool("lateral")                    (in process, tests)
+#
+# Every function that takes `pen_lat=None` resolves None to the ACTIVE value
+# at call time, so a single switch reaches the planner, the atlas, the
+# validator, the capsule models and the transit router consistently.
+PEN_LAT_HOLDER = 0.110   # m, the real holder's lateral tip offset (hand x)
+PEN_LAT = 0.0            # m, ACTIVE lateral offset (0.0 = legacy inline pen)
+TOOL_NAMES = ("inline", "lateral")
+ACTIVE_TOOL = "inline"
+
+
+def activate_tool(name):
+    """Select the ACTIVE tool model ("inline" | "lateral"), in this process."""
+    global PEN_LAT, ACTIVE_TOOL
+    if name not in TOOL_NAMES:
+        raise ValueError(f"unknown tool {name!r}; want one of {TOOL_NAMES}")
+    PEN_LAT = PEN_LAT_HOLDER if name == "lateral" else 0.0
+    ACTIVE_TOOL = name
+    return PEN_LAT
+
+
+def lat_of(pen_lat=None):
+    """Resolve a `pen_lat` argument: None means the ACTIVE tool's offset."""
+    return PEN_LAT if pen_lat is None else float(pen_lat)
+
+
+def tool_offset(pen_ext=PEN_EXT, pen_lat=None):
+    """The tip offset in the hand-TCP frame -> (3,).  tip = TCP + R @ this."""
+    return np.array([lat_of(pen_lat), 0.0, float(pen_ext)])
 # --- FINAL RIG tool (pen holder CAD; docs/FINAL_RIG.md "Pen holder") ------
 # The holder is CLAMPED BY THE HAND'S FINGERS (custom fingertips, half-width
 # 28.5 mm); the flange->hand chain is stock, so TCP_D stays the solver
@@ -154,16 +202,65 @@ def fk_many(qs, tcp=TCP_D):
     return T, P
 
 
-def tip_pos(q, pen_ext=PEN_EXT):
-    """Pen tip position in link0."""
+def tip_pos(q, pen_ext=PEN_EXT, pen_lat=None):
+    """Pen tip position in link0.  `pen_lat=None` -> the ACTIVE tool."""
     T, _ = fk(q)
-    return T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
+    return T[:3, 3] + T[:3, :3] @ tool_offset(pen_ext, pen_lat)
 
 
-def tip_pos_many(qs, pen_ext=PEN_EXT):
+def tip_pos_many(qs, pen_ext=PEN_EXT, pen_lat=None):
     """`tip_pos` for a whole array. (N,7) -> (N,3)."""
     T, _ = fk_many(qs)
-    return T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
+    return T[:, :3, 3] + T[:, :3, :3] @ tool_offset(pen_ext, pen_lat)
+
+
+def tool_points_many(T, pen_ext=PEN_EXT, pen_lat=None):
+    """Chain points of the TOOL beyond the TCP, from (N,4,4) TCP poses.
+
+    -> list of (N,3) arrays: [tip] for the inline pen; [tip, corner] for the
+    lateral holder, where `corner` is the bracket elbow TCP + R @ (lat, 0, 0)
+    — the point the two-capsule tool model (bracket TCP->corner, pen
+    corner->tip) hangs on.  Callers append these to `fk`'s 9 chain points, so
+    the chain is 10 points inline and 11 lateral, and every capsule table
+    selects on that width.
+    """
+    T = np.asarray(T, float)
+    lat = lat_of(pen_lat)
+    tip = T[:, :3, 3] + T[:, :3, :3] @ tool_offset(pen_ext, lat)
+    if lat == 0.0:
+        return [tip]
+    corner = T[:, :3, 3] + T[:, :3, :3] @ np.array([lat, 0.0, 0.0])
+    return [tip, corner]
+
+
+def joint_axes_many(qs):
+    """Joint axes and origins for a whole array, plus the hand-TCP pose.
+
+    (N,7) -> (z (N,7,3), p (N,7,3), T_tcp (N,4,4)).  In this modified-DH
+    chain joint i rotates about frame i's own z axis, so `z[:, i]` / `p[:, i]`
+    are the axis and origin the geometric Jacobian z_i x (p_tool - p_i) needs.
+    Vectorised transcription of `fk`'s loop; agrees with it bit for bit on the
+    origins (same arithmetic, same order).
+    """
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    N = len(qs)
+    T = np.tile(np.eye(4), (N, 1, 1))
+    zs = np.empty((N, 7, 3))
+    ps = np.empty((N, 7, 3))
+    for i, (al, a, d) in enumerate(DH):
+        ca, sa = np.cos(al), np.sin(al)
+        ct, st = np.cos(qs[:, i]), np.sin(qs[:, i])
+        A = np.zeros((N, 4, 4))
+        A[:, 0, 0], A[:, 0, 1], A[:, 0, 3] = ct, -st, a
+        A[:, 1, 0], A[:, 1, 1], A[:, 1, 2], A[:, 1, 3] = st * ca, ct * ca, -sa, -sa * d
+        A[:, 2, 0], A[:, 2, 1], A[:, 2, 2], A[:, 2, 3] = st * sa, ct * sa, ca, ca * d
+        A[:, 3, 3] = 1.0
+        T = T @ A
+        zs[:, i] = T[:, :3, 2]
+        ps[:, i] = T[:, :3, 3]
+    c, s = np.cos(-np.pi / 4), np.sin(-np.pi / 4)
+    F = np.array([[c, -s, 0, 0], [s, c, 0, 0], [0, 0, 1.0, TCP_D], [0, 0, 0, 1.0]])
+    return zs, ps, T @ F
 
 
 def joint_margin(q):

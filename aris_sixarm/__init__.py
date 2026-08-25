@@ -23,3 +23,18 @@ if _rig and _rig != "final":
     from . import fleet as _fleet
     _fleet.activate(_rig)
 del _rig
+
+# ---------------------------------------------------------------------------
+# THE ACTIVE TOOL, SAME DOOR AS THE RIG
+# ---------------------------------------------------------------------------
+# The pen holder model: "inline" (the legacy tip = TCP + 0.110 along tool z,
+# the DEFAULT so every published number reproduces) or "lateral" (the real
+# holder: tip = TCP + R @ (0.110, 0, 0.110), the pen 11 cm off the wrist axis
+# along hand x).  See frames.activate_tool / frames.PEN_LAT.
+#
+#     ARIS_TOOL=lateral python3 scripts/whatever.py
+_tool = _os.environ.get("ARIS_TOOL", "").strip()
+if _tool and _tool != "inline":
+    from . import frames as _frames
+    _frames.activate_tool(_tool)
+del _tool

@@ -248,6 +248,22 @@ PEN_R_FINAL = 0.05    # pen capsule radius, FINAL rig: the UNION envelope of
 STATIC_CAPSULES = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
                    (5, 7, 0.07), (7, 8, 0.07), (8, 9, PEN_R_FINAL))
 
+# LATERAL HOLDER (2026-08-25): the tool is an L — an 11 cm bracket along hand
+# x, then the pen down to the tip.  A single TCP->tip capsule would need
+# r ~ 0.078 + pen radius to cover the L's corner (the corner sits lat/sqrt(2)
+# off the diagonal), so the tool is TWO capsules through the corner point
+# instead: TCP->corner (the bracket) and corner->tip (the pen), both at the
+# same conservative 0.05 envelope — the holder has no CAD in this
+# configuration, so the radius is deliberately generous.  Chain layout:
+# frames.fk's 9 points + tip (index 9) + bracket corner (index 10) — see
+# frames.tool_points_many.  `chain_static_clearance` selects the table by the
+# chain's own width, so a caller cannot pair the wrong tool with its points.
+BRACKET_R_LAT = 0.05  # bracket capsule radius (no CAD; conservative)
+PEN_R_LAT = 0.05      # pen capsule radius on the lateral holder
+STATIC_CAPSULES_LAT = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
+                       (5, 7, 0.07), (7, 8, 0.07),
+                       (8, 10, BRACKET_R_LAT), (10, 9, PEN_R_LAT))
+
 # the holder as URDF tool geometry (visual mesh extracted from the SolidWorks
 # CAD, panda_hand frame; collision cylinder = the same union envelope)
 TOOL = dict(
@@ -306,13 +322,17 @@ def segment_box_clearance(A, B, boxes, iters=36):
     return out.min(axis=1)
 
 
-def chain_static_clearance(P, boxes, capsules=STATIC_CAPSULES):
-    """(N,10,3) world chain points (frames.fk's 9 + pen tip) -> (N,)
-    min over capsules of (segment-to-box-set distance minus capsule radius).
-    Compare against STATIC_MARGIN."""
+def chain_static_clearance(P, boxes, capsules=None):
+    """(N,10,3) or (N,11,3) world chain points (frames.fk's 9 + tool points)
+    -> (N,) min over capsules of (segment-to-box-set distance minus capsule
+    radius).  Compare against STATIC_MARGIN.  With `capsules=None` the table
+    is selected by the chain's width: 10 points = inline pen
+    (STATIC_CAPSULES), 11 = lateral holder (STATIC_CAPSULES_LAT)."""
     P = np.asarray(P, float)
     if P.ndim == 2:
         P = P[None]
+    if capsules is None:
+        capsules = STATIC_CAPSULES_LAT if P.shape[1] >= 11 else STATIC_CAPSULES
     if not boxes:
         return np.full(len(P), np.inf)
     worst = np.full(len(P), np.inf)

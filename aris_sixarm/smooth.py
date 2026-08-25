@@ -234,7 +234,9 @@ def certify(stroke_pts, spec, curve, lat=None, sheet=None, ds=0.005,
     history, n_bisect = [], 0
     for it in range(max_bisect + 1):
         ch = pwl.chase_cc(setup["poses"], setup["q7"], setup["q_seed"],
-                          pen_ext=setup["pen_ext"], margin_gate=margin_gate,
+                          pen_ext=setup["pen_ext"],
+                          pen_lat=setup.get("pen_lat", 0.0),
+                          margin_gate=margin_gate,
                           sigma_gate=sigma_gate, jump_gate=jump)
         if ch["ok"]:
             break

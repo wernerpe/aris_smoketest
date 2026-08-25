@@ -153,6 +153,15 @@ docs/
 
 - **Pen**: no CAD model exists anywhere. tip = hand-TCP + **0.110 m** tool-z
   (gate-validated on the rig). IK targets the tip, not the flange.
+- **LATERAL HOLDER (2026-08-25, env-selectable, NOT default)**: the real
+  holder offsets the pen 0.110 m along hand x — tip = TCP + R @ (0.110, 0,
+  0.110) — which BREAKS the yaw==q7 degeneracy: tool yaw phi becomes a real
+  redundancy DOF (`aris_sixarm/lateral.py`, coarse 8-phi ring + coupled
+  rescue lattice). `ARIS_TOOL=lateral` switches planner, atlas, validator,
+  capsules and router together; the axial 0.110 is a user-confirmed estimate
+  pending touchdown calibration (docs/DECISIONS.md). Measured: inverted-arm
+  strict-GO +51 % on its patch, GO radius 0.75 -> 0.86 m, strokes certify in
+  ~80-280 ms (`scripts/lateral_eval.py`).
 - **IK**: raw `_franka_ik.solve_ik(T16_column_major, q7, seed)` where T16 is the
   **hand-TCP** pose. The `.so` hardcodes Panda limits → FR3 limits re-filtered in python.
   Build lives in `../franka_analytical_ik` (env `ARIS_FRANKA_IK_PATH` to relocate).

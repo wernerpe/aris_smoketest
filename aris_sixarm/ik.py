@@ -172,7 +172,7 @@ def fk_batch(qs, tcp=TCP_D):
     return fk_many(qs, tcp)
 
 
-def tip_jacobian_batch(qs, pen_ext=PEN_EXT):
+def tip_jacobian_batch(qs, pen_ext=PEN_EXT, pen_lat=None):
     """Pen-tip position Jacobians for a whole array. (N,7) -> (N,3,7).
 
     The C++ path is the ANALYTIC geometric Jacobian, z_i x (p_tip - p_i); the
@@ -182,4 +182,4 @@ def tip_jacobian_batch(qs, pen_ext=PEN_EXT):
     tell them apart.
     """
     from .metrics import tip_jacobian_many     # lazy: metrics is not an import
-    return tip_jacobian_many(qs, pen_ext)
+    return tip_jacobian_many(qs, pen_ext, pen_lat)

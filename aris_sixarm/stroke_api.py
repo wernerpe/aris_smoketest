@@ -76,6 +76,10 @@ DEFAULTS = dict(
     j_end=None,            # pin the exit  q7 index
     sheet_id=None,         # pin the IK sheet; REQUIRED whenever j_start/j_end are
     tilt_max_deg=0.0,      # pen-tilt cone half-angle (deg); see below
+    pen_lat=None,          # lateral tool offset; None -> the ACTIVE tool
+    phi=None,              # tool yaw about the pen axis; None -> auto (0.0 for
+                           # the inline pen; a coarse search for the lateral
+                           # holder, see lateral.plan_adaptive)
 )
 
 # THE GATES ARE ARGUMENTS, NOT MODULE CONSTANTS.  `margin_gate` and
@@ -197,7 +201,20 @@ def plan_stroke(pts_xy, spec, opts=None, _depth=0):
     o = dict(DEFAULTS)
     o.update(opts or {})
     try:
-        if float(o.get("tilt_max_deg", 0.0)) > 0 and _depth == 0:
+        from .frames import lat_of as _lat_of
+        if _lat_of(o.get("pen_lat")) != 0.0 and o.get("phi") is None \
+                and _depth == 0:
+            # LATERAL TOOL, phi UNPINNED: the tool yaw is a real redundancy
+            # DOF (planner.build_lattice docstring) and somebody has to choose
+            # it.  `lateral.plan_adaptive` runs the coarse phi search and
+            # re-enters this entry point with phi pinned, so the recursion
+            # guard is the pin itself.  Pen TILT with the lateral holder is
+            # not supported (the tilt disc assumes the inline pen's yaw
+            # degeneracy); the lateral planner notes and ignores it.
+            from . import lateral as _lateral
+            return _lateral.plan_adaptive(pts_xy, spec, opts=o)
+        if float(o.get("tilt_max_deg", 0.0)) > 0 and _depth == 0 \
+                and _lat_of(o.get("pen_lat")) == 0.0:
             # _depth guards the recursion: a split's head is re-planned through
             # this entry point, and `tilt.plan_adaptive` reaches `prepare` /
             # `plan_from_ctx` directly, so only the outermost call may branch.
@@ -317,7 +334,8 @@ def prepare(pts_xy, spec, o, depth=0):
 
     # ---- 2. the lattice ----------------------------------------------------
     lat = planner.build_lattice(pts, spec, h_inv=o["h_inv"], pen_ext=o["pen_ext"],
-                                n_q7=o["n_q7"])
+                                n_q7=o["n_q7"], pen_lat=o.get("pen_lat"),
+                                phi=float(o.get("phi") or 0.0))
     fiber = lat["valid"].any(axis=(1, 2))
     if not fiber[0]:
         # where the arm could pick the stroke up again — the tail the caller
@@ -408,10 +426,14 @@ def plan_from_ctx(ctx, spec, o, depth=0):
 
     # ---- 5. the independent certificate ------------------------------------
     rep = validate_plan(dense_pts, spec, qs, times=pc["t"], h_inv=o["h_inv"],
-                        pen_ext=o["pen_ext"], margin_gate=o["margin_gate"],
+                        pen_ext=o["pen_ext"], pen_lat=lat.get("pen_lat", 0.0),
+                        margin_gate=o["margin_gate"],
                         sigma_gate=o["sigma_gate"]) \
         if o["validate"] else dict(ok=True)
-    out = dict(base, status="ok", reason="", knots=knots, qs=qs, pts=dense_pts,
+    out = dict(base, status="ok", reason="",
+               phi=float(lat.get("phi", 0.0)),
+               pen_lat=float(lat.get("pen_lat", 0.0)),
+               knots=knots, qs=qs, pts=dense_pts,
                times=pc["t"], s=sm["s"], q7=sm["q7"], sigmas=sm["sigmas"],
                margins=sm["margins"], min_sigma=float(sm["min_sigma"]),
                min_margin=float(sm["min_margin"]), tip_err=float(sm["tip_err"]),
@@ -605,6 +627,11 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
     for k in ("qs", "pts", "sigmas", "margins", "stroke", "q7", "tilt", "lean"):
         if k in plan:
             out[k] = np.asarray(plan[k], float)[::-1].copy()
+    # `phi` is a SCALAR on a fixed-phi lateral plan (rides along in the dict
+    # copy) and a PER-SAMPLE array on a phi-varying rescue, where it reverses
+    # with the samples it belongs to — same argument as tilt/lean above.
+    if np.ndim(plan.get("phi", 0.0)) > 0:
+        out["phi"] = np.asarray(plan["phi"], float)[::-1].copy()
     out["s"] = 1.0 - np.asarray(plan["s"], float)[::-1]
     # A FLAT knot row is (s, q7); a TILTED one is (s, q7, tx, ty).  Only the
     # first column is an arc length, so only it reflects — the rest are values
@@ -630,6 +657,7 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
     if validate and spec is not None:
         rep = validate_plan(out["pts"], spec, qs, times=out["times"],
                             h_inv=o["h_inv"], pen_ext=o["pen_ext"],
+                            pen_lat=float(plan.get("pen_lat", 0.0)),
                             margin_gate=o["margin_gate"],
                             sigma_gate=o["sigma_gate"],
                             tilt_max_deg=float(plan.get("tilt_max_deg", 0.0)))

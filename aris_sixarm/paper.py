@@ -63,8 +63,9 @@ orders of magnitude, which is the property that makes it worth having.
 import numpy as np
 
 from . import rig_final
+from . import frames as _frames
 from .fleet import H_INV_DEFAULT
-from .frames import PEN_EXT, fk_many, tip_pos_many
+from .frames import PEN_EXT, fk_many, tip_pos_many, tool_points_many
 from .validate import Z_CLEAR
 
 CHAIN_CLEAR = Z_CLEAR      # m, every chain point above the paper (= 0.02)
@@ -165,8 +166,9 @@ def _pose_bytes(q):
 def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
     # FRAME_SAFE is part of the question, so it is part of the key: the same
     # pair has a different answer with the steel gated in, and a memo that
-    # forgot that would hand a run the other run's route.
-    return (id(spec), float(pen_ext), float(h_inv),
+    # forgot that would hand a run the other run's route.  So is the ACTIVE
+    # TOOL (frames.PEN_LAT): the lateral holder sweeps a different envelope.
+    return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
             bool(FRAME_SAFE))
@@ -182,7 +184,7 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     """
     rb = [_pose_bytes(q) for q in q_rows]
     cb = [_pose_bytes(q) for q in q_cols]
-    base = (id(spec), float(pen_ext), float(h_inv))
+    base = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv))
 
     def key(a, b, tip_floor, chain_floor):
         return base + (rb[a], cb[b], round(float(tip_floor), 9),
@@ -204,9 +206,14 @@ def chain_tip_z(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     qs = np.asarray(qs, float).reshape(-1, 7)
     Twb = spec.T_world_base(h_inv)
     R, t = Twb[:3, :3], Twb[:3, 3]
-    _, p = fk_many(qs)                              # (M,9,3), base frame
+    T, p = fk_many(qs)                              # (M,9,3), base frame
     chain_z = (p @ R.T + t)[:, 1:, 2].min(axis=1)
-    tip_z = (tip_pos_many(qs, pen_ext) @ R.T + t)[:, 2]
+    tool = tool_points_many(T, pen_ext)             # [tip(, bracket corner)]
+    tip_z = (tool[0] @ R.T + t)[:, 2]
+    if len(tool) > 1:
+        # the lateral holder's bracket corner is a rigid body of the CHAIN —
+        # it can dip where no FK point does, so it joins the chain minimum
+        chain_z = np.minimum(chain_z, (tool[1] @ R.T + t)[:, 2])
     return chain_z, tip_z
 
 
@@ -299,10 +306,10 @@ def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     qs = np.asarray(qs, float).reshape(-1, 7)
     Twb = spec.T_world_base(h_inv)
     R, t = Twb[:3, :3], Twb[:3, 3]
-    _, p = fk_many(qs)
+    T, p = fk_many(qs)
     pw = p @ R.T + t
-    tips = tip_pos_many(qs, pen_ext) @ R.T + t
-    P10 = np.concatenate([pw, tips[:, None, :]], axis=1)
+    tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
+    P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
     return float(rig_final.chain_static_clearance(P10, boxes).min())
 
 

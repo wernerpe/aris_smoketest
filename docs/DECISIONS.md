@@ -1,5 +1,20 @@
 # Decisions — the numbers, and where each one is anchored
 
+## LATERAL PEN HOLDER (2026-08-25) — the tool model changed
+
+| Quantity | Value | Source / provenance |
+|---|---|---|
+| Lateral tip offset | **0.110 m along hand x** (perpendicular to finger travel): tip = TCP + R @ (0.110, 0, 0.110) | USER-SPECIFIED 2026-08-25.  `frames.PEN_LAT_HOLDER` |
+| Axial tip offset | **0.110 m below TCP along tool z, unchanged** | USER-CONFIRMED ESTIMATE 2026-08-25: tip ~15 cm below the gripper's white-housing bottom; housing bottom ~0.066 m below the hand root puts the tip ~0.216 m from the hand root = ~0.113 below TCP — matches the gate-B 0.110 within mm.  Refine by touchdown calibration once the holder is mounted |
+| Default tool | **inline** (`frames.PEN_LAT = 0.0`) — every published number reproduces | `ARIS_TOOL=lateral` (or `frames.activate_tool`) switches the whole stack |
+| Tool yaw phi | a REAL redundancy DOF under the lateral tool (the yaw==q7 aliasing is broken); coarse 8-point ring, adaptive, coupled (s x phi x q7 x branch) rescue | `aris_sixarm/lateral.py`; planner.build_lattice docstring |
+| Tool capsules | TWO capsules through the bracket corner (TCP->corner r 0.05, corner->tip r 0.05); the single-capsule union envelope CANNOT cover an 11 cm lateral arm | `rig_final.STATIC_CAPSULES_LAT`, `scene_check.RADII_LAT`, `coordination.CAPSULES_LAT`, pinned together by tests/test_lateral.py |
+
+Measured effect (arm 31 inverted, final6_opt, 4 cm patch, perpendicular pen):
+strict-GO 536 -> **810 cells (+51.1 %)**, max GO radius 0.75 -> **0.86 m**,
+median margin 0.528 -> 0.624.  Certified strokes plan in ~80-280 ms with the
+phi ring (`scripts/lateral_eval.py`, `out/lateral_eval.json`).
+
 ## FINAL RIG values (2026-08-21) — the drawing decides
 
 The user's final-rig files (`raw_slack_file_dump/`: the "3 arms, 1 up, 1 side,

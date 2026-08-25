@@ -32,7 +32,8 @@ import numpy as np
 
 from . import ik
 from . import rig_final
-from .frames import fk, rotx, PEN_EXT, joint_margin, FR3_MIN, FR3_MAX
+from .frames import (fk, rotx, rotz, PEN_EXT, joint_margin, FR3_MIN, FR3_MAX,
+                     lat_of, tool_offset)
 from .metrics import tip_jacobian, sigma_min as _sigma_min
 
 HARD_MARGIN = 0.15        # node gate, rad (permissive tier)
@@ -110,12 +111,23 @@ def _lattice_setup(spec, h_inv, n_q7):
 
 
 def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
-                  clearance=True):
+                  clearance=True, pen_lat=None, phi=0.0):
     """IK + gate the whole (s x q7 x branch) lattice for a vertical pen.
 
     Returns dict of arrays: Q (Ns,Nq,4,7), valid/margin/sigma (Ns,Nq,4).
     Nodes are kept only if margin >= HARD_MARGIN, sigma_min >= HARD_SIGMA and
     (optionally) the arm clears the paper and its own boom.
+
+    THE LATERAL TOOL AND THE phi AXIS.  `pen_lat` (None -> the ACTIVE tool,
+    see frames.PEN_LAT) is the pen's lateral offset along hand x:
+    tip = TCP + R @ (pen_lat, 0, pen_ext).  With it nonzero the WHY-NO-YAW
+    argument below breaks — rotating the tool about the pen's vertical axis
+    swings the TCP on a `pen_lat` circle around the tip, so the tool yaw
+    `phi` becomes a REAL second redundancy DOF.  This function builds the
+    FIXED-phi slice (R = rotz(phi) @ rotx(pi)); `lateral.py` owns the coarse
+    phi search and the coupled (s x phi x q7 x branch) rescue lattice, the
+    same adaptive shape as the tilt work.  With pen_lat == 0, phi is exactly
+    the q7 degeneracy and must stay 0.
 
     This is THE hot loop of the project — a 1.5 m stroke is ~7500 IK calls, and
     for years every one of them crossed the pybind boundary on its own, checked
@@ -128,10 +140,12 @@ def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
     the equality test measures the fast path against.
     """
     impl = _build_lattice_batch if ik.has_batch() else _build_lattice_scalar
-    return impl(pts_xy, spec, h_inv, pen_ext, n_q7, clearance)
+    return impl(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
+                lat_of(pen_lat), float(phi))
 
 
-def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
+def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
+                         pen_lat=0.0, phi=0.0):
     """Vectorised `build_lattice`.  Numerically identical to the scalar path.
 
     The gates are ANDs over independent per-node quantities, so applying them
@@ -142,14 +156,15 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
     Twb, Twb_inv, q7s = _lattice_setup(spec, h_inv, n_q7)
     pts = np.asarray(pts_xy, float)
     Ns = len(pts)
-    R_w = rotx(np.pi)                     # pen straight down, yaw fixed (see docstring)
+    off = tool_offset(pen_ext, pen_lat)   # tip = TCP + R @ off
+    R_w = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)   # pen straight down
 
     # (a) every (step, q7) target pose, in one (Ns*Nq, 16) array.  Row order is
     #     i*Nq + j so a reshape recovers the lattice axes.
     T_w = np.tile(np.eye(4), (Ns, 1, 1))
     T_w[:, :3, :3] = R_w
     T_w[:, :3, 3] = np.column_stack([pts[:, 0], pts[:, 1], np.zeros(Ns)]) \
-        - pen_ext * R_w[:, 2]
+        - R_w @ off
     T_b = Twb_inv @ T_w
     flat = np.repeat(ik._flat16(T_b), n_q7, axis=0)
 
@@ -179,16 +194,18 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
         boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") \
             else []
         if boxes:
-            tip = T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
-            tip_w = tip @ Twb[:3, :3].T + Twb[:3, 3]
-            P10 = np.concatenate([pw, tip_w[:, None, :]], axis=1)
+            from .frames import tool_points_many
+            tool_b = tool_points_many(T, pen_ext, pen_lat)   # [tip(,corner)]
+            tool_w = [t @ Twb[:3, :3].T + Twb[:3, 3] for t in tool_b]
+            P10 = np.concatenate([pw] + [t[:, None, :] for t in tool_w], axis=1)
             keep &= (rig_final.chain_static_clearance(P10, boxes)
                      >= rig_final.STATIC_MARGIN)
         idx, q, m = idx[keep], q[keep], m[keep]
 
     # (e) controllability: analytic tip Jacobians, one batched SVD
     if len(idx):
-        s = np.linalg.svd(ik.tip_jacobian_batch(q, pen_ext=pen_ext),
+        s = np.linalg.svd(ik.tip_jacobian_batch(q, pen_ext=pen_ext,
+                                                pen_lat=pen_lat),
                           compute_uv=False)[:, -1]
         keep = s >= HARD_SIGMA
         idx, q, m, s = idx[keep], q[keep], m[keep], s[keep]
@@ -202,17 +219,20 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
     Qo[idx], vo[idx], mo[idx], so[idx] = q, True, m, s
     return dict(Q=Qo.reshape(*shape, 7), valid=vo.reshape(shape),
                 margin=mo.reshape(shape), sigma=so.reshape(shape), q7s=q7s,
-                yaw=0.0, Twb=Twb, pts=pts, pen_ext=pen_ext, spec=spec)
+                yaw=float(phi), phi=float(phi), pen_lat=float(pen_lat),
+                Twb=Twb, pts=pts, pen_ext=pen_ext, spec=spec)
 
 
-def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
+def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
+                          pen_lat=0.0, phi=0.0):
     """The original nested-loop lattice: one pybind crossing and one
     finite-difference Jacobian per node.  Still the fallback wherever the
     extension has no batch entry points, and the reference the batched path is
     tested against (tests/test_planner_robustness.py)."""
     Twb, Twb_inv, q7s = _lattice_setup(spec, h_inv, n_q7)
     Ns = len(pts_xy)
-    R_w = rotx(np.pi)
+    off = tool_offset(pen_ext, pen_lat)
+    R_w = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)
     Q = np.full((Ns, n_q7, N_BRANCH, 7), np.nan)
     valid = np.zeros((Ns, n_q7, N_BRANCH), bool)
     marg = np.full((Ns, n_q7, N_BRANCH), -1.0)
@@ -223,7 +243,7 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
     for i, (x, y) in enumerate(pts_xy):
-        T_w[:3, 3] = np.array([x, y, 0.0]) - pen_ext * R_w[:, 2]
+        T_w[:3, 3] = np.array([x, y, 0.0]) - R_w @ off
         T_b = Twb_inv @ T_w
         for jq, q7 in enumerate(q7s):
             for kb, q in enumerate(ik.solve(T_b, q7, seed)):
@@ -243,20 +263,24 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance):
                         if np.any((p[:, 2] < BOOM_Z) & (rb < BOOM_R)):
                             continue
                     if boxes:
-                        tip = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
-                        tip_w = Twb[:3, :3] @ tip + Twb[:3, 3]
-                        P10 = np.vstack([pw, tip_w[None]])
+                        from .frames import tool_points_many
+                        tool_b = tool_points_many(T[None], pen_ext, pen_lat)
+                        tool_w = [Twb[:3, :3] @ t[0] + Twb[:3, 3]
+                                  for t in tool_b]
+                        P10 = np.vstack([pw] + [t[None] for t in tool_w])
                         if (rig_final.chain_static_clearance(P10, boxes)[0]
                                 < rig_final.STATIC_MARGIN):
                             continue
-                s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext))
+                s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext,
+                                            pen_lat=pen_lat))
                 if s < HARD_SIGMA:
                     continue
                 Q[i, jq, kb] = q
                 valid[i, jq, kb] = True
                 marg[i, jq, kb] = m
                 sig[i, jq, kb] = s
-    return dict(Q=Q, valid=valid, margin=marg, sigma=sig, q7s=q7s, yaw=0.0,
+    return dict(Q=Q, valid=valid, margin=marg, sigma=sig, q7s=q7s,
+                yaw=float(phi), phi=float(phi), pen_lat=float(pen_lat),
                 Twb=Twb, pts=np.asarray(pts_xy, float), pen_ext=pen_ext, spec=spec)
 
 

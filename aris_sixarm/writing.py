@@ -97,9 +97,13 @@ def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     else:
         from .tilt import pen_rot
         R_w = pen_rot(np.asarray(tilt, float).reshape(1, 2))[0]
+    from .frames import tool_offset
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
-    T_w[:3, 3] = np.array([xy[0], xy[1], z]) - pen_ext * R_w[:, 2]
+    # tip = TCP + R @ tool_offset (ACTIVE tool): the hover puts the TIP at
+    # (x, y, z) whichever holder is mounted.  One hover convention (phi = 0)
+    # for the whole fleet, same argument as the tilt note above.
+    T_w[:3, 3] = np.array([xy[0], xy[1], z]) - R_w @ tool_offset(pen_ext)
     T_b = np.linalg.inv(Twb) @ T_w
     q7s = np.clip(q_ref[6] + np.linspace(-span, span, n_q7),
                   FR3_MIN[6] + 1e-3, FR3_MAX[6] - 1e-3)
@@ -169,7 +173,7 @@ MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 
 
 def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-            max_dq=MAX_DQ_FRAME, tilt=None):
+            max_dq=MAX_DQ_FRAME, tilt=None, phi=0.0):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
     The DP's continuity window allows up to JUMP_THRESH rad between two
@@ -201,9 +205,21 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     the angles through a zero crossing would swing the azimuth half a turn and
     spin the pen on the paper while the lean passed through nothing.
     """
+    from .frames import rotz, tool_offset
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
-    R_w = rotx(np.pi)
+    off = tool_offset(pen_ext)              # ACTIVE tool
+    # `phi` IS THE TOOL YAW AND IT HAS TO COME ALONG for the same reason
+    # `tilt` does: a lateral plan was solved at its phi, and filling between
+    # its samples at phi = 0 would spin the wrist a quarter turn and back
+    # between every pair of commanded points.  Scalar phi (a fixed-phi plan)
+    # or per-sample (the phi-varying rescue, interpolated like tilt).
+    ph = np.asarray(phi, float)
+    ph_arr = ph.reshape(-1) if ph.ndim else None
+    if ph_arr is not None and len(ph_arr) != len(qs):
+        raise ValueError(f"phi has {len(ph_arr)} rows for {len(qs)} samples")
+    phi0 = float(ph) if ph.ndim == 0 else 0.0
+    R_w = rotz(phi0) @ rotx(np.pi) if phi0 else rotx(np.pi)
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
     tl = None if tilt is None else np.asarray(tilt, float).reshape(-1, 2)
@@ -221,7 +237,11 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
                 from .tilt import pen_rot
                 R_w = pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
                 T_w[:3, :3] = R_w
-            T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - pen_ext * R_w[:, 2]
+            elif ph_arr is not None:
+                R_w = rotz(ph_arr[i] + f * (ph_arr[i + 1] - ph_arr[i])) \
+                    @ rotx(np.pi)
+                T_w[:3, :3] = R_w
+            T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - R_w @ off
             q7 = qs[i, 6] + f * (qs[i + 1, 6] - qs[i, 6])
             q = ik.solve_cc(Twb_inv @ T_w, q7, out_q[-1])
             if q is None:                       # no case-consistent solution
@@ -524,7 +544,8 @@ def segment_draw_time(spec, seg, draw_speed=DRAW_SPEED_FLEET, qd_frac=QD_FRAC,
     qs = np.asarray(seg["plan"]["qs"], float)
     pts = np.asarray(seg["plan"]["pts"], float)
     qd, ud, _ = densify(qs, pts, spec, h_inv, pen_ext,
-                        tilt=seg["plan"].get("tilt"))
+                        tilt=seg["plan"].get("tilt"),
+                        phi=seg["plan"].get("phi", 0.0))
     return draw_duration(qd, ud, seg["length"], draw_speed, qd_frac)
 
 
@@ -817,7 +838,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         qs = np.asarray(s["plan"]["qs"], float)
         pts = np.asarray(s["plan"]["pts"], float)
         tl = s["plan"].get("tilt")
-        qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext, tilt=tl)
+        qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext, tilt=tl,
+                             phi=s["plan"].get("phi", 0.0))
         ref = np.column_stack([np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 0]),
                                np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 1])])
         err = tip_error_pts(qd, ref, spec, h_inv, pen_ext)

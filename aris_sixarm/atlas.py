@@ -27,7 +27,8 @@ import numpy as np
 from . import ik
 from . import rig_final
 from .fleet import FLEET, SHEET, H_INV_DEFAULT
-from .frames import fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin
+from .frames import (fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin,
+                     lat_of, tool_offset)
 from .metrics import tip_jacobian, sigma_min, f_max, GATE_MARGIN, GATE_SIGMA
 
 COLUMNS = ["x", "y", "margin", "sigma_min", "f_max", "n_sol", "valid_frac",
@@ -63,12 +64,20 @@ def _q7_window(valid_row):
 
 
 def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
-               boxes=()):
+               boxes=(), pen_lat=None):
     """-> (margin, sigma_min, f_max, n_sol, valid_frac, q7_window, tilt_deg, q)
-    or None.  `boxes`: the arm's static frame obstacles (final rig)."""
+    or None.  `boxes`: the arm's static frame obstacles (final rig).
+
+    With the LATERAL tool (`pen_lat` != 0) the 8 tool yaws in `_candidates`
+    stop being redundant with q7 and become the REAL phi axis: each yaw puts
+    the TCP at a different point of the 11 cm circle around the tip, so the
+    same candidate sweep that always ran now genuinely searches the new DOF.
+    """
     mount, seed = spec.mount, spec.q_seed
     legacy_inv = mount == "inv" and getattr(spec, "rig", "sixarm") == "sixarm"
-    tip_w = np.array([x, y, 0.0])
+    lat = lat_of(pen_lat)
+    off = tool_offset(pen_ext, lat)
+    tip_tgt = np.array([x, y, 0.0])
     press_b = Twb_inv[:3, :3] @ np.array([0, 0, -1.0])
     for cand in cand_sets:
         if not cand:
@@ -78,7 +87,7 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
         for i, (tilt_deg, R_w) in enumerate(cand):
             T_w = np.eye(4)
             T_w[:3, :3] = R_w
-            T_w[:3, 3] = tip_w - pen_ext * R_w[:, 2]
+            T_w[:3, 3] = tip_tgt - R_w @ off
             T_b = Twb_inv @ T_w
             T16 = T_b  # ik.solve flattens
             for j, q7 in enumerate(ik.Q7_GRID):
@@ -101,13 +110,16 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
                 if np.any((pts[:, 2] < -0.02) & (rb < 0.12)):
                     continue
             if boxes:
-                tip_b = T[:3, 3] + T[:3, :3] @ np.array([0.0, 0.0, pen_ext])
-                tip_w = Twb[:3, :3] @ tip_b + Twb[:3, 3]
-                P10 = np.vstack([pts_w, tip_w[None]])
+                tool_pts = [T[:3, 3] + T[:3, :3] @ off]
+                if lat != 0.0:
+                    tool_pts.append(T[:3, 3]
+                                    + T[:3, :3] @ np.array([lat, 0.0, 0.0]))
+                tool_w = [Twb[:3, :3] @ t + Twb[:3, 3] for t in tool_pts]
+                P10 = np.vstack([pts_w] + [t[None] for t in tool_w])
                 if (rig_final.chain_static_clearance(P10, boxes)[0]
                         < rig_final.STATIC_MARGIN):
                     continue
-            J = tip_jacobian(q, pen_ext=pen_ext)
+            J = tip_jacobian(q, pen_ext=pen_ext, pen_lat=lat)
             vf = float(valid.mean())
             qw = float(max(_q7_window(row) for row in valid))
             return (m, sigma_min(J), f_max(J, press_b), n_sol, vf, qw,
@@ -116,13 +128,17 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
 
 
 def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
-              tilt_max_deg=15.0, pen_ext=PEN_EXT, fleet=None, sheet=None):
+              tilt_max_deg=15.0, pen_ext=PEN_EXT, fleet=None, sheet=None,
+              pen_lat=None):
     spec = (FLEET if fleet is None else fleet)[arm_id]
     sheet = SHEET if sheet is None else sheet
     boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     cand_sets = _candidates(tilt_max_deg)
+    pen_lat = lat_of(pen_lat)
+    # the lateral tool extends reach by up to pen_lat in every direction
+    rmax = rmax + abs(pen_lat)
     bx, by = spec.xy
     rows = []
     t0 = time.time()
@@ -130,7 +146,8 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
         for x in np.arange(0.0, sheet[0] + 1e-9, grid):
             if (x - bx) ** 2 + (y - by) ** 2 > rmax ** 2:
                 continue
-            r = solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext, boxes)
+            r = solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext, boxes,
+                           pen_lat=pen_lat)
             if r is not None:
                 rows.append([x, y, *r[:7], *r[7]])
     arr = np.array(rows) if rows else np.zeros((0, len(COLUMNS)))
@@ -138,7 +155,8 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out, data=arr, columns=np.array(COLUMNS), arm_id=arm_id,
                         mount=spec.mount, base=Twb, grid=grid, h_inv=h_inv,
-                        tilt_max_deg=tilt_max_deg, pen_ext=pen_ext)
+                        tilt_max_deg=tilt_max_deg, pen_ext=pen_ext,
+                        pen_lat=pen_lat)
     go = strict_go(arr)
     print(f"arm {arm_id} ({spec.name}): {len(arr)} reachable, "
           f"{int(go.sum())} strict-GO, tilt<={tilt_max_deg:.0f}deg, "

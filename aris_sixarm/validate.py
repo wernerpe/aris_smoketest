@@ -38,7 +38,8 @@ import numpy as np
 
 from . import rig_final
 from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, fk_many,
-                     joint_margin_many, tip_pos_many)
+                     joint_margin_many, tip_pos_many, tool_offset,
+                     tool_points_many, lat_of)
 from .metrics import sigma_min_many as _sigma_min_many, tip_jacobian_many
 
 TIP_TOL = 2e-3           # m, pen tip must stay on the commanded curve
@@ -89,7 +90,8 @@ def _pen_lean_deg(T, Rwb):
 def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
                   tip_tol=TIP_TOL, margin_gate=MARGIN_GATE,
                   sigma_gate=SIGMA_GATE, jump=JUMP_GATE, qd_max=QD_MAX,
-                  clearance=True, eps=EPS, tilt_max_deg=CONE_GATE):
+                  clearance=True, eps=EPS, tilt_max_deg=CONE_GATE,
+                  pen_lat=None):
     """Re-derive every invariant of a planned stroke.  Never raises.
 
     Args:
@@ -164,7 +166,11 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
         # numbers are bit-identical to the three-call version — pinned by
         # tests/test_validate_cone.py::test_tip_matches_tip_pos_many.
         T_fk, P_fk = fk_many(qs)
-        tip_b = T_fk[:, :3, 3] + T_fk[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
+        # `pen_lat=None` resolves to the ACTIVE tool (frames.PEN_LAT): the
+        # lateral holder's tip is TCP + R @ (pen_lat, 0, pen_ext), re-derived
+        # here from the same FK — the plan's own fields are never read.
+        pen_lat = lat_of(pen_lat)
+        tip_b = T_fk[:, :3, 3] + T_fk[:, :3, :3] @ tool_offset(pen_ext, pen_lat)
 
         # ---- 1. the pen drew the stroke -----------------------------------
         tip_w = tip_b @ Rwb.T + twb
@@ -203,7 +209,8 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
             add("joint_limit_high", i, qs[i, j], FR3_MAX[j])
 
         marg = joint_margin_many(qs)
-        sig = _sigma_min_many(tip_jacobian_many(qs, pen_ext=pen_ext))
+        sig = _sigma_min_many(tip_jacobian_many(qs, pen_ext=pen_ext,
+                                                pen_lat=pen_lat))
         worst["min_margin"] = float(marg.min())
         worst["min_sigma"] = float(sig.min())
         for i in np.flatnonzero(marg < margin_gate - eps):
@@ -234,7 +241,10 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
             boxes = spec.static_obstacles() \
                 if hasattr(spec, "static_obstacles") else []
             if boxes:
-                P10 = np.concatenate([pw, tip_w[:, None, :]], axis=1)
+                tool_b = tool_points_many(T_fk, pen_ext, pen_lat)
+                tool_w = [t @ Rwb.T + twb for t in tool_b]
+                P10 = np.concatenate([pw] + [t[:, None, :] for t in tool_w],
+                                     axis=1)
                 c = rig_final.chain_static_clearance(P10, boxes)
                 worst["min_frame_clearance"] = float(c.min())
                 for i in np.flatnonzero(c < rig_final.STATIC_MARGIN - eps):
@@ -269,7 +279,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
 
 
 def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
-               z_clear=Z_CLEAR, eps=EPS):
+               z_clear=Z_CLEAR, eps=EPS, pen_lat=None):
     """The single-configuration half of `validate_plan`. -> dict(ok, ...).
 
     A POSE AN ARM STANDS IN IS NOT A PLAN, AND IS STILL A CLAIM.  When an arm
@@ -293,13 +303,14 @@ def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
         worst["joint_margin"] = marg
         if marg < margin_gate - eps:
             V.append(dict(kind="margin", index=0, value=marg, limit=margin_gate))
-        _, p = fk_many(q)                                # (1,9,3) base frame
+        T1, p = fk_many(q)                               # (1,9,3) base frame
         pw = p @ Twb[:3, :3].T + Twb[:3, 3]
         z = float(pw[0, 1:, 2].min())
         worst["min_chain_z"] = z
         if z < z_clear - eps:
             V.append(dict(kind="paper_clearance", index=0, value=z, limit=z_clear))
-        tip = Twb[:3, :3] @ tip_pos_many(q, pen_ext)[0] + Twb[:3, 3]
+        pen_lat = lat_of(pen_lat)
+        tip = Twb[:3, :3] @ tip_pos_many(q, pen_ext, pen_lat)[0] + Twb[:3, 3]
         worst["tip_z"] = float(tip[2])
         if tip[2] < -eps:
             V.append(dict(kind="pen_below_paper", index=0, value=float(tip[2]),
@@ -314,7 +325,10 @@ def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
         boxes = spec.static_obstacles() \
             if hasattr(spec, "static_obstacles") else []
         if boxes:
-            P10 = np.concatenate([pw, tip[None, None, :]], axis=1)
+            tool_b = tool_points_many(T1, pen_ext, pen_lat)
+            tool_w = [t @ Twb[:3, :3].T + Twb[:3, 3] for t in tool_b]
+            P10 = np.concatenate([pw] + [t[:, None, :] for t in tool_w],
+                                 axis=1)
             c = float(rig_final.chain_static_clearance(P10, boxes)[0])
             worst["min_frame_clearance"] = c
             if c < rig_final.STATIC_MARGIN - eps:

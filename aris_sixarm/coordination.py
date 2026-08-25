@@ -121,17 +121,28 @@ _IMAGE_STATS = dict(built=0, cached=0, transposed=0, cells=0, wall=0.0, jobs=0)
 # construction (zero DH offset), so they are not given their own capsule.
 CAPSULES = ((0, 1, LINK_R), (1, 3, LINK_R), (3, 4, LINK_R), (4, 5, LINK_R),
             (5, 7, WRIST_R), (7, 8, WRIST_R), (8, 9, PEN_R))
+# LATERAL HOLDER: an 11-point chain (bracket corner at index 10) and a
+# TWO-capsule tool, bracket TCP->corner + pen corner->tip, both at the
+# holder envelope radius.  Mirrors rig_final.STATIC_CAPSULES_LAT and
+# scene_check.RADII_LAT (a test pins the three together).
+CAPSULES_LAT = CAPSULES[:-1] + ((8, 10, PEN_R_FINAL), (10, 9, PEN_R_FINAL))
 
 
 # ==========================================================================
 # geometry
 # ==========================================================================
 def chain_world(qs, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
-    """(N,7) joints -> (N,10,3) chain points in WORLD, pen tip included."""
+    """(N,7) joints -> (N,10|11,3) chain points in WORLD, tool included.
+
+    10 points for the inline pen; with the lateral holder ACTIVE
+    (frames.PEN_LAT != 0) the bracket corner joins as point 10 and the
+    capsule tables select on the width.
+    """
     qs = np.asarray(qs, float).reshape(-1, 7)
     T, P = fk_many(qs)
-    tip = T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
-    P = np.concatenate([P, tip[:, None, :]], axis=1)
+    from .frames import tool_points_many
+    tool = tool_points_many(T, pen_ext)
+    P = np.concatenate([P] + [t[:, None, :] for t in tool], axis=1)
     Twb = spec.T_world_base(h_inv)
     return P @ Twb[:3, :3].T + Twb[:3, 3]
 
@@ -181,12 +192,14 @@ class ArmPath:
             self.q = np.vstack([self.q, self.q[-1:]])
         P = chain_world(self.q, spec, h_inv, pen_ext)
         self.n = len(P)
-        self.A = np.ascontiguousarray(P[:, [c[0] for c in CAPSULES], :], np.float32)
-        self.B = np.ascontiguousarray(P[:, [c[1] for c in CAPSULES], :], np.float32)
-        self.r = np.array([c[2] for c in CAPSULES], np.float32)
-        if getattr(spec, "rig", "sixarm") == "final":
+        caps = CAPSULES_LAT if P.shape[1] >= 11 else CAPSULES
+        self.A = np.ascontiguousarray(P[:, [c[0] for c in caps], :], np.float32)
+        self.B = np.ascontiguousarray(P[:, [c[1] for c in caps], :], np.float32)
+        self.r = np.array([c[2] for c in caps], np.float32)
+        if getattr(spec, "rig", "sixarm") == "final" and caps is CAPSULES:
             # the pen capsule carries the HOLDER envelope union (both CAD
             # builds, clutch extended): r 0.05, not the bare-pen 0.03
+            # (the lateral table already carries the envelope radius)
             self.r = self.r.copy()
             self.r[-1] = PEN_R_FINAL
         self.center = P.mean(axis=1).astype(np.float32)
