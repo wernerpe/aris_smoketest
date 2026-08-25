@@ -72,8 +72,13 @@ schedule) and makes the coordination problem small enough to solve exactly.
             instantaneous in the animation's kinematic playback; a real run
             needs the acceleration-limited version of the same schedule.
 """
+import atexit
+import hashlib
 import math
+import multiprocessing as mp
+import os
 import time
+from collections import OrderedDict
 
 import numpy as np
 
@@ -89,6 +94,27 @@ CALIB_M = 0.03       # m, unsurveyed base positions (see module docstring)
 SWEEP_K = 0.55       # sweep slack factor: 0.5 for the chord, +10 % for the arc
 BROAD_CAP = 0.25     # m, clearances above this are not computed exactly
 PRIORITY_SEARCH_MAX = 6   # moving arms whose 6! = 720 orders are all enumerated
+
+# THE CONDUCT IS THE IMAGES, NOT THE SEARCH.  Measured on the Trollface's first
+# conduct: the 12 DP solves take 2.1 s and the 15 collision images they read
+# take 187 s.  The log line that says "13 DP solves ... in 163.1 s" was always
+# reporting the geometry, because `cells()` builds an image the first time the
+# search asks for it and the search is what happens to be on the clock.  Four
+# things were wrong with those 187 s and the constants below are three of them;
+# the fourth, that `free_cells(b, a)` was built from scratch when
+# `free_cells(a, b)` was already in hand, needed no constant at all.
+CAPSULE_TILE = 32         # samples a side of the block the capsule filter uses
+DP_BLOCK = 1024           # time steps a schedule DP gathers at a time
+IMAGE_JOBS = 0            # 0: decide from the machine.  1: never fork
+IMAGE_JOBS_MAX = 32       # ceiling however many cores there are
+IMAGE_PAR_MIN = 2_000_000  # cells in a batch before a fork pays for itself
+IMAGE_CELLS_PER_JOB = 500_000    # cells one worker should be given
+IMAGE_CACHE_BYTES = 1 << 31   # 2 GiB of images kept between conducts
+
+_IMAGES = OrderedDict()   # (key_i, key_j, margin, sweep) -> free-cell image
+_IMAGE_BYTES = 0
+_BATCH = None             # the paths an image worker reads, inherited by fork
+_IMAGE_STATS = dict(built=0, cached=0, transposed=0, cells=0, wall=0.0, jobs=0)
 
 # (chain point i, chain point j, radius); indices into the 10-point chain
 # (frames.fk's 9 points + the pen tip).  Points 1/2 and 5/6 coincide by
@@ -136,6 +162,13 @@ def seg_seg_dist(p0, p1, q0, q1):
     return np.sqrt(np.maximum(np.sum(w * w, -1), 0.0))
 
 
+def _box_of(p, r0, r1):
+    """Each capsule's axis-aligned box over samples [r0, r1), grown by r."""
+    A, B = p.A[r0:r1], p.B[r0:r1]
+    return (np.minimum(A.min(0), B.min(0)) - p.r[:, None],
+            np.maximum(A.max(0), B.max(0)) + p.r[:, None])
+
+
 class ArmPath:
     """One arm's frozen path, pre-chewed for the collision image."""
 
@@ -162,6 +195,67 @@ class ArmPath:
         self.step = np.linalg.norm(np.diff(P, axis=0), axis=2).max(1).astype(np.float32)
         self.moves = bool(np.max(np.abs(self.q - self.q[0])) > 1e-9)
         self.motion = float(self.step.sum())
+        # PER-CAPSULE BOXES, because the per-SAMPLE one never rejects anything.
+        # `clearance_matrix`'s broad phase tests one bounding sphere per sample
+        # covering the whole chain — and a Franka is a metre long standing a
+        # metre from its neighbour, so those spheres always overlap: on the
+        # Trollface 100.0 % of the 19.3 M sample pairs its three moving arms
+        # make survived it and paid all 49 exact capsule distances.  A box per
+        # CAPSULE over the whole path is a different question with a useful
+        # answer (the base column is 0.85 m from anything arm 2 ever does),
+        # and it is exact: a capsule pair whose
+        # boxes are `cap` apart cannot contribute a value below `cap`, and a
+        # value at or above `cap` is clipped to `cap` either way.
+        self._box = self._key = None
+        self._tiles = {}
+
+    def boxes(self, r0=0, r1=None):
+        """Each capsule's swept box over samples [r0, r1). -> (lo, hi) (7,3)."""
+        r1 = self.n if r1 is None else int(r1)
+        if r0 == 0 and r1 == self.n:
+            if getattr(self, "_box", None) is None:
+                self._box = _box_of(self, 0, self.n)
+            return self._box
+        return _box_of(self, r0, r1)
+
+    def tile_boxes(self, tile):
+        """`boxes` over every block of `tile` samples. -> (lo, hi) (T,7,3).
+
+        Memoised on the path, because one image is built in row blocks on
+        several processes and every one of them tiles the same columns.
+        """
+        if getattr(self, "_tiles", None) is None:
+            self._tiles = {}
+        got = self._tiles.get(tile)
+        if got is None:
+            lo, hi = [], []
+            for s in range(0, self.n, tile):
+                b = _box_of(self, s, min(s + tile, self.n))
+                lo.append(b[0])
+                hi.append(b[1])
+            got = self._tiles[tile] = (np.array(lo), np.array(hi))
+        return got
+
+    @property
+    def key(self):
+        """A hash of what an image depends on. -> str.
+
+        TWO PATHS WITH THIS KEY HAVE THE SAME IMAGE, whoever built them.  The
+        conductor is run three or four times over one fleet (baseline, JIT,
+        retreat) and each pass re-programmes ONE or TWO arms — `idle._programs`
+        hands the others back the identical programme object — but every pass
+        re-samples all six and rebuilds every image from scratch.  Keying on the
+        world-frame capsule endpoints and the per-sample step, which is exactly
+        what `free_cells` reads, makes the unchanged pairs free.  Keying on
+        `id()` would not: `_capsules` builds new objects every pass.
+        """
+        if getattr(self, "_key", None) is None:
+            h = hashlib.blake2b(digest_size=16)
+            h.update(np.asarray([self.arm, self.n], np.int64).tobytes())
+            for arr in (self.A, self.B, self.r, self.step):
+                h.update(np.ascontiguousarray(arr).tobytes())
+            self._key = h.hexdigest()
+        return self._key
 
 
 def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None, fleet=None):
@@ -179,47 +273,262 @@ def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None, fleet=None):
             for a, q in q_by_arm.items()}
 
 
-def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000):
+def live_capsules(pi, pj, cap=BROAD_CAP):
+    """Which of the 49 capsule pairs can EVER come within `cap`. -> (P, Q).
+
+    Box-to-box distance is a lower bound on capsule-to-capsule distance — a
+    capsule lies inside the box of its two endpoints grown by its radius — so a
+    pair this rejects contributes nothing a `cap`-clipped matrix would record.
+    It costs 49 box tests for a whole matrix and on the Trollface's three real
+    pairs it retires 14 %, 51 % and 45 % of the exact work: the base column
+    never approaches anything, and neither does the upper arm of an arm working
+    the far side of its sheet.
+    """
+    return _live(pi.boxes(), pj.boxes(), float(cap) ** 2)
+
+
+def _live(bi, bj, cap2):
+    """The capsule pairs two box sets can bring within sqrt(cap2). -> (P, Q)."""
+    (lo_i, hi_i), (lo_j, hi_j) = bi, bj
+    sep = np.maximum(np.maximum(lo_i[:, None, :] - hi_j[None, :, :],
+                                lo_j[None, :, :] - hi_i[:, None, :]), 0.0)
+    return np.nonzero(np.einsum("pqk,pqk->pq", sep, sep) < cap2)
+
+
+def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000, rows=None, tile=None):
     """(Ni, Nj) capsule-to-capsule clearance, CLIPPED at `cap`.
 
-    The clip is the whole point: a broad phase on per-sample bounding spheres
-    throws away every pair that cannot possibly be closer than `cap`, and only
-    the survivors pay for 49 exact segment distances.  Anything reported as
-    `cap` is "at least cap", which is all a margin test needs to know.
+    The clip is the whole point: a broad phase throws away every pair that
+    cannot possibly be closer than `cap`, and only the survivors pay for the
+    exact segment distances.  Anything reported as `cap` is "at least cap",
+    which is all a margin test needs to know.
+
+    There are two broad phases and they reject different things.  The
+    per-CAPSULE one (`live_capsules`) is a property of the two whole paths and
+    decides which of the 49 capsule pairs are worth carrying at all; the
+    per-SAMPLE one below is a property of two instants.  On arms that share a
+    sheet the second rejects nothing and the first does the work.
+
+    `rows` is a half-open `(r0, r1)` range of ROWS of the matrix, so one image
+    can be built in blocks on several processes; the returned array is those
+    rows only.  `None` is the whole matrix, to the index.
     """
     Ni, Nj = pi.n, pj.n
-    D = np.full((Ni, Nj), cap, np.float32)
-    rr = (pi.r[:, None] + pj.r[None, :]).astype(np.float32)
-    rows = max(1, int(2e6 // max(Nj, 1)))
-    for a0 in range(0, Ni, rows):
-        a1 = min(a0 + rows, Ni)
-        d = pi.center[a0:a1, None, :] - pj.center[None, :, :]
-        gap = (np.sqrt(np.einsum("ijk,ijk->ij", d, d))
-               - pi.radius[a0:a1, None] - pj.radius[None, :])
-        ia, ib = np.nonzero(gap < cap)
-        if not len(ia):
-            continue
-        ia = ia + a0
-        for k0 in range(0, len(ia), chunk):
-            u, v = ia[k0:k0 + chunk], ib[k0:k0 + chunk]
-            d = seg_seg_dist(pi.A[u][:, :, None, :], pi.B[u][:, :, None, :],
-                             pj.A[v][:, None, :, :], pj.B[v][:, None, :, :]) - rr
-            D[u, v] = np.minimum(d.reshape(len(u), -1).min(1), cap)
+    tile = int(CAPSULE_TILE if tile is None else tile)
+    r0, r1 = (0, Ni) if rows is None else (int(rows[0]), int(rows[1]))
+    D = np.full((r1 - r0, Nj), cap, np.float32)
+    cap2 = float(cap) ** 2
+    if not len(_live(pi.boxes(), pj.boxes(), cap2)[0]):
+        return D                       # these two never come near each other
+    work = max(1, int(chunk) * len(CAPSULES) ** 2)   # distances per numpy call
+    col = pj.tile_boxes(int(tile))
+    for a0 in range(r0, r1, tile):
+        a1 = min(a0 + tile, r1)
+        row = pi.boxes(a0, a1)
+        for t, b0 in enumerate(range(0, Nj, tile)):
+            b1 = min(b0 + tile, Nj)
+            # WHICH CAPSULES CAN MEET, HERE.  Over the whole path an arm's
+            # forearm gets everywhere; over `tile` consecutive samples of it it
+            # does not, and the tile-local boxes retire most of the capsule
+            # pairs the whole-path boxes have to keep — on the Trollface's
+            # biggest pair, 42 of 49 globally against 14 of 49 per tile.
+            # Rejection is exact either way, so the matrix is the same matrix
+            # however it was tiled; only the arithmetic skipped changes.
+            P, Q = _live(row, (col[0][t], col[1][t]), cap2)
+            if not len(P):
+                continue
+            d = pi.center[a0:a1, None, :] - pj.center[None, b0:b1, :]
+            gap = (np.sqrt(np.einsum("ijk,ijk->ij", d, d))
+                   - pi.radius[a0:a1, None] - pj.radius[None, b0:b1])
+            ia, ib = np.nonzero(gap < cap)
+            if not len(ia):
+                continue
+            ia, ib = ia + a0, ib + b0
+            rr = (pi.r[P] + pj.r[Q]).astype(np.float32)
+            step = max(1, work // len(P))
+            for k0 in range(0, len(ia), step):
+                u, v = ia[k0:k0 + step], ib[k0:k0 + step]
+                d = seg_seg_dist(pi.A[u[:, None], P[None, :]],
+                                 pi.B[u[:, None], P[None, :]],
+                                 pj.A[v[:, None], Q[None, :]],
+                                 pj.B[v[:, None], Q[None, :]]) - rr
+                D[u - r0, v] = np.minimum(d.min(1), cap)
     return D
 
 
-def free_cells(pi, pj, margin, sweep=SWEEP_K, cap=BROAD_CAP):
+def free_cells(pi, pj, margin, sweep=SWEEP_K, cap=BROAD_CAP, rows=None):
     """(Ni-1, Nj-1) boolean: is the whole cell clear by `margin`?
 
     Clearance is 1-Lipschitz in the displacement of the bodies, so the cell's
     worst case is bounded by its best corner minus the two half-step motions.
     `sweep` > 0.5 pays for the arc-vs-chord difference of a rotating link.
+
+    `rows` is a half-open range of CELL rows, and reads one clearance row more
+    than it returns because a cell is bounded by its four corners.
     """
-    D = clearance_matrix(pi, pj, cap)
+    r0, r1 = (0, pi.n - 1) if rows is None else (int(rows[0]), int(rows[1]))
+    D = clearance_matrix(pi, pj, cap, rows=(r0, r1 + 1))
     S = np.minimum(np.minimum(D[:-1, :-1], D[1:, :-1]),
                    np.minimum(D[:-1, 1:], D[1:, 1:]))
-    S -= sweep * (pi.step[:, None] + pj.step[None, :])
+    S -= sweep * (pi.step[r0:r1, None] + pj.step[None, :])
     return S >= margin
+
+
+# ==========================================================================
+# the image bag: once per unordered pair, on every core, and kept
+# ==========================================================================
+def clear_images():
+    """Drop the collision-image memo.  -> None."""
+    global _IMAGE_BYTES
+    _IMAGES.clear()
+    _IMAGE_BYTES = 0
+
+
+def _remember(k, F):
+    """File one image under its content key, oldest out first. -> the image."""
+    global _IMAGE_BYTES
+    F.flags.writeable = False       # it is handed to every caller that asks
+    _IMAGES[k] = F
+    _IMAGE_BYTES += F.nbytes
+    while _IMAGE_BYTES > IMAGE_CACHE_BYTES and len(_IMAGES) > 1:
+        _, old = _IMAGES.popitem(last=False)
+        _IMAGE_BYTES -= old.nbytes
+    return F
+
+
+def image_jobs(n_cells):
+    """Processes to build `n_cells` of image on. -> int (1 = do it here).
+
+    SCALED TO THE BATCH, not to the machine.  The kernel is memory-bound —
+    measured on the Trollface, the build stops getting faster somewhere around
+    eight to twelve processes and forking more only costs the fork — so the
+    rule is a process per `IMAGE_CELLS_PER_JOB` cells, floored at one and
+    capped at what `IMAGE_JOBS` (or the machine) allows.
+    """
+    if int(IMAGE_JOBS) == 1 or mp.current_process().daemon:
+        return 1                  # a pool worker may not have children
+    if int(n_cells) < int(IMAGE_PAR_MIN):
+        return 1
+    cap = int(IMAGE_JOBS) if int(IMAGE_JOBS) > 0 else (os.cpu_count() or 1)
+    return max(1, min(int(cap), IMAGE_JOBS_MAX,
+                      int(n_cells) // int(IMAGE_CELLS_PER_JOB) or 1))
+
+
+def _image_rows(task):
+    """One block of one image, in a forked worker. -> (a, b, r0, r1, rows)."""
+    a, b, r0, r1, margin, sweep = task
+    return a, b, r0, r1, free_cells(_BATCH[a], _BATCH[b], margin, sweep,
+                                    rows=(r0, r1))
+
+
+def _build(paths, todo, key_of, margin, sweep, jobs):
+    """Build the images `todo` names, in row blocks over a fork pool. -> None.
+
+    ONE POOL FOR THE WHOLE BATCH, AND THE BATCH IS ROW BLOCKS AND NOT IMAGES.
+    A conduct wants three big images at once and they are not the same size —
+    on the Trollface 13.9 s, 4.8 s and 4.0 s — so a task per image leaves most
+    of the machine idle for the length of the slowest one.  Row blocks of one
+    image are independent (a cell reads two clearance rows and nothing else),
+    so the batch is sliced to about four blocks per worker and the wall clock
+    becomes the total over the cores rather than the largest image.
+
+    The pool is FORKED with the paths already in memory: an `ArmPath` is a
+    megabyte of float32 and there are six of them, and copy-on-write ships them
+    for nothing where `pool.map` would pickle them once per task.
+    """
+    global _BATCH
+    cells = sum((paths[a].n - 1) * (paths[b].n - 1) for a, b in todo)
+    njobs = image_jobs(cells) if jobs is None else max(1, int(jobs))
+    aim = max(1, cells // (njobs * 4))      # cells a block should carry
+    tasks = []
+    for a, b in todo:
+        ni, nj = paths[a].n - 1, paths[b].n - 1
+        blk = max(1, min(ni, aim // max(nj, 1)))
+        for r0 in range(0, ni, blk):
+            tasks.append((a, b, r0, min(r0 + blk, ni),
+                          float(margin), float(sweep)))
+    part = {c: np.empty((paths[c[0]].n - 1, paths[c[1]].n - 1), bool)
+            for c in todo}
+    t0 = time.time()
+    if njobs > 1 and len(tasks) > 1:
+        _BATCH = paths
+        try:
+            with mp.get_context("fork").Pool(njobs) as pool:
+                for a, b, r0, r1, F in pool.imap_unordered(_image_rows, tasks,
+                                                           chunksize=1):
+                    part[(a, b)][r0:r1] = F
+        finally:
+            _BATCH = None
+    else:
+        for a, b, r0, r1, m, s in tasks:
+            part[(a, b)][r0:r1] = free_cells(paths[a], paths[b], m, s,
+                                             rows=(r0, r1))
+    for c, F in part.items():
+        _remember(key_of[c], F)
+    _IMAGE_STATS.update(built=_IMAGE_STATS["built"] + len(todo),
+                        cells=_IMAGE_STATS["cells"] + cells,
+                        wall=_IMAGE_STATS["wall"] + (time.time() - t0),
+                        jobs=njobs)
+
+
+def build_images(paths, pairs, margin, sweep, jobs=None):
+    """Every image `pairs` asks for. -> {(a, b): (na-1, nb-1) bool}.
+
+    THREE THINGS THE OLD `cells()` DID NOT DO, and between them they are most
+    of a conduct.
+
+      ONCE PER UNORDERED PAIR.  `free_cells(b, a)` is `free_cells(a, b)`
+      transposed — the four-corner minimum and the two sweep terms are both
+      symmetric — and the priority search asks for BOTH directions of every
+      moving pair, because an order that schedules `a` before `b` and one that
+      schedules `b` before `a` are both in the enumeration.  The old code built
+      each from scratch: on the Trollface, 46.0 s for (31, 2) and then 45.8 s
+      for (2, 31).  The image is now built for the pair sorted by arm id and
+      read the other way round, which also makes it a function of the UNORDERED
+      pair — `seg_seg_dist` clamps one parameter before the other, so the two
+      directions could disagree in the last bit of a float32, and now they
+      cannot.
+
+      KEPT BETWEEN CONDUCTS.  Keyed on `ArmPath.key`, so the JIT and retreat
+      passes — which re-programme one or two arms and leave the rest alone —
+      pay only for the pairs that actually changed.
+
+      BUILT ON EVERY CORE.  See `_build`.
+
+    The pairs are gathered UP FRONT rather than on first use.  Every one of them
+    is needed by any complete schedule (arm k is conducted against the k-1 arms
+    before it and every parked arm, and the union over k is exactly this set),
+    so nothing is built on speculation — and asking for them together is what
+    makes one dispatch out of what was six serial waits.
+    """
+    canon, key_of = {}, {}
+    for a, b in pairs:
+        c = (a, b) if a <= b else (b, a)
+        canon[(a, b)] = c
+        key_of[c] = (paths[c[0]].key, paths[c[1]].key,
+                     float(margin), float(sweep))
+    todo = [c for c in dict.fromkeys(canon.values()) if key_of[c] not in _IMAGES]
+    hit = len(key_of) - len(todo)
+    if todo:
+        _build(paths, todo, key_of, margin, sweep, jobs)
+    _IMAGE_STATS["cached"] += hit
+    out = {}
+    for ab, c in canon.items():
+        F = _IMAGES[key_of[c]]
+        _IMAGES.move_to_end(key_of[c])
+        if ab == c:
+            out[ab] = F
+        else:
+            out[ab] = np.ascontiguousarray(F.T)
+            _IMAGE_STATS["transposed"] += 1
+    return out
+
+
+def _at_exit():                                            # pragma: no cover
+    clear_images()
+
+
+atexit.register(_at_exit)
 
 
 # ==========================================================================
@@ -263,13 +572,33 @@ def _dp(free_ab, prog_hi, n, horizon, deadline=None, rest=True):
         for b, F in free_ab.items():
             rest_row &= F[n - 2, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
     rest_ok = np.logical_and.accumulate(rest_row[::-1])[::-1][:D]
-    ok = np.ones((n - 1, D), bool)
-    for b, F in free_ab.items():
-        ok &= F[:, np.clip(prog_hi[b][:D], 0, F.shape[1] - 1)]
-    okf = np.vstack([ok, ok[-1:]])                # index n-1 sits in cell n-2
-    reach = np.zeros((n, D), bool)
+    # THE COLUMNS AFTER THE ARM ARRIVES ARE NEVER READ, so they are never built.
+    # `ok` is one gather per already-scheduled arm over (n-1) x D booleans — on
+    # the Trollface 29.5 MB apiece, and the measured 184 ms of a 253 ms solve —
+    # while the forward pass below breaks the moment the arm can stop, which on
+    # that same solve was step 3525 of a horizon of 10639.  Building it in
+    # blocks makes the gather cost what the schedule actually uses.  The first
+    # block is the arm's own length because it cannot possibly arrive sooner:
+    # arriving means advancing n-1 times, one index per step.
+    okf = np.empty((n, D), bool)          # index n-1 sits in cell n-2
+    reach = np.zeros((n, D), bool)        # both are lazily paged, not touched
     reach[0, 0] = True
+    have = 0
+
+    def extend(upto):                     # -> columns [0, upto) of okf are real
+        nonlocal have
+        hi = min(D, max(int(upto), have + max(n, DP_BLOCK)))
+        col = okf[:, have:hi]
+        col[:] = True
+        for b, F in free_ab.items():
+            G = F[:, np.clip(prog_hi[b][have:hi], 0, F.shape[1] - 1)]
+            col[:n - 1] &= G
+            col[n - 1] &= G[n - 2]
+        have = hi
+
     for m in range(1, D):
+        if have < m:
+            extend(m)
         av = reach[:, m - 1] & okf[:, m - 1]
         col = av.copy()
         col[1:] |= av[:-1]
@@ -381,7 +710,7 @@ def _search_priority(paths, moving, static, cells, prog0, M, dt):
 
 def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
                horizon_mult=3.0, retry_orders=True, priority_search=True,
-               search_max_n=PRIORITY_SEARCH_MAX, verbose=True):
+               search_max_n=PRIORITY_SEARCH_MAX, jobs=None, verbose=True):
     """Frozen paths -> a merged, pause-scheduled timeline.
 
     -> dict(progress {arm: (M,) index}, order, moving, parked, pauses, finish,
@@ -426,7 +755,23 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
     nom = {a: (paths[a].n - 1) * dt for a in paths}
     M = int(np.ceil(max(nom.values()) * horizon_mult / dt)) + 64
 
-    free = {}
+    # EVERY IMAGE ANY ORDER COULD ASK FOR, IN ONE DISPATCH.  The set is not a
+    # guess: arm k is conducted against the arms before it and every parked
+    # arm, so the union over every order is exactly `moving x everyone else`,
+    # and the search used to discover that one image at a time — six serial
+    # waits, two of which were the transpose of two others.
+    t_img = time.time()
+    n_img0, n_hit0 = _IMAGE_STATS["built"], _IMAGE_STATS["cached"]
+    free = build_images(paths, [(a, b) for a in moving for b in paths if b != a],
+                        margin, sweep, jobs=jobs)
+    t_img = time.time() - t_img
+    images = dict(wall=float(t_img), built=_IMAGE_STATS["built"] - n_img0,
+                  cached=_IMAGE_STATS["cached"] - n_hit0,
+                  jobs=int(_IMAGE_STATS["jobs"]))
+    if verbose and free:
+        print(f"  collision images: {images['built']} built on "
+              f"{images['jobs']} process(es), {images['cached']} already in "
+              f"hand, {len(free)} read (both ways round) in {t_img:.1f} s")
 
     def cells(a, b):
         if (a, b) not in free:
@@ -519,7 +864,8 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
                 margin=margin, safety=float(safety), calib=float(calib),
                 sweep=float(sweep), M=m_last, dt=float(dt), free=free,
                 moving=moving, parked=static, attempts=int(n_attempts),
-                search=search, pause_total=float(sum(pauses.values())))
+                search=search, images=images,
+                pause_total=float(sum(pauses.values())))
 
 
 def hard_blocks(paths, margin=SAFETY_M + CALIB_M, sweep=SWEEP_K, free=None):

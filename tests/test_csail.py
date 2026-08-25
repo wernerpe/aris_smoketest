@@ -468,6 +468,230 @@ def test_priority_search_returns_the_minimum_makespan_order():
                                    retry_orders=True, verbose=False)["attempts"] >= 1
 
 
+def _busy_scene(n=130):
+    """Three moving arms and one parked, close enough to interfere."""
+    out = {}
+    for arm, lo, hi in ((31, 0.0, 0.30), (71, 0.0, 0.22), (2, 0.0, 0.26)):
+        q0 = np.asarray(FLEET[arm].q_seed, float)
+        out[arm] = ArmPath6(arm, np.linspace(q0, q0 + hi, n), 0.02)
+    q0 = np.asarray(FLEET[97].q_seed, float)
+    out[97] = ArmPath6(97, q0[None, :], 0.02)
+    return out
+
+
+def _brute_clearance(pi, pj, cap=coordination.BROAD_CAP):
+    """Every one of the 49 capsule pairs, no broad phase at all.
+
+    The independent reference for the two broad phases: whatever they reject,
+    the answer has to be the answer this returns.
+    """
+    d = coordination.seg_seg_dist(pi.A[:, :, None, None, :],
+                                  pi.B[:, :, None, None, :],
+                                  pj.A[None, None, :, :, :],
+                                  pj.B[None, None, :, :, :])
+    d = np.transpose(d, (0, 2, 1, 3)) - (pi.r[:, None] + pj.r[None, :])
+    return np.minimum(d.reshape(pi.n, pj.n, -1).min(2), cap).astype(np.float32)
+
+
+def test_the_broad_phase_drops_only_what_could_not_have_mattered():
+    """Rejecting a capsule pair must not change one cell of the matrix.
+
+    `clearance_matrix` clips at `cap`, so a capsule pair whose boxes are `cap`
+    apart cannot lower any cell below what is already recorded — that is the
+    whole argument, and it holds however the paths are tiled, so the same
+    matrix must come out at every tile size and from a reference that does no
+    rejecting whatever.  It is worth a test because the filter is the
+    difference between 49 exact distances per cell and about 13.
+    """
+    paths = _busy_scene(60)
+    for a, b in ((31, 71), (2, 31), (31, 97)):
+        pi, pj = paths[a], paths[b]
+        want = _brute_clearance(pi, pj)
+        for tile in (8, 32, 4096):
+            got = coordination.clearance_matrix(pi, pj, tile=tile)
+            assert np.array_equal(got, want), \
+                (f"({a},{b}) at tile {tile}: {np.count_nonzero(got != want)} "
+                 "cells differ from the unfiltered reference")
+        # and a block of rows is exactly those rows of the whole image
+        whole = coordination.free_cells(pi, pj, 0.08)
+        r0, r1 = 7, min(23, pi.n - 1)
+        assert np.array_equal(coordination.free_cells(pi, pj, 0.08,
+                                                      rows=(r0, r1)),
+                              whole[r0:r1]), f"({a},{b}): row block drifted"
+        # the picture is the same read the other way round, to the bit
+        assert np.array_equal(coordination.free_cells(pj, pi, 0.08), whole.T), \
+            f"({a},{b}): the image is not its own transpose"
+
+
+def _plain_dp(free_ab, prog_hi, n, horizon, deadline=None, rest=True):
+    """`_dp` with the whole reachable table built up front, and no blocking.
+
+    The straightforward reading of the same recurrence, kept as an independent
+    reference: `_dp` builds its free-cell table a block of time steps at a time
+    and stops when the arm arrives, which is worth a third of a solve and is
+    exactly the kind of change that can be right on every case a fixture
+    happens to contain.
+    """
+    M = horizon
+    D = M if deadline is None else int(min(max(deadline, 0) + 1, M))
+    rest_row = np.ones(M, bool)
+    if rest:
+        for b, F in free_ab.items():
+            rest_row &= F[n - 2, np.clip(prog_hi[b], 0, F.shape[1] - 1)]
+    rest_ok = np.logical_and.accumulate(rest_row[::-1])[::-1][:D]
+    ok = np.ones((n - 1, D), bool)
+    for b, F in free_ab.items():
+        ok &= F[:, np.clip(prog_hi[b][:D], 0, F.shape[1] - 1)]
+    okf = np.vstack([ok, ok[-1:]])
+    reach = np.zeros((n, D), bool)
+    reach[0, 0] = True
+    for m in range(1, D):
+        av = reach[:, m - 1] & okf[:, m - 1]
+        col = av.copy()
+        col[1:] |= av[:-1]
+        reach[:, m] = col
+        if reach[n - 1, m] and rest_ok[m]:
+            break
+    hits = np.flatnonzero(reach[n - 1] & rest_ok)
+    if not len(hits):
+        return None, None
+    m_end = int(hits[0])
+    prog = np.full(M, n - 1, int)
+    p, m = n - 1, m_end
+    while m > 0:
+        if p > 0 and reach[p - 1, m - 1] and okf[p - 1, m - 1]:
+            p -= 1
+        elif reach[p, m - 1] and okf[p, m - 1]:
+            pass
+        else:
+            raise RuntimeError("backtrack fell off the reachable set")
+        m -= 1
+        prog[m] = p
+    return prog, m_end
+
+
+def test_the_schedule_dp_builds_its_table_lazily_and_gets_the_same_answer():
+    """Same arrival, same progress, same refusals — deadline and rest included.
+
+    The randomised instances are deliberately mixed: some arms arrive early
+    (where the laziness bites), some are blocked outright (where it cannot),
+    and the deadlines straddle the arrival so both the "beaten the bound" and
+    "made it" branches are exercised.
+    """
+    rng = np.random.default_rng(20260825)
+    seen = dict(arrived=0, refused=0, bounded=0)
+    for _ in range(60):
+        n = int(rng.integers(3, 40))
+        nb = int(rng.integers(3, 40))
+        M = int(rng.integers(n + 2, 4 * n + 30))
+        blockers = {}
+        for b in range(int(rng.integers(0, 4))):
+            F = rng.random((n - 1, nb - 1)) > rng.uniform(0.05, 0.6)
+            blockers[b] = F
+        prog = {b: np.clip(np.cumsum(rng.integers(0, 2, M)), 0, nb - 2)
+                for b in blockers}
+        for deadline in (None, int(rng.integers(0, M + 5))):
+            for rest in (True, False):
+                got = coordination._dp(blockers, prog, n, M, deadline, rest)
+                want = _plain_dp(blockers, prog, n, M, deadline, rest)
+                assert (got[1] is None) == (want[1] is None), \
+                    f"one refused and the other did not (n={n}, M={M})"
+                if want[1] is None:
+                    seen["refused"] += 1
+                    continue
+                seen["arrived"] += 1
+                seen["bounded"] += deadline is not None
+                assert got[1] == want[1], \
+                    f"arrival {got[1]} vs {want[1]} (n={n}, M={M})"
+                assert np.array_equal(got[0], want[0]), \
+                    f"the progress traces differ (n={n}, M={M})"
+    assert seen["arrived"] > 20 and seen["refused"] > 5 and seen["bounded"] > 10, \
+        f"the instances did not cover both outcomes: {seen}"
+
+
+def test_the_image_bag_is_keyed_on_what_the_image_is_made_of():
+    """Built once per unordered pair, and kept for the pass that follows.
+
+    The conductor runs three or four times over one fleet and each pass
+    re-programmes one or two arms, so most pairs are bit-identical to the pass
+    before — but every pass builds fresh `ArmPath` objects, so a memo keyed on
+    identity would never hit.  What is pinned here: the same content hits
+    whatever object carries it, a changed path misses, a changed margin misses,
+    and the two directions of a pair cost ONE build between them.
+    """
+    coordination.clear_images()
+    paths = _busy_scene(80)
+    pairs = [(a, b) for a in (31, 71, 2) for b in paths if b != a]
+    before = dict(coordination._IMAGE_STATS)
+    bag = coordination.build_images(paths, pairs, 0.08, coordination.SWEEP_K,
+                                    jobs=1)
+    built = coordination._IMAGE_STATS["built"] - before["built"]
+    # 3 moving x 3 others = 9 ordered pairs, but only 6 unordered ones
+    assert len(bag) == 9 and built == 6, \
+        f"{len(bag)} images read, {built} built; want 9 read and 6 built"
+    for a, b in pairs:
+        assert np.array_equal(bag[(a, b)], bag[(b, a)].T if (b, a) in bag
+                              else bag[(a, b)])
+        assert np.array_equal(bag[(a, b)],
+                              coordination.free_cells(paths[a], paths[b], 0.08))
+
+    # SAME CONTENT, DIFFERENT OBJECTS: every one of them is already in hand
+    again = {a: ArmPath6(a, p.q, p.dt) for a, p in paths.items()}
+    assert all(again[a].key == paths[a].key for a in paths)
+    mark = coordination._IMAGE_STATS["built"]
+    bag2 = coordination.build_images(again, pairs, 0.08, coordination.SWEEP_K,
+                                     jobs=1)
+    assert coordination._IMAGE_STATS["built"] == mark, \
+        "a rebuilt path with identical content should not rebuild its images"
+    for k in bag:
+        assert np.array_equal(bag[k], bag2[k])
+
+    # a path that MOVED, and a margin that changed, are both misses
+    q = np.asarray(paths[71].q, float).copy()
+    q[:, 0] += 0.05
+    again[71] = ArmPath6(71, q, paths[71].dt)
+    assert again[71].key != paths[71].key
+    coordination.build_images(again, pairs, 0.08, coordination.SWEEP_K, jobs=1)
+    assert coordination._IMAGE_STATS["built"] == mark + 3, \
+        "only the three pairs that touch the arm that moved should rebuild"
+    coordination.build_images(paths, pairs, 0.09, coordination.SWEEP_K, jobs=1)
+    assert coordination._IMAGE_STATS["built"] == mark + 9, \
+        "a different margin is a different image and must be rebuilt"
+    coordination.clear_images()
+
+
+def test_conducting_on_a_pool_picks_the_same_order_as_conducting_serially():
+    """The priority search must not depend on how many cores built its images.
+
+    The images are the only thing the pool touches — the search itself is
+    serial and exact — but "the only thing" is worth pinning, because a row
+    block assembled out of order or an image read as its own transpose would
+    change the schedule that SHIPS while leaving every test about makespan
+    happy.  So: same winner, same makespan, same total pause, same images, and
+    the same again with everything already memoised.
+    """
+    want, saw = None, {}
+    for tag, jobs, wipe in (("serial", 1, True), ("pooled", 4, True),
+                            ("pooled again", 4, True), ("memoised", 4, False)):
+        if wipe:
+            coordination.clear_images()
+        res = coordination.coordinate(_busy_scene(), jobs=jobs, verbose=False)
+        saw[tag] = res["images"]
+        got = (round(float(res["duration"]), 12), tuple(res["order"]),
+               round(float(res["pause_total"]), 12),
+               tuple(res["search"]["order"]), res["search"]["n_dp"],
+               {k: int(v.sum()) for k, v in sorted(res["free"].items())})
+        if want is None:
+            want, first = got, tag
+        assert got == want, f"{tag} disagrees with {first}"
+    assert len(want[5]) == 9, "three moving arms should read nine images"
+    # the runs above have to have been different runs, or this pins nothing
+    assert saw["serial"]["jobs"] == 1 and saw["pooled"]["jobs"] == 4, \
+        f"the pool was never used: {saw}"
+    assert saw["serial"]["built"] == 6 and saw["memoised"]["built"] == 0, \
+        f"the memoised run rebuilt images: {saw}"
+
+
 def test_balancing_lowers_the_busiest_arm():
     """A cover optimal for pen-ups can be terrible for the clock.
 

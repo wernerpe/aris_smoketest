@@ -825,6 +825,12 @@ def build(a, on_certified=None):
     attribute of `a` because the per-profile argument objects are pickled to the
     conduct workers and a closure will not go.
     """
+    # A MODULE GLOBAL AND NOT A PARAMETER, because `coordinate` is four calls
+    # below here and the image pool is a property of the MACHINE rather than of
+    # any allocation.  It is read at every dispatch, so setting it here reaches
+    # the conducts of every profile, including the forked ones.
+    if getattr(a, "image_jobs", None) is not None:
+        coordination.IMAGE_JOBS = int(a.image_jobs)
     dt = 1.0 / (a.fps * a.substeps)
     if not getattr(a, "select_profile", False):
         phases, alt, pens, strokes, info = allocate_all(a)
@@ -1150,6 +1156,12 @@ def schedule_args(ap):
     # transits with them before this script ever freezes a timeline.
     ap.add_argument("--safety", type=float, default=coordination.SAFETY_M)
     ap.add_argument("--calib", type=float, default=coordination.CALIB_M)
+    ap.add_argument("--image-jobs", type=int, default=None,
+                    help="processes the conductor builds its collision images "
+                         "on (default: one per core).  1 is the serial build "
+                         "every number published before 2026-08-25 was "
+                         "measured on; the images are the same images either "
+                         "way, so this changes wall clock and nothing else")
     ap.add_argument("--search-max-n", type=int,
                     default=coordination.PRIORITY_SEARCH_MAX,
                     help="moving arms below which EVERY priority order is "
