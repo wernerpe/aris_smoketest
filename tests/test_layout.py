@@ -12,7 +12,8 @@ clears it.
 import numpy as np
 import pytest
 
-from aris_sixarm import fleet, frames, layout, mounts, rig_final, stroke_api
+from aris_sixarm import (fleet, frames, layout, mounts, rig_final, stroke_api,
+                         validate)
 from aris_sixarm.rig_final6 import SHEET_FINAL6
 
 
@@ -154,6 +155,172 @@ def test_certified_ready_pose_is_gated_not_merely_solved():
     assert frames.joint_margin(q) >= 0.30
     assert rep["worst"]["min_chain_z"] >= 0.02
     # an inverted arm hung 4 m up cannot certify anything: the solver RAISES
-    # rather than handing back an ungated pose
+    # rather than handing back an ungated pose.  The height is the SPEC's now
+    # (`study_spec` writes the base pose in), so asking about 4 m means
+    # building the arm at 4 m — and asking the 0.85 m arm about 4 m is a
+    # contradiction the function refuses instead of quietly ignoring.
+    high = layout.study_spec(spec.arm_id, "inv", spec.xy, h=4.0)
+    assert high.T_world_base()[2, 3] == 4.0
     with pytest.raises(RuntimeError):
+        layout.certified_ready_pose(high)
+    with pytest.raises(ValueError):
         layout.certified_ready_pose(spec, 4.0)
+
+
+# ---------------------------------------------------------------------------
+# THE h_inv TRAP (2026-08-25)
+# ---------------------------------------------------------------------------
+# `ArmSpec.T_world_base(h_inv=H_INV_DEFAULT)` defaults to 1.00 m, and v2 built
+# the study specs with `z=None, R=None`.  Every layout-study call site passes
+# `h_inv=LAYOUT_PROPOSED["h"]`, so the study was right — but the GENERIC draw
+# pipeline (planner, sequence, coordination, idle, scene_check, viz) never
+# passes it, so `ARIS_RIG=proposed scripts/draw.py` planned the whole fleet
+# 15 cm above where it is bolted, with its own mount boxes still at 0.850.
+# `study_spec` now writes the base pose into the spec.  These pin BOTH halves:
+# the bare call is right, and the explicit call did not move.
+def test_proposed_specs_know_their_own_height_without_being_told():
+    h = layout.LAYOUT_PROPOSED["h"]
+    assert h == 0.850
+    for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
+        T = spec.T_world_base()                     # NO ARGUMENT — the trap
+        assert T[2, 3] == h, (aid, T[2, 3])
+        # and hanging, not standing: the legacy inverted seat's rotation
+        assert np.allclose(T[:3, :3], frames.roty(np.pi) @ frames.rotz(spec.yaw),
+                           atol=0), aid
+        assert np.array_equal(T, spec.T_world_base(h))
+        assert np.array_equal(T, spec.T_world_base(1.00))   # explicit-R branch
+
+
+def test_the_pipeline_default_h_inv_now_reaches_the_right_base():
+    """The bug was never in `T_world_base` — it was in every caller that had
+    no height to pass.  `coordination.chain_world` is one of them, and it is
+    the one the conductor measures every inter-arm clearance with."""
+    from aris_sixarm import coordination
+    h = layout.LAYOUT_PROPOSED["h"]
+    spec = layout.FLEET_PROPOSED[31]
+    q = np.asarray(spec.q_seed, float)[None, :]
+    bare = coordination.chain_world(q, spec)         # h_inv=H_INV_DEFAULT=1.00
+    told = coordination.chain_world(q, spec, h_inv=h)
+    assert np.array_equal(bare, told)
+    # the shoulder hangs BELOW the 0.850 mount plane, not below a 1.00 one
+    assert bare[0, :, 2].max() <= h + 1e-9
+
+
+def test_every_swept_height_reproduces_the_legacy_transform_exactly():
+    """Nothing in the certified study shifts: for every h the study swept and
+    both families, the explicit-R branch returns bit-for-bit what the legacy
+    branch computed from the same inputs."""
+    def legacy(spec, h_inv):
+        T = np.eye(4)
+        if spec.mount == "floor":
+            T[:3, :3] = frames.rotz(spec.yaw)
+            T[:3, 3] = [*spec.xy, fleet.Z_FLOOR_BASE]
+        else:
+            T[:3, :3] = frames.roty(np.pi) @ frames.rotz(spec.yaw)
+            T[:3, 3] = [*spec.xy, h_inv]
+        return T
+
+    for h in (0.850, 0.922, 1.000):
+        for lay in (layout.paired_grid(h=h), dict(layout.LAYOUT_V1, h=h)):
+            for aid, spec in layout.build_fleet(lay).items():
+                assert np.array_equal(spec.T_world_base(h), legacy(spec, h)), \
+                    (h, aid)
+
+
+# ---------------------------------------------------------------------------
+# THE PARKED FLEET (2026-08-25)
+# ---------------------------------------------------------------------------
+# `spec.q_seed` is the home the sequencer flies back to and the configuration
+# every arm HOLDS for every phase it is not drawing in, so it is in the
+# conductor's collision images from t = 0.  The all-ceiling rig cannot inherit
+# the mount default and cannot aim all six at the canvas centre; these pin both
+# refusals with the numbers that motivate them.
+LAT = frames.PEN_LAT_HOLDER
+
+
+def _park_clearance(poses, fl):
+    """Min capsule clearance between any two arms holding `poses`.  Clipped
+    at `coordination.BROAD_CAP` — a value AT the cap means "at least"."""
+    from aris_sixarm import coordination
+    paths = {aid: coordination.ArmPath(aid, np.asarray(q, float)[None, :],
+                                       0.05, spec=fl[aid])
+             for aid, q in poses.items()}
+    ids = sorted(poses)
+    return min(float(np.min(coordination.clearance_matrix(paths[a], paths[b])))
+               for i, a in enumerate(ids) for b in ids[i + 1:])
+
+
+@pytest.fixture
+def lateral():
+    """The proposed rig's tool, for the duration of one test only."""
+    frames.activate_tool("lateral")
+    try:
+        yield frames.PEN_LAT
+    finally:
+        frames.activate_tool("inline")
+
+
+def test_the_parked_fleet_does_not_park_inside_the_table():
+    """The legacy inverted seed is NOT valid at h = 0.850 with the lateral
+    holder — it is 61.6 mm under the paper and 0.184 of joint margin, under
+    the 0.30 gate.  Six arms would park inside the table.  This pins the
+    refusal AND the replacement."""
+    bad = frames.Q_READY_INV
+    spec = layout.FLEET_PROPOSED[31]
+    rep = validate.check_pose(bad, spec, pen_lat=LAT)
+    assert not rep["ok"]
+    assert rep["worst"]["tip_z"] < -0.05          # under the paper
+    assert frames.joint_margin(bad) < 0.30
+
+    for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
+        q = spec.q_seed                            # what the pipeline reads
+        assert np.array_equal(q, np.asarray(layout.Q_PARK_PROPOSED[aid], float))
+        rep = validate.check_pose(q, spec, pen_lat=LAT)
+        assert rep["ok"], (aid, rep)
+        assert rep["worst"]["tip_z"] >= 0.09, aid          # hovering, not down
+        assert frames.joint_margin(q) >= 0.30, aid
+        assert rep["worst"]["min_frame_clearance"] >= 0.30, aid
+
+
+def test_the_parked_fleet_does_not_park_inside_itself(lateral):
+    """WHY THE BEARING IS OUTWARD.  Aimed at the canvas centre — which is what
+    one arm alone wants — the six park in a huddle and the closest pair
+    overlaps by 95.6 mm.  Away from the fleet centroid they fan out to the rim
+    and no two come within the broad-phase cap."""
+    fl = layout.FLEET_PROPOSED
+    assert _park_clearance(layout.Q_PARK_PROPOSED, fl) >= 0.25 - 1e-6
+
+    inward = {aid: layout.certified_ready_pose(s, pen_lat=LAT)[0]
+              for aid, s in sorted(fl.items())}
+    assert _park_clearance(inward, fl) < 0.0       # INTERPENETRATING
+
+
+def test_baked_park_poses_are_that_functions_own_output():
+    """The literals in `layout.py` are `certified_park_poses`' output on
+    `LAYOUT_PROPOSED`, so they cannot drift from the recipe that made them.
+    Derived from the BARE fleet: the park pose is also the IK seed, and a
+    fleet already carrying one would be seeded by its own answer."""
+    bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
+    assert all(np.array_equal(s.q_seed, frames.Q_READY_INV)
+               for s in bare.values()), "derive from the LEGACY seed"
+    made = layout.certified_park_poses(bare, pen_lat=LAT)
+    assert sorted(made) == sorted(layout.Q_PARK_PROPOSED)
+    for aid, q in made.items():
+        assert np.allclose(q, layout.Q_PARK_PROPOSED[aid], atol=5e-5), aid
+
+    # WHERE they hold the pen is the layout's own symmetry — three pairs, each
+    # the other's reflection through the canvas centre.  The JOINT vectors are
+    # not required to mirror and two of the three pairs happen to (`q3` of
+    # 13/97 differs by 0.25 rad): `ik.Q7_GRID` is not symmetric under that map,
+    # so which branch wins the min(margin, 2.5 sigma) ranking need not be.
+    W, H = SHEET_FINAL6
+    hov = {}
+    for aid, q in layout.Q_PARK_PROPOSED.items():
+        T = frames.fk(np.asarray(q, float))[0]
+        tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(pen_lat=LAT)
+        Twb = layout.FLEET_PROPOSED[aid].T_world_base()
+        hov[aid] = (Twb[:3, :3] @ tip + Twb[:3, 3])[:2]
+        assert np.allclose(hov[aid], layout.PARK_HOVER_PROPOSED[aid],
+                           atol=1e-3), aid
+    for a, b in ((13, 97), (17, 2), (31, 71)):
+        assert np.allclose(hov[a] + hov[b], [W, H], atol=2e-3), (a, b)

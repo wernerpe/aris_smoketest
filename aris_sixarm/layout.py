@@ -56,7 +56,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import mounts
-from .fleet import ArmSpec
+from .fleet import ArmSpec, Z_FLOOR_BASE
+from .frames import roty, rotz
 from .rig_final6 import SHEET_FINAL6
 
 # the measured strict-GO annuli, LATERAL tool (see module docstring)
@@ -73,7 +74,10 @@ PROFILES_INLINE = {
     ("inv", 1.000): (0.26, 0.64),
 }
 
-Z_FLOOR = 0.0127          # canvas m, surveyed legacy floor base plate top
+# canvas m, surveyed legacy floor base plate top.  THE SAME OBJECT as the
+# legacy rule `ArmSpec.T_world_base` applies to a floor mount, so a study
+# spec's explicit z cannot drift from the height the legacy branch gave it.
+Z_FLOOR = Z_FLOOR_BASE
 MIN_BASE_DIST = 0.50      # m, any two bases (horizontal)
 MIN_FLOOR_INV_DIST = 0.60 # m, floor base to inverted base (boom vs workspace)
 # m, a floor base's J1 axis must sit at least this far outside the web.  v1
@@ -124,19 +128,55 @@ class StudySpec(ArmSpec):
         return list(self.mount_boxes)
 
 
-def study_spec(arm_id, mount, xy, h=0.922, name=None, mount_boxes=()):
-    """One study arm.  Floor arms get z through T_world_base's legacy rule
-    (Z_FLOOR_BASE); inverted arms take `h` through the h_inv argument, so
-    callers pass h_inv=h to atlas/planner for those."""
-    yaw = 0.0
+def study_spec(arm_id, mount, xy, h=0.922, name=None, mount_boxes=(),
+               q_ready=None):
+    """One study arm, carrying its base pose EXPLICITLY (z and R).
+
+    WHY EXPLICIT, AND NOT THROUGH `h_inv` (2026-08-25).  v2 built these specs
+    with `z=None, R=None` and let `ArmSpec.T_world_base`'s legacy branch put
+    an inverted base at whatever `h_inv` the caller passed.  Every layout-study
+    call site passes `h_inv=LAYOUT_PROPOSED["h"]`, so the study was right — but
+    that argument DEFAULTS to `H_INV_DEFAULT = 1.00`, and the generic draw
+    pipeline (planner, sequence, coordination, idle, scene_check, viz) never
+    passes it.  A bare `T_world_base()` therefore hung the proposed fleet 15 cm
+    above where it is bolted, silently: the whole rig planned at h = 1.00 while
+    its own mount boxes stayed at 0.850.
+
+    So the pose lives in the spec, where the rest of the package can read it
+    without being told a height it has no way to know:
+
+        floor   z = Z_FLOOR_BASE (the legacy surveyed plate top), R = rotz(yaw)
+        inv     z = h,                                R = roty(pi) @ rotz(yaw)
+
+    These are EXACTLY the transforms the legacy branch computed for the same
+    inputs, so every certified study number reproduces; `T_world_base`'s
+    explicit-R branch simply ignores `h_inv` from now on — which is the same
+    contract the final rig has always had (`tests/test_final_rig.py`).  The
+    consequence a caller must know: an arm's height is now decided when the
+    SPEC is built, so asking about another height means building another spec.
+
+    `q_ready` is the pose the arm PARKS in — `ArmSpec.q_seed`, which is both
+    the IK seed and the home the sequencer flies back to.  `None` keeps the
+    mount's legacy default, which is right for the study's coverage numbers
+    (the seed does not move an atlas cell: the analytic solver enumerates all
+    four branches independently of it, only `ik.solve_cc` reads it) and WRONG
+    for anything that flies the arm — see `certified_park_poses`.
+    """
     if mount == "floor":
         # face the canvas centre: reach is yaw-invariant, but the seed pose
         # and q1 limits prefer the work in front of the arm
         c = np.array([SHEET_FINAL6[0] / 2, SHEET_FINAL6[1] / 2])
         yaw = float(np.arctan2(c[1] - xy[1], c[0] - xy[0]))
+        z, R = Z_FLOOR_BASE, rotz(yaw)
+    else:
+        yaw = 0.0
+        z, R = float(h), roty(np.pi) @ rotz(yaw)
     return StudySpec(arm_id, name or f"{mount}{arm_id}", mount,
                      (float(xy[0]), float(xy[1])), yaw, True,
                      COLORS.get(arm_id, (0.5, 0.5, 0.5)),
+                     z=float(z), R=tuple(np.asarray(R, float).flatten()),
+                     q_ready=None if q_ready is None else tuple(
+                         np.asarray(q_ready, float).reshape(7)),
                      mount_boxes=tuple(mount_boxes))
 
 
@@ -149,25 +189,31 @@ def arm_ids(layout):
     return fids, iids
 
 
-def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True):
+def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
+                q_park=None):
     """A layout dict -> {arm_id: StudySpec}, each carrying the OTHER arms'
     schematic mount hardware as static obstacle boxes.
 
     layout = dict(floor=[(x, y) x nf], inv=[(x, y) x (6 - nf)], h=0.922)
     `with_mounts=False` reproduces the v1 GREEN-FIELD specs exactly (no
     boxes) — that is how the study re-scores v1's winner honestly.
+    `q_park` is {arm_id: q} of park poses (`certified_park_poses`); `None`
+    leaves every arm on its mount's legacy default seed, which is what the
+    COVERAGE study wants and what nothing that FLIES the arm can use.
     """
     h = float(layout.get("h", 0.922))
     fids, iids = arm_ids(layout)
+    q_park = {} if q_park is None else dict(q_park)
     bare = {}
     for aid, xy in zip(fids, layout["floor"]):
-        bare[aid] = study_spec(aid, "floor", xy, h=h)
+        bare[aid] = study_spec(aid, "floor", xy, h=h, q_ready=q_park.get(aid))
     for aid, xy in zip(iids, layout["inv"]):
-        bare[aid] = study_spec(aid, "inv", xy, h=h)
+        bare[aid] = study_spec(aid, "inv", xy, h=h, q_ready=q_park.get(aid))
     if not with_mounts:
         return bare
     per = mounts.fleet_mount_boxes(bare, h, mount_model)
     return {aid: study_spec(s.arm_id, s.mount, s.xy, h=h,
+                            q_ready=q_park.get(aid),
                             mount_boxes=[b for o, bs in per.items()
                                          if o != aid for b in bs])
             for aid, s in bare.items()}
@@ -266,9 +312,17 @@ def pair_spacing_of(layout_d):
 # ===========================================================================
 # THE CERTIFIED READY POSE
 # ===========================================================================
-def certified_ready_pose(spec, h_inv, hover=0.10, sheet=SHEET_FINAL6,
-                         pen_lat=None):
+def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
+                         pen_lat=None, bearing=None):
     """A gated READY pose for one study arm with the LATERAL tool.
+
+    `h_inv` IS NO LONGER WHAT DECIDES THE HEIGHT — `study_spec` writes the base
+    pose into the spec, so the spec is the truth and `None` is the honest
+    default.  A height passed here must AGREE with the spec's own, and a
+    disagreement raises rather than being silently ignored: this function used
+    to be the one place a caller could ask about a different height, and it
+    stops being so quietly enough to hide a fifteen-centimetre error.  To ask
+    about another height, build the spec at that height.
 
     `pen_lat` defaults to the lateral holder EXPLICITLY rather than to the
     process-global ACTIVE tool: this is a study function, the study's tool is
@@ -276,12 +330,15 @@ def certified_ready_pose(spec, h_inv, hover=0.10, sheet=SHEET_FINAL6,
     that leaks into every other module) just to ask for a ready pose.
 
     Hover `hover` m over a comfortable point of the arm's own annulus, on the
-    ray towards the canvas centre.  Scans 8 tool yaws x the q7 grid x all IK
-    branches — with the lateral holder phi is a REAL DOF, so a hover pinned to
-    phi = 0 can be unreachable at a spot the arm covers at another phi.  Keeps
-    the best min(margin, 2.5 sigma) among poses that pass `validate.check_pose`
-    with the PEN TIP above the paper — the check that caught the legacy
-    inverted ready pose dipping 16 mm under at this h.
+    ray towards the canvas centre — or along `bearing`, a fixed (dx, dy)
+    direction in the canvas frame, which is what `certified_park_poses` hands
+    in: six arms that all reach for the middle of the canvas end up INSIDE
+    each other (see there).  Scans 8 tool yaws x the q7 grid x all IK branches —
+    with the lateral holder phi is a REAL DOF, so a hover pinned to phi = 0 can
+    be unreachable at a spot the arm covers at another phi.  Keeps the best
+    min(margin, 2.5 sigma) among poses that pass `validate.check_pose` with the
+    PEN TIP above the paper — the check that caught the legacy inverted ready
+    pose dipping 16 mm under at this h.
 
     -> (q (7,), hover xy (2,), validate report).  Raises if none is certified.
 
@@ -294,10 +351,17 @@ def certified_ready_pose(spec, h_inv, hover=0.10, sheet=SHEET_FINAL6,
                          tool_offset)
     from .validate import check_pose
 
+    if h_inv is not None and abs(float(h_inv) - float(spec.z)) > 1e-12:
+        raise ValueError(
+            f"arm {spec.arm_id} is built at base z = {spec.z}, not "
+            f"{float(h_inv)}: `study_spec` carries the pose now, so a "
+            "different height means a different spec, not a different "
+            "argument")
     lat = PEN_LAT_HOLDER if pen_lat is None else float(pen_lat)
     W, H = sheet
     b = np.asarray(spec.xy, float)
-    u = np.array([W / 2, H / 2]) - b
+    u = (np.array([W / 2, H / 2]) - b if bearing is None
+         else np.asarray(bearing, float).reshape(2))
     u = u / max(float(np.linalg.norm(u)), 1e-9)
     Twb_inv = np.linalg.inv(spec.T_world_base(h_inv))
     off = tool_offset(pen_lat=lat)
@@ -317,13 +381,56 @@ def certified_ready_pose(spec, h_inv, hover=0.10, sheet=SHEET_FINAL6,
                     rep = check_pose(q, spec, h_inv=h_inv, pen_lat=lat)
                     if not rep["ok"] or rep["worst"]["tip_z"] <= 0.0:
                         continue
+                    # `pen_lat=lat`, NOT the process global.  This is the
+                    # ranking key, and a study function that took its tool
+                    # explicitly everywhere except here would rank the
+                    # candidates by the ACTIVE tool's wrist — which silently
+                    # picked a different pose for arm 31 depending on whether
+                    # ARIS_TOOL happened to be set.
                     key = min(m, 2.5 * metrics.sigma_min(
-                        metrics.tip_jacobian(q)))
+                        metrics.tip_jacobian(q, pen_lat=lat)))
                     if best is None or key > best[0]:
                         best = (key, q, xy, rep)
         if best is not None:
             return best[1], best[2], best[3]
     raise RuntimeError(f"no certified ready pose for arm {spec.arm_id}")
+
+
+def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None):
+    """Where the six arms WAIT. -> {arm_id: q (7,)}, one certified pose each.
+
+    THE PARK POSE IS NOT DECORATION AND IT IS NOT INHERITED.  `spec.q_seed` is
+    the home the sequencer flies back to, the pose `paper.route` folds through
+    on a long transit, and the configuration every arm holds for the whole of
+    every phase it is not drawing in — so it is in the conductor's collision
+    images from t = 0 to the end.  The all-ceiling rig cannot use the mount
+    default: at h = 0.850 with the lateral holder the legacy `Q_READY_INV`
+    puts the pen tip 61.6 mm BELOW the paper and its joint margin at 0.184,
+    under the 0.30 gate — SIX arms parked inside the table.
+
+    BEARING, AND WHY IT IS OUTWARD.  `certified_ready_pose` aims each arm at
+    the canvas centre, which is right for one arm and catastrophic for six
+    hung over the same canvas: on this layout it parks the fleet in a huddle
+    and the closest pair (13, 17) INTERPENETRATES by 95.6 mm.  So each arm is
+    sent along its own base's bearing AWAY from the fleet centroid — the one
+    direction that is different for every arm and that no two of them share —
+    and the fleet fans out to the canvas rim: >= 250 mm between every pair
+    (`coordination.BROAD_CAP`, i.e. the clip, i.e. "at least"), 0.508 m from
+    every neighbour's steel.  For `paired_grid` the centroid is the canvas
+    centre, so this is exactly "each arm reaches for its own nearest rim".
+
+    Every pose is `certified_ready_pose`'s: gated by `validate.check_pose`
+    with the pen tip above the paper, best min(margin, 2.5 sigma).  Costs
+    ~0.4 s for six arms; `Q_PARK_PROPOSED` is this function's own output on
+    `LAYOUT_PROPOSED`, baked so that importing the rig does not re-solve it.
+    """
+    cent = np.mean([np.asarray(s.xy, float) for s in fleet.values()], axis=0)
+    out = {}
+    for aid, spec in sorted(fleet.items()):
+        out[aid] = certified_ready_pose(
+            spec, hover=hover, sheet=sheet, pen_lat=pen_lat,
+            bearing=np.asarray(spec.xy, float) - cent)[0]
+    return out
 
 
 # ===========================================================================
@@ -373,9 +480,42 @@ LAYOUT_V1 = dict(
 # between six arms whose workspaces now overlap on 55.98 % of the canvas.
 LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850)
 
+# THE PARKED FLEET.  `certified_park_poses(build_fleet(LAYOUT_PROPOSED))`,
+# baked the way `frames.Q_READY_*` are baked and for the same two reasons: an
+# operator types these into Desk, and importing a rig should not re-solve
+# six IK searches.  `tests/test_layout.py` re-derives them and compares, so
+# the literals cannot drift from the function that made them.
+#
+# Every one of them: pen tip +0.100 m over the paper, min chain z 0.210 m,
+# 0.508 m from the nearest neighbour's steel, joint margin >= 0.644 (gate
+# 0.30), sigma >= 0.302 (gate 0.14), and >= 0.250 m from every other parked
+# arm.  WHERE they hold the pen is the layout's own figure — three pairs,
+# (13, 97), (17, 2), (31, 71), each the other's reflection through the canvas
+# centre, which is the check that this is a shape and not six coincidences.
+# The JOINT vectors mirror in two of the three pairs and not the third: the
+# q7 grid is not symmetric under that reflection, so which branch wins the
+# min(margin, 2.5 sigma) ranking need not be either.
+#
+# SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
+# yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
+Q_PARK_PROPOSED = {
+    13: (0.0711, 0.9323, -1.4449, -1.9738, -2.1391, 1.2382, -0.5932),
+    17: (-0.0673, -0.9058, -1.7116, -1.9764, 2.1624, 1.2186, 2.1750),
+    31: (1.0024, 1.0718, -1.3908, -1.6772, -2.0593, 1.3622, -1.7795),
+    71: (1.0024, -1.0718, 1.7508, -1.6772, -2.0593, 1.3622, -1.7795),
+    2:  (-0.0673, 0.9058, 1.4300, -1.9764, 2.1624, 1.2186, 2.1750),
+    97: (0.0711, -0.9323, 1.6967, -1.9738, -2.1391, 1.2382, -0.5932),
+}
+# where each of them holds the pen (canvas m), for the log and the scene
+PARK_HOVER_PROPOSED = {
+    13: (0.462, 0.072), 17: (1.341, 0.072),
+    31: (0.050, 1.815), 71: (1.753, 1.815),
+    2:  (0.462, 3.559), 97: (1.341, 3.559),
+}
+
 
 def _proposed():
-    return build_fleet(LAYOUT_PROPOSED)
+    return build_fleet(LAYOUT_PROPOSED, q_park=Q_PARK_PROPOSED)
 
 
 FLEET_PROPOSED = _proposed()

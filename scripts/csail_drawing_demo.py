@@ -41,6 +41,11 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
 from aris_sixarm.fleet import ACTIVE_RIG, FLEET, SHEET          # noqa: E402
+# THE TOOL IS A CHOICE TOO, AND THIS FILE HAS TO MAKE THE SAME ONE.  The pen is
+# drawn here and the tip is re-derived here, so a demo that hard-codes the
+# inline offset renders the wrong pen — and its own fidelity assert catches it
+# 110 mm out.  `frames.PEN_LAT` is the ACTIVE lateral offset (ARIS_TOOL).
+from aris_sixarm.frames import PEN_LAT                          # noqa: E402
 
 # the CSAIL logo's own two inks (trace.GREY_RGB / trace.ORANGE_RGB), inlined so
 # this file imports nothing that needs the system python's numpy stack.  They
@@ -51,7 +56,7 @@ from aris_sixarm.fleet import ACTIVE_RIG, FLEET, SHEET          # noqa: E402
 INK_HEX = {"grey": "#666665", "orange": "#cb6608"}
 from pydrake.geometry import (Box, Cylinder, Meshcat,           # noqa: E402
                               MeshcatVisualizer, Rgba, Sphere)
-from pydrake.math import RigidTransform                          # noqa: E402
+from pydrake.math import RigidTransform, RotationMatrix          # noqa: E402
 from pydrake.multibody.parsing import Parser                     # noqa: E402
 from pydrake.multibody.plant import AddMultibodyPlantSceneGraph  # noqa: E402
 from pydrake.systems.framework import DiagramBuilder             # noqa: E402
@@ -98,6 +103,14 @@ def frame_boxes():
     a viewer can see that the two frames abut, that the canvas spans the seam,
     and how much of the middle band is steel.  On the 3-arm rig it is that
     unit's 34 boxes.  Empty on the legacy layout, which has no box model.
+
+    On the PROPOSED all-ceiling rig there is no frame drawing yet, and the only
+    steel any gate ever saw is the schematic mount hardware each spec carries
+    for its neighbours (`aris_sixarm/mounts.py`): six plates and six booms.  It
+    is taken from the SPECS rather than rebuilt from `mounts.MOUNTS`, so the
+    boxes drawn are the boxes `scene_check` measured against — the union over
+    arms, deduplicated by name, because every box is in five arms' lists and in
+    none of its own arm's.
     """
     from aris_sixarm import rig_final, rig_final6 as r6
     if ACTIVE_RIG in ("final6", "final6_opt"):
@@ -106,6 +119,13 @@ def frame_boxes():
                                if ACTIVE_RIG == "final6_opt" else None))
     elif ACTIVE_RIG == "final":
         boxes = rig_final.frame_boxes_canvas(zmin=-10)
+    elif ACTIVE_RIG == "proposed":
+        seen, boxes = set(), []
+        for spec in FLEET.values():
+            for b in spec.static_obstacles():
+                if b["name"] not in seen:
+                    seen.add(b["name"])
+                    boxes.append(b)
     else:
         return []
     return [(b["name"].replace(":", "_"), b["lo"], b["hi"]) for b in boxes]
@@ -140,6 +160,25 @@ def build_scene(pen_ext, inks):
         length = float(pen_ext[aid]) + PEN_MARGIN
         for ink, hexcol in inks.items():
             name = f"pen{aid}_{ink}"
+            if PEN_LAT:
+                # THE LATERAL HOLDER, AS THE TWO CAPSULES THE PLANNER USES:
+                # bracket TCP -> corner along hand x, pen corner -> tip along
+                # hand z (frames.tool_points_many).  Drawing it as one axial
+                # cylinder would put the pen 110 mm from where the arm was
+                # certified to hold it.
+                plant.RegisterVisualGeometry(
+                    plant.GetBodyByName("panda_hand", mi),
+                    RigidTransform(RotationMatrix.MakeYRotation(np.pi / 2),
+                                   [PEN_LAT / 2.0, 0.0, D_HAND_TCP]),
+                    Cylinder(PEN_R, abs(PEN_LAT)), f"{name}_bracket",
+                    _rgba(hexcol))
+                plant.RegisterVisualGeometry(
+                    plant.GetBodyByName("panda_hand", mi),
+                    RigidTransform([PEN_LAT, 0.0,
+                                    D_HAND_TCP + float(pen_ext[aid]) / 2.0]),
+                    Cylinder(PEN_R, float(pen_ext[aid])), name, _rgba(hexcol))
+                pen_names.setdefault(aid, {})[ink] = name
+                continue
             plant.RegisterVisualGeometry(
                 plant.GetBodyByName("panda_hand", mi),
                 RigidTransform([0.0, 0.0, tip_z - length / 2.0]),
@@ -353,8 +392,11 @@ def main():
             ref = P[i0] + (fi - i0) * (P[i0 + 1] - P[i0])
             X = plant.EvalBodyPoseInWorld(pctx, plant.GetBodyByName("panda_hand",
                                                                     arms[aid]))
+            # the ACTIVE tool's own offset, not a hard-coded axial one: with
+            # the lateral holder the tip is 110 mm off the wrist axis and this
+            # gate is the only thing that would ever notice
             tip = X.translation() + X.rotation().matrix() @ [
-                0, 0, D_HAND_TCP + pen_ext[aid]]
+                PEN_LAT, 0, D_HAND_TCP + pen_ext[aid]]
             checks.append(np.linalg.norm(tip - [ref[0], ref[1], 0.0]))
             n_draw += 1
     meshcat.StopRecording()
