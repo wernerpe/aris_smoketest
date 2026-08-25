@@ -623,19 +623,39 @@ On the two-web layout that paper does not exist and neither does that ink; all
 four hanging arms contribute, two from each unit. The two floor arms draw
 nothing, which is geometry: they sit 1.5 m from any placement worth having.
 
-## The layout study — 2 floor + 4 ceiling arms, green field (2026-08-25)
+## The layout study — hang all six, mounts modelled (2026-08-25, v2)
 
-`docs/LAYOUT_STUDY.md`: with the LATERAL tool fixed, the user's "re-evaluate
-the arm positions" ran as a coarse-to-fine search (measured GO annuli →
-disc-cover multi-start → real 4 cm atlases → certified 2 cm atlases).  The
-winner — floor pair off the south short edge, two transverse inverted pairs
-at y ≈ 1.40 / 2.87, h = 0.85 — covers **99.38 %** of the merged canvas
-strict-GO (≥2-arm 50.31 %) against 75.93 % for the current rig inline and
-**84.91 %** for the current rig with the lateral tool alone
-(`out/atlas_final6_opt_lat/`).  GREEN FIELD: no steel or transport is
-modelled for the new positions — this informs the physical redesign, and
-structure modelling follows the pick.  `ARIS_RIG=proposed` selects it
-(`aris_sixarm/layout.py`); `out/layout_study.png`, `out/proposed_scene.html`.
+`docs/LAYOUT_STUDY.md`: v1 of this study modelled NO mounting hardware, so its
+99.38 % winner was a kinematic ceiling.  v2 makes the schematic mounts
+(`aris_sixarm/mounts.py` — booms r = 0.10 up to a 2.34 m grid, 0.226×0.190×0.05
+base plates, 0.30×0.25 floor pedestals) **first-class static obstacles at every
+stage**, through the same `static_obstacles → atlas.solve_cell(boxes=…) →
+chain_static_clearance` plumbing the final rig's frame uses, and adds an
+all-ceiling family on a second mandate.
+
+**Re-scored under mounts, v1's winner is 99.28 %** — union −0.10 pp, ≥2-arm
+−2.27 pp (50.31 → 48.04 %).  Every cell of that loss falls on the two FLOOR
+arms; the four inverted arms lose *identically nothing*.  That is physics, not
+modelling slack: a drawing pose hangs its whole chain low (an inverted arm's
+tops out 0.33 m *below* its own base plane, a floor arm's elbow at 0.650 m), so
+all inverted mount steel at z ≥ h is unreachable — while the floor PEDESTALS
+sit at the pen's own working height just outside the web and eat the edge their
+neighbours want to draw.
+
+So the configuration changed: **hang all six, on a regular 2×3 ceiling grid at
+h = 0.85** — x = 0.5967 / 1.2067 (centre line ± 0.305), y = 0.6051 / 1.8153 /
+3.0255 (H/6, H/2, 5H/6), i.e. `layout.paired_grid(0.61, 3, 0.850)`.  Certified
+**99.98 %** union strict-GO with mounts active, **55.98 %** ≥2-arm, 13.95 %
+≥3-arm, **3 dead cells out of 16 562**, all six certified ready poses clear of
+every neighbour's steel by ≥ 0.35 m — against 99.37 % / 47.82 % / 105 dead for
+the best 2+4 layout, and 84.91 % for the current rig with the lateral tool
+alone (`out/atlas_final6_opt_lat/`).  The mechanism is per-arm coverage: a
+hanging arm sits OVER the canvas and spends its whole annulus on paper (28–32 %
+each), where a floor arm must stand outside the web and manages 11–16 %.  All
+six mounts are then identical and both short edges are free for transport.
+Not modelled: inter-arm collision at 56 % overlap, the grid's own members,
+transport.  `ARIS_RIG=proposed` selects it (`aris_sixarm/layout.py`);
+`out/layout_study.png`, `out/proposed_scene.html`.
 
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 

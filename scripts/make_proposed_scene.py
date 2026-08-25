@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Static meshcat scene of the PROPOSED layout (docs/LAYOUT_STUDY.md).
 
-2 floor + 4 ceiling-inverted arms on the merged canvas, LATERAL pen holder
-visible (bracket + offset pen), every arm in a READY pose derived for this
-tool: hover 0.10 m over a comfortable point of the arm's own annulus, IK'd
-with the lateral offset and gated by `validate.check_pose` — margin >= 0.30,
-chain above the paper, PEN TIP above the paper (the check that caught the
-legacy inverted ready pose dipping 16 mm under).
+The winning layout on the merged canvas with the LATERAL pen holder visible
+(bracket + offset pen), every arm in the CERTIFIED ready pose
+(`layout.certified_ready_pose` — the same one the study's fine stage gates).
 
-GREEN FIELD: the ceiling is drawn as a nominal slab at z = 2.0 m and each
-inverted arm hangs from a schematic boom; no real structure exists for these
-positions yet.
+v2: THE SCHEMATIC MOUNT HARDWARE IS DRAWN, at the dimensions the study
+treated as obstacles (`aris_sixarm/mounts.py`): each inverted arm's base
+plate (0.226 x 0.190 x 0.05, sitting on the base flange) and its boom
+(r = 0.10 cylinder up to the 2.34 m ceiling grid), each floor arm's pedestal
+(0.30 x 0.25, from the plate top down).  Each arm's ready pose is reported
+with its clearance to every OTHER arm's hardware, so the picture and the
+numbers cannot drift apart.
 
     python3 scripts/make_proposed_scene.py         -> out/proposed_scene.html
 """
@@ -30,73 +31,40 @@ import meshcat  # noqa: E402
 import meshcat.geometry as g  # noqa: E402
 import meshcat.transformations as tf  # noqa: E402
 
-from aris_sixarm import atlas, ik, metrics  # noqa: E402
-from aris_sixarm.frames import joint_margin, rotx, rotz, tool_offset  # noqa: E402
-from aris_sixarm.layout import build_fleet, LAYOUT_PROPOSED  # noqa: E402
+from aris_sixarm import atlas, mounts, rig_final  # noqa: E402
+from aris_sixarm.layout import (build_fleet, certified_ready_pose,  # noqa: E402
+                                LAYOUT_PROPOSED)
 from aris_sixarm.rig_final6 import SHEET_FINAL6  # noqa: E402
-from aris_sixarm.validate import check_pose  # noqa: E402
 from aris_sixarm.viz import robot_model  # noqa: E402
 
 W, H = SHEET_FINAL6
-CEILING_Z = 2.0
+M = mounts.MOUNTS
+CEILING_Z = M.ceiling_z
 
 
 def _hex(rgb):
     return int(rgb[0] * 255) << 16 | int(rgb[1] * 255) << 8 | int(rgb[2] * 255)
 
 
-def ready_pose(spec, h_inv):
-    """Hover 0.10 m over the arm's comfortable patch, lateral tool, gated.
-
-    Scans 8 tool yaws x the q7 grid x all branches — with the lateral holder
-    phi is a real DOF and a hover pinned to phi = 0 can be unreachable at a
-    spot the arm covers at another phi (`writing.lifted_config` keeps the
-    one-convention phi = 0 for the INLINE fleet; a phi-aware hover solver
-    for the full pipeline is follow-up work).  Best min(margin, 2.5 sigma)
-    among poses that pass `validate.check_pose` with the pen above paper —
-    the frames.py ready-pose recipe, at the new tool.
-    """
-    b = np.asarray(spec.xy, float)
-    c = np.array([W / 2, H / 2])
-    u = c - b
-    u = u / max(np.linalg.norm(u), 1e-9)
-    Twb = spec.T_world_base(h_inv)
-    Twb_inv = np.linalg.inv(Twb)
-    off = tool_offset()                      # ACTIVE tool (lateral)
-    best = None
-    for r in (0.55, 0.62, 0.48, 0.70, 0.40):
-        xy = np.clip(b + r * u, [0.05, 0.05], [W - 0.05, H - 0.05])
-        for phi in np.linspace(0, 2 * np.pi, 8, endpoint=False):
-            R = rotz(phi) @ rotx(np.pi)
-            T_w = np.eye(4)
-            T_w[:3, :3] = R
-            T_w[:3, 3] = np.array([xy[0], xy[1], 0.10]) - R @ off
-            T_b = Twb_inv @ T_w
-            for q7 in ik.Q7_GRID:
-                for q in ik.solve(T_b, q7, spec.q_seed):
-                    m = joint_margin(q)
-                    if m < 0.30:
-                        continue
-                    rep = check_pose(q, spec, h_inv=h_inv)
-                    if not rep["ok"] or rep["worst"]["tip_z"] <= 0.0:
-                        continue
-                    s = metrics.sigma_min(metrics.tip_jacobian(q))
-                    key = min(m, 2.5 * s)
-                    if best is None or key > best[0]:
-                        best = (key, q, xy, rep)
-        if best is not None:
-            return best[1], best[2], best[3]
-    raise RuntimeError(f"no certified ready pose for arm {spec.arm_id}")
-
-
 def main():
+    # ALWAYS the registered recommendation — the scene must show what
+    # `ARIS_RIG=proposed` gives, not whatever happened to rank first in the
+    # last search.  The atlas cloud is the certified sweep OF THAT layout,
+    # matched by coordinates rather than by index.
     lay = LAYOUT_PROPOSED
+    h = float(lay.get("h", 0.922))
+    fine_dir = None
     cand = ROOT / "out" / "layout_candidates.json"
     if cand.exists():
         rec = json.loads(cand.read_text())
-        if rec.get("fine"):
-            lay = rec["fine"][0]["layout"]
-    h = float(lay.get("h", 0.922))
+        want = np.round(np.asarray(sorted(map(tuple, lay["inv"]))), 4)
+        for entry in list(rec.get("grid", [])) + list(rec.get("fine", [])):
+            got = np.round(np.asarray(sorted(map(tuple,
+                                                 entry["layout"]["inv"]))), 4)
+            if got.shape == want.shape and np.allclose(got, want, atol=2e-3) \
+                    and abs(entry["layout"]["h"] - h) < 1e-9:
+                fine_dir = Path(entry["dir"])
+                break
     fl = build_fleet(lay)
     links, joints = robot_model.load_model()
 
@@ -115,9 +83,8 @@ def main():
     vis["ceiling"].set_transform(
         tf.translation_matrix([W / 2, H / 2, CEILING_Z + 0.015]))
 
-    # strict-GO cloud from the fine atlas of the winner, if present
-    fine_dir = ROOT / "out" / "layout_study" / "fine_0"
-    if fine_dir.exists():
+    # strict-GO cloud from the certified atlas of THIS layout, if present
+    if fine_dir is not None and fine_dir.exists():
         for f in sorted(fine_dir.glob("atlas_arm*.npz")):
             d = np.load(f)
             arr, aid = d["data"], int(d["arm_id"])
@@ -139,34 +106,49 @@ def main():
         vis[f"bases/{name}"].set_object(g.Sphere(0.045),
                                         g.MeshLambertMaterial(color=col))
         vis[f"bases/{name}"].set_transform(Twb)
+        # THE SCHEMATIC MOUNT HARDWARE, at the dimensions the study treated
+        # as obstacles — drawn so the picture and the numbers cannot drift
         if spec.mount == "inv":
-            length = CEILING_Z - h
+            vis[f"plates/{name}"].set_object(
+                g.Box([*M.plate_xy, M.plate_t]),
+                g.MeshLambertMaterial(color=0x555555))
+            vis[f"plates/{name}"].set_transform(tf.translation_matrix(
+                [spec.xy[0], spec.xy[1], h + M.plate_t / 2]))
+            length = CEILING_Z - (h + M.plate_t)
             vis[f"booms/{name}"].set_object(
-                g.Cylinder(length, 0.05),
+                g.Cylinder(length, M.boom_r),
                 g.MeshLambertMaterial(color=col, opacity=0.55))
             vis[f"booms/{name}"].set_transform(
                 tf.translation_matrix([spec.xy[0], spec.xy[1],
-                                       h + length / 2])
+                                       h + M.plate_t + length / 2])
                 @ tf.rotation_matrix(np.pi / 2, [1, 0, 0]))
         else:
             vis[f"stands/{name}"].set_object(
-                g.Box([0.23, 0.19, 0.013]),
+                g.Box([*M.ped_xy, M.ped_drop]),
                 g.MeshLambertMaterial(color=0x555555))
-            vis[f"stands/{name}"].set_transform(
-                tf.translation_matrix([spec.xy[0], spec.xy[1], 0.006]))
-        q, xy, rep = ready_pose(spec, h)
+            vis[f"stands/{name}"].set_transform(tf.translation_matrix(
+                [spec.xy[0], spec.xy[1], M.z_floor - M.ped_drop / 2]))
+        q, xy, rep = certified_ready_pose(spec, h)
         robot_model.add_robot(vis, f"robots/{name}", links, joints, q, Twb,
                               pen_color=col)
-        tip = Twb[:3, :3] @ frames.tip_pos(q) + Twb[:3, 3]
+        T, pts = frames.fk(q)
+        P = np.vstack([pts] + list(frames.tool_points_many(
+            T[None], pen_lat=frames.PEN_LAT_HOLDER)))
+        Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
+        cl = float(rig_final.chain_static_clearance(
+            Pw, spec.static_obstacles())[0])
+        gate = "OK" if cl >= rig_final.STATIC_MARGIN else "VIOLATION"
         print(f"arm {aid:>2} ({spec.mount:5s}) ready over ({xy[0]:.2f}, "
               f"{xy[1]:.2f}): margin {rep['worst']['joint_margin']:.3f}, "
-              f"tip z {tip[2] * 1000:+.0f} mm, chain z "
-              f"{rep['worst']['min_chain_z'] * 1000:.0f} mm")
+              f"tip z {rep['worst']['tip_z'] * 1000:+.0f} mm, "
+              f"mount clearance {cl:+.3f} m {gate}")
 
     html = vis.static_html()
     out = ROOT / "out" / "proposed_scene.html"
     out.write_text(html)
-    print(f"wrote {out} ({len(html) / 1e6:.1f} MB), layout h={h}")
+    nf = sum(s.mount == "floor" for s in fl.values())
+    print(f"wrote {out} ({len(html) / 1e6:.1f} MB), {nf}+{6 - nf} layout "
+          f"h={h}, mounts drawn (boom r={M.boom_r}, ceiling {CEILING_Z} m)")
 
 
 if __name__ == "__main__":
