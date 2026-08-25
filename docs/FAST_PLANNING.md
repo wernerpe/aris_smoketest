@@ -655,17 +655,17 @@ would really see.
 
 The comparison is on the outcome (refused or not), the makespan, the priority
 order it chose, the pause total, a hash of every arm's progress array and a hash
-of every collision image built. All 26 replay through the new build in 201.4 s;
-of the 12 the old build has been through at the time of writing — all nine of the
-profile that ships, and three of the pruned ones —
+of every collision image built:
 
 | | |
 |---|---|
-| conducts compared | 12 |
-| refusals reproduced as refusals | 9 |
+| conducts compared | **26** — every one of the run |
+| refusals reproduced as refusals | 23 |
 | certified conducts, same makespan AND same priority order | 3 |
+| progress arrays compared, by hash | 18 |
+| collision images compared, by hash | 45 |
 | **conducts whose schedule differs** | **none** |
-| replay wall clock | 2749.3 s -> 51.8 s (**53.1x**) |
+| replay wall clock | 9528.3 s -> 188.9 s (**50.4x**) |
 
 A conduct that refuses is as much a result as one that certifies: the six passes
 the split allocation spends before giving up have to give up for the same reason
