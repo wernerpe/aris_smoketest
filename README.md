@@ -62,7 +62,16 @@ aris_sixarm/
   validate.py      independent re-derivation of every invariant from raw outputs
   trace.py         raster art -> pen strokes: colour unmixing, Zhang-Suen thinning,
                    skeleton-graph tracing that continues STRAIGHT THROUGH crossings,
-                   boundary contours for solid glyphs  (numpy/PIL only)
+                   boundary contours for solid glyphs  (numpy/PIL only).
+                   §7 `trace_art` does the same for ANY picture — the ink count
+                   is measured (`detect_inks`), the working resolution is fixed
+                   rather than upsampled, and the line/fill threshold is
+                   measured off the picture's own skeleton (`auto_fill_erode`);
+                   §8 `trace_svg` flattens a vector source into the same shape
+  artwork.py       where a traced picture goes on the paper and how big: the
+                   atlas-proxy + real-allocation search and the "largest within
+                   1 pp of the best coverage" rule, shared by csail_place.py
+                   and draw.py; plus the ink-name -> colour palette
   allocate.py      strokes x arms -> certified per-arm programs: interval probing
                    via plan_stroke, pen-colour partition enumeration, greedy
                    interval cover, mid-overlap handoff cuts, dropped-span report;
@@ -94,7 +103,13 @@ scripts/
   csail_place.py   placement search: scale x translation, atlas proxy then real
                    allocations, "largest size within 1 pp of the best coverage"
   csail_schedule.py  allocate -> freeze timelines -> conduct -> validate -> npz
-  csail_drawing_demo.py  drake/meshcat playback of that npz (venv python3.10)
+  csail_drawing_demo.py  drake/meshcat playback of that npz (venv python3.10).
+                   Reads the ink names and colours out of the payload, so it
+                   replays a one-ink drawing or a three-ink one unchanged
+  draw.py          THE GENERIC FRONT DOOR: any raster or SVG -> trace -> place
+                   -> allocate -> conduct -> scene_check -> animation, every
+                   output named by --out.  Plans nothing of its own; every
+                   stage is the call the csail_* scripts make  (docs/ANY_PICTURE.md)
   solo_time.py     read-only: how much of the run is one arm drawing alone, and
                    whether anybody else certified the span (docs/SOLO_TIME.md)
   bench.py         the standing regression: the whole pipeline over five
@@ -109,6 +124,8 @@ tests/
                    the perpendicular pen every pre-tilt plan was asked for
   test_merge_spans.py  the segment merge, and the two spans that used to be
                    the last 59.9 mm of the logo
+  test_draw.py     the generic front door: ink counting, the line/fill split,
+                   the vector branch, and a whole picture end to end
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
   CONCURRENCY.md   where the 148 s of pause came from, and what each lever bought
@@ -119,6 +136,9 @@ docs/
   TILT_EXPLORATION.md  pen tilt as a planning axis: what it buys, what it costs
   FULL_COVERAGE.md the last 59.9 mm -> 100.0000 %, and why the fix was the
                    allocator rather than the pen tilt everyone expected
+  ANY_PICTURE.md   the generic front door: the three CSAIL-specific assumptions
+                   in the tracer and what measured them instead, and the
+                   Trollface run end to end
 ```
 
 ## Key facts

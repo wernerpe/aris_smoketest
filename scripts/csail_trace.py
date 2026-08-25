@@ -137,8 +137,17 @@ def main(argv=None):
     fig.savefig(out / "csail_masks.png", dpi=100)
     plt.close(fig)
 
+    # `to_sheet`'s info carries two TUPLES (`center`, `offset`) since the
+    # placement search was added, and a flat `float(v)` over it has raised
+    # `TypeError` here ever since; they are lists in the JSON like everywhere
+    # else the same dict is written (see `csail_allocate.program_json`).
+    def _j(v):
+        if isinstance(v, (tuple, list)):
+            return [float(x) for x in v]
+        return bool(v) if isinstance(v, bool) else float(v)
+
     with open(out / "csail_strokes.json", "w") as f:
-        json.dump(dict(sheet=list(SHEET), info={k: float(v) for k, v in info.items()},
+        json.dump(dict(sheet=list(SHEET), info={k: _j(v) for k, v in info.items()},
                        n_strokes=len(strokes), total_length=L,
                        strokes=[dict(id=s["id"], color=s["color"], kind=s["kind"],
                                      length=trace.plen(s["pts"]),

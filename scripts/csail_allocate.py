@@ -28,14 +28,16 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import (allocate, idle, paper, pwl, rig_final,  # noqa: E402
-                         trace, writing)
+from aris_sixarm import (allocate, artwork, idle, paper, pwl,   # noqa: E402
+                         rig_final, trace, writing)
 from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
 
 # the logo's own two inks, straight off the source image (trace.GREY_RGB /
-# trace.ORANGE_RGB); one of them is what each arm's pen is filled with
+# trace.ORANGE_RGB); one of them is what each arm's pen is filled with.  A
+# picture that is not this logo carries its own measured palette instead, and
+# every writer below takes one as an argument (see `aris_sixarm.artwork`).
 PEN = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
        "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
 
@@ -72,7 +74,7 @@ def _figsize(w_in, extra_h=0.0, max_h=12.5):
     return (max(w_in, 6.2), max(4.0, h) + extra_h), (1 if w_in < 8.0 else 2)
 
 
-def allocation_png(phases, strokes, path):
+def allocation_png(phases, strokes, path, name="CSAIL logo"):
     """One sheet, coloured by the arm that draws it; a phase per line style.
 
     Two passes are drawn on ONE picture on purpose: the question the picture
@@ -140,7 +142,7 @@ def allocation_png(phases, strokes, path):
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.015),
               ncol=ncol, fontsize=9, framealpha=0.94, borderpad=0.8,
               labelspacing=0.5, columnspacing=2.0)
-    ax.set_title(f"CSAIL logo — allocation to {len(used_arms)} arms in "
+    ax.set_title(f"{name} — allocation to {len(used_arms)} arms in "
                  f"{len(phases)} pass{'' if len(phases) == 1 else 'es'} "
                  f"({100 * T['covered']:.2f} % of {T['traced']:.2f} m traced, "
                  f"{T['n_segments']} certified segments); colour = arm",
@@ -151,12 +153,15 @@ def allocation_png(phases, strokes, path):
 
 
 # ---------------------------------------------------------------------------
-def final_png(phases, strokes, path, title=None):
+def final_png(phases, strokes, path, title=None, palette=None,
+              name="CSAIL logo"):
     """The end state: the paper as it looks when every arm has stopped.
 
-    Ink is drawn in the PEN colour (the logo's own grey/orange), not the arm
-    colour, because that is what is on the paper; what nobody reached stays a
-    dashed ghost so the holes are visible rather than merely absent.
+    Ink is drawn in the PEN colour — the picture's own, measured off the source
+    by the tracer and passed in as `palette`, defaulting to the CSAIL mark's
+    grey/orange — and not in the arm colour, because that is what is on the
+    paper; what nobody reached stays a dashed ghost so the holes are visible
+    rather than merely absent.
     """
     figsize, ncol = _figsize(9.0, 1.7)
     fig, ax = plt.subplots(figsize=figsize)
@@ -166,19 +171,20 @@ def final_png(phases, strokes, path, title=None):
             p = np.asarray(d["pts"], float)
             ax.plot(p[:, 0], p[:, 1], ls=(0, (4, 4)), color="#cfcfcf", lw=1.8,
                     zorder=2)
-    drawn = {"grey": 0.0, "orange": 0.0}
+    inks = artwork.inks_of(strokes) or ["grey", "orange"]
+    hexes = {c: artwork.hex_of(c, palette or PEN) for c in inks}
+    drawn = {c: 0.0 for c in inks}
     for ph in phases:
         for aid in ph["arms"]:
             for s in ph["programs"][aid]:
                 p = s["pts"]
-                drawn[s["color"]] += s["length"]
-                ax.plot(p[:, 0], p[:, 1], "-", color=PEN[s["color"]], lw=3.6,
+                drawn[s["color"]] = drawn.get(s["color"], 0.0) + s["length"]
+                ax.plot(p[:, 0], p[:, 1], "-",
+                        color=hexes.get(s["color"], artwork.FALLBACK_HEX), lw=3.6,
                         zorder=4, solid_capstyle="round", solid_joinstyle="round")
     T = totals(phases)
-    handles = [Line2D([], [], color=PEN["grey"], lw=4),
-               Line2D([], [], color=PEN["orange"], lw=4)]
-    labels = [f"grey ink #{PEN['grey'][1:]} — {drawn['grey']:.2f} m",
-              f"orange ink #{PEN['orange'][1:]} — {drawn['orange']:.2f} m"]
+    handles = [Line2D([], [], color=hexes[c], lw=4) for c in inks]
+    labels = [f"{c} ink {hexes[c]} — {drawn.get(c, 0.0):.2f} m" for c in inks]
     if T["dropped"] > 0:
         handles.append(Line2D([], [], color="#cfcfcf", lw=1.8, ls=(0, (4, 4))))
         labels.append(f"left empty — {T['dropped']:.3f} m, "
@@ -190,7 +196,7 @@ def final_png(phases, strokes, path, title=None):
                       f"{T['traced']:.2f} m certified")
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02),
               ncol=ncol, fontsize=9.5, framealpha=0.94, borderpad=0.7)
-    ax.set_title(title or ("CSAIL logo — the paper when the arms stop "
+    ax.set_title(title or (f"{name} — the paper when the arms stop "
                            f"({100 * T['covered']:.2f} % of {T['traced']:.2f} m "
                            "traced, every metre plan_stroke-certified)"),
                  fontsize=12)
@@ -386,7 +392,8 @@ def _phase_json(res):
     return out
 
 
-def program_json(phases, strokes, info, path):
+def program_json(phases, strokes, info, path, palette=None, name="CSAIL logo",
+                 source=None):
     T = totals(phases)
     pens = {}
     for p in phases:
@@ -395,6 +402,10 @@ def program_json(phases, strokes, info, path):
         rig=fleet_mod.ACTIVE_RIG, arms_in_fleet=[int(x) for x in sorted(FLEET)],
         sheet=list(SHEET), h_inv=H_INV_DEFAULT, n_phases=len(phases),
         two_pass=len(phases) > 1, pens_mm=pens,
+        name=name, source=source,
+        inks=artwork.inks_of(strokes),
+        palette={k: artwork.hex_of(k, palette or PEN)
+                 for k in artwork.inks_of(strokes)},
         logo={k: ([float(x) for x in v] if isinstance(v, (tuple, list))
                   else v if isinstance(v, bool) else float(v))
               for k, v in info.items()},
@@ -555,7 +566,7 @@ def parse_pens(s):
     return out
 
 
-def run_allocation(a, verbose=False, split=None):
+def run_allocation(a, verbose=False, split=None, px=None):
     """Trace -> place -> allocate. -> (phases, strokes, info).
 
     One code path for the allocation PNG/JSON and for the animation, so the
@@ -566,6 +577,20 @@ def run_allocation(a, verbose=False, split=None):
     path through every writer downstream; nothing here special-cases it.  Each
     phase is a full `allocate.allocate` result with `name`, `ink` and its own
     stroke subset attached.
+
+    `px` is a stroke set already traced into PIXEL space — `scripts/draw.py`
+    hands one in from `trace.trace_any` so that an arbitrary picture goes
+    through THIS allocator rather than a second one, and so that the four
+    execution profiles do not re-trace the same file four times.  Left None the
+    CSAIL tracer runs, which is what every published run did.
+
+    THE INKS COME FROM THE STROKES, NOT FROM A CONSTANT.  `allocate.COLORS` is
+    the CSAIL mark's own two, and a picture drawn with ONE pen must say so:
+    left to enumerate partitions, `allocate.best_partition` would hand half the
+    fleet a colour no stroke carries and drop everything those arms could have
+    drawn.  With one ink there is no partition to make and no swap to make it
+    across, so the colour map is fixed and the run is single-pass by
+    construction.
     """
     tw, off, rot = a.target_width, a.offset, getattr(a, "rotate", None)
     if a.placement:
@@ -586,10 +611,12 @@ def run_allocation(a, verbose=False, split=None):
         print(f"  pen-ups are certified against the frame too "
               f"(margin {1000 * rig_final.STATIC_MARGIN:.0f} mm)")
     t0 = time.time()
-    px, _ = trace.trace_logo(a.image)
+    if px is None:
+        px, _ = trace.trace_logo(a.image)
     strokes, info = trace.to_sheet(px, SHEET, margin=a.margin, target_width=tw,
                                    offset=tuple(off or (0.0, 0.0)),
-                                   rotate_deg=rot)
+                                   rotate_deg=rot,
+                                   min_len=float(getattr(a, "min_len", 0.025)))
     if not info["fits"]:
         raise SystemExit(f"placement does not fit the sheet: {info}")
     print(f"traced {len(strokes)} strokes, {trace.total_length(strokes):.2f} m, "
@@ -621,16 +648,20 @@ def run_allocation(a, verbose=False, split=None):
                                   idle.POLICY_FREEZE) == idle.POLICY_HOME,
               atlas_dir=None if a.no_prefilter
               else str(Path(getattr(a, "atlas", None) or a.out)))
+    arms = allocate.active_arms(_override(a.arms))
+    inks = artwork.inks_of(strokes)
     if not getattr(a, "two_pass", False):
-        res = allocate.allocate(strokes, **kw)
-        res.update(name="single pass", ink=None, strokes=strokes)
+        one = inks[0] if len(inks) == 1 else None
+        res = allocate.allocate(strokes,
+                                colors=(None if one is None
+                                        else {x: one for x in arms}), **kw)
+        res.update(name="single pass", ink=one, strokes=strokes)
         return [res], strokes, info
 
-    arms = allocate.active_arms(_override(a.arms))
     phases = []
-    for ink in allocate.COLORS:
+    for ink in inks:
         sub = [s for s in strokes if s["color"] == ink]
-        print(f"  phase {len(phases) + 1}/{len(allocate.COLORS)} — {ink} ink, "
+        print(f"  phase {len(phases) + 1}/{len(inks)} — {ink} ink, "
               f"{len(sub)} strokes, {trace.total_length(sub):.2f} m, "
               f"all {len(arms)} arms available")
         r = allocate.allocate(sub, colors={x: ink for x in arms}, **kw)

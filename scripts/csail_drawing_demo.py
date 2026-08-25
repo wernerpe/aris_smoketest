@@ -42,8 +42,12 @@ sys.path.insert(0, str(ROOT))
 
 from aris_sixarm.fleet import ACTIVE_RIG, FLEET, SHEET          # noqa: E402
 
-# the logo's own two inks (trace.GREY_RGB / trace.ORANGE_RGB), inlined so
-# this file imports nothing that needs the system python's numpy stack
+# the CSAIL logo's own two inks (trace.GREY_RGB / trace.ORANGE_RGB), inlined so
+# this file imports nothing that needs the system python's numpy stack.  They
+# are the FALLBACK: a payload written by `csail_schedule.payload` carries
+# `ink_names` and `ink_palette`, measured off whatever picture was traced, and
+# those win — which is what lets this same demo replay a one-ink drawing, or a
+# three-ink one, without knowing anything about the picture.
 INK_HEX = {"grey": "#666665", "orange": "#cb6608"}
 from pydrake.geometry import (Box, Cylinder, Meshcat,           # noqa: E402
                               MeshcatVisualizer, Rgba, Sphere)
@@ -171,13 +175,13 @@ def build_scene(pen_ext, inks):
 LEGEND = """
 <div style="position:fixed;top:12px;left:12px;z-index:1000;background:rgba(255,255,255,0.94);
 border:1px solid #bbb;border-radius:8px;padding:10px 14px;font:12px/1.55 sans-serif;color:#222;max-width:470px">
-<b>Aris Kindt &mdash; six arms draw the whole CSAIL logo</b><br>
+<b>Aris Kindt &mdash; six arms draw %(title)s</b><br>
 %(rows)s
 <hr style="margin:6px 0">
 <b>%(cov).2f %% of the %(tot).2f m traced is drawn</b> &mdash; every metre of it
 returned by <code>plan_stroke</code> with an independent validator's certificate.
-Logo %(lw).2f x %(lh).2f m at offset (%(ox)+.3f, %(oy)+.3f) m: the largest size
-at which the fleet certifies ALL of it.<br>
+Drawing %(lw).2f x %(lh).2f m%(rot)s at offset (%(ox)+.3f, %(oy)+.3f) m &mdash; the
+largest placement within a point of the best coverage the fleet achieved.<br>
 %(swap)s
 <hr style="margin:6px 0">
 <b>Conducted, not merely concurrent.</b>  Every arm's path and stroke order is
@@ -195,9 +199,9 @@ the acceleration-limited version of the same schedule.</i><br>
 </div>
 """
 
-SWAP_NOTE = """<b>Two passes, one piece.</b>  Phase 1 lays every grey line; all
-six arms then park for %(swapdur).1f s while a human swaps grey pens for orange;
-phase 2 lays every orange line.  One pen per arm per phase &mdash; the constraint
+SWAP_NOTE = """<b>Two passes, one piece.</b>  Phase 1 lays every %(first)s line; all
+six arms then park for %(swapdur).1f s while a human swaps %(first)s pens for %(second)s;
+phase 2 lays every %(second)s line.  One pen per arm per phase &mdash; the constraint
 that is lifted is one pen per arm for the WHOLE piece, and lifting it is what
 takes the coverage to 100 %%.  Pen LENGTHS do not change at the swap: they are
 fixtures (%(pens)s).<br>"""
@@ -232,6 +236,9 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "out/csail_full.html"))
     ap.add_argument("--zip", default=str(ROOT / "out/csail_full.zip"))
     ap.add_argument("--budget", type=float, default=28.0, help="MiB, zip cap")
+    ap.add_argument("--title", default=None,
+                    help="what the legend calls the drawing (default: the "
+                         "schedule summary's `name`, else the CSAIL logo)")
     args = ap.parse_args()
 
     d = np.load(args.schedule, allow_pickle=False)
@@ -244,7 +251,12 @@ def main():
     pen_ext = {a: float(v) for a, v in zip(sorted(FLEET), d["pen_ext"])}
     phase = d["phase"] if "phase" in d else np.zeros(nF, np.int64)
     phase_ink = [str(x) for x in d["phase_ink"]] if "phase_ink" in d else ["grey"]
-    inks = {"grey": INK_HEX["grey"], "orange": INK_HEX["orange"]}
+    if "ink_names" in d and "ink_palette" in d:
+        inks = {str(k): str(v) for k, v in zip(d["ink_names"], d["ink_palette"])}
+    else:
+        inks = {"grey": INK_HEX["grey"], "orange": INK_HEX["orange"]}
+    for c in phase_ink:                      # a phase must have a pen to hold
+        inks.setdefault(c, INK_HEX.get(c, "#333333"))
     print(f"schedule: {nF} frames @ {fps:g} fps = {(nF - 1) / fps:.1f} s, "
           f"{len(d['ink_t'])} ink chunks, {len(phase_ink)} phase(s), min clearance "
           f"{float(d['min_clearance']) * 1000:.1f} mm")
@@ -359,23 +371,28 @@ def main():
         for a, m in ph["arm_metres"].items():
             per_arm.setdefault(int(a), []).append(
                 (ph["ink"] or "grey", float(m), int(ph["arm_segments"][a])))
+    swatch = inks.get(phase_ink[0], INK_HEX["grey"])
     for aid in fleet:
         bits = [f"{ink} {m:.2f} m in {n} seg" for ink, m, n in per_arm.get(aid, [])
                 if n]
         rows.append(
-            f'<span style="color:{INK_HEX["grey"]}">&#9632;</span> arm {aid} '
+            f'<span style="color:{swatch}">&#9632;</span> arm {aid} '
             f"{FLEET[aid].name} &mdash; <b>{1000 * pen_ext[aid]:.0f} mm</b> pen "
             "&mdash; " + (" then ".join(bits) if bits
-                          else "reaches none of the logo (idle)"))
+                          else "reaches none of the drawing (idle)"))
     swap = ""
     if summary.get("two_pass"):
         swap = SWAP_NOTE % dict(
-            swapdur=summary["pen_swap_pause_s"],
+            swapdur=summary["pen_swap_pause_s"], first=phase_ink[0],
+            second=phase_ink[1] if len(phase_ink) > 1 else "the second ink",
             pens=", ".join(f"arm {a} {v:.0f} mm"
                            for a, v in sorted(summary["pens_mm"].items(),
                                               key=lambda kv: int(kv[0]))))
+    rot = float(summary["logo"].get("rotate_deg", 0.0) or 0.0)
     html = meshcat.StaticHtml().replace("</body>", LEGEND % dict(
         rows="<br>".join(rows), tot=summary["traced_m"],
+        title=args.title or summary.get("name") or "the whole CSAIL logo",
+        rot=(f", turned {rot:.0f}&deg;" if rot else ""),
         cov=100 * summary["coverage"], lw=summary["logo"]["w"],
         lh=summary["logo"]["h"], ox=summary["logo"]["offset"][0],
         oy=summary["logo"]["offset"][1], swap=swap,

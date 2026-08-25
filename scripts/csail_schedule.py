@@ -49,8 +49,8 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, coordination, idle, pwl, scene_check,  # noqa: E402
-                         sequence, trace, writing)
+from aris_sixarm import (allocate, artwork, coordination, idle, pwl,  # noqa: E402
+                         scene_check, sequence, trace, writing)
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
@@ -577,7 +577,8 @@ def allocate_all(a, verbose=False):
     a run that draws less of the picture than it was asked for is not a faster
     run, and finding that out costs one allocation instead of one conduct.
     """
-    phases, strokes, info = run_allocation(a, verbose=False)
+    phases, strokes, info = run_allocation(a, verbose=False,
+                                           px=getattr(a, "traced_px", None))
     for ph in phases:
         print(f"\n=== {ph['name']} ===")
         for line in allocate.report(ph, ph["strokes"]):
@@ -606,12 +607,28 @@ def allocate_all(a, verbose=False):
         if cut:
             print(f"\nallocating {len(cut)} split phase(s) again without cutting, "
                   "so the conductor can rule on whether the cuts paid")
-            base, _, _ = run_allocation(a, verbose=False, split=False)
+            base, _, _ = run_allocation(a, verbose=False, split=False,
+                                        px=getattr(a, "traced_px", None))
             for k in cut:
                 base[k].update(name=phases[k]["name"] + " [unsplit]",
                                ink=phases[k]["ink"], strokes=phases[k]["strokes"])
                 alt[k] = base[k]
     return phases, alt, pens, strokes, info
+
+
+def _alloc_profile(args):
+    """One profile's allocation, in its own process. -> (name, result | error).
+
+    Module level and returning rather than raising, so `mp.Pool` can both send
+    it and get an answer back from a cell that refused — `select_profile`
+    records a refused allocation as an outcome with a reason, and losing that
+    to a worker traceback would turn a recorded refusal into a dead run.
+    """
+    a, p = args
+    try:
+        return profile_name(p), allocate_all(profile_args(a, p)), None
+    except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+        return profile_name(p), None, f"{type(exc).__name__}: {exc}"
 
 
 def build(a):
@@ -626,11 +643,40 @@ def build(a):
     # and the placement are the same in every cell — only the two knobs move —
     # so the strokes and the placement info are kept per cell only because the
     # winner's are the ones that get written out beside its allocation.
-    seen = {}
+    #
+    # THE FOUR ALLOCATIONS ARE INDEPENDENT, AND ON A DENSE PICTURE THEY ARE THE
+    # RUN.  `docs/BENCH.md`'s premise is that conducting a cell is the expensive
+    # half and allocating one is seconds; that holds for the logo's 42 segments
+    # and inverts for a picture with 63, where `balance_loads`' split search is
+    # 676.8 s of a 724.1 s allocation and the four cells are 56 minutes of
+    # strictly serial single-core work.  `--profile-jobs` maps them over
+    # processes instead.  It cannot change any result — each cell is a pure
+    # function of `(a, profile)` — so the default stays 1 and every published
+    # number reproduces on the serial path.
+    seen, pre = {}, {}
+    jobs = int(getattr(a, "profile_jobs", 1) or 1)
+    if jobs > 1:
+        import multiprocessing as mp
+        print(f"\nallocating {len(PROFILES)} execution profiles on {jobs} "
+              "processes (they are independent; the conducts after them stay "
+              "serial, because each one prunes the next on its makespan)")
+        t0 = time.time()
+        with mp.get_context("fork").Pool(min(jobs, len(PROFILES))) as pool:
+            for name, res, err in pool.map(_alloc_profile,
+                                           [(a, p) for p in PROFILES]):
+                pre[name] = (res, err)
+        print(f"  {len(pre)} allocations in {time.time() - t0:.1f} s")
 
     def alloc(b, p):
-        phases, alt, pens, strokes, info = allocate_all(b)
-        seen[profile_name(p)] = (strokes, info)
+        name = profile_name(p)
+        if name in pre:
+            res, err = pre[name]
+            if err is not None:
+                raise SystemExit(err)
+            phases, alt, pens, strokes, info = res
+        else:
+            phases, alt, pens, strokes, info = allocate_all(b)
+        seen[name] = (strokes, info)
         return phases, alt, pens
 
     sel = select_profile(a, alloc, dt,
@@ -786,6 +832,13 @@ def payload(built, dt, pens, a, out):
         starts.append(M_tot)
         M_tot += B["M"] + (n_pause if k + 1 < len(built) else 0)
 
+    # THE PALETTE TRAVELS WITH THE PAYLOAD.  The drake demo builds one pen per
+    # (arm, ink) and switches between them at the swap, so it has to know which
+    # inks exist and what colour each one is — and on an arbitrary picture that
+    # is measured off the source by the tracer, not looked up in a table.  Two
+    # extra arrays here are what let the demo stop hard-coding grey and orange
+    # without it having to import the tracer or read the program JSON.
+    pal = getattr(a, "palette", None) or INK
     drawing = sorted({x for B in built for x in B["res"]["arms"]
                       if B["res"]["programs"][x]})
     d = dict(fps=np.float64(a.fps), dt=np.float64(dt),
@@ -798,6 +851,15 @@ def payload(built, dt, pens, a, out):
              drawing_arms=np.array(drawing, np.int64),
              pen_ext=np.array([pens[x] for x in sorted(FLEET)], float),
              sheet=np.array(SHEET, float))
+    used_inks = []
+    for B in built:
+        for c in ([B["res"]["ink"]] if B["res"]["ink"]
+                  else sorted(set(B["res"]["colors"].values()))):
+            if c and c not in used_inks:
+                used_inks.append(c)
+    used_inks = used_inks or ["grey"]
+    d["ink_names"] = np.array(used_inks)
+    d["ink_palette"] = np.array([artwork.hex_of(c, pal) for c in used_inks])
 
     idx = np.arange(0, M_tot, stride)
     nF = len(idx)
@@ -853,13 +915,18 @@ def payload(built, dt, pens, a, out):
     d["ink_xyz"] = (np.vstack(ink_xyz) if ink_xyz else np.zeros((0, 3)))
     # a chunk's colour is the colour of the PHASE it was laid in, not a property
     # of the arm: the same arm lays grey before the swap and orange after
-    d["ink_hex"] = np.array([INK[c] for c in ink_col])
+    d["ink_hex"] = np.array([artwork.hex_of(c, pal) for c in ink_col])
     np.savez_compressed(out, **d)
     return nF, len(ink_t), M_tot, n_pause
 
 
-def main(argv=None):
-    ap = add_args(argparse.ArgumentParser())
+def schedule_args(ap):
+    """The conducting + animation arguments, shared with `scripts/draw.py`.
+
+    Split out of `main` for the same reason `csail_allocate.add_args` was: the
+    generic front door conducts with THIS conductor and must be able to be
+    handed every knob it has, and a second copy of the list would drift.
+    """
     ap.add_argument("--tag", default="_6arm")
     ap.add_argument("--fps", type=float, default=24.0)
     ap.add_argument("--substeps", type=int, default=2,
@@ -922,12 +989,26 @@ def main(argv=None):
     ap.add_argument("--no-profile-prune", action="store_true",
                     help="conduct every profile even when its floor already "
                          "says it cannot win (see csail_schedule.profile_floor)")
+    ap.add_argument("--profile-jobs", type=int, default=1,
+                    help="processes to ALLOCATE the four execution profiles on. "
+                         "They are independent and each is a pure function of "
+                         "(args, profile), so this changes wall clock and "
+                         "nothing else.  Worth turning up on a dense picture, "
+                         "where the allocator's split search — not the "
+                         "conductor — is the run: 677 s of a 724 s allocation "
+                         "on the Trollface's 63 segments.  The conducts stay "
+                         "serial: each one prunes the next on its makespan")
     ap.add_argument("--program", action="store_true",
                     help="also write out/csail_program<tag>.json from the "
                          "allocation that SHIPPED, so the programme and the "
                          "schedule cannot describe different runs")
     ap.add_argument("--final", default=None)
     ap.add_argument("--verbose", action="store_true")
+    return ap
+
+
+def main(argv=None):
+    ap = schedule_args(add_args(argparse.ArgumentParser()))
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -942,16 +1023,19 @@ def main(argv=None):
         a.band_objective = prof["band_objective"]
     path = out / f"csail_schedule{a.tag}.npz"
     nF, nInk, M_tot, n_pause = payload(built, dt, pens, a, path)
+    pal = getattr(a, "palette", None)
+    nm = getattr(a, "name", None) or "CSAIL logo"
     if a.program:
         doc = program_json(phases, strokes, info,
-                           out / f"csail_program{a.tag}.json")
+                           out / f"csail_program{a.tag}.json",
+                           palette=pal, name=nm, source=a.image)
         if prof:
             doc["profile"] = prof
             (out / f"csail_program{a.tag}.json").write_text(json.dumps(doc))
         print(f"wrote {out}/csail_program{a.tag}.json "
               f"({(out / f'csail_program{a.tag}.json').stat().st_size / 1e3:.0f} kB)")
     if a.final:
-        final_png(phases, strokes, a.final)
+        final_png(phases, strokes, a.final, palette=pal, name=nm)
     print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB): {nF} frames @ "
           f"{a.fps:g} fps = {(nF - 1) / a.fps:.1f} s, {nInk} ink chunks"
           + (f", including {n_pause * dt:.1f} s of pen-swap pause"
@@ -959,9 +1043,29 @@ def main(argv=None):
           + (f"; {a.final}" if a.final else ""))
     print(f"SCHEDULE WALL CLOCK {time.time() - t0:.1f} s")
 
+    summary = summary_json(a, phases, strokes, info, built, dt, pens, prof,
+                           nF, nInk, n_pause)
+    (out / f"csail_schedule{a.tag}.json").write_text(json.dumps(summary, indent=1))
+    return summary
+
+
+def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
+                 n_pause):
+    """The run's own record. -> dict, ready for `json.dumps`.
+
+    Split out of `main` so `scripts/draw.py` writes the IDENTICAL document under
+    its own name: the drake demo reads this file for its legend and every
+    downstream reader (docs, `scripts/bench.py`, the README tables) knows this
+    shape, so a generic front door that invented a second one would be a second
+    schema to keep in step.
+    """
     T = totals(phases)
     summary = dict(
         profile=prof, qd_frac=float(a.qd_frac),
+        name=getattr(a, "name", None), source=getattr(a, "image", None),
+        inks=artwork.inks_of(strokes),
+        palette={k: artwork.hex_of(k, getattr(a, "palette", None) or INK)
+                 for k in artwork.inks_of(strokes)},
         cluster=bool(getattr(a, "cluster", False)),
         band_objective=getattr(a, "band_objective", None),
         frames=nF, fps=a.fps, duration=(nF - 1) / a.fps, ink_chunks=nInk,
@@ -1054,7 +1158,6 @@ def main(argv=None):
                    arm_segments=summary["phases"][0]["arm_segments"],
                    per_pair=summary["phases"][0]["per_pair"],
                    colors=summary["phases"][0]["colors"])
-    (out / f"csail_schedule{a.tag}.json").write_text(json.dumps(summary, indent=1))
     return summary
 
 
