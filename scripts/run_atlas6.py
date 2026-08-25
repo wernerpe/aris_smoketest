@@ -310,6 +310,8 @@ def main():
     ap.add_argument("--grid", type=float, default=0.02)
     ap.add_argument("--tilt", type=float, default=15.0)
     ap.add_argument("--pen", type=float, default=0.110)
+    ap.add_argument("--pen-lat", type=float, default=None,
+                    help="lateral tool offset (None = the ACTIVE tool, i.e. 0 unless ARIS_TOOL=lateral)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--png", default=None)
     ap.add_argument("--jobs", type=int, default=6)
@@ -333,7 +335,7 @@ def main():
     else:
         fn = partial(sweep_arm, out_dir=str(out), grid=a.grid,
                      tilt_max_deg=a.tilt, pen_ext=a.pen, fleet=FLEET,
-                     sheet=SHEET)
+                     sheet=SHEET, pen_lat=a.pen_lat)
         with mp.get_context("fork").Pool(min(a.jobs, len(arms))) as pool:
             arrs = pool.map(fn, arms)
 

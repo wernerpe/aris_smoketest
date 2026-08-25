@@ -623,6 +623,20 @@ On the two-web layout that paper does not exist and neither does that ink; all
 four hanging arms contribute, two from each unit. The two floor arms draw
 nothing, which is geometry: they sit 1.5 m from any placement worth having.
 
+## The layout study — 2 floor + 4 ceiling arms, green field (2026-08-25)
+
+`docs/LAYOUT_STUDY.md`: with the LATERAL tool fixed, the user's "re-evaluate
+the arm positions" ran as a coarse-to-fine search (measured GO annuli →
+disc-cover multi-start → real 4 cm atlases → certified 2 cm atlases).  The
+winner — floor pair off the south short edge, two transverse inverted pairs
+at y ≈ 1.40 / 2.87, h = 0.85 — covers **99.38 %** of the merged canvas
+strict-GO (≥2-arm 50.31 %) against 75.93 % for the current rig inline and
+**84.91 %** for the current rig with the lateral tool alone
+(`out/atlas_final6_opt_lat/`).  GREEN FIELD: no steel or transport is
+modelled for the new positions — this informs the physical redesign, and
+structure modelling follows the pick.  `ARIS_RIG=proposed` selects it
+(`aris_sixarm/layout.py`); `out/layout_study.png`, `out/proposed_scene.html`.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm

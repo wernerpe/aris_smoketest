@@ -114,7 +114,8 @@ def link_poses(joints, q, finger_open=0.02):
 
 
 def add_robot(vis, path, links, joints, q, T_world_base, pen_color=0x202020,
-              pen_len=0.110, body_color=0xF4F4F2, dark_color=0x2E2E2E):
+              pen_len=0.110, body_color=0xF4F4F2, dark_color=0x2E2E2E,
+              pen_lat=None):
     poses = link_poses(joints, q)
     dark = {"panda_hand", "panda_leftfinger", "panda_rightfinger", "panda_link7"}
     for name, (v, f) in links.items():
@@ -124,13 +125,36 @@ def add_robot(vis, path, links, joints, q, T_world_base, pen_color=0x202020,
         vis[f"{path}/{name}"].set_object(
             g.TriangularMeshGeometry(v, f), g.MeshLambertMaterial(color=col))
         vis[f"{path}/{name}"].set_transform(T_world_base @ poses[name])
-    # pen: cylinder from inside the grip to the tip (TCP frame, +z toward tip)
+    # pen (TCP frame, +z toward tip).  `pen_lat=None` -> the ACTIVE tool
+    # (frames.PEN_LAT): with the LATERAL holder the pen hangs pen_lat along
+    # hand x — a bracket bar from the grip out to the offset, then the pen
+    # down to the tip, so the visual matches the planned geometry.
+    from ..frames import lat_of
+    lat = lat_of(pen_lat)
     T_tcp = np.eye(4)
     T_tcp[2, 3] = 0.1034
     T_pen = poses["panda_hand"] @ T_tcp
-    seg = np.eye(4)
-    seg[2, 3] = pen_len / 2 - 0.025          # extends 0.05 up into the fingers
     rx = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1.0]])
-    vis[f"{path}/pen"].set_object(
-        g.Cylinder(pen_len + 0.05, 0.0045), g.MeshLambertMaterial(color=pen_color))
-    vis[f"{path}/pen"].set_transform(T_world_base @ T_pen @ seg @ rx)
+    if lat == 0.0:
+        seg = np.eye(4)
+        seg[2, 3] = pen_len / 2 - 0.025      # extends 0.05 up into the fingers
+        vis[f"{path}/pen"].set_object(
+            g.Cylinder(pen_len + 0.05, 0.0045),
+            g.MeshLambertMaterial(color=pen_color))
+        vis[f"{path}/pen"].set_transform(T_world_base @ T_pen @ seg @ rx)
+    else:
+        rz = np.array([[0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0],
+                       [0, 0, 0, 1.0]])     # cylinder axis y -> x
+        brk = np.eye(4)
+        brk[0, 3] = lat / 2 - 0.01
+        vis[f"{path}/pen_bracket"].set_object(
+            g.Cylinder(lat + 0.02, 0.008),
+            g.MeshLambertMaterial(color=dark_color))
+        vis[f"{path}/pen_bracket"].set_transform(T_world_base @ T_pen @ brk @ rz)
+        seg = np.eye(4)
+        seg[0, 3] = lat
+        seg[2, 3] = pen_len / 2 - 0.01
+        vis[f"{path}/pen"].set_object(
+            g.Cylinder(pen_len + 0.02, 0.0045),
+            g.MeshLambertMaterial(color=pen_color))
+        vis[f"{path}/pen"].set_transform(T_world_base @ T_pen @ seg @ rx)

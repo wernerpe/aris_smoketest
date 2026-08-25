@@ -165,7 +165,7 @@ ACTIVE_RIG = "final"
 # The env var is the one to use from a script, because a script's `from
 # aris_sixarm.fleet import SHEET` runs before its first line does and only the
 # env var is earlier than that; `aris_sixarm/__init__.py` is what reads it.
-RIG_NAMES = ("final", "final6", "final6_opt", "sixarm")
+RIG_NAMES = ("final", "final6", "final6_opt", "sixarm", "proposed")
 
 
 def rig(name):
@@ -181,6 +181,12 @@ def rig(name):
         return ((rig_final6.FLEET_FINAL6_OPT if name == "final6_opt"
                  else rig_final6.FLEET_FINAL6),
                 rig_final6.SHEET_FINAL6)
+    if name == "proposed":
+        # the GREEN-FIELD layout study's winner (docs/LAYOUT_STUDY.md):
+        # 2 floor + 4 ceiling-inverted arms, no wall mounts, LATERAL tool.
+        # No structure exists for these positions yet — see aris_sixarm/layout.py.
+        from . import layout, rig_final6
+        return layout.FLEET_PROPOSED, rig_final6.SHEET_FINAL6
     raise ValueError(f"unknown rig {name!r}; want one of {RIG_NAMES}")
 
 
@@ -235,11 +241,13 @@ def sheet_for(spec):
 
     A MIRRORED-rig spec (`rig_final6.Arm6Spec`) draws on the COMBINED canvas.
     Under `MERGE_WEBS` that is one continuous surface from the canvas origin,
-    which is exactly what `planner.clip_to_sheet` measures against.
+    which is exactly what `planner.clip_to_sheet` measures against.  A
+    `layout.StudySpec` carries `unit` too (and the legacy proxies, so its
+    `rig` reads "sixarm") — the unit check must therefore come first.
     """
-    if getattr(spec, "rig", "sixarm") == "sixarm":
-        return SHEET_SIXARM
     if hasattr(spec, "unit"):
         from . import rig_final6
         return rig_final6.SHEET_FINAL6
+    if getattr(spec, "rig", "sixarm") == "sixarm":
+        return SHEET_SIXARM
     return SHEET_FINAL
