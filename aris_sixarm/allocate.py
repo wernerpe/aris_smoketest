@@ -136,6 +136,55 @@ SPLIT_CAND_CUTS = 3       # cut positions `split_candidates` offers by default
 SPLIT_COARSE_CUTS = 2     # of them tried while RANKING (segment, receiver, side)
 SPLIT_REFINE = 5          # bisection steps that then place the winner's cut
 
+# ---- what an improvement pass is allowed to spend --------------------------
+# THE BALANCER WAS 93 % OF THE CLOCK AND MOSTLY SPENT PROVING A NEGATIVE.  On
+# the Trollface the pass takes 676.8 s of an 826 s allocation and ends with
+# `0 moves and 0 splits taken` — every second of it went on pricing candidates
+# that were never going to be accepted.  Three things were wrong and all three
+# are bounded here rather than in a call site:
+#
+#   PRICING WAS FROM SCRATCH.  Every candidate bag rebuilt the arm's whole cost
+#   matrix (a forward-kinematics screen over every crossing) and re-solved its
+#   tour from the greedy seed under the sequencer's full 2 s budget.  Both are
+#   now incremental: `_ArmMatrix` screens a crossing once per run and slices,
+#   and the tour search starts from the tour the arm already had over the bag
+#   this candidate differs from by ONE span (`sequence.seed_from`), under
+#   `BALANCE_BUDGET` instead of `sequence.TIME_BUDGET`.  The final sequencing
+#   pass is untouched and still runs at full budget on the bag that is shipped.
+#
+#   THE SCAN WAS BEST-IMPROVEMENT.  Every relocation and every swap was priced
+#   before one was taken.  The scan is now ordered by the predicted busiest arm
+#   — a move's effect on the two loads it changes is known from the ink alone,
+#   which costs nothing — and takes the FIRST candidate that strictly improves.
+#
+#   NOTHING KNEW WHEN TO STOP.  A phase whose busiest arm is already at the
+#   lower bound its ink imposes cannot be improved by any assignment, and the
+#   pass had no way to say so.  `_phase_floor` computes that bound and the loop
+#   stops within `BALANCE_EPS` of it.
+BALANCE_BUDGET = 0.15     # s of local search per CANDIDATE price
+BALANCE_EXACT_STATES = 400_000   # DP states a candidate price may cost before
+#   the warm-started local search is used instead of exact Held-Karp
+BALANCE_CAND_CAP = 24     # candidates priced per round before the round gives up
+BALANCE_PATIENCE = 8      # candidates priced AFTER the first improving one, so
+#   that a round takes the best of a promising prefix rather than literally the
+#   first thing that helps — on synthetic instances the difference between
+#   "within 2 % of the exhaustive scan" and "23 % worse on one seed in twelve"
+BALANCE_EPS = 0.02        # stop when the busiest arm is within this of the floor
+SPLIT_MIN_GAIN = 0.5      # s; a receiver no lighter than this cannot take a cut
+#   worth the entry and exit it costs, so it is not probed at all
+SPLIT_SEAM_S = 1.6        # s a cut costs the arm receiving it — one entry and
+#   one exit, measured on this rig (section 4c's "1.4-1.9 s of pen-up").  Only
+#   `_cut_gain`'s RANKING uses it; what a cut really costs is priced.
+SPLIT_CAND_TRIES = 8      # coarse (segment, receiver, cut) candidates PRICED per
+#   round.  Every one of them re-plans two halves and prices two arms' tours,
+#   and — because a candidate cut is a span nobody has seen before — screens its
+#   crossings against every other span the arm holds.  Enumerating forty of them
+#   per round was most of what the split search cost.  They are ranked first on
+#   the ink alone (`_cut_gain`, which costs nothing) and only this many of that
+#   ordering are ever priced; the winner is then placed exactly by `_bisect_cut`,
+#   which is where the cut position was always really decided.
+TOUR_MEMO = 64            # bags per arm whose tour is kept to warm-start from
+
 
 def active_arms(active_override=None, fleet=None):
     """Which arms this run may use -> list of arm ids, in registry order.
@@ -998,7 +1047,8 @@ def _slice_ends(ends, k):
 def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
              qd_frac=writing.QD_FRAC, h_inv=H_INV_DEFAULT,
              pen_ext=None, ends=None, exact_max_n=sequence.EXACT_MAX_N,
-             budget=sequence.TIME_BUDGET, q_start=None, return_home=True):
+             budget=sequence.TIME_BUDGET, q_start=None, return_home=True,
+             C=None, warm=None, record=None):
     """Nominal seconds one arm needs for `segs`: its ink plus its best pen-up tour.
 
     `draw_s` is the per-segment ink time in the same order as `segs`.  The
@@ -1012,17 +1062,26 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
     therefore reaches a different tour and a different number of seconds; use
     `cluster_arm_load` for that, or better, let `cost_model` hand you the
     matching pair (see the section below).
+
+    `C` is a cost matrix already built for exactly these segments in this order
+    (`_ArmMatrix` slices one out of the arm's own), `warm` a tour to start the
+    search from (`sequence.seed_from`), and `record` a dict the chosen tour is
+    written back into so the next candidate can be warm-started from it.  All
+    three are pure accelerations: with none of them this is the function it was.
     """
     if not len(segs):
         return 0.0
     pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
-    C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
-                             ends=ends, pen_ext=pen, q_start=q_start,
-                             return_home=return_home)
+    if C is None:
+        C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
+                                 ends=ends, pen_ext=pen, q_start=q_start,
+                                 return_home=return_home)
     try:
-        r = sequence.solve(C, len(segs), exact_max_n, budget)
+        r = sequence.solve(C, len(segs), exact_max_n, budget, warm=warm)
     except RuntimeError:
         return UNFLYABLE
+    if record is not None:
+        record["tour"] = sequence.tour_of(r["order"], r["dirs"], len(segs))
     return float(sum(draw_s) + r["cost"])
 
 
@@ -1056,7 +1115,8 @@ def cluster_arm_load(spec, segs, draw_s, menus,
                      qd_frac=writing.QD_FRAC, h_inv=H_INV_DEFAULT,
                      pen_ext=None, ends=None, exact_max_n=sequence.EXACT_MAX_N,
                      budget=sequence.TIME_BUDGET, q_start=None,
-                     return_home=True, w_surcharge=sequence.W_SURCHARGE):
+                     return_home=True, w_surcharge=sequence.W_SURCHARGE,
+                     C=None, T=None, e=None, warm=None, record=None):
     """`arm_load`, priced with the DP that will actually sequence this bag. -> s
 
     Same contract, same units, and the same claim — it is the programme costed
@@ -1082,18 +1142,28 @@ def cluster_arm_load(spec, segs, draw_s, menus,
     band optimises clearance and takes travel as a tie-break — and it is
     reported here rather than hidden, because the sign of the error is
     conservative: a variant is priced at no less than it costs.
+
+    `C`, `T` and `e` are a matrix already built for exactly these menus in this
+    order (`_ArmMatrix` slices one out of the arm's own), `warm` a tour to start
+    the search from, and `record` a dict the chosen tour is written back into.
+    All four are pure accelerations; with none of them this is what it was.
     """
     if not len(segs):
         return 0.0
     pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
-    C, T, e = sequence.cluster_cost_matrix(spec, menus, transit_speed, qd_frac,
-                                           h_inv, pen, q_start=q_start,
-                                           return_home=return_home, ends=ends,
-                                           w_surcharge=w_surcharge)
+    if C is None:
+        C, T, e = sequence.cluster_cost_matrix(spec, menus, transit_speed,
+                                               qd_frac, h_inv, pen,
+                                               q_start=q_start,
+                                               return_home=return_home,
+                                               ends=ends,
+                                               w_surcharge=w_surcharge)
     try:
-        r = sequence.cluster_solve(C, T, e, exact_max_n, budget)
+        r = sequence.cluster_solve(C, T, e, exact_max_n, budget, warm=warm)
     except RuntimeError:
         return UNFLYABLE
+    if record is not None:
+        record["tour"] = sequence.tour_of_nodes(r["nodes"], e["N"])
     base, sur = np.asarray(e["base"], int), np.asarray(e["surcharge"], float)
     nodes = [int(base[k]) + 2 * int(v) + (0 if d > 0 else 1)
              for k, v, d in zip(r["order"], r["variants"], r["dirs"])]
@@ -1121,6 +1191,32 @@ def cluster_arm_load(spec, segs, draw_s, menus,
 # third sequencing model means implementing both halves of one object, which
 # is the property being bought: allocation and sequencing cannot disagree
 # unless somebody writes two DPs into one class on purpose.
+def plan_family(strokes, arms, aopts, pens):
+    """Everything a plan call for this run depends on. -> a hashable key.
+
+    THE JOINT-SPEED CAP IS NOT IN IT, AND THAT IS THE WHOLE POINT.  `plan_stroke`
+    resolves the redundancy against reach, clearance and the band objective; it
+    never looks at `qd_frac`, which enters only when `writing` turns a path into
+    a clock and when `sequence` prices a transit.  So two of the four execution
+    profiles ask the planner exactly the same questions as the other two, and
+    this key is what lets the second one of a pair be handed the first one's
+    answers instead of buying them again.
+
+    What IS in it: the strokes themselves (geometry and identity — a different
+    placement is a different question, and so is the other phase of a two-pass
+    run), the arms, and each arm's planner options, which carry its pen and the
+    band objective `--cluster` implies.
+    """
+    def okey(o):
+        return tuple(sorted((str(k), repr(v)) for k, v in (o or {}).items()))
+    return (tuple(int(a) for a in arms),
+            tuple((int(a), okey(aopts[a])) for a in sorted(arms)),
+            tuple(sorted((int(k), float(v)) for k, v in (pens or {}).items())),
+            tuple((int(s["id"]), str(s["color"]),
+                   np.round(np.asarray(s["pts"], float), 9).tobytes())
+                  for s in strokes))
+
+
 def _seg_key(seg, arm):
     """A menu's identity: which arm, and which polyline it will enumerate.
 
@@ -1218,8 +1314,21 @@ class ClusterCost:
             n_plan = sum(1 for m in mus if isinstance(m, menu.PlanMenu))
             print(f"    menus: {len(mus) - n_plan} enumerated, {n_plan} fell "
                   f"back to the certified plan; sizes {sizes}")
-        r = sequence_arm_cluster(segs, spec, mus, opts, seq_opts, forbid,
-                                 verbose=verbose)
+        try:
+            r = sequence_arm_cluster(segs, spec, mus, opts, seq_opts, forbid,
+                                     verbose=verbose)
+        except RuntimeError as exc:
+            # THE MENUS CAN BE LESS CONNECTED THAN THE PLAN THEY REPLACE.
+            # `prune_unflyable` guarantees this bag has a paper-legal tour ON
+            # THE CERTIFIED PLANS — that is the matrix it asks — and a variant
+            # is a different entry and exit pose, so a span whose only flyable
+            # approach is the plan's own can have no reachable fiber at all.
+            # The fiber menus are an optimisation over the certified plan; when
+            # they cannot order the bag, the certified plan still can, and
+            # dropping to it is a slower programme rather than no programme.
+            print(f"  !! arm {arm}: the fiber menus have no flyable order "
+                  f"({exc}); sequencing on the certified plans instead")
+            return sequence_arm(segs, spec, sequencer, opts, seq_opts, forbid)
         r["menus"] = mus
         return r
 
@@ -1274,7 +1383,9 @@ def load_score(loads):
 
 
 def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
-                  verbose=False):
+                  verbose=False, draw_fn=None, floor=None, eps=BALANCE_EPS,
+                  cap=BALANCE_CAND_CAP, patience=BALANCE_PATIENCE,
+                  strategy="first"):
     """Greedy min-max load balancing over segments several arms can certify.
 
     `owner[i]` is the arm currently drawing segment i; `options[i]` is the set
@@ -1292,11 +1403,27 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
     termination proof, and `max_rounds` is a belt on top of it.
 
     Each round considers every single-segment RELOCATION out of the busiest arm
-    and every SWAP of one of its segments against one held by another arm, and
-    takes the best.  The busiest arm is the only source worth considering
-    because it is the only arm whose load is the objective; a swap is worth
-    considering separately from two moves because the pair can be admissible
-    when neither half is.
+    and every SWAP of one of its segments against one held by another arm.  The
+    busiest arm is the only source worth considering because it is the only arm
+    whose load is the objective; a swap is worth considering separately from two
+    moves because the pair can be admissible when neither half is.
+
+    FIRST IMPROVEMENT, IN AN ORDER THAT COSTS NOTHING TO COMPUTE.  Pricing a
+    candidate means solving two arms' tours; ranking one does not — a move's
+    effect on the two loads it touches is bounded by the INK it hands over, and
+    `draw_fn` already knows that to the millisecond.  So the candidates are
+    sorted by the busiest arm the ink alone predicts and the first one that
+    strictly improves the real score is taken, instead of pricing all of them to
+    find the best.  `cap` bounds how many of that ordering a round may price
+    before it gives up; `strategy="best"` restores the exhaustive scan, which is
+    what the equivalence tests compare against.
+
+    THE FLOOR IS WHERE IMPROVEMENT STOPS BEING POSSIBLE.  `floor` is a lower
+    bound on the busiest arm any assignment of these segments can achieve (see
+    `_phase_floor`): every arm's load is at least its own ink, so no move can
+    take the maximum below the biggest single segment or below the mean.  Within
+    `eps` of it there is nothing left to find, and continuing means pricing
+    candidates that cannot win — which on a dense picture is most of the clock.
     """
     owner = list(owner)
     options = [set(o) for o in options]
@@ -1317,31 +1444,62 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
         L = {a: load(a, own) for a in arms}
         return load_score(L), L
 
+    def ink(a, i):
+        """The ink arm `a` would spend on segment i. -> s (0 if unknown)."""
+        return 0.0 if draw_fn is None else float(draw_fn(a, i))
+
     key, L = score(owner)
     info = dict(loads_before=dict(L), max_before=key[1], moves=[], rounds=0,
-                n_movable=int(sum(1 for o in options if len(o) > 1)))
+                n_movable=int(sum(1 for o in options if len(o) > 1)),
+                n_scanned=0, stopped=None)
+    lo = None if floor is None else float(floor) * (1.0 + float(eps))
     for _ in range(int(max_rounds)):
         src = max(arms, key=lambda a: (L[a], a))
+        if lo is not None and np.isfinite(L[src]) and L[src] <= lo:
+            info["stopped"] = "floor"
+            break
         mine = [i for i, x in enumerate(owner) if x == src]
-        best = None
+        cands = []
         for i in mine:
             for b in sorted(options[i] - {src}):
-                cand = list(owner)
-                cand[i] = b
-                k, _ = score(cand)
-                if best is None or k < best[0]:
-                    best = (k, cand, dict(kind="move", seg=i, frm=src, to=b))
+                cands.append((max(L[src] - ink(src, i), L[b] + ink(b, i)),
+                              0, i, b, -1))
         for i in mine:
             for j, b in enumerate(owner):
                 if b == src or b not in options[i] or src not in options[j]:
                     continue
-                cand = list(owner)
+                cands.append((max(L[src] - ink(src, i) + ink(src, j),
+                                  L[b] - ink(b, j) + ink(b, i)),
+                              1, i, b, j))
+        if strategy == "first":
+            cands.sort(key=lambda c: (c[0], c[1], c[2], c[3], c[4]))
+            cands = cands[:int(cap)]
+        best, since = None, 0
+        for _pred, kind, i, b, j in cands:
+            cand = list(owner)
+            if j < 0:
+                cand[i] = b
+                rec = dict(kind="move", seg=i, frm=src, to=b)
+            else:
                 cand[i], cand[j] = b, src
-                k, _ = score(cand)
-                if best is None or k < best[0]:
-                    best = (k, cand, dict(kind="swap", seg=i, other=j,
-                                          frm=src, to=b))
+                rec = dict(kind="swap", seg=i, other=j, frm=src, to=b)
+            k, _ = score(cand)
+            info["n_scanned"] += 1
+            if best is None or k < best[0]:
+                best, since = (k, cand, rec), 0
+            elif best[0] < key:
+                since += 1
+            # THE BEST OF A PROMISING PREFIX, NOT LITERALLY THE FIRST THING THAT
+            # HELPS.  A candidate that improves only the sum-of-squares
+            # tie-break is an improvement and would end the round on a strict
+            # reading of "first"; taking it costs the round that a real
+            # reduction of the maximum would have used.  So once something
+            # improves, `patience` more of the ordering are priced and the best
+            # of them is taken.
+            if strategy == "first" and best[0] < key and since >= int(patience):
+                break
         if best is None or not best[0] < key:
+            info["stopped"] = info["stopped"] or "no improving move"
             break
         owner, key = best[1], best[0]
         _, L = score(owner)
@@ -1354,7 +1512,8 @@ def balance_loads(owner, options, load_fn, max_rounds=BALANCE_ROUNDS,
                   f"{m['seg']} arm {m['frm']} -> arm {m['to']}"
                   + (f" (against segment {m['other']})" if "other" in m else "")
                   + f"; busiest arm now {key[1]:.1f} s")
-    info.update(loads_after=dict(L), max_after=key[1], n_loads=len(cache))
+    info.update(loads_after=dict(L), max_after=key[1], n_loads=len(cache),
+                floor=None if floor is None else float(floor))
     return owner, info
 
 
@@ -1566,6 +1725,230 @@ def _stack_ends(es):
                 z=np.concatenate([e["z"] for e in es]), n=len(es))
 
 
+class _ArmMatrix:
+    """One arm's transit costs over EVERY span it is ever offered. -> submatrices.
+
+    THE CROSSING IS A PROPERTY OF TWO SPANS, NOT OF A BAG.  `sequence.cost_matrix`
+    prices the leg from one node's exit to another's entry out of those two poses
+    and the run's fixed speeds; which other spans the arm happens to be holding
+    changes nothing about it.  So the matrix over the union of every span the
+    balancer offers this arm CONTAINS the matrix over any bag of them as a
+    submatrix, and the whole of the balancer's re-pricing is an index operation.
+
+    That is worth having because the leg is not cheap to compute: every cell is
+    screened for a canvas dive by a forward-kinematics sweep of 33 configurations
+    (`sequence._paper_surcharge`), and the ones that dive are routed. Rebuilding
+    it per candidate — which is what `arm_load` did — screened the same few
+    thousand crossings hundreds of times.
+
+    The union is not known in advance (a split makes new spans), so it GROWS:
+    `ensure` appends the missing spans' nodes and computes only the new rows
+    against the old columns, the old rows against the new columns, and the new
+    block against itself.  Adding spans one at a time therefore costs the same
+    total work as building the union once, which is a fraction of ONE of the
+    per-candidate rebuilds it replaces.
+
+    Both cost models are the same object here: a span contributes two nodes with
+    the plain DP and 2 x V with the fiber menus, and nothing below cares which.
+    """
+
+    def __init__(self, spec, cluster, transit_speed, qd_frac, h_inv, pen_ext,
+                 q_start, return_home, w_reconfig=sequence.W_RECONFIG,
+                 w_surcharge=sequence.W_SURCHARGE):
+        self.spec, self.cluster = spec, bool(cluster)
+        self.ts, self.qf, self.h_inv = transit_speed, qd_frac, h_inv
+        self.pen = pen_ext
+        self.q_start, self.return_home = q_start, bool(return_home)
+        self.w_reconfig, self.w_surcharge = w_reconfig, w_surcharge
+        self.slot = {}                       # span key -> (start, stop) nodes
+        self.span = []                       # node -> the span it belongs to
+        self.nv = {}                         # span key -> variants
+        self.node = {}                       # the concatenated node arrays
+        self.B = np.zeros((0, 0))            # exit -> entry transit seconds
+        self.TR = np.zeros((0, 0))           # the reconfiguration tie-break
+        self.into = np.zeros(0)              # depot -> node
+        self.outof = np.zeros(0)             # node -> depot
+        self.tdout = np.zeros(0)             # the freeze-in-place tie-break
+        self.n_added = 0
+
+    # -- the node record a span contributes --------------------------------
+    @staticmethod
+    def plain_nodes(ends):
+        """`sequence.endpoints` for ONE segment -> its two nodes."""
+        q, xy, hov = ends["q"], ends["xy"], ends["hover"]
+        return dict(ent_q=q[:, [0, 1]].reshape(2, 7),
+                    ent_h=hov[:, [0, 1]].reshape(2, 7),
+                    ent_xy=xy[:, [0, 1]].reshape(2, 2),
+                    exi_q=q[:, [1, 0]].reshape(2, 7),
+                    exi_h=hov[:, [1, 0]].reshape(2, 7),
+                    exi_xy=xy[:, [1, 0]].reshape(2, 2),
+                    sur=np.zeros(2), var=np.zeros(2, int),
+                    dirn=np.array([0, 1], int), nv=1)
+
+    @staticmethod
+    def cluster_nodes(ce):
+        """`sequence.cluster_endpoints` for ONE segment -> its 2 x V nodes."""
+        return dict(ent_q=ce["ent_q"], ent_h=ce["ent_h"], ent_xy=ce["ent_xy"],
+                    exi_q=ce["exi_q"], exi_h=ce["exi_h"], exi_xy=ce["exi_xy"],
+                    sur=np.asarray(ce["surcharge"], float),
+                    var=np.asarray(ce["var"], int),
+                    dirn=np.asarray(ce["dirn"], int), nv=int(ce["nv"][0]))
+
+    # -- growth ------------------------------------------------------------
+    def ensure(self, pairs):
+        """Add the (key, node record) pairs this matrix does not have yet."""
+        new = [(k, r) for k, r in pairs if k not in self.slot]
+        if not new:
+            return
+        seen = set()
+        new = [(k, r) for k, r in new if not (k in seen or seen.add(k))]
+        M = len(self.span)
+        add = {f: np.concatenate([r[f] for _, r in new]) for f in
+               ("ent_q", "ent_h", "ent_xy", "exi_q", "exi_h", "exi_xy",
+                "sur", "var", "dirn")}
+        owner = []
+        for k, r in new:
+            n = len(r["ent_q"])
+            self.slot[k] = (M + len(owner), M + len(owner) + n)
+            self.nv[k] = int(r["nv"])
+            owner += [k] * n
+        m = len(owner)
+        lift = sequence.node_lift(self.spec, add["exi_q"], add["exi_h"],
+                                  self.qf, self.h_inv, self.pen)
+        lower = sequence.node_lower(self.spec, add["ent_h"], add["ent_q"],
+                                    self.qf, self.h_inv, self.pen)
+        into, outof = sequence.depot_legs(
+            self.spec, add["ent_h"], add["exi_h"], lift, lower, self.qf,
+            self.h_inv, self.pen, self.q_start, self.return_home)
+        old = self.node
+        blk = np.concatenate([np.full(len(r["ent_q"]), j, int)
+                              for j, (_, r) in enumerate(new)])
+        same = blk[:, None] == blk[None, :]
+        # EVERY CROSSING OF THIS GROWTH STEP, ROUTED IN ONE DISPATCH.  The three
+        # blocks below are built one after another and each one's paper screen
+        # would dispatch its own diving crossings; a batch's wall clock is its
+        # slowest route, so three small batches idle the pool three times.  This
+        # asks for all of them at once and the blocks then find their answers
+        # already in the memo.  It is a pure accelerator — remove it and the
+        # numbers are identical, and slower.
+        sequence.prewarm(
+            self.spec,
+            ([(old["exi_h"], add["ent_h"], np.zeros((M, m), bool)),
+              (add["exi_h"], old["ent_h"], np.zeros((m, M), bool))] if M else [])
+            + [(add["exi_h"], add["ent_h"], same)],
+            self.qf, self.h_inv, self.pen)
+        B = np.empty((M + m, M + m))
+        if M:
+            B[:M, :M] = self.B
+            B[:M, M:] = sequence.leg_costs(
+                self.spec, old["exi_h"], old["exi_xy"], add["ent_h"],
+                add["ent_xy"], old["lift"], lower, np.zeros((M, m), bool),
+                self.ts, self.qf, self.h_inv, self.pen)
+            B[M:, :M] = sequence.leg_costs(
+                self.spec, add["exi_h"], add["exi_xy"], old["ent_h"],
+                old["ent_xy"], lift, old["lower"], np.zeros((m, M), bool),
+                self.ts, self.qf, self.h_inv, self.pen)
+        B[M:, M:] = sequence.leg_costs(
+            self.spec, add["exi_h"], add["exi_xy"], add["ent_h"],
+            add["ent_xy"], lift, lower, same, self.ts, self.qf, self.h_inv,
+            self.pen)
+        TR = np.empty((M + m, M + m))
+        if M:
+            TR[:M, :M] = self.TR
+            TR[:M, M:] = sequence.reconfig_block(old["exi_q"], add["ent_q"],
+                                                 self.w_reconfig)
+            TR[M:, :M] = sequence.reconfig_block(add["exi_q"], old["ent_q"],
+                                                 self.w_reconfig)
+        TR[M:, M:] = sequence.reconfig_block(add["exi_q"], add["ent_q"],
+                                             self.w_reconfig)
+        home = np.repeat(np.asarray(self.spec.q_seed, float)[None, :], m, axis=0)
+        tdout = self.w_reconfig * np.max(np.abs(add["exi_q"] - home), axis=-1)
+        for f in ("ent_q", "ent_h", "ent_xy", "exi_q", "exi_h", "exi_xy",
+                  "sur", "var", "dirn"):
+            self.node[f] = (np.concatenate([old[f], add[f]]) if M else add[f])
+        self.node["lift"] = np.concatenate([old["lift"], lift]) if M else lift
+        self.node["lower"] = (np.concatenate([old["lower"], lower]) if M
+                              else lower)
+        self.into = np.concatenate([self.into, into])
+        self.outof = np.concatenate([self.outof, outof])
+        self.tdout = np.concatenate([self.tdout, tdout])
+        self.B, self.TR, self.span = B, TR, self.span + owner
+        self.n_added += len(new)
+
+    def keep(self, live):
+        """Forget every span not in `live`. -> {old node: new node} for the rest.
+
+        THE SPLIT SEARCH INVENTS SPANS AND THROWS MOST OF THEM AWAY.  Each cut
+        it prices makes two halves nobody has seen before, and pricing them puts
+        their nodes in the union for good — so the round after prices its
+        candidates against a union carrying the eight rejected cuts of the round
+        before, and the one after that against sixteen.  On the Trollface that
+        took an arm's union from the 36 spans it can actually hold to 115.
+
+        Dropping them again is pure index arithmetic: no crossing is re-screened
+        and no route re-walked, because everything that survives keeps its value
+        and only its position changes.  The remap is returned so the tours kept
+        for warm starts can be renumbered rather than lost.
+        """
+        order = [k for k in self.slot if k in live]
+        if len(order) == len(self.slot):
+            return None
+        idx = self.nodes_of(order)
+        remap = {int(g): i for i, g in enumerate(idx)}
+        self.B = self.B[np.ix_(idx, idx)]
+        self.TR = self.TR[np.ix_(idx, idx)]
+        for f in list(self.node):
+            self.node[f] = self.node[f][idx]
+        self.into, self.outof = self.into[idx], self.outof[idx]
+        self.tdout = self.tdout[idx]
+        self.slot, pos, span = {}, 0, []
+        for k in order:
+            n = 2 * self.nv[k]
+            self.slot[k] = (pos, pos + n)
+            span += [k] * n
+            pos += n
+        self.nv = {k: self.nv[k] for k in order}
+        self.span = span
+        return remap
+
+    # -- slicing -----------------------------------------------------------
+    def nodes_of(self, keys):
+        """The global node ids of a bag, span by span, in bag order. -> array."""
+        return np.concatenate([np.arange(*self.slot[k]) for k in keys]) \
+            if keys else np.zeros(0, int)
+
+    def matrix(self, keys):
+        """The bag's (C, T, e, global node ids), sliced out of the union."""
+        idx = self.nodes_of(list(keys))
+        m = len(idx)
+        C = np.full((m + 1, m + 1), np.inf)
+        if m:
+            C[:m, :m] = self.B[np.ix_(idx, idx)]
+            C[m, :m] = self.into[idx]
+            C[:m, m] = self.outof[idx]
+        nv = [self.nv[k] for k in keys]
+        base = np.concatenate([[0], np.cumsum([2 * v for v in nv])]).astype(int)
+        seg = np.concatenate([np.full(2 * v, i, int)
+                              for i, v in enumerate(nv)]) if nv \
+            else np.zeros(0, int)
+        e = dict(seg=seg, var=self.node["var"][idx] if m else np.zeros(0, int),
+                 dirn=self.node["dirn"][idx] if m else np.zeros(0, int),
+                 base=base, nv=nv,
+                 surcharge=self.node["sur"][idx] if m else np.zeros(0),
+                 n=len(keys), N=m)
+        T = None
+        if self.cluster:
+            T = np.zeros((m + 1, m + 1))
+            if m:
+                T[:m, :m] = self.TR[np.ix_(idx, idx)]
+                T[:, :m] += ((self.w_surcharge / max(self.qf, 1e-6))
+                             * e["surcharge"][None, :])
+                if not self.return_home:
+                    T[:m, m] += self.tdout[idx]
+            T[~np.isfinite(C)] = 0.0
+        return C, T, e, idx
+
+
 class _Pricer:
     """Certifies and prices per-arm programmes over a MUTABLE set of spans.
 
@@ -1586,7 +1969,9 @@ class _Pricer:
     """
 
     def __init__(self, arms, colors, ivmap, specs, aopts, pens, draw_speed,
-                 seq, min_seg, h_inv, q_start, return_home, cost=None):
+                 seq, min_seg, h_inv, q_start, return_home, cost=None,
+                 fast=True, budget=BALANCE_BUDGET,
+                 exact_states=BALANCE_EXACT_STATES):
         self.cost = cost_model(cost)
         self.arms = sorted(arms)
         self.colors, self.ivmap = colors, ivmap
@@ -1602,6 +1987,12 @@ class _Pricer:
         self._probe, self._cends = {}, {}
         self.n_replans = self.n_probes = 0
         self.reach = None      # {(stroke id, arm): bool} from the atlas prefilter
+        # -- the incremental half (see `_ArmMatrix` and the section-4b note) --
+        self.fast = bool(fast)
+        self.bal_budget = float(budget)
+        self.bal_states = int(exact_states)
+        self._mat, self._tours = {}, {}
+        self.n_priced = self.n_warm = 0
 
     # -- certification -----------------------------------------------------
     def seed(self, it):
@@ -1701,6 +2092,97 @@ class _Pricer:
                 self.pens[arm])
         return self._cends[k]
 
+    # -- the incremental matrix and the tour it warm-starts from -----------
+    def matrix_of(self, arm):
+        """This arm's growing union matrix. -> `_ArmMatrix`."""
+        m = self._mat.get(arm)
+        if m is None:
+            m = _ArmMatrix(self.specs[arm], self.cost.cluster, self.ts, self.qf,
+                           self.h_inv, self.pens[arm], self.q_start.get(arm),
+                           self.return_home)
+            self._mat[arm] = m
+        return m
+
+    def node_record(self, arm, it, ent):
+        """One span's contribution to the arm's node list, under either model."""
+        if self.cost.cluster:
+            return _ArmMatrix.cluster_nodes(self.cluster_ends(arm, it, ent))
+        return _ArmMatrix.plain_nodes(self.ends(arm, it, ent))
+
+    def _exact_n(self, N):
+        """The biggest bag Held-Karp may still be asked for at this node count."""
+        cap = int(self.exact)
+        while cap > 0 and (1 << cap) * max(int(N), 1) > self.bal_states:
+            cap -= 1
+        return cap
+
+    def remember(self, arm, keys, tour):
+        """Keep this bag's tour, in the arm matrix's own node numbering."""
+        lst = self._tours.setdefault(arm, [])
+        lst.append((frozenset(keys), list(tour)))
+        if len(lst) > TOUR_MEMO:
+            del lst[0]
+
+    def warm_for(self, arm, keys, idx):
+        """The nearest bag already priced for this arm, as a local tour. -> list|None.
+
+        NEAREST BY OVERLAP, because that is what makes the seed worth having: a
+        candidate differs from the bag it came from by one span, so the tour
+        over that bag already orders every other span of this one.
+        """
+        lst = self._tours.get(arm)
+        if not lst:
+            return None
+        want = frozenset(keys)
+        best, n_best = None, 0
+        for ks, tour in reversed(lst):
+            n = len(want & ks)
+            if n > n_best:
+                best, n_best = tour, n
+        if best is None:
+            return None
+        loc = {int(g): k for k, g in enumerate(idx)}
+        out = [loc[int(g)] for g in best if int(g) in loc]
+        return out or None
+
+    def grow(self, pairs):
+        """Put these (arm, item, entry) spans into their matrices, arm by arm.
+
+        ONE GROWTH STEP PER ARM, NOT ONE PER SPAN.  Growing a matrix dispatches
+        its new diving crossings to the route pool and waits for the SLOWEST of
+        them — a pair that cannot be routed walks the whole ladder — so the wall
+        clock of a growth step barely depends on how many spans it adds.  The
+        split search knows all the candidates it is about to price before it
+        prices any of them, and this is how it says so.
+        """
+        by = {}
+        for arm, it, ent in pairs:
+            by.setdefault(arm, []).append(
+                (_span_key(it, arm), self.node_record(arm, it, ent)))
+        for arm, ps in by.items():
+            self.matrix_of(arm).ensure(ps)
+
+    def compact(self, items):
+        """Drop from every arm's union the spans no longer on the table.
+
+        Called once a split round has committed, so that the cuts it REJECTED
+        stop being screened against everything the next round prices.  A span
+        is live for an arm if it is one of the spans currently placed — whoever
+        happens to be drawing it, because the balancer may hand it over.
+        """
+        live = {a: set() for a in self.arms}
+        for it in items:
+            for a in self.arms:
+                live[a].add(_span_key(it, a))
+        for a, M in self._mat.items():
+            remap = M.keep(live.get(a, set()))
+            if remap is None:
+                continue
+            self._tours[a] = [
+                (ks, [remap[g] for g in t if g in remap])
+                for ks, t in self._tours.get(a, [])
+                if all(k in M.slot for k in ks)]
+
     def load(self, arm, pairs):
         """Nominal seconds arm `arm` needs for these (item, entry) pairs.
 
@@ -1708,18 +2190,52 @@ class _Pricer:
         object that will sequence the bag once the balancer has stopped moving
         it.  Whichever model that is, the memoisation below is on the span and
         the bag, so switching models changes what is computed and not how often.
+
+        THE FAST PATH IS THE SAME COST MODEL, SEARCHED FOR LESS TIME.  With
+        `fast` the matrix is sliced out of `_ArmMatrix` instead of rebuilt, the
+        tour search starts from the nearest bag this arm has already been priced
+        on, and it runs under `BALANCE_BUDGET` rather than the sequencer's own.
+        The DP, the matrix and the objective are identical — only the effort
+        spent searching for the tour differs, and the bag that is finally
+        shipped is re-sequenced at full budget by `allocate` regardless.  The
+        price is memoised on the bag either way, which is what keeps
+        `load_score` a potential: a bag priced once keeps that price, so every
+        accepted move still strictly lowers the objective and the loop still
+        terminates.
         """
         if not pairs:
             return 0.0
         pairs = sorted(pairs, key=lambda p: _span_key(p[0], arm))
-        ck = (arm, tuple(_span_key(it, arm) for it, _ in pairs))
-        if ck not in self._load:
-            segs = [e for _, e in pairs]
-            draw = [self.draw_s(arm, it, e) for it, e in pairs]
-            kw = dict(transit_speed=self.ts, qd_frac=self.qf, h_inv=self.h_inv,
-                      pen_ext=self.pens[arm], exact_max_n=self.exact,
-                      budget=self.budget, q_start=self.q_start.get(arm),
-                      return_home=self.return_home)
+        keys = [_span_key(it, arm) for it, _ in pairs]
+        ck = (arm, tuple(keys))
+        if ck in self._load:
+            return self._load[ck]
+        segs = [e for _, e in pairs]
+        draw = [self.draw_s(arm, it, e) for it, e in pairs]
+        kw = dict(transit_speed=self.ts, qd_frac=self.qf, h_inv=self.h_inv,
+                  pen_ext=self.pens[arm], exact_max_n=self.exact,
+                  budget=self.budget, q_start=self.q_start.get(arm),
+                  return_home=self.return_home)
+        self.n_priced += 1
+        if self.fast:
+            M = self.matrix_of(arm)
+            M.ensure([(k, self.node_record(arm, it, e))
+                      for k, (it, e) in zip(keys, pairs)])
+            C, T, ends, idx = M.matrix(keys)
+            warm = self.warm_for(arm, keys, idx)
+            self.n_warm += int(warm is not None)
+            rec = {}
+            kw.update(C=C, warm=warm, record=rec, budget=self.bal_budget,
+                      exact_max_n=self._exact_n(ends["N"]))
+            if self.cost.cluster:
+                kw.update(T=T, e=ends,
+                          menus=[self.menu(arm, it, e) for it, e in pairs])
+            val = self.cost.load(arm, self.specs[arm], segs, draw, **kw)
+            t = rec.get("tour")
+            if t is not None:
+                self.remember(arm, keys,
+                              [int(idx[k]) for k in t if 0 <= k < len(idx)])
+        else:
             if self.cost.cluster:
                 kw["menus"] = [self.menu(arm, it, e) for it, e in pairs]
                 kw["ends"] = _stack_cluster_ends(
@@ -1727,9 +2243,9 @@ class _Pricer:
             else:
                 kw["ends"] = _stack_ends([self.ends(arm, it, e)
                                           for it, e in pairs])
-            self._load[ck] = self.cost.load(arm, self.specs[arm], segs, draw,
-                                            **kw)
-        return self._load[ck]
+            val = self.cost.load(arm, self.specs[arm], segs, draw, **kw)
+        self._load[ck] = val
+        return val
 
     def loads(self, items):
         """Per-arm seconds for the assignment `items` currently carries."""
@@ -1767,14 +2283,15 @@ class _Pricer:
         return opts, ents
 
 
-def _try_cut(items, i, side, s_cut, L, src, recv, splice, pricer):
-    """Cut span `i`, certify both halves, and price the whole fleet with them.
+def _cut_halves(items, i, side, s_cut, L, src, recv, splice, pricer):
+    """Cut span `i` and certify both halves. -> (trial items, keep, give) | None.
 
-    -> (score, trial items, loads, record) or None if either half will not
-    certify for the arm that would draw it.  BOTH halves are re-planned from
-    scratch through `replan_same_span`, which refuses a plan that gives back so
-    much as a millimetre — the donor's remainder is not grandfathered in just
-    because it used to be part of a span the donor certified.
+    BOTH halves are re-planned from scratch through `replan_same_span`, which
+    refuses a plan that gives back so much as a millimetre — the donor's
+    remainder is not grandfathered in just because it used to be part of a span
+    the donor certified.  Nothing is priced here, which is what lets the split
+    search certify every candidate it is considering before it grows a matrix
+    for any of them.
     """
     it = items[i]
     keep = dict(it, entry=None)
@@ -1787,14 +2304,31 @@ def _try_cut(items, i, side, s_cut, L, src, recv, splice, pricer):
     if e_keep is None:
         return None
     keep["entry"], give["entry"] = e_keep, e_give
-    trial = items[:i] + [keep, give] + items[i + 1:]
+    return items[:i] + [keep, give] + items[i + 1:], keep, give
+
+
+def _price_cut(trial, i, side, s_cut, src, recv, keep, give, pricer):
+    """Price the whole fleet with this cut in place. -> (score, trial, loads, rec)."""
     loads = pricer.loads(trial)
     key = load_score(loads)
     return key, trial, loads, dict(
         kind="split", seg=int(i), frm=int(src), to=int(recv), side=side,
-        stroke=int(it["stroke"]["id"]), s_cut=float(s_cut),
-        keep_m=float(e_keep["length"]), give_m=float(e_give["length"]),
-        max_after=float(key[1]))
+        stroke=int(keep["stroke"]["id"]), s_cut=float(s_cut),
+        keep_m=float(keep["entry"]["length"]),
+        give_m=float(give["entry"]["length"]), max_after=float(key[1]))
+
+
+def _try_cut(items, i, side, s_cut, L, src, recv, splice, pricer):
+    """Cut span `i`, certify both halves, and price the fleet with them.
+
+    -> (score, trial items, loads, record) or None if either half will not
+    certify for the arm that would draw it.
+    """
+    r = _cut_halves(items, i, side, s_cut, L, src, recv, splice, pricer)
+    if r is None:
+        return None
+    trial, keep, give = r
+    return _price_cut(trial, i, side, s_cut, src, recv, keep, give, pricer)
 
 
 def _bisect_cut(items, i, side, lo, hi, L, src, recv, splice, pricer, best,
@@ -1835,7 +2369,58 @@ def _bisect_cut(items, i, side, lo, hi, L, src, recv, splice, pricer, best,
     return best, n
 
 
-def _split_search(items, loads, pricer, min_split, splice, budget):
+def _phase_floor(items, options, entries, pricer):
+    """Lower bounds on the busiest arm of ANY assignment. -> (whole, mean) s.
+
+    An arm's load is its ink plus its pen-up tour, so it is never less than its
+    ink; and every segment costs at least what the CHEAPEST arm that certifies
+    it would spend drawing it.  Two bounds follow and both are exact:
+
+      WHOLE      no assignment of undivided segments can put the busiest arm
+                 below the longest single segment, because somebody draws it.
+      MEAN       the total ink spread evenly over the arms that can hold any of
+                 it.  This one survives SPLITTING, which the other does not — a
+                 cut hands part of a span to another arm and adds the splice, so
+                 the total only grows.
+
+    They are what tells the improvement loop when it has finished rather than
+    when it has run out of candidates, which on a picture whose cover is already
+    near-optimal is the difference between eleven minutes and a few seconds.
+    """
+    mins, arms = [], set()
+    for i, it in enumerate(items):
+        cand = [(a, e) for a, e in entries[i].items() if a in options[i]]
+        if not cand:
+            cand = [(it["arm"], it["entry"])]
+        mins.append(min(pricer.draw_s(a, it, e) for a, e in cand))
+        arms |= {a for a, _ in cand}
+    if not mins:
+        return 0.0, 0.0
+    mean = float(sum(mins)) / max(len(arms), 1)
+    return max(float(max(mins)), mean), mean
+
+
+def _cut_gain(sp, s_cut, side, L, rate, loads, src, recv):
+    """The busiest arm this cut would leave, judged on the ink alone. -> s.
+
+    A cut hands `give` metres of ink from the source to the receiver and costs
+    the receiver an entry and an exit; the pen-up tours on both sides move too,
+    and this cannot see them.  That is exactly why it is worth having — it costs
+    two multiplications, where finding out what the tours do costs two clean
+    re-plans, two DP solves and the paper screen of two spans that did not exist
+    a moment ago.  So it RANKS the candidates and `_try_cut` prices the few at
+    the top of that ranking, which is the same bargain `balance_loads` strikes
+    with `draw_fn`.
+    """
+    give_m = (float(s_cut) - float(sp["s0"])) * L if side == "head" \
+        else (float(sp["s1"]) - float(s_cut)) * L
+    give = max(0.0, give_m) * float(rate)
+    return max(loads[src] - give,
+               loads.get(recv, 0.0) + give + SPLIT_SEAM_S)
+
+
+def _split_search(items, loads, pricer, min_split, splice, budget,
+                  floor=None, eps=BALANCE_EPS, tries=SPLIT_CAND_TRIES):
     """The best IMPROVING split of one span off the busiest arm.
 
     -> ((score, new items, record), plan calls spent), the triple being None
@@ -1851,12 +2436,27 @@ def _split_search(items, loads, pricer, min_split, splice, budget):
     `load_score`, the balancer's own ruler, so a split and a relocation can be
     compared without either being given a handicap; a split is accepted only if
     it beats the score the move/swap pass left behind.
+
+    THE BUDGET IS ADAPTIVE, IN FOUR PLACES.  `floor` is `_phase_floor`'s MEAN
+    bound — the one splitting cannot get under — and a busiest arm already
+    within `eps` of it ends the search before a single probe is bought.  A
+    receiver no more than `SPLIT_MIN_GAIN` lighter than the source cannot take a
+    piece worth the entry and the exit a cut costs it, so it is not probed
+    either.  The surviving (segment, receiver, cut) triples are then RANKED ON
+    THE INK by `_cut_gain`, which costs nothing, and only `tries` of that
+    ordering are ever priced — pricing one means two clean re-plans, two tours,
+    and the crossings of two spans nobody has seen before.  The winner is
+    refined by `_bisect_cut` exactly as before, which is where the cut position
+    is actually decided.
     """
     key0 = load_score(loads)
     src = max(loads, key=lambda a: (loads[a], a))
+    if floor is not None and np.isfinite(loads[src]) \
+            and loads[src] <= float(floor) * (1.0 + float(eps)):
+        return None, 0
     mine = sorted((i for i, it in enumerate(items) if it["arm"] == src),
                   key=lambda i: (-float(items[i]["entry"]["length"]), i))
-    spent, best, where = 0, None, None
+    spent, best, where, cands = 0, None, None, []
     for i in mine[:SPLIT_CAND_SEGS]:
         it = items[i]
         st, sp = it["stroke"], it["sp"]
@@ -1872,7 +2472,8 @@ def _split_search(items, loads, pricer, min_split, splice, budget):
         # what is left.
         recv = sorted((b for b in pricer.arms
                        if b != src and pricer.colors.get(b) == st["color"]
-                       and pricer.reaches(it, b)),
+                       and pricer.reaches(it, b)
+                       and loads[src] - loads.get(b, 0.0) > SPLIT_MIN_GAIN),
                       key=lambda b: (loads.get(b, 0.0), b))
         for b in recv[:SPLIT_CAND_RECV]:
             ivs = [v for v in pricer.ivmap.get(st["id"], []) if v.arm == b]
@@ -1891,16 +2492,47 @@ def _split_search(items, loads, pricer, min_split, splice, budget):
             for c, side in split_candidates(sp["s0"], sp["s1"], L, pre, suf,
                                             want, min_split, splice,
                                             n=SPLIT_COARSE_CUTS):
-                if spent >= budget:
-                    return (best if best and best[0] < key0 else None), spent
-                n0 = pricer.n_replans
-                r = _try_cut(items, i, side, c, L, src, b, splice, pricer)
-                spent += pricer.n_replans - n0
-                if r is not None and (best is None or r[0] < best[0]):
-                    best = (r[0], r[1], r[3])
-                    where = (i, side, b, L, sp, pre, suf)
-    if where is None:
-        return None, spent
+                cands.append((_cut_gain(sp, c, side, L, rate, loads, src, b),
+                              i, side, float(c), b, L, sp, pre, suf))
+            if spent >= budget:
+                break
+    # CERTIFY THE SHORTLIST, THEN GROW ONE MATRIX, THEN PRICE.  Every candidate
+    # cut makes two spans nobody has seen before, and the crossings of a new span
+    # go to the route pool in a batch whose wall clock is its slowest member.
+    # Done one candidate at a time that is one such wait each; done like this it
+    # is one wait for the shortlist.  The pricing loop below still stops at the
+    # first candidate that improves — what has been paid for in advance is the
+    # geometry, which is the same geometry either way.
+    cands.sort(key=lambda c: (c[0], c[1], c[2], c[3], c[4]))
+    ready = []
+    for _g, i, side, c, b, L, sp, pre, suf in cands[:int(tries)]:
+        if spent >= budget:
+            break
+        n0 = pricer.n_replans
+        halves = _cut_halves(items, i, side, c, L, src, b, splice, pricer)
+        spent += pricer.n_replans - n0
+        if halves is not None:
+            ready.append((i, side, c, b, L, sp, pre, suf, halves))
+    grow = []
+    for _i, _side, _c, recv, _L, _sp, _pre, _suf, (_t, keep, give) in ready:
+        grow.append((src, keep, keep["entry"]))
+        grow.append((recv, give, give["entry"]))
+    pricer.grow(grow)
+    # AND THEN PRICE ALL OF THEM.  Stopping at the first candidate that improves
+    # is the right bargain in `balance_loads`, where pricing one IS the cost;
+    # here the cost was the certifying and the growing above, both of which the
+    # whole shortlist has already been charged for, and what is left is a
+    # handful of DP solves over matrices that are already built.  Measured on
+    # the CSAIL orange pass, stopping early took 5 splits down to 3 and left the
+    # busiest arm 8 % heavier; taking the best of the shortlist costs about two
+    # seconds a round and gets them back.
+    for i, side, c, b, L, sp, pre, suf, (trial, keep, give) in ready:
+        r = _price_cut(trial, i, side, c, src, b, keep, give, pricer)
+        if best is None or r[0] < best[0]:
+            best = (r[0], r[1], r[3])
+            where = (i, side, b, L, sp, pre, suf)
+    if where is None or spent >= budget:
+        return (best if best and best[0] < key0 else None), spent
     # The winner is located; now place its cut exactly.  This runs even when no
     # COARSE candidate improved anything: the two coarse cuts are the equalising
     # guess (which has to price a pen-up tour it cannot see) and the receiver's
@@ -1924,7 +2556,8 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
               h_inv=H_INV_DEFAULT, verbose=False, q_start=None,
               return_home=True, split=True, min_split=MIN_SPLIT_M,
               splice=SPLIT_OVERLAP_M, split_rounds=SPLIT_ROUNDS,
-              split_budget=SPLIT_BUDGET, reach=None, cost=None):
+              split_budget=SPLIT_BUDGET, reach=None, cost=None, fast=True,
+              entries=None):
     """The probe data + the placed spans -> a re-assignment. -> (placed, info).
 
     ALLOCATION v2.  The loop is (move | swap | split) until nothing improves:
@@ -1958,35 +2591,53 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
     """
     pricer = _Pricer(arms, colors, ivmap, specs, aopts, pens, draw_speed,
                      dict(seq_opts or {}), min_seg, h_inv, q_start,
-                     return_home, cost=cost)
+                     return_home, cost=cost, fast=fast)
     pricer.reach = reach
+    if entries is not None:
+        # the clean re-plans another profile of the same plan family already
+        # bought; `allocate.plan_family` is what says they are the same question
+        pricer._entry = entries
     items = [dict(it) for it in placed]
     lengths = {int(it["stroke"]["id"]): polyline_length(it["stroke"]["pts"])
                for it in items}
     cover0 = merged_spans(items)
     owner0 = [(it["arm"], float(it["entry"]["length"])) for it in items]
     moves, splits, loads_before, n_movable, spent = [], [], None, 0, 0
+    floors, stops = (0.0, 0.0), []
 
     for _ in range(int(split_rounds) + 1):
         options, entries = pricer.options(items)
+        floors = _phase_floor(items, options, entries, pricer)
+
+        def draw_fn(a, i, _items=items, _ents=entries):
+            e = _ents[i].get(a)
+            return (pricer.draw_s(a, _items[i], e) if e is not None
+                    else float("inf"))
+
         owner, info = balance_loads([it["arm"] for it in items], options,
                                     pricer.load_fn(items, entries),
-                                    verbose=verbose)
+                                    verbose=verbose, draw_fn=draw_fn,
+                                    floor=floors[0] if fast else None,
+                                    strategy="first" if fast else "best")
         for i, (it, a) in enumerate(zip(items, owner)):
             it["arm"], it["entry"] = a, entries[i][a]
         if loads_before is None:
             loads_before, n_movable = dict(info["loads_before"]), info["n_movable"]
         moves += info["moves"]
+        stops.append(info.get("stopped"))
         if not split:
             break
         best, used = _split_search(items, dict(info["loads_after"]), pricer,
                                    float(min_split), float(splice),
-                                   max(int(split_budget) - spent, 0))
+                                   max(int(split_budget) - spent, 0),
+                                   floor=floors[1] if fast else None)
         spent += used
         if best is None:
             break
         key, items, rec = best
         splits.append(rec)
+        if fast:
+            pricer.compact(items)
         if verbose:
             print(f"  split {len(splits):>2}: stroke {rec['stroke']} cut at "
                   f"s={rec['s_cut']:.4f}; arm {rec['frm']} keeps "
@@ -2009,6 +2660,9 @@ def rebalance(placed, arms, colors, ivmap, specs, aopts, pens,
         moves=moves, rounds=len(moves), splits=splits, n_splits=len(splits),
         n_movable=int(n_movable), n_replans=int(pricer.n_replans),
         n_probes=int(pricer.n_probes), split_calls=int(spent),
+        floor_seg_s=float(floors[0]), floor_mean_s=float(floors[1]),
+        n_priced=int(pricer.n_priced), n_warm=int(pricer.n_warm),
+        stopped=[s for s in stops if s], incremental=bool(fast),
         draw_speed=float(draw_speed), cost_model=pricer.cost.name,
         n_menus=int(getattr(pricer.cost, "n_built", 0)),
         min_split_m=float(min_split), splice_m=float(splice),
@@ -2512,7 +3166,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              min_split=MIN_SPLIT_M, splice=SPLIT_OVERLAP_M,
              split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
              draw_speed=DRAW_SPEED, q_start=None, return_home=True,
-             cluster=CLUSTER, menu_opts=None, fleet=None, merge=True):
+             cluster=CLUSTER, menu_opts=None, fleet=None, merge=True,
+             fast_balance=True, share=None):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -2563,6 +3218,25 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     piece a cut may create and `splice` the ink drawn twice at the seam.
     Coverage is invariant under it by construction and re-measured before the
     result is returned; `split=False` recovers allocation v1 exactly.
+
+    `fast_balance` is the incremental improvement loop (see the constants above
+    `BALANCE_BUDGET`): one growing cost matrix per arm, tours warm-started from
+    the bag each candidate differs from by a span, a first-improvement scan and
+    a stop at the phase's own floor.  `fast_balance=False` prices every
+    candidate from scratch under the sequencer's full budget and scans
+    exhaustively, which is what every run before this one did.
+
+    `share` is a dict a CALLER keeps across allocations, and it is how the four
+    execution profiles stop paying four times for the same geometry.  Nothing
+    the planner does depends on `qd_frac`: a probe, a clean re-plan and a fiber
+    menu are functions of the stroke, the arm, its pen and the band objective,
+    and two profiles that agree on those get the same answers to the last bit.
+    So they are memoised under a key that names exactly that (`plan_family`),
+    and a profile that differs only in the joint-speed cap re-uses every plan
+    call the first one bought.  Left None nothing is shared and each allocation
+    is what it always was.  (The other half of the sharing needs no bookkeeping
+    at all: `paper`'s route memo and `sequence`'s priced-crossing memo are
+    process-global, and a pen-up route knows nothing about `qd_frac` either.)
     """
     if arms is not None and active_override is not None:
         raise ValueError("pass arms= or active_override=, not both")
@@ -2575,34 +3249,54 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
             raise ValueError(f"pens names arms not in the fleet: {sorted(unknown)}")
     aopts = {a: pen_opts(opts, pens, a) for a in arms}
     t0 = time.time()
-    pre = prefilter(strokes, arms, atlas_dir)
-    t_pre = time.time() - t0
+    share = {} if share is None else share
+    fam = plan_family(strokes, arms, aopts, pens)
+    pk = ("probe", fam, int(max_probes), round(float(min_seg), 9),
+          round(float(gap_tol), 9), probe_ref_m, str(atlas_dir))
+    shared_probe = pk in share
+    if shared_probe:
+        # A COPY, BECAUSE `repair_gaps` APPENDS TO IT.  The probe pass is what
+        # costs; the map it returns is a few hundred intervals.  Handing each
+        # profile its own copy means the repairs one of them certifies cannot
+        # change what the next one is offered, so a shared run and a solo run
+        # reach the same allocation and not merely a similar one.
+        pre, iv0, probe_stats = share[pk]
+        ivmap = {k: list(v) for k, v in iv0.items()}
+        t_pre = t_probe = 0.0
+    else:
+        pre = prefilter(strokes, arms, atlas_dir)
+        t_pre = time.time() - t0
 
-    ivmap, probe_stats = {}, []
-    t1 = time.time()
-    for st in strokes:
-        ivs = []
-        for a in arms:
-            if pre is not None and not pre.get((st["id"], a), True):
-                probe_stats.append(dict(arm=a, probes=0, statuses=["prefiltered"],
-                                        stroke=st["id"]))
-                continue
-            v, s = probe_stroke(st["pts"], specs[a], aopts[a],
-                                max_probes=stroke_probes(
-                                    polyline_length(st["pts"]), max_probes,
-                                    probe_ref_m),
-                                min_seg=min_seg, gap_tol=gap_tol,
-                                bisect=probe_ref_m is not None)
-            s["stroke"] = st["id"]
-            probe_stats.append(s)
-            ivs += v
-        ivmap[st["id"]] = ivs
-        if verbose:
-            print(f"  stroke {st['id']:3d} {st['color']:6s} "
-                  f"L={polyline_length(st['pts']):.3f} m -> "
-                  + (", ".join(f"{v.arm}[{v.s0:.2f},{v.s1:.2f}]" for v in ivs)
-                     or "no arm"))
-    t_probe = time.time() - t1
+        ivmap, probe_stats = {}, []
+        t1 = time.time()
+        for st in strokes:
+            ivs = []
+            for a in arms:
+                if pre is not None and not pre.get((st["id"], a), True):
+                    probe_stats.append(dict(arm=a, probes=0,
+                                            statuses=["prefiltered"],
+                                            stroke=st["id"]))
+                    continue
+                v, s = probe_stroke(st["pts"], specs[a], aopts[a],
+                                    max_probes=stroke_probes(
+                                        polyline_length(st["pts"]), max_probes,
+                                        probe_ref_m),
+                                    min_seg=min_seg, gap_tol=gap_tol,
+                                    bisect=probe_ref_m is not None)
+                s["stroke"] = st["id"]
+                probe_stats.append(s)
+                ivs += v
+            ivmap[st["id"]] = ivs
+            if verbose:
+                print(f"  stroke {st['id']:3d} {st['color']:6s} "
+                      f"L={polyline_length(st['pts']):.3f} m -> "
+                      + (", ".join(f"{v.arm}[{v.s0:.2f},{v.s1:.2f}]" for v in ivs)
+                         or "no arm"))
+        t_probe = time.time() - t1
+        share[pk] = (pre, {k: list(v) for k, v in ivmap.items()}, probe_stats)
+    mk = round(float(min_seg), 9)
+    replan_memo = share.setdefault(("replan", fam, mk), {})
+    entry_memo = share.setdefault(("entry", fam, mk), {})
 
     if colors is None:
         colors, cover, table = best_partition(strokes, ivmap, arms, min_seg,
@@ -2676,9 +3370,18 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         for ps in cover["per_stroke"]:
             st, L = ps["stroke"], ps["L"]
             for span in place_cuts(ps["chosen"], L, overlap):
-                plan, sp = replan_segment(st["pts"], span, specs[span["arm"]],
-                                          aopts[span["arm"]], min_seg=min_seg)
-                n_replan += sp["replans"]
+                rk = (int(st["id"]), int(span["arm"]),
+                      round(float(span["s0"]), 9), round(float(span["s1"]), 9))
+                hit = replan_memo.get(rk)
+                if hit is None:
+                    plan, sp = replan_segment(st["pts"], span,
+                                              specs[span["arm"]],
+                                              aopts[span["arm"]],
+                                              min_seg=min_seg)
+                    replan_memo[rk] = (plan, sp)
+                    n_replan += sp["replans"]
+                else:
+                    plan, sp = hit[0], dict(hit[1])
                 if plan is None:
                     continue
                 placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
@@ -2723,7 +3426,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                                 min_split=min_split, splice=splice,
                                 split_rounds=split_rounds,
                                 split_budget=split_budget, reach=pre,
-                                cost=cost)
+                                cost=cost, fast=fast_balance,
+                                entries=entry_memo)
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
@@ -2916,6 +3620,15 @@ def report(res, strokes):
                      f"busiest arm {b['max_before']:.1f} s -> "
                      f"{b['max_after']:.1f} s (the phase's floor), draw speed "
                      f"{b['draw_speed']:g} m/s")
+        if b.get("incremental"):
+            lines.append(
+                f"      {b.get('n_priced', 0)} candidate bags priced "
+                f"({b.get('n_warm', 0)} warm-started off a neighbouring bag); "
+                f"the ink puts the busiest arm at no less than "
+                f"{b.get('floor_seg_s', 0.0):.1f} s whole "
+                f"({b.get('floor_mean_s', 0.0):.1f} s if it is cut up)"
+                + (f"; stopped: {', '.join(b['stopped'])}"
+                   if b.get("stopped") else ""))
         if b.get("n_splits"):
             lines.append(f"      {b['n_segments_before']} segments -> "
                          f"{b['n_segments_after']}; "

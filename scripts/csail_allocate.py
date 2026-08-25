@@ -566,7 +566,7 @@ def parse_pens(s):
     return out
 
 
-def run_allocation(a, verbose=False, split=None, px=None):
+def run_allocation(a, verbose=False, split=None, px=None, share=None):
     """Trace -> place -> allocate. -> (phases, strokes, info).
 
     One code path for the allocation PNG/JSON and for the animation, so the
@@ -605,9 +605,10 @@ def run_allocation(a, verbose=False, split=None, px=None):
     # and `writing`'s timeline reach `paper` by different routes — so it is set
     # once, here, before anything plans, rather than threaded through six
     # signatures that could disagree.  The memo is keyed on it either way.
+    share = {} if share is None else share
     if bool(getattr(a, "frame_safe", False)) != paper.FRAME_SAFE:
         paper.FRAME_SAFE = bool(getattr(a, "frame_safe", False))
-        paper.clear_cache()
+        paper.clear_cache()          # and, through its hook, sequence's
         print(f"  pen-ups are certified against the frame too "
               f"(margin {1000 * rig_final.STATIC_MARGIN:.0f} mm)")
     t0 = time.time()
@@ -646,6 +647,9 @@ def run_allocation(a, verbose=False, split=None, px=None):
               seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
               return_home=getattr(a, "idle_policy",
                                   idle.POLICY_FREEZE) == idle.POLICY_HOME,
+              # every plan call this allocation makes that another execution
+              # profile of the same plan family has already made (`plan_family`)
+              share=share,
               atlas_dir=None if a.no_prefilter
               else str(Path(getattr(a, "atlas", None) or a.out)))
     arms = allocate.active_arms(_override(a.arms))

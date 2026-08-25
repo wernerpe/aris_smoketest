@@ -222,6 +222,38 @@ def placement_png(doc, path, name, arms, slack, radius):
     plt.close(fig)
 
 
+def write_program(a, b, row, strokes, info, dt, P, palette, prof, elapsed):
+    """Put a runnable, certified programme on disk. -> the schedule summary.
+
+    THE SAME WRITE, EARLY AND LATE.  `--select-profile` conducts four execution
+    profiles and used to write nothing until all four had been decided; the
+    first one to certify is already a programme the fleet could run, and the
+    metric that matters to somebody standing in front of the robots is when
+    THAT exists, not when the grid finishes.  So this is called once the moment
+    the provisional best certifies and once more on whatever finally wins, and
+    the files say which they are (`provisional` in both JSONs, and `elapsed_s`,
+    the seconds since the picture was handed in).
+
+    `b` is the winning row's OWN arguments — its `qd_frac`, its band objective —
+    because the payload and the summary describe the timeline that certified,
+    not the defaults the run was started with.
+    """
+    phases, built, pens = row["phases"], row["built"], row["pens"]
+    nF, nInk, M_tot, n_pause = payload(built, dt, pens, b, P("_schedule.npz"))
+    doc = program_json(phases, strokes, info, P("_program.json"),
+                       palette=palette, name=a.name, source=a.source)
+    doc["profile"] = prof
+    doc["provisional"] = bool(prof.get("provisional", False))
+    doc["elapsed_s"] = round(float(elapsed), 3)
+    P("_program.json").write_text(json.dumps(doc))
+    summary = summary_json(b, phases, strokes, info, built, dt, pens, prof,
+                           nF, nInk, n_pause)
+    summary["provisional"] = doc["provisional"]
+    summary["elapsed_s"] = doc["elapsed_s"]
+    P("_schedule.json").write_text(json.dumps(summary, indent=1))
+    return summary
+
+
 def strokes_json(strokes, info, path, palette):
     with open(path, "w") as f:
         json.dump(dict(sheet=[float(SHEET[0]), float(SHEET[1])],
@@ -411,21 +443,43 @@ def main(argv=None):
     # ---- 3+4+5. allocate, conduct, check -------------------------------
     a.traced_px = px
     print("\n=== allocate, conduct, check ===")
-    phases, strokes, info, built, dt, pens, sel = build(a)
+    first = {}
+
+    def on_certified(row, strokes, info, dt):
+        """A profile has certified: put its programme on disk right now."""
+        t = time.time() - t_all
+        prof = dict(chosen=row["profile"], qd_frac=row["qd_frac"],
+                    cluster=row["cluster"],
+                    band_objective=row["band_objective"],
+                    makespan_s=row["makespan_s"], floor_s=row["floor_s"],
+                    provisional=True)
+        write_program(a, row["args"], row, strokes, info, dt, P, palette, prof, t)
+        first.setdefault("t", t)
+        first["profile"] = row["profile"]
+        first["makespan_s"] = row["makespan_s"]
+        print(f"\n*** PROVISIONAL-BEST PROGRAMME ON DISK at {t:.1f} s from the "
+              f"picture: {row['profile']}, makespan {row['makespan_s']:.3f} s"
+              f"\n    {P('_program.json')}, {P('_schedule.json')}, "
+              f"{P('_schedule.npz')} ***")
+
+    phases, strokes, info, built, dt, pens, sel = build(
+        a, on_certified=on_certified)
     prof = profile_json(sel) if sel else None
     if prof:
         a.qd_frac, a.cluster = prof["qd_frac"], prof["cluster"]
         a.band_objective = prof["band_objective"]
-
-    nF, nInk, M_tot, n_pause = payload(built, dt, pens, a, P("_schedule.npz"))
-    doc = program_json(phases, strokes, info, P("_program.json"),
-                       palette=palette, name=a.name, source=a.source)
-    if prof:
-        doc["profile"] = prof
-        P("_program.json").write_text(json.dumps(doc))
-    summary = summary_json(a, phases, strokes, info, built, dt, pens, prof,
-                           nF, nInk, n_pause)
-    P("_schedule.json").write_text(json.dumps(summary, indent=1))
+        prof["provisional"] = False
+        prof["first_certified_s"] = sel.get("first_certified_s")
+        summary = write_program(a, a, sel["chosen"], strokes, info, dt, P,
+                                palette, prof, time.time() - t_all)
+    else:
+        nF, nInk, M_tot, n_pause = payload(built, dt, pens, a,
+                                           P("_schedule.npz"))
+        doc = program_json(phases, strokes, info, P("_program.json"),
+                           palette=palette, name=a.name, source=a.source)
+        summary = summary_json(a, phases, strokes, info, built, dt, pens, prof,
+                               nF, nInk, n_pause)
+        P("_schedule.json").write_text(json.dumps(summary, indent=1))
     sheet_png(strokes, info, P("_sheet.png"), a.name, palette)
     strokes_json(strokes, info, P("_strokes.json"), palette)
     allocation_png(phases, strokes, P("_allocation.png"), name=a.name)
@@ -459,6 +513,12 @@ def main(argv=None):
     print(f"  wrote {P('_program.json')}, {P('_schedule.json')}, "
           f"{P('_schedule.npz')}, {P('_allocation.png')}, {P('_final.png')}, "
           f"{P('_sheet.png')}, {P('_strokes.json')}")
+    if first:
+        print(f"\n  TIME TO FIRST CERTIFIED PROGRAM {first['t']:.1f} s "
+              f"({first['profile']} at {first['makespan_s']:.3f} s)"
+              + ("" if first["profile"] == (prof or {}).get("chosen")
+                 else f"; {(prof or {}).get('chosen')} replaced it at "
+                      f"{summary['makespan_s']:.3f} s"))
 
     # ---- 6. animation --------------------------------------------------
     if not a.no_anim:

@@ -107,10 +107,59 @@ _CACHE = {}                # (spec key, pen, h_inv, q0, q1, floors) -> result
 _LIFTS = {}                # (spec key, pen, h_inv, q, z) -> hover pose | None
 
 
+_ON_CLEAR = []             # memos elsewhere that are derived from these two
+
+
+def on_clear(fn):
+    """Register a memo to be dropped whenever this module's are.
+
+    `sequence` caches the PRICED detour of a crossing, which is this module's
+    answer plus arithmetic; a fleet mutated in place invalidates both, and a
+    module that had to remember to clear the other one would eventually forget.
+    """
+    _ON_CLEAR.append(fn)
+
+
 def clear_cache():
     """Drop the memos.  Tests that mutate a fleet in place need this."""
     _CACHE.clear()
     _LIFTS.clear()
+    for fn in _ON_CLEAR:
+        fn()
+
+
+def route_key(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+              tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR):
+    """The memo key `route` would file this question under. -> hashable.
+
+    Public because the crossings of one cost matrix are screened in PARALLEL
+    (`sequence._paper_surcharge`) and a worker's memo dies with the worker: the
+    parent files each answer it gets back under this key, so the routes bought
+    by one matrix are still free to the next one and to the timeline that
+    finally flies them.  `route` clamps the floors to what the endpoints can
+    hold before it keys on them, and so does this — the two must agree or the
+    parent would file the answer where nothing looks for it.
+    """
+    tf, cf = effective_floors(spec, q0, q1, pen_ext, h_inv, tip_floor,
+                              chain_floor)
+    return _key(spec, q0, q1, pen_ext, h_inv, tf, cf)
+
+
+NOT_CACHED = object()      # `None` is a legitimate answer ("no route exists")
+
+
+def cache_route(key, out):
+    """File a route computed elsewhere under `route_key`'s key."""
+    _CACHE[key] = out
+
+
+def cached_route(key):
+    """The memoised answer for that key, or `NOT_CACHED`."""
+    return _CACHE.get(key, NOT_CACHED)
+
+
+def _pose_bytes(q):
+    return np.round(np.asarray(q, float), 9).tobytes()
 
 
 def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
@@ -118,10 +167,27 @@ def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
     # pair has a different answer with the steel gated in, and a memo that
     # forgot that would hand a run the other run's route.
     return (id(spec), float(pen_ext), float(h_inv),
-            np.round(np.asarray(q0, float), 9).tobytes(),
-            np.round(np.asarray(q1, float), 9).tobytes(),
+            _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
             bool(FRAME_SAFE))
+
+
+def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+    """`_key` for a whole BLOCK of pose pairs, with each pose hashed once.
+
+    A cost matrix asks about tens of thousands of pairs drawn from a few
+    hundred poses, and rounding-and-hashing a pose is not free; the block form
+    does it once per pose instead of once per cell.  It builds the same tuple
+    `_key` does, out of the same helper, so the two cannot drift apart.
+    """
+    rb = [_pose_bytes(q) for q in q_rows]
+    cb = [_pose_bytes(q) for q in q_cols]
+    base = (id(spec), float(pen_ext), float(h_inv))
+
+    def key(a, b, tip_floor, chain_floor):
+        return base + (rb[a], cb[b], round(float(tip_floor), 9),
+                       round(float(chain_floor), 9), bool(FRAME_SAFE))
+    return key
 
 
 # --------------------------------------------------------------------------

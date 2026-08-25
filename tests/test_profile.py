@@ -114,6 +114,12 @@ def test_refusal_falls_back_to_the_next_certified_profile():
     which one happened to be tried first: the selector conducts them, is
     refused, and carries on down the order rather than stopping at the first
     answer or shipping the refusal's floor as if it were a makespan.
+
+    `qd0.60+cluster` is conducted before anything else has even been ALLOCATED
+    (`csail_schedule.FIRST_PROFILE`, see docs/FAST_PLANNING.md §4), so that a
+    picture whose usual winner does win has a runnable programme as early as
+    possible.  When it is refused, as here, the remaining three fall back into
+    floor order behind it and nothing else about the outcome changes.
     """
     boom = SystemExit("scene_check REFUSED phase 1: grey; nothing rendered")
     h = Harness(floors={"qd0.60": 56.7, "qd0.60+cluster": 58.0,
@@ -121,9 +127,11 @@ def test_refusal_falls_back_to_the_next_certified_profile():
                 conducts={"qd0.60": idle.Unconductable("arm 2 cannot stop clear"),
                           "qd0.60+cluster": boom,
                           "qd0.30": 89.395833, "qd0.30+cluster": 95.0})
-    sel = h.run()
+    sel = h.run(jobs=1)
 
-    assert h.conducted == ["qd0.60", "qd0.60+cluster", "qd0.30", "qd0.30+cluster"]
+    assert h.conducted == ["qd0.60+cluster", "qd0.60", "qd0.30", "qd0.30+cluster"]
+    assert h.allocated[0] == "qd0.60+cluster", \
+        "the provisional best must be allocated before the other three"
     assert sel["chosen"]["profile"] == "qd0.30"
     assert abs(sel["chosen"]["makespan_s"] - 89.395833) < 1e-9
     assert sel["chosen"]["qd_frac"] == 0.30 and not sel["chosen"]["cluster"]
@@ -150,17 +158,24 @@ def test_the_recorded_grid_is_the_conducts_that_happened():
     when its FLOOR — an exact lower bound on any schedule of that allocation —
     is already the incumbent's certified makespan or worse.  Turning the
     pruning off must not move the answer, only the bill.
+
+    The cells are ALLOCATED with the provisional best first and REPORTED in the
+    listed order: which one is finished first is a scheduling decision and the
+    record of what was tried should not move with it.
     """
     floors = {"qd0.30": 81.789, "qd0.30+cluster": 90.716,
               "qd0.60": 62.0, "qd0.60+cluster": 58.0}
     conducts = {"qd0.30": 104.021, "qd0.30+cluster": 123.375,
                 "qd0.60": 84.396, "qd0.60+cluster": 77.792}
     h = Harness(floors, conducts)
-    sel = h.run()
+    sel = h.run(jobs=1)
     doc = json.loads(json.dumps(cs.profile_json(sel)))   # it has to survive JSON
 
-    assert h.allocated == [cs.profile_name(p) for p in cs.PROFILES]
-    assert [r["profile"] for r in doc["grid"]] == h.allocated
+    assert h.allocated == [cs.profile_name(p)
+                           for p in cs.profile_order(cs.PROFILES)]
+    assert h.allocated[0] == cs.FIRST_PROFILE
+    assert [r["profile"] for r in doc["grid"]] == \
+        [cs.profile_name(p) for p in cs.PROFILES]
     assert doc["chosen"] == "qd0.60+cluster"
     assert abs(doc["makespan_s"] - 77.792) < 1e-9
 

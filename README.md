@@ -126,6 +126,10 @@ tests/
                    the last 59.9 mm of the logo
   test_draw.py     the generic front door: ink counting, the line/fill split,
                    the vector branch, and a whole picture end to end
+  test_balance.py  the incremental improvement loop: the sliced cost matrix,
+                   first-improvement against the exhaustive scan, the phase
+                   floor, what the four profiles may share, and which one is
+                   certified first  (docs/FAST_PLANNING.md)
 docs/
   DECISIONS.md     every number the upstream repos disagree on, and what we picked
   CONCURRENCY.md   where the 148 s of pause came from, and what each lever bought
@@ -139,6 +143,10 @@ docs/
   ANY_PICTURE.md   the generic front door: the three CSAIL-specific assumptions
                    in the tracer and what measured them instead, and the
                    Trollface run end to end
+  FAST_PLANNING.md why a picture used to take an hour to become a certified
+                   programme and now does not: the balancer priced every
+                   candidate from scratch, and 94 % of a cost matrix is
+                   `paper.route`.  Time to the FIRST certified programme
 ```
 
 ## Key facts

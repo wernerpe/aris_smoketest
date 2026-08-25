@@ -38,8 +38,11 @@ Writes out/csail_schedule<tag>.npz, (with --program) the shipped allocation as
 out/csail_program<tag>.json, and (with --final) the end-state still.
 """
 import argparse
+import contextlib
 import copy
+import io
 import json
+import multiprocessing as mp
 import sys
 import time
 from pathlib import Path
@@ -306,8 +309,26 @@ def nominal_floor(a, res, pens, q_start=None, policy=idle.POLICY_FREEZE):
 # pruning bite, and it bites hard: over `bench`'s five drawings and the logo,
 # 8 of the 24 cells were conducted and three of the six drawings decided on a
 # single conduct (`docs/BENCH.md`).
+#
+# AND THE ORDER THEY ARE TRIED IN IS NOT THE ORDER THEY ARE LISTED IN.  Floor
+# order decides which candidates are worth conducting, and it cannot be known
+# until every cell has been allocated; but WHICH CELL TO FINISH FIRST is a
+# different question, and the answer has been the same on this rig for every
+# picture in the corpus.  `qd0.60+cluster` is what the CSAIL logo ships at
+# (77.792 s against 104.021 s on the defaults, `docs/BENCH.md`), what the
+# Trollface ships at, and what two-pass ships at.  So it is allocated,
+# conducted and certified BEFORE the other three are allocated at all, and the
+# moment `scene_check` signs its timeline off the programme is written to disk
+# as the provisional best.
+#
+# That is the number this pipeline is now measured on: not how long the grid
+# takes, but how long until there is a certified programme the fleet could run.
+# The remaining three then run against it — pruned by their floors, conducted
+# in parallel because they no longer prune each other — and replace it only if
+# one of them is faster.
 PROFILES = (dict(qd_frac=0.30, cluster=False), dict(qd_frac=0.30, cluster=True),
             dict(qd_frac=0.60, cluster=False), dict(qd_frac=0.60, cluster=True))
+FIRST_PROFILE = "qd0.60+cluster"
 
 
 class NoProfile(SystemExit):
@@ -339,6 +360,11 @@ def profile_args(a, p):
     left alone, because then it is the only band there is.
     """
     b = copy.copy(a)
+    # A PROFILE'S ARGUMENTS TRAVEL TO A CONDUCT WORKER, SO THEY MUST PICKLE.
+    # `draw.py` hangs its "a programme certified" callback on the args object,
+    # and a closure is exactly what `mp.Pool` cannot send.  The callback belongs
+    # to the run, not to the cell, and `build` passes it separately.
+    b.on_certified = None
     b.qd_frac = float(p["qd_frac"])
     b.cluster = bool(p["cluster"])
     if p["cluster"]:
@@ -393,42 +419,112 @@ def profile_makespan(a, built):
                  + profile_pause_s(a, len(built)))
 
 
+def profile_order(profiles, first=FIRST_PROFILE):
+    """`profiles` with the preferred cell first, the rest in their own order."""
+    names = [profile_name(p) for p in profiles]
+    if first in names:
+        k = names.index(first)
+        return [profiles[k]] + [p for i, p in enumerate(profiles) if i != k]
+    return list(profiles)
+
+
+def _conduct_one(args):
+    """One profile's conduct, in its own process. -> (name, built, reason, log).
+
+    Module level and returning rather than raising, for `_alloc_profile`'s
+    reason; and its stdout comes back as TEXT rather than going to the terminal,
+    because three conducts talking at once is three conducts nobody can read.
+    """
+    name, b, phases, dt, pens, alt = args
+    buf, t0 = io.StringIO(), time.time()
+    try:
+        with contextlib.redirect_stdout(buf):
+            built = build_phases(b, phases, dt, pens, alt=alt)
+    except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+        return (name, None, f"{type(exc).__name__}: {exc}", buf.getvalue(),
+                time.time() - t0)
+    return name, built, None, buf.getvalue(), time.time() - t0
+
+
+def _record(r, built, reason, conduct_s):
+    """Fold one conduct's outcome into its grid row. -> the row."""
+    r["conduct_s"] = conduct_s
+    if built is None:
+        r.update(status="refused", reason=reason)
+        return r
+    ok = all(bool(B["rep"]["ok"]) for B in built)
+    r.update(built=built, makespan_s=profile_makespan(r["args"], built),
+             scene_check=ok,
+             min_clearance=float(min(B["rep"]["min_clearance"] for B in built)))
+    if not ok:
+        # `build_phase` already has the veto and raises rather than returning a
+        # refused timeline; this is the belt to that braces, so that a future
+        # conductor which reports instead of raising cannot ship an uncertified
+        # profile through this door.
+        r.update(status="refused",
+                 reason="scene_check refused the conducted timeline")
+    else:
+        r["status"] = "certified"
+    return r
+
+
 def select_profile(a, alloc, dt, conduct=None, floor=None, profiles=PROFILES,
-                   prune=True, verbose=True):
+                   prune=True, verbose=True, first=FIRST_PROFILE, jobs=None,
+                   on_certified=None):
     """Conduct the execution profiles and ship the fastest CERTIFIED one.
 
         alloc(b, p) -> (phases, alt, pens)     allocate `p` under the args `b`
         conduct(b, phases, dt, pens, alt=alt) -> built        (`build_phases`)
 
-    Returns `dict(chosen=<grid row>, grid=[<grid row> x len(profiles)])`, in
-    which the chosen row carries `built`, `phases`, `alt` and `pens` — the
-    conduct that WON is the conduct that ships, never re-run, so what the
-    payload is written from is the timeline `scene_check` signed off on here.
+    Returns `dict(chosen=<grid row>, grid=[<grid row> x len(profiles)],
+    first_certified_s=...)`, in which the chosen row carries `built`, `phases`,
+    `alt` and `pens` — the conduct that WON is the conduct that ships, never
+    re-run, so what the payload is written from is the timeline `scene_check`
+    signed off on here.
 
-    Deterministic: the allocator and the sequencer are functions of their input
-    (up to `sequence.TIME_BUDGET` on arms above 16 segments, which is the same
-    caveat every row of `docs/BENCH.md` carries), the conduct order is by floor
-    with ties broken on the fixed `PROFILES` order, and nothing here reads a
-    clock except to report one.
+    TWO STAGES, AND THE FIRST ONE IS THE ANSWER.  `first` names the cell this
+    rig has always shipped (see the section note); it is allocated and conducted
+    on its own, and `on_certified(row)` is called the moment its timeline
+    certifies so the caller can put a runnable programme on disk.  Only then are
+    the other three allocated, pruned against that certified makespan, and
+    conducted — in `jobs` processes, because a floor that has already been
+    beaten prunes just as well from a parallel batch as from a serial one, and
+    what the remaining candidates cannot do is prune each other.  `jobs=1`
+    conducts them one at a time in floor order, which is the serial chain every
+    published number was measured on.
+
+    Deterministic in what it ships: the allocator and the sequencer are
+    functions of their input (up to the local-search budgets, which is the same
+    caveat every row of `docs/BENCH.md` carries), the candidate order is by
+    floor with ties broken on the fixed `PROFILES` order, and running the
+    conducts concurrently cannot change any one of their timelines — only how
+    many of them get run.
     """
     conduct = build_phases if conduct is None else conduct
     floor = profile_floor if floor is None else floor
-    grid = []
-    for i, p in enumerate(profiles):
+    t_start = time.time()
+    rows = {}
+    for p in profiles:
         b = profile_args(a, p)
+        rows[profile_name(p)] = dict(
+            profile=profile_name(p), qd_frac=float(p["qd_frac"]),
+            cluster=bool(p["cluster"]),
+            band_objective=getattr(b, "band_objective", None),
+            status="allocated", floor_s=None, makespan_s=None, reason=None,
+            alloc_s=0.0, conduct_s=0.0, args=b)
+    grid = [rows[profile_name(p)] for p in profiles]
+    order = profile_order(profiles, first)
+
+    def do_alloc(p, tag):
+        row = rows[profile_name(p)]
         if verbose:
             print(f"\n{'=' * 74}\n=== allocating profile {profile_name(p)} "
-                  f"({i + 1} of {len(profiles)})\n{'=' * 74}")
-        row = dict(profile=profile_name(p), qd_frac=float(p["qd_frac"]),
-                   cluster=bool(p["cluster"]),
-                   band_objective=getattr(b, "band_objective", None),
-                   status="allocated", floor_s=None, makespan_s=None,
-                   reason=None, alloc_s=0.0, conduct_s=0.0, args=b)
+                  f"({tag})\n{'=' * 74}")
         t0 = time.time()
         try:
-            phases, alt, pens = alloc(b, p)
+            phases, alt, pens = alloc(row["args"], p)
             row.update(phases=phases, alt=alt, pens=pens,
-                       floor_s=float(floor(b, phases, pens, alt)))
+                       floor_s=float(floor(row["args"], phases, pens, alt)))
         except (SystemExit, idle.Unconductable, RuntimeError) as exc:
             # AN ALLOCATION CAN REFUSE TOO, and a profile that cannot be
             # allocated (or that draws less of the picture than this run was
@@ -436,26 +532,75 @@ def select_profile(a, alloc, dt, conduct=None, floor=None, profiles=PROFILES,
             # it is not a slower answer, it is not an answer.
             row.update(status="refused", reason=f"{type(exc).__name__}: {exc}")
         row["alloc_s"] = time.time() - t0
-        grid.append(row)
         if verbose:
             print(f"\n--- profile {row['profile']} allocated in "
                   f"{row['alloc_s']:.1f} s"
                   + (f", floor {row['floor_s']:.3f} s"
                      if row["floor_s"] is not None else f": {row['reason']}"))
-    ready = [i for i, r in enumerate(grid) if r["status"] == "allocated"]
-    order = sorted(ready, key=lambda i: (grid[i]["floor_s"], i))
+        return row
+
+    best, first_s = None, None
+
+    def keep(r):
+        """Adopt `r` as the incumbent and tell the caller it may be shipped."""
+        nonlocal best, first_s
+        best = r
+        if first_s is None:
+            first_s = time.time() - t_start
+        if on_certified is not None:
+            on_certified(r)
+
+    # ---- stage 1: the cell most likely to win, all the way to a programme ---
+    lead = do_alloc(order[0], f"1 of {len(profiles)}, the provisional best")
+    if lead["status"] == "allocated":
+        lead["rank"] = 0
+        if verbose:
+            print(f"\n{'=' * 74}\n=== conducting profile {lead['profile']} "
+                  f"(qd_frac {lead['qd_frac']:.2f}, cluster "
+                  f"{'on' if lead['cluster'] else 'off'}, band "
+                  f"{lead['band_objective']}), floor {lead['floor_s']:.3f} s"
+                  f"\n{'=' * 74}")
+        t0 = time.time()
+        try:
+            built = conduct(lead["args"], lead["phases"], dt, lead["pens"],
+                            alt=lead["alt"])
+            _record(lead, built, None, time.time() - t0)
+        except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+            _record(lead, None, f"{type(exc).__name__}: {exc}",
+                    time.time() - t0)
+        if lead["status"] == "certified":
+            if verbose:
+                print(f"  profile {lead['profile']} CERTIFIED: "
+                      f"{lead['makespan_s']:.3f} s against a floor of "
+                      f"{lead['floor_s']:.3f} s, clearance "
+                      f"{1000 * lead['min_clearance']:.1f} mm "
+                      f"({lead['conduct_s']:.0f} s)")
+            keep(lead)
+            if verbose:
+                print(f"\n*** PROVISIONAL BEST after {first_s:.1f} s: "
+                      f"{lead['profile']} at {lead['makespan_s']:.3f} s — a "
+                      "certified programme exists from here on ***")
+        elif verbose:
+            print(f"  !! profile {lead['profile']} {lead['status'].upper()}: "
+                  f"{lead['reason']}")
+
+    # ---- stage 2: the rest, against a makespan that already certified -------
+    for i, p in enumerate(order[1:]):
+        do_alloc(p, f"{i + 2} of {len(profiles)}")
+    ranked = sorted((r for r in grid
+                     if r["status"] == "allocated" and r is not lead),
+                    key=lambda r: (r["floor_s"], grid.index(r)))
     if verbose:
-        print(f"\n{'=' * 74}\n=== execution profiles: {len(order)} of "
-              f"{len(grid)} allocated, conducting in floor order\n{'=' * 74}")
+        print(f"\n{'=' * 74}\n=== execution profiles: "
+              f"{sum(1 for r in grid if r['floor_s'] is not None)} of "
+              f"{len(grid)} allocated\n{'=' * 74}")
         for r in grid:
             print(f"  {r['profile']:<16} "
                   + (f"floor {r['floor_s']:8.3f} s   (allocated in "
                      f"{r['alloc_s']:.1f} s)" if r["floor_s"] is not None
                      else f"REFUSED at allocation: {r['reason']}"))
-
-    best = None
-    for rank, i in enumerate(order):
-        r = grid[i]
+    todo = []
+    for rank, r in enumerate(ranked, start=1):
         r["rank"] = rank
         if prune and best is not None \
                 and r["floor_s"] >= best["makespan_s"] - 1e-9:
@@ -466,44 +611,79 @@ def select_profile(a, alloc, dt, conduct=None, floor=None, profiles=PROFILES,
             if verbose:
                 print(f"\n  {r['profile']}: {r['reason']} — not conducted")
             continue
-        if verbose:
-            print(f"\n{'=' * 74}\n=== conducting profile {r['profile']} "
-                  f"(qd_frac {r['qd_frac']:.2f}, cluster "
-                  f"{'on' if r['cluster'] else 'off'}, band "
-                  f"{r['band_objective']}), floor {r['floor_s']:.3f} s"
-                  + ("" if best is None else
-                     f", to beat {best['makespan_s']:.3f} s")
-                  + f"\n{'=' * 74}")
-        t0 = time.time()
-        try:
-            built = conduct(r["args"], r["phases"], dt, r["pens"], alt=r["alt"])
-        except (SystemExit, idle.Unconductable, RuntimeError) as exc:
-            r.update(status="refused", reason=f"{type(exc).__name__}: {exc}",
-                     conduct_s=time.time() - t0)
-            if verbose:
-                print(f"  !! profile {r['profile']} REFUSED: {r['reason']}")
-            continue
-        r["conduct_s"] = time.time() - t0
-        ok = all(bool(B["rep"]["ok"]) for B in built)
-        r.update(built=built, makespan_s=profile_makespan(r["args"], built),
-                 scene_check=ok,
-                 min_clearance=float(min(B["rep"]["min_clearance"] for B in built)))
-        if not ok:
-            # `build_phase` already has the veto and raises rather than
-            # returning a refused timeline; this is the belt to that braces, so
-            # that a future conductor which reports instead of raising cannot
-            # ship an uncertified profile through this door.
-            r.update(status="refused",
-                     reason="scene_check refused the conducted timeline")
-            continue
-        r["status"] = "certified"
-        if verbose:
+        todo.append(r)
+
+    def report(r):
+        if not verbose:
+            return
+        if r["status"] == "certified":
             print(f"  profile {r['profile']} CERTIFIED: "
                   f"{r['makespan_s']:.3f} s against a floor of "
                   f"{r['floor_s']:.3f} s, clearance "
                   f"{1000 * r['min_clearance']:.1f} mm ({r['conduct_s']:.0f} s)")
-        if best is None or r["makespan_s"] < best["makespan_s"] - 1e-9:
-            best = r
+        else:
+            print(f"  !! profile {r['profile']} {r['status'].upper()}: "
+                  f"{r['reason']}")
+
+    # `conduct is build_phases` because only the real conductor is known to be
+    # forkable: a caller that passes its own (the tests do) gets the serial path
+    n_jobs = len(todo) if jobs is None else int(jobs)
+    if todo and n_jobs > 1 and conduct is build_phases:
+        if verbose:
+            print(f"\n{'=' * 74}\n=== conducting "
+                  + ", ".join(r["profile"] for r in todo)
+                  + f" on {min(n_jobs, len(todo))} processes — the provisional "
+                    "best has pruned them already and they cannot prune each "
+                    f"other\n{'=' * 74}")
+        with mp.get_context("fork").Pool(min(n_jobs, len(todo))) as pool:
+            out = pool.map(_conduct_one,
+                           [(r["profile"], r["args"], r["phases"], dt,
+                             r["pens"], r["alt"]) for r in todo])
+        for r, (_name, built, reason, log, took) in zip(todo, out):
+            if verbose:
+                print(f"\n{'-' * 74}\n--- profile {r['profile']}\n{log.rstrip()}")
+            _record(r, built, reason, took)
+            report(r)
+        # judged together, in floor order, so which one ships does not depend
+        # on which one happened to finish first
+        for r in todo:
+            if r["status"] == "certified" \
+                    and (best is None
+                         or r["makespan_s"] < best["makespan_s"] - 1e-9):
+                keep(r)
+    else:
+        for r in todo:
+            if prune and best is not None \
+                    and r["floor_s"] >= best["makespan_s"] - 1e-9:
+                r.update(status="pruned",
+                         reason=f"floor {r['floor_s']:.3f} s cannot beat the "
+                                f"certified {best['makespan_s']:.3f} s of "
+                                f"{best['profile']}")
+                if verbose:
+                    print(f"\n  {r['profile']}: {r['reason']} — not conducted")
+                continue
+            if verbose:
+                print(f"\n{'=' * 74}\n=== conducting profile {r['profile']} "
+                      f"(qd_frac {r['qd_frac']:.2f}, cluster "
+                      f"{'on' if r['cluster'] else 'off'}, band "
+                      f"{r['band_objective']}), floor {r['floor_s']:.3f} s"
+                      + ("" if best is None else
+                         f", to beat {best['makespan_s']:.3f} s")
+                      + f"\n{'=' * 74}")
+            t0 = time.time()
+            try:
+                built = conduct(r["args"], r["phases"], dt, r["pens"],
+                                alt=r["alt"])
+                _record(r, built, None, time.time() - t0)
+            except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+                _record(r, None, f"{type(exc).__name__}: {exc}",
+                        time.time() - t0)
+            report(r)
+            if r["status"] == "certified" \
+                    and (best is None
+                         or r["makespan_s"] < best["makespan_s"] - 1e-9):
+                keep(r)
+
     if best is None:
         raise NoProfile(
             "no execution profile could be certified: "
@@ -512,8 +692,10 @@ def select_profile(a, alloc, dt, conduct=None, floor=None, profiles=PROFILES,
     if verbose:
         print(f"\n{'=' * 74}\n=== SHIPPING {best['profile']}: "
               f"{best['makespan_s']:.3f} s\n" + "\n".join(profile_table(grid))
-              + f"\n{'=' * 74}")
-    return dict(chosen=best, grid=grid)
+              + f"\n=== first certified programme at {first_s:.1f} s, "
+                f"grid finished at {time.time() - t_start:.1f} s\n{'=' * 74}")
+    return dict(chosen=best, grid=grid, first_certified_s=first_s,
+                grid_s=time.time() - t_start)
 
 
 def profile_table(grid):
@@ -568,7 +750,7 @@ def profile_json(sel):
                 grid=[row(r) for r in sel["grid"]])
 
 
-def allocate_all(a, verbose=False):
+def allocate_all(a, verbose=False, share=None):
     """Trace, allocate, and build the unsplit fallback. -> (phases, alt, pens).
 
     Everything `build_phases` needs and nothing it does not, so that ONE
@@ -577,8 +759,10 @@ def allocate_all(a, verbose=False):
     a run that draws less of the picture than it was asked for is not a faster
     run, and finding that out costs one allocation instead of one conduct.
     """
+    share = {} if share is None else share
     phases, strokes, info = run_allocation(a, verbose=False,
-                                           px=getattr(a, "traced_px", None))
+                                           px=getattr(a, "traced_px", None),
+                                           share=share)
     for ph in phases:
         print(f"\n=== {ph['name']} ===")
         for line in allocate.report(ph, ph["strokes"]):
@@ -608,7 +792,8 @@ def allocate_all(a, verbose=False):
             print(f"\nallocating {len(cut)} split phase(s) again without cutting, "
                   "so the conductor can rule on whether the cuts paid")
             base, _, _ = run_allocation(a, verbose=False, split=False,
-                                        px=getattr(a, "traced_px", None))
+                                        px=getattr(a, "traced_px", None),
+                                        share=share)
             for k in cut:
                 base[k].update(name=phases[k]["name"] + " [unsplit]",
                                ink=phases[k]["ink"], strokes=phases[k]["strokes"])
@@ -631,8 +816,15 @@ def _alloc_profile(args):
         return profile_name(p), None, f"{type(exc).__name__}: {exc}"
 
 
-def build(a):
-    """Allocate and conduct, at one profile or at the best of four. -> tuple."""
+def build(a, on_certified=None):
+    """Allocate and conduct, at one profile or at the best of four. -> tuple.
+
+    `on_certified(row, strokes, info, dt)` is called the moment a profile's
+    timeline certifies, so a caller can put a runnable programme on disk before
+    the grid has finished (see `select_profile`).  It is a PARAMETER and not an
+    attribute of `a` because the per-profile argument objects are pickled to the
+    conduct workers and a closure will not go.
+    """
     dt = 1.0 / (a.fps * a.substeps)
     if not getattr(a, "select_profile", False):
         phases, alt, pens, strokes, info = allocate_all(a)
@@ -653,13 +845,21 @@ def build(a):
     # processes instead.  It cannot change any result — each cell is a pure
     # function of `(a, profile)` — so the default stays 1 and every published
     # number reproduces on the serial path.
-    seen, pre = {}, {}
+    #
+    # THE FOUR ALLOCATIONS ARE NOT INDEPENDENT ANY MORE, ON PURPOSE.  Two of the
+    # knobs the grid moves are invisible to the planner: `plan_family` says two
+    # profiles that agree on the band objective ask `plan_stroke` the same
+    # questions, and `paper`'s route memo says all four ask `paper.route` the
+    # same ones.  Run in ONE process with a shared bag they cost the geometry
+    # once between them, which is worth more than running them in four processes
+    # that each pay for it — `--profile-jobs` is still there for a machine where
+    # it is not.
+    seen, pre, share = {}, {}, {}
     jobs = int(getattr(a, "profile_jobs", 1) or 1)
     if jobs > 1:
-        import multiprocessing as mp
         print(f"\nallocating {len(PROFILES)} execution profiles on {jobs} "
-              "processes (they are independent; the conducts after them stay "
-              "serial, because each one prunes the next on its makespan)")
+              "processes (they are independent; this trades the shared plan and "
+              "route memos for cores)")
         t0 = time.time()
         with mp.get_context("fork").Pool(min(jobs, len(PROFILES))) as pool:
             for name, res, err in pool.map(_alloc_profile,
@@ -675,12 +875,24 @@ def build(a):
                 raise SystemExit(err)
             phases, alt, pens, strokes, info = res
         else:
-            phases, alt, pens, strokes, info = allocate_all(b)
+            phases, alt, pens, strokes, info = allocate_all(b, share=share)
         seen[name] = (strokes, info)
         return phases, alt, pens
 
+    hook = on_certified if on_certified is not None \
+        else getattr(a, "on_certified", None)
+
+    def certified(row):
+        """Tell the caller a runnable programme exists, with what it needs."""
+        if hook is not None:
+            strokes, info = seen[row["profile"]]
+            hook(row, strokes, info, dt)
+
     sel = select_profile(a, alloc, dt,
-                         prune=not getattr(a, "no_profile_prune", False))
+                         prune=not getattr(a, "no_profile_prune", False),
+                         first=getattr(a, "first_profile", FIRST_PROFILE),
+                         jobs=getattr(a, "conduct_jobs", None),
+                         on_certified=certified if hook is not None else None)
     best = sel["chosen"]
     strokes, info = seen[best["profile"]]
     return (best["phases"], strokes, info, best["built"], dt, best["pens"], sel)
@@ -989,15 +1201,33 @@ def schedule_args(ap):
     ap.add_argument("--no-profile-prune", action="store_true",
                     help="conduct every profile even when its floor already "
                          "says it cannot win (see csail_schedule.profile_floor)")
+    ap.add_argument("--first-profile", default=FIRST_PROFILE,
+                    help="the execution profile allocated, conducted and "
+                         "certified BEFORE the others, so that a runnable "
+                         "programme exists as early as possible.  The rest run "
+                         "against its certified makespan and replace it only if "
+                         "one of them is faster.  Give a profile name "
+                         "('qd0.60+cluster') or anything else to keep the "
+                         "listed order")
+    ap.add_argument("--conduct-jobs", type=int, default=None,
+                    help="processes the REMAINING profiles are conducted on "
+                         "(default: all of them at once).  They cannot prune "
+                         "each other — only the provisional best prunes them — "
+                         "so conducting them together costs the longest one "
+                         "instead of the sum.  1 conducts them serially in "
+                         "floor order, which is what every published number was "
+                         "measured on")
     ap.add_argument("--profile-jobs", type=int, default=1,
                     help="processes to ALLOCATE the four execution profiles on. "
                          "They are independent and each is a pure function of "
                          "(args, profile), so this changes wall clock and "
-                         "nothing else.  Worth turning up on a dense picture, "
-                         "where the allocator's split search — not the "
-                         "conductor — is the run: 677 s of a 724 s allocation "
-                         "on the Trollface's 63 segments.  The conducts stay "
-                         "serial: each one prunes the next on its makespan")
+                         "nothing else.  USUALLY A LOSS NOW, and left at 1 for "
+                         "that reason: run in one process the four cells share "
+                         "the plan bag (allocate.plan_family) and the route memo "
+                         "that most of an allocation is made of, and a worker "
+                         "may not fork the route screen's own pool at all — so "
+                         "each of the four pays serially for geometry the "
+                         "shared run buys once (see docs/FAST_PLANNING.md)")
     ap.add_argument("--program", action="store_true",
                     help="also write out/csail_program<tag>.json from the "
                          "allocation that SHIPPED, so the programme and the "
