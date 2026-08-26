@@ -1369,6 +1369,164 @@ splitting:
   v1's go-home: the same last resort, for the same reason, as the
   `Unconductable` fallback beside it.
 
+# 100 % IS NOT AVAILABLE AT THIS GEOMETRY, AND HERE IS THE PROOF (2026-08-26)
+
+The mandate was **"make it draw 100 % of the logo."**  It cannot, and the
+reason is 110 mm long and sits 48 mm from arm 71's mount.  What the schedule
+CAN do it now does: **99.3018 % of the paper covered against 99.2573 %**, no ink
+allocated that no phase draws, and a makespan 8.8 s shorter.
+`out/csail_proposed_h094_v6.{html,zip}` (43.9 / 18.7 MiB).
+
+## The ceiling, measured before any allocator gets a vote
+
+For every stroke and every arm, `probe_stroke` returns the sub-intervals that
+arm can certify a drawing plan for.  The UNION of those over the six arms is an
+exact upper bound on any programme at that placement: the cover, the balancer,
+the router and the conductor can each only take ink away.  It costs probes and
+nothing else — 30 s a placement against 16 minutes for an allocation — so it
+can be asked of a whole neighbourhood (`out/ceiling.py`).
+
+At the shipped placement it is **99.3435 %**: 16.6271 m of 16.7370 m traced, and
+the 109.9 mm it leaves out is ONE contiguous span of grey.  The number does not
+move with effort — identical to four decimals at a probe budget of 3 and of 12,
+with the same single hole.
+
+**That span lies under arm 71's own base column.**  Its midpoint is 47.8 mm from
+the column centre; the nearest other arm is 611 mm away.  `plan_stroke` is
+categorical rather than marginal about it: at both endpoints, in both
+directions, arm 71 reports `empty_fiber` — no IK solution anywhere on the tool
+fiber, because an inverted arm cannot fold back under its own mount — and the
+other five report `start_infeasible`.  The atlas agrees independently: not one
+of 201 samples along the span is within 15 mm of a strict-GO cell of ANY arm,
+the nearest GO paper is 64–100 mm away, and the dead patch is 95 mm to its
+nearest edge and about 300 mm across the midpoint (`out/holeA.py`).
+
+## ...and the placement cannot dodge it
+
+A nudge translates the logo rigidly, so the ceiling can be re-measured at every
+neighbouring offset for one probe sweep each.  Fifteen of the 25 offsets on the
+±0.10 m grid fit the sheet at this scale:
+
+| dx, dy | ceiling | holes | worst hole |
+|---|---:|---:|---:|
+| −0.10, +0.05 | **99.4587 %** | 1 | 90.6 mm |
+| **−0.10, 0.00** (shipped) | **99.3435 %** | 1 | 109.9 mm |
+| 0.00, +0.10 | 98.7975 % | 3 | 100.8 mm |
+| 0.00, +0.05 | 98.7383 % | 2 | 130.7 mm |
+| −0.05, 0.00 | 98.4423 % | 2 | 160.8 mm |
+| ...the other ten | 96.84 – 98.44 % | 2–4 | 140–248 mm |
+
+**No offset in the neighbourhood has a ceiling of 100 %**, and the shipped one is
+within 0.115 points of the best.  Moving the logo does not remove a column
+shadow, it trades one for another — which is what the table IS: every arm in
+this fleet casts one, and the sheet has six.  The one candidate with a higher
+ceiling, (−0.10, +0.05), `csail_place` had already allocated in full and it came
+out 0.56 points WORSE in real coverage than the shipped offset, so it is
+measured, named and not adopted.
+
+## The two levers, both fired SELECTIVELY
+
+That word is the whole of the difference between them and the global switches
+that were measured as a wash.
+
+**1. The depot-aware hover, one span end at a time (`--depot-hover-selective`).**
+`writing.HOVER_DEPOT_AWARE` re-searches the hover fiber for a pose that joins
+the depot, and switched on globally it is +57.5 mm of grey against −81.5 mm of
+orange.  Read again, that is an argument against the SWITCH: the tier fires at
+every pocket and only some pockets are about to be paid for, and at the others
+it swaps a 6 cm lift for a pose most of a radian away and re-prices the whole
+bag around ink that was never at risk.  So the tier takes an ALLOW-SET of
+span-end identities.  `lifted_or_lower`'s branch **and its memo key** both read
+`depot_hover_selected(spec, q_ref, xy)` rather than the module flag, so an end
+outside the set runs the same code and fills the same memo slot a tier-off run
+does — "every other hover is untouched" is a property of the key, not a
+measurement.  `allocate.fly_shrink` is the only thing allowed to grow the set,
+because it is the only place that knows a pocket is about to cost something: it
+admits the offending ends, asks `depot_round_trip` again, and keeps the
+admission ONLY IF THE ANSWER CHANGED.  A rescue that buys nothing is rolled
+back exactly.
+
+On this logo it fires **four times and moves eight hovers**, and the proof it
+moved nothing else is in the log: every other give-back comes back to the
+millimetre and to the same s-range (stroke 7: 9 mm, stroke 11: 18 mm →
+[0.30, 1.00], stroke 13: 25 mm).
+
+| | v7 | v8 |
+|---|---:|---:|
+| grey drawn, primary pass | 5.700 m | **5.740 m** |
+| grey given back at pocket ends | 93 mm | **53 mm** |
+| orange given back at pocket ends | 433 mm | **216 mm** |
+| whole strokes banned "cannot fly to it" | 1 | **0** |
+
+**2. A refused pass is retried frozen (`--freeze-refused-phase`).**
+`csail_schedule` allocates under the freeze policy — "can the arm fly OUT to
+this span" — and then re-sequences every pass but the last WITH the trip home,
+which is strictly harder; a phase that fails that is dropped whole.  The trip
+home between passes is a CLOCK argument and the clock is only an objective,
+while coverage is the constraint.  So such a pass is retried frozen before its
+ink is dropped.  The allocation is untouched, the frozen pose still has to pass
+`scene_check`'s own gate, and the inter-phase hold is still checked.
+
+**The two are coupled, and not in the direction you would guess.**  Lever 1 keeps
+arm 71 a span it used to be banned from, which gives arm 71 an eight-segment
+orange bag with no ordering at all under `return_home=True` — so lever 1
+CREATES the refusal lever 2 catches, on the 10.66 m orange pass.  Without lever
+2 that pass falls through to the arm-group rescue ladder.  Shipping either one
+alone would have been worse than shipping neither.
+
+## The A/B, and the accounting it is measured in
+
+`summary_json` reports `drawn_m / traced_m`, and `drawn_m` is a sum of SEGMENT
+LENGTHS: it counts a handoff seam twice (`OVERLAP_M`, 4 mm each side of every
+cut between two arms) and a split splice twice.  That ink is deliberately laid
+twice so the pens meet, and counting it twice makes the ratio flatter than the
+paper.  Worse, the `dropped` hole list rides on phase 0, and when the conductor
+swaps phase 0 for its unsplit twin the composed list goes with it.  So the row
+that matters is measured off the npz instead (`out/geocover.py`): every traced
+stroke sampled at 1 mm, a sample DRAWN if some CONDUCTED segment of the same
+colour passes within 1.5 mm.
+
+| | v7 | v8 |
+|---|---:|---:|
+| **paper covered** (1 mm sampling) | 99.2573 % | **99.3018 %** |
+| empty | 124.3 mm | **116.9 mm** |
+| reported `drawn_m / traced_m` | 99.3649 % | 99.5217 % |
+| ink allocated that no phase draws | 31.2 mm | **0** |
+| makespan | 201.65 s | **192.83 s** |
+| pause | 88.40 s | 130.33 s |
+| min clearance (margin 80 mm) | 83.2 mm | 82.2 mm |
+| conducted phases / segments | 5 / 46 | 4 / 45 |
+| `scene_check` | PASS on all | **PASS on all** |
+
+**What is left is two holes and only one of them is geometry.**  106.9 mm of the
+109.9 mm no arm can reach (the tolerance eats 1.5 mm at each end), and 13.0 mm
+of orange at (0.657, 1.883).  That 13 mm is the head of a 216 mm span
+`fly_shrink` gives back so arm 31 can fly to the other 203; it is under
+`MIN_SEG_M`, so no cover, repair or residual pass will place it alone, the
+fiber has no pose that joins the depot there, and — measured — **arm 31 is the
+only arm that certifies any of that span at all**, so there is no second owner
+for a pocket-aware assignment to prefer.  The one mechanism that would take it
+is `merge_remainders`, which refuses on purpose: a merge may not hand back a
+round trip, because the phase it is drawn in may have to go home.
+`--freeze-refused-phase` makes that consequence recoverable and so makes the
+refusal re-openable — 13 mm of ink against a certified programme, and not spent
+here.
+
+## The fork, for Pete
+
+* **accept 99.30 %** — one 110 mm gap in a grey stroke, 48 mm from arm 71's
+  mount, in the middle of the sheet.  Costs nothing.
+* **widen the pitch, or go 2+4** — the shadow is the arm's own, and this is the
+  same physical fork `docs/` has been naming since the middle-row study.
+* **shrink the logo** — `csail_place` certified 98.18 % at f = 0.70 (1.178 m
+  wide) against 97.93 % at the shipped 1.431 m, which is a smaller drawing and
+  is the thing the v7 placement was chosen to avoid.
+
+Reproduce: `out/ceiling.py` (the ceiling, one placement or a grid),
+`out/holeA.py` (what `plan_stroke` says, and the dead patch),
+`out/last106b.py` (per hole, per arm, tier off and on),
+`out/geocover.py` (coverage off the conducted npz), `out/run_v8.sh`.
+
 ## Roadmap
 
 1. ✅ reachability + controllability atlas
