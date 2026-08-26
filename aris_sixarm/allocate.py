@@ -267,6 +267,15 @@ MIN_SEG_M = 0.025        # m; a shorter piece is not worth a pen-up
 GAP_TOL_M = 0.002        # m; below this a hole in the ink is not a hole
 PREFILTER_R = 0.05       # m; atlas cell distance that still counts as maybe
 
+# ON BY DEFAULT, BECAUSE A PASS IS NOT A TOUR.  An arm's bag may be flown as
+# SEVERAL depot-returning tours inside one phase — out, draw, home, out, draw —
+# and `sequence.close_depot` makes that one extra edge in the same matrix the
+# single-tour solver already walks.  It is the difference between `this ink is
+# impossible` and `this ink costs a trip home`, and on the proposed rig at
+# h = 0.940 it is the entire coverage story (see `sequence`'s section 1c).
+# Turn it off with `--no-multi-tour` and every stage is what it was.
+MULTI_TOUR = True
+
 # MIN_SEG and GAP_TOL are not the same number and used to be conflated.  What
 # the fleet will be ASKED TO DRAW has a floor (a 5 mm pen-down between two
 # pen-ups is not a segment); what counts as LEFT EMPTY does not get to inherit
@@ -691,12 +700,33 @@ def _sub_matrix(C, idx, n):
     return C[np.ix_(nodes, nodes)]
 
 
+def home_legs(spec, segs, mat, cluster=False, menus=None):
+    """`sequence.home_legs` for a bag, or `None` when the bag has none. -> pair.
+
+    ONE PLACE DECIDES WHETHER THE DEPOT IS ON THE TABLE, so that the pruner, the
+    balancer's price and the sequencer that finally orders the bag cannot
+    disagree about it.  `MULTI_TOUR = False` turns the whole feature off and
+    every caller falls back to the single-tour matrix it had.
+    """
+    if not MULTI_TOUR or not len(segs):
+        return None
+    if cluster:
+        return sequence.cluster_home_legs(spec, menus, **mat)
+    return sequence.home_legs(spec, segs, **mat)
+
+
 def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
-                    budget=sequence.TIME_BUDGET):
+                    budget=sequence.TIME_BUDGET, home=None):
     """Drop the spans that make this arm's bag impossible to fly. -> (keep, drop).
 
     Both are lists of indices into `segs`.  `keep` is guaranteed to have a
     finite tour; `drop` is the ink this arm must give back.
+
+    `home` is `(outof, into)` from `sequence.home_legs`: given one, the bag is
+    tested as a MULTI-TOUR bag — the arm may go home between any two spans — and
+    a span is prunable only if no schedule of ANY shape can reach it, which for
+    depot-flyable ink is never.  Left None the question is the single-tour one
+    this asked before, which is what the fakes in `tests/test_csail.py` pin.
 
     CERTIFYING THE INK IS NOT CERTIFYING THE APPROACH, and until the paper
     became an obstacle nothing here had to tell the two apart.  `plan_stroke`
@@ -730,6 +760,8 @@ def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
     if n == 0:
         return [], []
     C = sequence.cost_matrix(spec, segs, **mat)
+    if home is not None:
+        C = sequence.close_depot(C, home[0], home[1], sequence.seg_index(n))
     idx, drop = list(range(n)), []
     while idx:
         S = _sub_matrix(C, idx, n)
@@ -1062,7 +1094,9 @@ def merge_remainders(strokes, programs, specs, aopts, min_seg=MIN_SEG_M,
     def _accept(arm, keep, what):
         """Commit `keep` as arm `arm`'s bag if the arm can still fly it."""
         if mat_of is not None:
-            _, bad = prune_unflyable(specs[arm], keep, mat_of(arm))
+            m = mat_of(arm)
+            _, bad = prune_unflyable(specs[arm], keep, m,
+                                     home=home_legs(specs[arm], keep, m))
             if bad:
                 if verbose:
                     print(f"  merge: arm {arm} {what} certifies and breaks its "
@@ -1262,6 +1296,15 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
         C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
                                  ends=ends, pen_ext=pen, q_start=q_start,
                                  return_home=return_home)
+        # `_ArmMatrix` hands its slices in ALREADY CLOSED (it keeps one pair of
+        # home legs per node for the whole union); only the standalone build
+        # path has to ask for them here.
+        hm = home_legs(spec, segs, dict(transit_speed=transit_speed,
+                                        qd_frac=qd_frac, h_inv=h_inv,
+                                        pen_ext=pen, ends=ends))
+        if hm is not None:
+            C = sequence.close_depot(C, hm[0], hm[1],
+                                     sequence.seg_index(len(segs)))
     try:
         r = sequence.solve(C, len(segs), exact_max_n, budget, warm=warm)
     except RuntimeError:
@@ -1344,6 +1387,11 @@ def cluster_arm_load(spec, segs, draw_s, menus,
                                                return_home=return_home,
                                                ends=ends,
                                                w_surcharge=w_surcharge)
+        hm = home_legs(spec, segs, dict(qd_frac=qd_frac, h_inv=h_inv,
+                                        pen_ext=pen, ends=e),
+                       cluster=True, menus=menus)
+        if hm is not None:
+            C = sequence.close_depot(C, hm[0], hm[1], e["seg"])
     try:
         r = sequence.cluster_solve(C, T, e, exact_max_n, budget, warm=warm)
     except RuntimeError:
@@ -1954,6 +2002,13 @@ class _ArmMatrix:
         self.TR = np.zeros((0, 0))           # the reconfiguration tie-break
         self.into = np.zeros(0)              # depot -> node
         self.outof = np.zeros(0)             # node -> depot
+        # ...and the SAME two legs measured against `q_seed` with the trip home
+        # charged, which is what a MID-TOUR depot return costs whatever the pass
+        # does at its own ends (`sequence.home_legs`).  When the pass starts at
+        # the ready pose and ends there they are the same arrays, and are not
+        # computed twice.
+        self.hin = np.zeros(0)               # q_seed -> node
+        self.hout = np.zeros(0)              # node -> q_seed
         self.tdout = np.zeros(0)             # the freeze-in-place tie-break
         self.n_added = 0
 
@@ -2006,6 +2061,12 @@ class _ArmMatrix:
         into, outof = sequence.depot_legs(
             self.spec, add["ent_h"], add["exi_h"], lift, lower, self.qf,
             self.h_inv, self.pen, self.q_start, self.return_home)
+        if self.q_start is None and self.return_home:
+            hin, hout = into, outof
+        else:
+            hin, hout = sequence.depot_legs(
+                self.spec, add["ent_h"], add["exi_h"], lift, lower, self.qf,
+                self.h_inv, self.pen, None, True)
         old = self.node
         blk = np.concatenate([np.full(len(r["ent_q"]), j, int)
                               for j, (_, r) in enumerate(new)])
@@ -2057,6 +2118,8 @@ class _ArmMatrix:
                               else lower)
         self.into = np.concatenate([self.into, into])
         self.outof = np.concatenate([self.outof, outof])
+        self.hin = np.concatenate([self.hin, hin])
+        self.hout = np.concatenate([self.hout, hout])
         self.tdout = np.concatenate([self.tdout, tdout])
         self.B, self.TR, self.span = B, TR, self.span + owner
         self.n_added += len(new)
@@ -2086,6 +2149,7 @@ class _ArmMatrix:
         for f in list(self.node):
             self.node[f] = self.node[f][idx]
         self.into, self.outof = self.into[idx], self.outof[idx]
+        self.hin, self.hout = self.hin[idx], self.hout[idx]
         self.tdout = self.tdout[idx]
         self.slot, pos, span = {}, 0, []
         for k in order:
@@ -2104,7 +2168,13 @@ class _ArmMatrix:
             if keys else np.zeros(0, int)
 
     def matrix(self, keys):
-        """The bag's (C, T, e, global node ids), sliced out of the union."""
+        """The bag's (C, T, e, global node ids), sliced out of the union.
+
+        DEPOT-CLOSED (`sequence.close_depot`) when multi-tour bags are on, so
+        the price the balancer puts on a bag is the price of the schedule it
+        will actually be flown as — several tours with a trip home between them
+        where that is cheaper, or where the direct crossing does not exist.
+        """
         idx = self.nodes_of(list(keys))
         m = len(idx)
         C = np.full((m + 1, m + 1), np.inf)
@@ -2117,6 +2187,8 @@ class _ArmMatrix:
         seg = np.concatenate([np.full(2 * v, i, int)
                               for i, v in enumerate(nv)]) if nv \
             else np.zeros(0, int)
+        if m and MULTI_TOUR:
+            C = sequence.close_depot(C, self.hout[idx], self.hin[idx], seg)
         e = dict(seg=seg, var=self.node["var"][idx] if m else np.zeros(0, int),
                  dirn=self.node["dirn"][idx] if m else np.zeros(0, int),
                  base=base, nv=nv,
@@ -2898,6 +2970,34 @@ def transit_metres(items, start_xy):
     return tot
 
 
+def _mark_homes(prog, C_open, home, order, dirs):
+    """Stamp `home_before` on the entries the arm flies out to from the depot.
+
+    -> the same list of flags, so a caller can report them.  Element k is True
+    when the arm goes home between `prog[k - 1]` and `prog[k]`; element 0 is
+    always False, because the first entry is flown from wherever the pass
+    starts and the depot has nothing to add to that.
+
+    IN PLACE, ON THE PROGRAMME ENTRY, and that is the whole point: every stage
+    between here and `writing.arm_program` — the balancer's bookkeeping, the
+    conductor's re-sequencing, `split_by_arms`, `split_by_segments`, the npz —
+    carries programme entries around as opaque dicts, and a flag that rides on
+    the entry cannot be dropped by a stage that never heard of it.
+    """
+    flags = [False] * len(prog)
+    for e in prog:
+        e.pop("home_before", None)
+    if home is None or len(prog) < 2:
+        return flags
+    nodes = sequence.nodes_of(order, dirs)
+    for k, b in enumerate(sequence.depot_bounces(C_open, home[0], home[1],
+                                                 nodes)):
+        if b:
+            flags[k + 1] = True
+            prog[k + 1]["home_before"] = True
+    return flags
+
+
 def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
                  forbid=None):
     """One arm's bag of segments -> the programme in the order it will be drawn.
@@ -2916,13 +3016,27 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
     is perfectly happy to give the best tour that avoids it.  Both directions of
     both segments are cut, because which hover pose the transit flies through
     depends on the directions and the refusal was about the geometry.
+
+    A FORBIDDEN PAIR IS FORBIDDEN VIA THE DEPOT TOO.  With multi-tour bags the
+    tour may go home between two segments, and it would be tempting to let a
+    refused crossing be answered that way — it is, after all, a different
+    motion.  It is not offered, for a reason that has nothing to do with the
+    geometry: the refusal names an EDGE, the re-sequence loop is bounded, and a
+    fix the conductor can refuse a second time under the same name burns a try
+    without removing an option.  So `forbid` is applied AFTER the closure and
+    means what it always meant — those two spans are not adjacent.
+
+    `homes[k]` (True) says the arm flies back to its ready pose between
+    programme entry k-1 and entry k; the same flag rides on the entry itself as
+    `home_before`, which is how `writing.arm_program` reads it without a single
+    signature changing between here and there.
     """
     n = len(segs)
     t0 = time.time()
     if n == 0:
         return dict(programme=[], order=[], dirs=[], method="empty", n=0,
                     cost=0.0, baseline_cost=0.0, n_reversed=0, n_refused=0,
-                    wall=0.0)
+                    homes=[], n_home=0, wall=0.0)
     seq_opts = dict(seq_opts or {})
     mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv",
                                     "pen_ext", "q_start", "return_home")
@@ -2931,7 +3045,10 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
     budget = seq_opts.get("budget", sequence.TIME_BUDGET)
 
     base_order, _ = order_nearest(segs, spec.xy)
-    C = sequence.cost_matrix(spec, segs, **mat)
+    C0 = sequence.cost_matrix(spec, segs, **mat)
+    hm = home_legs(spec, segs, mat)
+    C = C0 if hm is None else sequence.close_depot(C0, hm[0], hm[1],
+                                                   sequence.seg_index(n))
     base_cost = sequence.sequence_cost(C, n, base_order, [1] * n)
     n_forbidden = 0
     for i, j in (forbid or ()):
@@ -2963,9 +3080,14 @@ def sequence_arm(segs, spec, sequencer=SEQUENCER, opts=None, seq_opts=None,
             prog.append(rev)
             dirs.append(-1)
             n_rev += 1
+    # THE DIRECTIONS THE PROGRAMME ACTUALLY GOT, not the ones the DP asked for:
+    # `reverse_segment` may refuse, and a refused flip changes which node the
+    # tour stands on and therefore which crossings are cheaper flown via home.
+    homes = _mark_homes(prog, C0, hm, r["order"], dirs)
     return dict(programme=prog, order=[int(i) for i in r["order"]], dirs=dirs,
                 method=r["method"], n=n, n_reversed=n_rev, n_refused=n_ref,
-                n_forbidden=int(n_forbidden),
+                n_forbidden=int(n_forbidden), homes=homes,
+                n_home=int(sum(homes)),
                 cost=float(sequence.sequence_cost(C, n, r["order"], dirs)),
                 baseline_cost=float(base_cost),
                 nn_cost=float(r.get("nn_cost", float("nan"))),
@@ -3039,7 +3161,7 @@ def sequence_arm_cluster(segs, spec, menus, opts=None, seq_opts=None,
     if n == 0:
         return dict(programme=[], order=[], dirs=[], variants=[], method="empty",
                     n=0, cost=0.0, baseline_cost=0.0, n_reversed=0, n_refused=0,
-                    n_rematerialised=0, wall=0.0)
+                    n_rematerialised=0, homes=[], n_home=0, wall=0.0)
     seq_opts = dict(seq_opts or {})
     mat = {k: seq_opts[k] for k in ("transit_speed", "qd_frac", "h_inv",
                                     "pen_ext", "q_start", "return_home")
@@ -3048,7 +3170,13 @@ def sequence_arm_cluster(segs, spec, menus, opts=None, seq_opts=None,
     budget = seq_opts.get("budget", sequence.TIME_BUDGET)
 
     C, T, e = sequence.cluster_cost_matrix(spec, menus, **mat)
+    hm = home_legs(spec, segs, dict(mat, ends=e), cluster=True, menus=menus)
+    if hm is not None:
+        C = sequence.close_depot(C, hm[0], hm[1], e["seg"])
     base = sequence.cost_matrix(spec, segs, **mat)
+    hb = home_legs(spec, segs, mat)
+    if hb is not None:
+        base = sequence.close_depot(base, hb[0], hb[1], sequence.seg_index(n))
     base_order, _ = order_nearest(segs, spec.xy)
     base_cost = sequence.sequence_cost(base, n, base_order, [1] * n)
     n_forbidden = 0
@@ -3094,16 +3222,25 @@ def sequence_arm_cluster(segs, spec, menus, opts=None, seq_opts=None,
             prog.append(rev)
             dirs.append(-1)
             n_rev += 1
+    # ...and the depot returns are re-decided on the MATERIALISED plans for the
+    # same reason the cost is: a variant that would not certify moved the
+    # endpoint, and which crossings are cheaper flown via home moved with it.
     C2 = sequence.cost_matrix(spec, prog, **mat)
+    hm2 = home_legs(spec, prog, mat)
+    homes = _mark_homes(prog, C2, hm2, list(range(n)), [1] * n)
+    if hm2 is not None:
+        C2 = sequence.close_depot(C2, hm2[0], hm2[1], sequence.seg_index(n))
     cost = sequence.sequence_cost(C2, n, list(range(n)), [1] * n)
     if verbose:
         print(f"    cluster: {r['method']} {n} segs, {e['N']} nodes, "
               f"transit {cost:.2f} s (baseline {base_cost:.2f} s), "
-              f"{n_mat} re-materialised")
+              f"{n_mat} re-materialised"
+              + (f", {sum(homes)} trip(s) home" if sum(homes) else ""))
     return dict(programme=prog, order=[int(i) for i in r["order"]], dirs=dirs,
                 variants=[int(v) for v in r["variants"]], method=r["method"],
                 n=n, n_reversed=n_rev, n_refused=n_ref, n_rematerialised=n_mat,
                 n_forbidden=int(n_forbidden), n_nodes=int(e["N"]),
+                homes=homes, n_home=int(sum(homes)),
                 cost=float(cost), cluster_cost=float(r["cost"]),
                 baseline_cost=float(base_cost),
                 nn_cost=float(r.get("nn_cost", float("nan"))),
@@ -3671,8 +3808,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
             mine = [i for i, it in enumerate(placed) if it["arm"] == a]
             if not mine:
                 continue
-            _, bad = prune_unflyable(specs[a], [placed[i]["entry"] for i in mine],
-                                     _mat(a))
+            bag = [placed[i]["entry"] for i in mine]
+            _, bad = prune_unflyable(specs[a], bag, _mat(a),
+                                     home=home_legs(specs[a], bag, _mat(a)))
             for k in bad:
                 it = placed[mine[k]]
                 key = (a, int(it["stroke"]["id"]))
@@ -3757,7 +3895,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         segs = programs[a]
         if not segs:
             continue
-        keep, bad = prune_unflyable(specs[a], segs, _mat(a))
+        keep, bad = prune_unflyable(specs[a], segs, _mat(a),
+                                    home=home_legs(specs[a], segs, _mat(a)))
         if not bad:
             continue
         for k in bad:

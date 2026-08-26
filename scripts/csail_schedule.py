@@ -183,6 +183,8 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
               f"({p['draw_s']:.1f} s drawing + {p['transit_s']:.1f} s pen-up"
               + (f" + {p['taxi_s']:.1f} s slow taxi" if p["taxi_s"] else "")
               + (f" + {p['retreat_s']:.1f} s retreat" if p["retreat_s"] else "")
+              + (f", {p['n_home']} trip(s) home mid-bag"
+                 if p.get("n_home") else "")
               + f"; sequencer said {q['cost']:.1f} s, nearest-xy would be "
               f"{q['baseline_cost']:.1f} s), {samp[aid]['n']} steps, "
               f"densify tip_err {p['dense_tip_err']:.2e} m")
@@ -1967,6 +1969,11 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
                                     for x in res["arms"]},
             arm_reversed={str(x): int(res["sequence"][x]["n_reversed"])
                           for x in res["arms"]},
+            # trips home INSIDE a bag (`allocate.MULTI_TOUR`): the tour edge
+            # that turned "this ink is impossible" into "this ink costs a
+            # go-home", counted where the coverage it bought is reported
+            arm_home_trips={str(x): int(progs[x].get("n_home", 0))
+                            for x in res["arms"]},
             arm_sequencer_method={str(x): res["sequence"][x]["method"]
                                   for x in res["arms"]},
             # the reconfiguration the transit floors hide (`sequence.reconfiguration`)
@@ -1982,6 +1989,9 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
         sum(ph["arm_reconfig_rad"].values()) for ph in summary["phases"]))
     summary["transit_s"] = float(sum(
         sum(ph["arm_transit_s"].values()) for ph in summary["phases"]))
+    summary["multi_tour"] = bool(allocate.MULTI_TOUR)
+    summary["home_trips"] = int(sum(
+        sum(ph["arm_home_trips"].values()) for ph in summary["phases"]))
     summary.update(pauses=summary["phases"][0]["pauses"],
                    priority=summary["phases"][0]["priority"],
                    arm_metres=summary["phases"][0]["arm_metres"],

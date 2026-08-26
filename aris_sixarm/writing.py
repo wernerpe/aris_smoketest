@@ -1044,6 +1044,17 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                      of the per-step motion, and therefore a fraction of the
                      swept-tube slack it costs everybody else.
 
+    A BAG IS NOT A TOUR.  A segment carrying `home_before=True` is entered from
+    the READY POSE rather than from the segment before it: the arm lifts, flies
+    home, and flies out again — `exit_beats` then `enter_beats`, the same two
+    legs the pass pays at its own ends, laid end to end as one pen-up block.
+    `sequence.close_depot` is what puts the flag there and
+    `sequence.home_legs` prices it, so the seconds this lays down are the
+    seconds the sequencer minimised and `csail_schedule.cross_check` still
+    holds to the float.  The flag is ignored on the FIRST segment, which is
+    entered from `q_start` by definition; slicing a programme (`split_by_arms`,
+    `split_by_segments`) therefore needs no fixing up.
+
     -> dict(t, q, seg, u, phases, ink, duration, lifts, dense_tip_err, q_end,
             transit_s, taxi_s, retreat_s, draw_s, ...)
        t     (K,)    waypoint times, strictly increasing
@@ -1073,7 +1084,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
                     taxi_s=0.0, retreat_s=0.0, q_end=q0, park=str(park),
                     pen=float(pen_ext), paper_modes=[], paper_vias=0,
-                    fallbacks=0)
+                    fallbacks=0, n_home=0)
 
     dense = []
     for k, s in enumerate(segs):
@@ -1114,15 +1125,27 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     ent = need(enter_beats(spec, q0, hov[0][0], dense[0]["qd"][0], pen_ext,
                            h_inv, qd_frac, paper_safe), "entry", 0)
     beats, modes = [ent["steps"]], [ent["modes"]]
-    hops = []
+    hops, n_home = [], 0
     for k, D in enumerate(dense):
         if k + 1 < len(dense):
             hop = float(np.linalg.norm(dense[k + 1]["pts"][0] - D["pts"][-1]))
             hops.append(hop)
-            b = need(transit_beats(spec, D["qd"][-1], hox[k][0], hov[k + 1][0],
-                                   dense[k + 1]["qd"][0], hop, hox[k][1],
-                                   hov[k + 1][1], pen_ext, h_inv, transit_speed,
-                                   qd_frac, paper_safe, q_home), "transit", k)
+            if segs[k + 1].get("home_before"):
+                go = need(exit_beats(spec, D["qd"][-1], hox[k][0], q_home,
+                                     pen_ext, h_inv, qd_frac, paper_safe),
+                          "go-home", k)
+                come = need(enter_beats(spec, q_home, hov[k + 1][0],
+                                        dense[k + 1]["qd"][0], pen_ext, h_inv,
+                                        qd_frac, paper_safe), "entry", k + 1)
+                b = dict(steps=go["steps"] + come["steps"],
+                         modes=tuple(go["modes"]) + tuple(come["modes"]))
+                n_home += 1
+            else:
+                b = need(transit_beats(spec, D["qd"][-1], hox[k][0],
+                                       hov[k + 1][0], dense[k + 1]["qd"][0],
+                                       hop, hox[k][1], hov[k + 1][1], pen_ext,
+                                       h_inv, transit_speed, qd_frac,
+                                       paper_safe, q_home), "transit", k)
         elif park == PARK_HOME:
             b = need(exit_beats(spec, D["qd"][-1], hox[k][0], q_home, pen_ext,
                                 h_inv, qd_frac, paper_safe), "go-home", k)
@@ -1207,7 +1230,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 paper_modes=[m for mm in modes for m in mm],
                 paper_vias=int(sum(len(b) for b in beats)
                                - sum(len(mm) for mm in modes)),
-                fallbacks=int(sum(D["fallbacks"] for D in dense)))
+                fallbacks=int(sum(D["fallbacks"] for D in dense)),
+                n_home=int(n_home))
 
 
 def uniform_samples(prog, dt):

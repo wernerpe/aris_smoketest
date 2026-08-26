@@ -349,6 +349,8 @@ def _phase_json(res):
             order=[int(x) for x in q["order"]], dirs=[int(x) for x in q["dirs"]],
             transit_s=float(q["cost"]), baseline_transit_s=float(q["baseline_cost"]),
             n_reversed=int(q["n_reversed"]), n_refused=int(q["n_refused"]),
+            homes=[bool(x) for x in q.get("homes", [])],
+            n_home=int(q.get("n_home", 0)),
             wall_s=float(q["wall"])) for a, q in res["sequence"].items()},
         merges=[dict(kind=str(m["kind"]), arm=int(m["arm"]),
                      stroke_id=int(m["stroke_id"]),
@@ -364,6 +366,9 @@ def _phase_json(res):
             kind=s["kind"], s_range=[float(x) for x in s["s_range"]],
             direction=int(s["direction"]),
             flipped=bool(s.get("flipped", False)), length_m=float(s["length"]),
+            # the arm flies back to its ready pose BEFORE this segment: the
+            # tour crossed the depot rather than the paper (allocate.MULTI_TOUR)
+            home_before=bool(s.get("home_before", False)),
             n_points=int(len(s["pts"])), plan_ok=s["plan"]["status"] == "ok",
             validated=bool(s["plan"]["validation"]["ok"]),
             pen_ext_m=float(res["pens"][aid]),
@@ -571,6 +576,14 @@ def add_args(ap):
                     help="what an arm does when it finishes: 'freeze' (default) "
                          "lifts the pen and stops where it is; 'home' is "
                          "conductor v1's transit back to the ready pose")
+    ap.add_argument("--no-multi-tour", action="store_true",
+                    help="require an arm's whole bag to thread into ONE tour "
+                         "per phase.  On by default since 2026-08-26 a bag may "
+                         "be flown as several depot-returning tours — out, "
+                         "draw, home, out, draw — which is what stops "
+                         "`prune_unflyable` giving back certified, "
+                         "depot-reachable ink it merely could not thread "
+                         "(see allocate.MULTI_TOUR)")
     return ap
 
 
@@ -717,6 +730,15 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
           f"{1000 * paper.TIP_SWEEP_PAD:.0f} mm sweep)" if paper.STATIC_SAFE
           else "  !! pen-ups are NOT certified against the static set "
                "(--no-static-safe)")
+    # A MODULE FLAG FOR THE SAME REASON, one obstacle over: the pruner, the
+    # balancer's price and the sequencer all have to agree about whether a bag
+    # may be flown as several tours, and they reach `allocate` by three
+    # different routes (see allocate.MULTI_TOUR).
+    allocate.MULTI_TOUR = not bool(getattr(a, "no_multi_tour", False))
+    print("  a bag may be flown as SEVERAL depot-returning tours in one phase "
+          "(allocate.MULTI_TOUR)" if allocate.MULTI_TOUR
+          else "  !! an arm's whole bag must thread into ONE tour "
+               "(--no-multi-tour)")
     t0 = time.time()
     if px is None:
         px, _ = trace.trace_logo(a.image)

@@ -74,6 +74,25 @@ def _same(A, B, tol=1e-12):
                 and np.allclose(A[fa], B[fb], atol=tol, rtol=0.0))
 
 
+def _plain_want(ends, return_home=True):
+    """The matrix `_ArmMatrix` should slice, built from scratch. -> (2n+1)^2.
+
+    DEPOT-CLOSED, because that is the model the run uses: with multi-tour bags
+    on (`allocate.MULTI_TOUR`) a crossing may be flown via the ready pose, so
+    the freshly built matrix these tests compare against has to be the one the
+    sequencer will actually walk.  With the feature off both sides are the
+    plain `cost_matrix` again and the assertions read exactly as they did.
+    """
+    n = len(ends["z"])
+    C = sequence.cost_matrix(FLOOR, None, 0.30, 0.30, 1.0, ends=ends,
+                             pen_ext=0.110, return_home=return_home)
+    if not allocate.MULTI_TOUR:
+        return C
+    outof, into = sequence.home_legs(FLOOR, None, 0.30, 0.30, 1.0, ends=ends,
+                                     pen_ext=0.110)
+    return sequence.close_depot(C, outof, into, sequence.seg_index(n))
+
+
 def test_arm_matrix_slices_the_plain_cost_matrix():
     """A bag's matrix out of the union == the bag's matrix built alone."""
     rng = np.random.default_rng(5)
@@ -83,10 +102,7 @@ def test_arm_matrix_slices_the_plain_cost_matrix():
               for i, e in enumerate(ends)])
     for keys in ([0, 1, 2, 3, 4, 5], [4, 1, 0], [2], [5, 3]):
         C, _T, e, idx = M.matrix(keys)
-        want = sequence.cost_matrix(
-            FLOOR, None, 0.30, 0.30, 1.0,
-            ends=allocate._stack_ends([ends[k] for k in keys]),
-            pen_ext=0.110, return_home=True)
+        want = _plain_want(allocate._stack_ends([ends[k] for k in keys]))
         assert C.shape == want.shape == (2 * len(keys) + 1,) * 2
         assert _same(C, want), f"bag {keys} sliced a different matrix"
         assert len(idx) == 2 * len(keys)
@@ -106,6 +122,10 @@ def test_arm_matrix_slices_the_cluster_cost_matrix():
         wC, wT, we = sequence.cluster_cost_matrix(
             FLOOR, None, 0.30, 0.60, 1.0, 0.110, q_start=None,
             return_home=False, ends=stacked)
+        if allocate.MULTI_TOUR:
+            outof, into = sequence.cluster_home_legs(
+                FLOOR, None, 0.30, 0.60, 1.0, 0.110, ends=stacked)
+            wC = sequence.close_depot(wC, outof, into, stacked["seg"])
         assert _same(C, wC), f"bag {keys}: transit matrix differs"
         assert _same(T, wT), f"bag {keys}: tie-break matrix differs"
         assert list(e["nv"]) == list(we["nv"]) and e["N"] == we["N"]
@@ -126,9 +146,7 @@ def test_arm_matrix_growth_does_not_disturb_what_was_there():
     again, _, _, _ = M.matrix([0, 1])
     assert _same(first, again), "growing the union moved an existing cell"
     whole, _, _, _ = M.matrix([0, 1, 2, 3, 4])
-    want = sequence.cost_matrix(FLOOR, None, 0.30, 0.30, 1.0,
-                                ends=allocate._stack_ends(ends),
-                                pen_ext=0.110, return_home=True)
+    want = _plain_want(allocate._stack_ends(ends))
     assert _same(whole, want), "the grown union is not the matrix it slices"
     # ensure() is idempotent: asking again adds nothing and changes nothing
     n_before = len(M.span)

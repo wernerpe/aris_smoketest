@@ -377,6 +377,110 @@ def test_one_unreachable_segment_is_refused_and_not_priced_at_infinity():
     assert r["order"] == [0] and r["dirs"] == [-1] and np.isfinite(r["cost"])
 
 
+# ==========================================================================
+# 6. multi-tour bags: the depot is a place the tour may pass through
+# ==========================================================================
+def test_the_depot_closure_is_a_min_and_the_bounces_say_which_half_won():
+    """`close_depot` never raises a cost, and `depot_bounces` reads it back.
+
+    The two have to be exact inverses of one another or the timeline pays for
+    a schedule the sequencer did not price: the DP walks the CLOSED matrix and
+    `writing.arm_program` lays down a trip home wherever `depot_bounces` says
+    the closure took the depot half.  Ties go to the direct crossing, so a bag
+    that never needed the depot reads back as the bag it always was.
+    """
+    n = 3
+    N = 2 * n
+    rng = np.random.default_rng(3)
+    C = rng.uniform(1.0, 9.0, (N + 1, N + 1))
+    for i in range(n):
+        C[2 * i:2 * i + 2, 2 * i:2 * i + 2] = np.inf
+    C[:, 4:6] = np.inf                    # nothing can reach segment 2 directly
+    outof = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    into = np.array([2.0, 2.0, 2.0, 2.0, 0.5, 0.5])
+    seg = sequence.seg_index(n)
+    D = sequence.close_depot(C, outof, into, seg)
+
+    assert np.array_equal(D[N, :], C[N, :]) and np.array_equal(D[:, N], C[:, N]), \
+        "the closure moved the two ends of the PASS, which it has no say in"
+    fin = np.isfinite(C[:N, :N])
+    assert (D[:N, :N][fin] <= C[:N, :N][fin] + 1e-12).all(), \
+        "the closure made a crossing more expensive"
+    same = seg[:, None] == seg[None, :]
+    assert not np.isfinite(D[:N, :N][same]).any(), \
+        "a segment may follow itself through the depot"
+    assert np.isfinite(D[:4, 4:6]).all(), \
+        "the unreachable segment is still unreachable with a trip home"
+    assert not np.isfinite(D[N, 4:6]).any(), \
+        "the closure invented a way to START the pass on it"
+
+    # ...and the tour the DP now finds really does visit all three
+    r = sequence.solve(D, n)
+    assert sorted(r["order"]) == [0, 1, 2] and np.isfinite(r["cost"])
+    nodes = sequence.nodes_of(r["order"], r["dirs"])
+    b = sequence.depot_bounces(C, outof, into, nodes)
+    assert len(b) == n - 1
+    # every flagged crossing is one the closure won, and the total agrees
+    got = sum((outof[a] + into[x]) if f else C[a, x]
+              for f, (a, x) in zip(b, zip(nodes[:-1], nodes[1:])))
+    assert abs(got + C[N, nodes[0]] + C[nodes[-1], N] - r["cost"]) < 1e-9, \
+        "the bounces do not add up to the cost the DP reported"
+    k = next(i for i, x in enumerate(nodes) if x in (4, 5))
+    assert k > 0 and b[k - 1], \
+        "segment 2 has no direct in-edge and was not flown home first"
+
+
+def test_a_bag_with_no_single_tour_is_flyable_as_two():
+    """The whole claim, on the smallest matrix that can carry it.
+
+    Segment 1 can be reached from nowhere and reaches nowhere; the depot can
+    reach it and it can reach the depot.  There is no Hamiltonian path in the
+    open matrix and there is one in the closed matrix, and it is exactly `go,
+    draw, home, go, draw` — which is what `allocate.prune_unflyable` stops
+    calling impossible and `writing.arm_program` stops refusing to fly.
+    """
+    n = 2
+    N = 2 * n
+    C = np.full((N + 1, N + 1), 1.0)
+    for i in range(n):
+        C[2 * i:2 * i + 2, 2 * i:2 * i + 2] = np.inf
+    C[:N, 2:4] = np.inf                   # nothing reaches segment 1 ...
+    C[2:4, :N] = np.inf                   # ... and it reaches nothing
+    with pytest.raises(RuntimeError, match="no feasible order"):
+        sequence.solve(C, n)
+
+    outof, into = np.full(N, 3.0), np.full(N, 4.0)
+    D = sequence.close_depot(C, outof, into, sequence.seg_index(n))
+    r = sequence.solve(D, n)
+    assert sorted(r["order"]) == [0, 1]
+    nodes = sequence.nodes_of(r["order"], r["dirs"])
+    assert sequence.depot_bounces(C, outof, into, nodes) == [True], \
+        "the one crossing this bag has is not flown via the depot"
+    assert abs(r["cost"] - (1.0 + 7.0 + 1.0)) < 1e-12
+
+
+def test_home_legs_are_the_pass_end_legs_measured_at_the_ready_pose():
+    """`home_legs` ignores where the pass starts and whether it ends at home.
+
+    A mid-tour bounce is not the pass's own entry or go-home: it always leaves
+    from `q_seed` and always comes back to it, so the legs must not move when
+    the caller hands in the pass's `q_start` or `return_home`.  They are the
+    numbers `writing.exit_beats` and `writing.enter_beats` will pay, which is
+    what `test_the_timeline_pays_exactly_what_a_bounce_was_priced_at` pins.
+    """
+    plan = plan_floor()
+    segs = [dict(plan=plan, pts=np.asarray(plan["pts"], float), length=0.30)]
+    a = sequence.home_legs(FLOOR, segs)
+    q_odd = np.asarray(FLOOR.q_seed, float) + 0.05
+    b = sequence.home_legs(FLOOR, segs, q_start=q_odd, return_home=False)
+    assert np.allclose(a[0], b[0]) and np.allclose(a[1], b[1]), \
+        "the mid-tour trip home moved with the pass's own ends"
+    # and against the pass's legs, which DO move: at q_seed with return_home
+    # they are the same two numbers
+    C = sequence.cost_matrix(FLOOR, segs, return_home=True)
+    assert np.allclose(a[1], C[2, :2]) and np.allclose(a[0], C[:2, 2])
+
+
 if __name__ == "__main__":
     t0 = time.time()
     fails = 0

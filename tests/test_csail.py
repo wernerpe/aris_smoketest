@@ -936,6 +936,93 @@ def test_prune_unflyable_drops_only_the_unreachable_span():
     assert np.isfinite(allocate.sequence.solve(sub, len(keep))["cost"])
 
 
+def test_prune_keeps_the_span_a_trip_home_can_reach():
+    """The same matrix, asked the MULTI-TOUR question.
+
+    Segment 2 has in-degree 0 in the direct matrix, which is exactly why the
+    single-tour reading drops it — and it is not why the ink is impossible.  An
+    arm that can fly home from segment 0 and out again to segment 2 draws all
+    three, in two tours, for the price of a go-home; `sequence.close_depot` is
+    the one edge that says so and `home` is how this function is told to use it.
+    """
+    n = 3
+    N = 2 * n
+    C = np.full((N + 1, N + 1), 1.0)
+    for i in range(n):
+        C[2 * i:2 * i + 2, 2 * i:2 * i + 2] = np.inf
+    C[N, 2:4] = np.inf
+    C[:, 4:6] = np.inf                    # nothing REACHES segment 2 directly
+
+    segs = [dict(length=1.0), dict(length=1.0), dict(length=0.5)]
+    real = allocate.sequence.cost_matrix
+    allocate.sequence.cost_matrix = lambda spec, s, **kw: C
+    try:
+        # no home legs: the answer this function has always given
+        keep, drop = allocate.prune_unflyable(None, segs, {})
+        assert drop == [2] and keep == [0, 1]
+        # ...and with them, nothing is given back
+        home = (np.full(N, 2.0), np.full(N, 2.0))
+        keep, drop = allocate.prune_unflyable(None, segs, {}, home=home)
+    finally:
+        allocate.sequence.cost_matrix = real
+    assert drop == [], f"gave back {drop} ink a trip home reaches"
+    assert keep == [0, 1, 2]
+    # a span the DEPOT itself cannot reach is still refused, both ways round
+    C2 = np.array(C)
+    C2[:, 4:6] = np.inf
+    allocate.sequence.cost_matrix = lambda spec, s, **kw: C2
+    try:
+        dead = (np.full(N, 2.0), np.array([2.0] * 4 + [np.inf] * 2))
+        keep, drop = allocate.prune_unflyable(None, segs, {}, home=dead)
+    finally:
+        allocate.sequence.cost_matrix = real
+    assert drop == [2], f"kept {keep}; segment 2 is unreachable from anywhere"
+
+
+def test_the_timeline_pays_exactly_what_a_bounce_was_priced_at():
+    """A trip home mid-bag is `exit_beats` then `enter_beats`, to the float.
+
+    THE CROSS-CHECK IS THE WHOLE SAFETY OF THIS FEATURE.  The sequencer chooses
+    an order against `sequence.close_depot`'s arithmetic and `writing.arm_program`
+    lays the path down against `writing`'s beats; if the two disagree by a
+    millisecond the conductor is scheduling a fiction, and
+    `csail_schedule.build_phase` stops the run at 1e-6.  So: the same two
+    segments, flown direct and flown via the depot, priced both ways.
+    """
+    from aris_sixarm import sequence, writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    s0 = _short_segment(31, bx + 0.30, by - 0.30)
+    s1 = _short_segment(31, bx - 0.30, by - 0.30)
+    segs = [s0, s1]
+    C = sequence.cost_matrix(spec, segs, pen_ext=0.110, return_home=False)
+    outof, into = sequence.home_legs(spec, segs, pen_ext=0.110)
+
+    direct = writing.arm_program(spec, segs, pen_ext=0.110)
+    assert direct["n_home"] == 0
+    want = C[4, 0] + C[0, 2] + C[2, 4]        # depot -> seg0 -> seg1 -> lift
+    assert abs(direct["transit_s"] - want) < 1e-9, \
+        f"the direct tour costs {direct['transit_s']:.6f} s, priced {want:.6f} s"
+
+    bounced = writing.arm_program(spec, [s0, dict(s1, home_before=True)],
+                                  pen_ext=0.110)
+    assert bounced["n_home"] == 1, "the flag did not reach the timeline"
+    want_b = C[4, 0] + (outof[0] + into[2]) + C[2, 4]
+    assert abs(bounced["transit_s"] - want_b) < 1e-9, \
+        (f"the bounce costs {bounced['transit_s']:.6f} s, "
+         f"`home_legs` priced it {want_b:.6f} s")
+    assert bounced["transit_s"] > direct["transit_s"], \
+        "this fixture's depot detour is free, so it pins nothing"
+    # the closure would therefore NOT have taken it, and `depot_bounces` agrees
+    D = sequence.close_depot(C, outof, into, sequence.seg_index(2))
+    assert abs(D[0, 2] - C[0, 2]) < 1e-12
+    assert sequence.depot_bounces(C, outof, into, [0, 2]) == [False]
+    # ...and the arm really does stand at its ready pose in the middle of it
+    q = np.asarray(bounced["q"], float)
+    d = np.abs(q - np.asarray(spec.q_seed, float)).max(axis=1)
+    assert d.min() < 1e-9, "the 'trip home' never reaches q_seed"
+
+
 def _covered(r):
     """{stroke id: merged covered spans} of a shipped allocation.
 

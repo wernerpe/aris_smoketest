@@ -634,6 +634,117 @@ def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
     return C
 
 
+# ==========================================================================
+# 1c. MULTI-TOUR BAGS: THE DEPOT IS A PLACE THE TOUR MAY PASS THROUGH
+# ==========================================================================
+# A BAG THE ARM CANNOT FLY IN ONE TOUR IS NOT INK THE ARM CANNOT FLY.  Every
+# solver above answers one question — "is there a paper-legal Hamiltonian path
+# from the depot through this bag and back" — and a `no` there has been read
+# everywhere downstream as `this ink is impossible`.  It is not.  A pass is not
+# a tour: an arm may fly out, draw some of its bag, GO HOME, and fly out again,
+# as many times as the ink needs.  `csail_schedule.split_by_segments` already
+# does exactly that by hand, cutting a refused one-arm phase in two with a trip
+# home between the halves; and `residual_passes` does it a whole allocation at
+# a time.  Both are special cases of one edge.
+#
+# THE EDGE IS THE WHOLE CHANGE.  Going home between segment a and segment b
+# costs `outof[a] + into[b]` — the same two legs the pass already pays at its
+# ends, priced by the same `depot_legs` — so a multi-tour schedule over a bag is
+# a plain Hamiltonian path over the DEPOT-CLOSED matrix
+#
+#       C'[a, b] = min(C[a, b], outof[a] + into[b])
+#
+# and nothing about Held-Karp, the local search, the move set or the cost
+# accounting has to know.  A tour of C' is read back as a tour of C with a trip
+# home wherever the closure was the cheaper half (`depot_bounces`).  The
+# optimum over C' is the optimum over every multi-tour schedule, exactly, and
+# it is never worse than the single-tour optimum because C' <= C cell for cell.
+#
+# WHY THIS IS A CAPABILITY AND NOT A RESTATEMENT OF `paper.route`'s FOLD.  The
+# router already offers `[q_home]` and `[a0, q_home, a1]` on its ladder, so a
+# crossing may already pass through the ready pose — but only as STRAIGHT joint
+# lines hover -> q_seed -> hover, taken or refused whole.  The two legs of a
+# real trip home are routed INDEPENDENTLY and each gets the entire ladder: lift
+# higher, traverse the hover plane in 20 cm hops, skirt a column's footprint.
+# An arm that cannot fly hover-to-hover through its depot in two straight lines
+# can very often fly home by one shape and out again by another.
+def home_legs(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
+              h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT, q_start=None,
+              return_home=True, paper_safe=True):
+    """The two halves of a MID-TOUR trip home, per node. -> (outof, into).
+
+    `outof[a]` is the seconds to lift off node a's exit and fly to the arm's own
+    `spec.q_seed`; `into[b]` is the flight back out and the lower onto node b's
+    entry.  Together they are what one depot return costs, and they are the same
+    two `depot_legs` the pass already pays at its ends — so a bounce is priced
+    by the function `writing.exit_beats` and `writing.enter_beats` are pinned
+    against, and `csail_schedule.cross_check` keeps them equal to the float.
+
+    `q_start` and `return_home` are ACCEPTED AND IGNORED, so this takes the same
+    `**mat` its caller hands `cost_matrix`.  They describe the two ends of the
+    PASS; an intermediate tour begins and ends at the depot whatever the pass
+    does, so the legs here are always measured against `spec.q_seed` with the
+    trip home charged in full.
+    """
+    ends = endpoints(spec, segs, h_inv, pen_ext) if ends is None else ends
+    n = ends["n"]
+    if n == 0:
+        return np.zeros(0), np.zeros(0)
+    N = 2 * n
+    ent_q = ends["q"][:, [0, 1]].reshape(N, 7)
+    ent_h = ends["hover"][:, [0, 1]].reshape(N, 7)
+    exi_q = ends["q"][:, [1, 0]].reshape(N, 7)
+    exi_h = ends["hover"][:, [1, 0]].reshape(N, 7)
+    lift = node_lift(spec, exi_q, exi_h, qd_frac, h_inv, pen_ext, paper_safe)
+    lower = node_lower(spec, ent_h, ent_q, qd_frac, h_inv, pen_ext, paper_safe)
+    into, outof = depot_legs(spec, ent_h, exi_h, lift, lower, qd_frac, h_inv,
+                             pen_ext, None, True, paper_safe)
+    return outof, into
+
+
+def seg_index(n):
+    """Node -> its segment, for the plain two-nodes-per-segment layout. -> (2n,)."""
+    return np.arange(2 * n) // 2
+
+
+def close_depot(C, outof, into, seg):
+    """`C` with a trip home offered as an alternative to every crossing. -> C'.
+
+    `seg[k]` is the segment node k belongs to, so the plain and the cluster
+    layouts share one definition; a pair of nodes of the SAME segment stays
+    infinite, because a segment is drawn once and the tour never contains both.
+    The depot row and column are left exactly as they were: they are the two
+    ends of the PASS, which the closure has nothing to say about.
+    """
+    seg = np.asarray(seg, int)
+    N = len(seg)
+    D = np.array(C, float)
+    if N:
+        B = (np.asarray(outof, float)[:, None]
+             + np.asarray(into, float)[None, :])
+        B[seg[:, None] == seg[None, :]] = np.inf
+        D[:N, :N] = np.minimum(D[:N, :N], B)
+    return D
+
+
+BOUNCE_EPS = 1e-12       # s; a tie between a crossing and a bounce goes direct
+
+
+def depot_bounces(C, outof, into, nodes, eps=BOUNCE_EPS):
+    """Which crossings of a chosen node order go home. -> [bool], len(nodes) - 1.
+
+    `C` is the OPEN matrix — the one `close_depot` was given — because the
+    question is which half of the `min` the closure took.  Ties go to the direct
+    crossing, so a bag that never needed the depot reads back exactly as it did
+    before this existed.
+    """
+    out = []
+    for a, b in zip(nodes[:-1], nodes[1:]):
+        cost = float(outof[a]) + float(into[b])
+        out.append(bool(not np.isfinite(C[a, b]) or C[a, b] > cost + eps))
+    return out
+
+
 def flip_index(N):
     """Node -> the same segment drawn the other way (the depot maps to itself)."""
     fl = np.arange(N + 1)
@@ -1200,6 +1311,28 @@ def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
         T[:N, N] += w_reconfig * np.max(np.abs(exi_q - home), axis=-1)
     T[~np.isfinite(C)] = 0.0
     return C, T, e
+
+
+def cluster_home_legs(spec, menus, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
+                      h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT, q_start=None,
+                      return_home=True, ends=None, w_reconfig=W_RECONFIG,
+                      w_surcharge=W_SURCHARGE, paper_safe=True):
+    """`home_legs` over the (segment, direction, VARIANT) node list. -> (outof, into).
+
+    Same contract, same two `depot_legs`, same ignored pass-end arguments; the
+    only difference is that a segment offers 2 x V nodes instead of 2 and each
+    one carries its own entry and exit fiber.
+    """
+    e = cluster_endpoints(spec, menus, h_inv, pen_ext) if ends is None else ends
+    if e["N"] == 0:
+        return np.zeros(0), np.zeros(0)
+    lift = node_lift(spec, e["exi_q"], e["exi_h"], qd_frac, h_inv, pen_ext,
+                     paper_safe)
+    lower = node_lower(spec, e["ent_h"], e["ent_q"], qd_frac, h_inv, pen_ext,
+                       paper_safe)
+    into, outof = depot_legs(spec, e["ent_h"], e["exi_h"], lift, lower, qd_frac,
+                             h_inv, pen_ext, None, True, paper_safe)
+    return outof, into
 
 
 def cluster_held_karp(C, e):
