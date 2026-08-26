@@ -3651,12 +3651,23 @@ def where(dropped, sheet, nx=3, ny=3):
 # ===========================================================================
 # 7. the whole allocation
 # ===========================================================================
-def atlas_cells(arms, atlas_dir):
+def atlas_cells(arms, atlas_dir, tilt_max_deg=0.0):
     """-> {arm: (grid_m, {(ix, iy)})}, or None if any arm's atlas is missing.
 
     The atlas is a 2 cm sweep of the paper; a cell counts if the pen reached it
-    PERPENDICULAR (tilt 0 — the planner never leans the pen) with the planner's
-    own permissive joint margin.
+    PERPENDICULAR with the planner's own permissive joint margin — plus, when
+    the run allows the pen to lean, any cell the atlas CERTIFIES at a lean the
+    run permits.
+
+    THE FLAT QUESTION HAS ITS OWN COLUMN NOW, and it needs one.  This used to
+    read `tilt_deg <= 0 and margin >= 0.15`, which worked while `tilt_deg` meant
+    "the lean of the best-margin pose that cleared metal here" — 0 for the great
+    majority of reachable cells.  Once `atlas.solve_cell` started returning the
+    LEAST-LEAN pose that PASSES the gates, a cell that only certifies at 5
+    degrees began carrying `tilt_deg = 5` and the flat pose it can still reach
+    stopped being written down: the prefilter shrank, arms stopped being offered
+    ink they can draw, and the logo lost 2.5 points to a map that had just
+    gained 7.6.  `atlas.FLATCOL` is that answer, recorded on purpose.
 
     `atlas_dir` may be ONE directory (every arm read from it) or a mapping
     {arm_id: directory}, which is what a per-arm pen assignment needs: the
@@ -3677,7 +3688,14 @@ def atlas_cells(arms, atlas_dir):
         except Exception:
             return None
         g = float(meta["grid"])
-        rows = arr[(arr[:, 8] <= 0.0) & (arr[:, 2] >= 0.15)]
+        from . import atlas as _atl
+        if arr.shape[1] > _atl.FLATCOL:
+            flat = arr[:, _atl.FLATCOL] >= 0.15
+            lean = ((arr[:, _atl.LEANCOL] >= 0.0)
+                    & (arr[:, _atl.LEANCOL] <= float(tilt_max_deg) + 1e-9))
+            rows = arr[flat | lean]
+        else:                       # a pre-2026-08-26 sweep: the old reading
+            rows = arr[(arr[:, 8] <= 0.0) & (arr[:, 2] >= 0.15)]
         grids[a] = (g, {(int(round(x / g)), int(round(y / g)))
                         for x, y in rows[:, :2]})
     return grids
@@ -3739,13 +3757,17 @@ def _pad_to(m, shape):
     return out
 
 
-def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R):
+def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R,
+              tilt_max_deg=0.0):
     """-> {(stroke_id, arm): True} where the atlas says probing is worth it.
 
     A stroke with no reachable cell near any of its points cannot be planned by
     that arm, so the probe is skipped.  Absent an atlas everything is probed.
+    `tilt_max_deg` is the run's cone: with it open the atlas's LEANED
+    certifications count as reachable too, because the planner can now reach
+    them (`lateral.plan_adaptive`'s lean ladder).
     """
-    grids = atlas_cells(arms, atlas_dir)
+    grids = atlas_cells(arms, atlas_dir, tilt_max_deg)
     if grids is None:
         return None
     ok = {}
@@ -3873,7 +3895,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         ivmap = {k: list(v) for k, v in iv0.items()}
         t_pre = t_probe = 0.0
     else:
-        pre = prefilter(strokes, arms, atlas_dir)
+        pre = prefilter(strokes, arms, atlas_dir,
+                        tilt_max_deg=float((opts or {}).get("tilt_max_deg", 0.0)
+                                           or 0.0))
         t_pre = time.time() - t0
 
         ivmap, probe_stats = {}, []

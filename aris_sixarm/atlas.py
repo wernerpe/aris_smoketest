@@ -33,12 +33,25 @@ from .metrics import tip_jacobian, sigma_min, f_max, GATE_MARGIN, GATE_SIGMA
 
 COLUMNS = ["x", "y", "margin", "sigma_min", "f_max", "n_sol", "valid_frac",
            "q7_window", "tilt_deg", "q1", "q2", "q3", "q4", "q5", "q6", "q7",
-           "min_lean_deg"]
+           "min_lean_deg", "flat_margin"]
 QCOL = 9                      # index of q1 in COLUMNS
 LEANCOL = 16                  # index of min_lean_deg — APPENDED, on purpose:
 #   every consumer that slices `arr[:, QCOL:QCOL + 7]` or reads a column by the
 #   index it has always had keeps working, and the new column is only seen by
 #   code that asks for it.
+FLATCOL = 17                  # ...and `flat_margin`, which exists because the
+#   gated search took an answer away.  `tilt_deg` used to mean "the lean of the
+#   best-margin pose that cleared metal here", and for the great majority of
+#   reachable cells that was 0 — so `tilt_deg == 0 and margin >= 0.15` was a
+#   usable statement of FLAT REACHABILITY, and `allocate.atlas_cells` has read
+#   it as one for as long as there has been a prefilter.  The gated search
+#   changed what the row records: a cell that only certifies at 5 degrees now
+#   carries `tilt_deg = 5`, and the flat pose it can still reach — uncomfortably,
+#   below the strict gate, but reachable — stopped being written down.  The
+#   allocator's prefilter shrank, arms stopped being offered ink they can draw,
+#   and the logo lost 2.5 points of coverage to a map that had just gained 7.6.
+#   So the flat answer is recorded explicitly: the joint margin of the best
+#   PERPENDICULAR pose that clears every obstacle here, or -1 if none does.
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +332,23 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
                         sols.append((m, tilt_deg, q))
         return sols, n_sol, valid
 
+    def _flat_best(sols, valid):
+        """The old flat answer: best-margin perpendicular pose that clears.
+
+        -> margin, or -1.0.  Same candidate ordering and same top-six
+        truncation the legacy pick uses, because it IS the legacy pick
+        restricted to the locked set — the number `allocate.atlas_cells` has
+        always read out of `tilt_deg == 0 and margin >= 0.15`.
+        """
+        if not sols:
+            return -1.0
+        top = sorted(sols, key=lambda t: -t[0])[:6]
+        ok = _self_mask(np.array([t[2] for t in top]), pen_ext, lat)
+        for n, (m, _, q) in enumerate(top):
+            if ok[n] and _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
+                return float(m)
+        return -1.0
+
     def _pack(m, q, tilt_deg, n_sol, valid, lean):
         J = tip_jacobian(q, pen_ext=pen_ext, pen_lat=lat)
         s = sigma_min(J)
@@ -329,9 +359,12 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
                 float(max(_q7_window(row) for row in valid)), tilt_deg, q, lean)
 
     # ---- the GATED search: least lean that certifies ----------------------
+    flat_m, flat_done, keep0 = -1.0, False, None
     for lean, cand in (gate_groups if gate_groups is not None
                        else _gated_groups(15.0)):
         sols, n_sol, valid = _solve_set(cand)
+        if lean == 0.0:
+            keep0 = (sols, valid)
         keep = [s for s in sols if s[0] >= gate_margin]
         if not keep:
             continue
@@ -351,7 +384,9 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
             if _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
                 out = _pack(m, q, tilt_deg, n_sol, valid, lean)
                 if out is not None:
-                    return out
+                    # a cell certified FLAT is flat-reachable by definition
+                    return out + (float(m) if lean == 0.0
+                                  else _flat_best(*keep0),)
 
     # ---- the LEGACY pick, verbatim: best margin among the best six --------
     for cand in cand_sets:
@@ -367,7 +402,9 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
             if not ok[n]:
                 continue
             if _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
-                return _pack(m, q, tilt_deg, n_sol, valid, -1.0)
+                return _pack(m, q, tilt_deg, n_sol, valid, -1.0) + (
+                    float(m) if tilt_deg == 0.0
+                    else (_flat_best(*keep0) if keep0 else -1.0),)
     return None
 
 
@@ -394,7 +431,7 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
             r = solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext, boxes,
                            pen_lat=pen_lat, gate_groups=gate_groups)
             if r is not None:
-                rows.append([x, y, *r[:7], *r[7], r[8]])
+                rows.append([x, y, *r[:7], *r[7], r[8], r[9]])
     arr = np.array(rows) if rows else np.zeros((0, len(COLUMNS)))
     out = Path(out_dir) / f"atlas_arm{arm_id}.npz"
     out.parent.mkdir(parents=True, exist_ok=True)
