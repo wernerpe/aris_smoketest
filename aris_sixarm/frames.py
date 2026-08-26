@@ -263,6 +263,48 @@ def joint_axes_many(qs):
     return zs, ps, T @ F
 
 
+# --- the LINK frames, not just the chain points ---------------------------
+# `fk` walks the modified-DH chain and keeps each step's ORIGIN, which is all a
+# capsule drawn about the chain's own segments ever needed.  A capsule drawn
+# about a LINK's own metal — which is what `selfcoll` measures, because the
+# metal's principal axis is nothing like the segment between two joint origins
+# — needs the whole transform, and so does anything that wants to pose the
+# manufacturer's meshes.  Index i is link i for i in 0..7, 8 is the flange
+# (link8) and 9 is the hand frame: the same order and the same frames
+# `scripts/collision_audit.py` names in `FRAMES`, which is the order the
+# meshes are delivered in.  `out[:, 9] @ trans(0, 0, D_HAND_TCP)` is `fk`'s
+# `T`, and `out[:, i, :3, 3]` is `fk`'s point i, both bit for bit
+# (tests/test_selfcoll.py pins them).
+LINK_FRAMES = ("link0", "link1", "link2", "link3", "link4", "link5", "link6",
+               "link7", "link8", "hand")
+
+
+def link_frames_many(qs, tcp=TCP_D):
+    """Per-link frames of the FR3 chain in link0. (N,7) -> (N,10,4,4)."""
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    N = len(qs)
+    out = np.empty((N, 10, 4, 4))
+    T = np.tile(np.eye(4), (N, 1, 1))
+    out[:, 0] = T
+    for i, (al, a, d) in enumerate(DH):
+        ca, sa = np.cos(al), np.sin(al)
+        ct, st = np.cos(qs[:, i]), np.sin(qs[:, i])
+        A = np.zeros((N, 4, 4))
+        A[:, 0, 0], A[:, 0, 1], A[:, 0, 3] = ct, -st, a
+        A[:, 1, 0], A[:, 1, 1], A[:, 1, 2], A[:, 1, 3] = st * ca, ct * ca, -sa, -sa * d
+        A[:, 2, 0], A[:, 2, 1], A[:, 2, 2], A[:, 2, 3] = st * sa, ct * sa, ca, ca * d
+        A[:, 3, 3] = 1.0
+        T = T @ A
+        out[:, i + 1] = T
+    F = np.eye(4)
+    F[2, 3] = tcp - D_HAND_TCP                 # link7 -> flange (link8)
+    out[:, 8] = out[:, 7] @ F
+    c, s = np.cos(-np.pi / 4), np.sin(-np.pi / 4)
+    R = np.array([[c, -s, 0, 0], [s, c, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]])
+    out[:, 9] = out[:, 8] @ R                  # the flange twist -> hand frame
+    return out
+
+
 def joint_margin(q):
     """Worst distance to a joint limit (rad). Strict comfort gate: >= 0.30."""
     return float(np.min(np.minimum(q - FR3_MIN, FR3_MAX - q)))

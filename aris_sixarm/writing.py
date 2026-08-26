@@ -884,6 +884,13 @@ def static_gate(spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, floor=None,
         Q = np.asarray(Q, float).reshape(-1, 7)
         cz, _, sc = paper.chain_screen(Q, spec, pen_ext, h_inv, boxes)
         good = (cz >= paper.CHAIN_CLEAR - paper.EPS) & (sc >= fl - paper.EPS)
+        # ...AND THE ARM AGAINST ITSELF.  A hover is a pose nobody drew with:
+        # `lifted_config`'s only gate is the joint margin, and this score is
+        # the whole of the rest.  A pen-up that lifts into a fold would have
+        # passed everything (`aris_sixarm/selfcoll.py`).
+        from . import selfcoll
+        good &= selfcoll.self_ok(Q, margin=selfcoll.SELF_PLAN_MARGIN,
+                                 pen_ext=pen_ext)
         return np.where(good, np.minimum(sc, cap), -np.inf)
     score.cap = cap          # `hover_solve` reads it to decide when to widen
     return score

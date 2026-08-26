@@ -32,8 +32,8 @@ import numpy as np
 
 from . import ik
 from . import rig_final
-from .frames import (fk, rotx, rotz, PEN_EXT, joint_margin, FR3_MIN, FR3_MAX,
-                     lat_of, tool_offset)
+from .frames import (fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin, FR3_MIN,
+                     FR3_MAX, lat_of, tool_offset)
 from .metrics import tip_jacobian, sigma_min as _sigma_min
 
 HARD_MARGIN = 0.15        # node gate, rad (permissive tier)
@@ -98,6 +98,40 @@ def clip_to_sheet(pts, border=0.02, verbose=True, return_slice=False,
     return (pts[i0:i1], slice(i0, i1)) if return_slice else pts[i0:i1]
 
 
+# THE PEN'S LEAN, AS A TOOL-FRAME ROTATION (2026-08-26)
+# ------------------------------------------------------
+# `tilt` is a 2-vector in the TOOL's own xy plane: the rotation axis is
+# (tx, ty, 0) in tool coordinates and the lean is its magnitude in radians, so
+# `R_tilted = R @ rot_axis(...)`.  POST-multiplication, deliberately, and not
+# the world-frame pre-multiplication `tilt.py` uses: with the inline pen the
+# two span the same set of pen directions because tool yaw is a q7 shift and
+# free, and with the LATERAL holder they do not — a world-frame lean would
+# swing the 11 cm bracket somewhere the atlas never looked.  `atlas._candidates`
+# leans the same way (`rot_axis(R @ ax, a) @ R` is exactly `R @ rot_axis(ax,
+# a)`), so a lean the atlas certified is a lean this lattice can reproduce.
+#
+# The pen axis is the tool's z, and a rotation about an axis in the xy plane
+# moves it by exactly |tilt| — so |tilt| IS the lean from vertical that
+# `validate._pen_lean_deg` will measure back off the FK.
+def tool_lean(R, tilt=None):
+    """Tool-frame lean of a tool rotation. `tilt` = (tx, ty) rad -> (3,3)."""
+    if tilt is None:
+        return R
+    t = np.asarray(tilt, float).reshape(2)
+    a = float(np.hypot(t[0], t[1]))
+    if a < 1e-12:
+        return R
+    return R @ rot_axis(np.array([t[0] / a, t[1] / a, 0.0]), a)
+
+
+def lean_deg(tilt=None):
+    """The lean `tilt` commands, in degrees."""
+    if tilt is None:
+        return 0.0
+    t = np.asarray(tilt, float).reshape(2)
+    return float(np.rad2deg(np.hypot(t[0], t[1])))
+
+
 Z_PAPER = 0.02            # m, chain points must stay this far above the paper
 BOOM_R = 0.12             # m, inverted-mount boom cylinder radius (base frame)
 BOOM_Z = -0.02            # m, below which the boom cylinder is an obstacle
@@ -111,7 +145,7 @@ def _lattice_setup(spec, h_inv, n_q7):
 
 
 def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
-                  clearance=True, pen_lat=None, phi=0.0):
+                  clearance=True, pen_lat=None, phi=0.0, tilt=None):
     """IK + gate the whole (s x q7 x branch) lattice for a vertical pen.
 
     Returns dict of arrays: Q (Ns,Nq,4,7), valid/margin/sigma (Ns,Nq,4).
@@ -141,11 +175,11 @@ def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
     """
     impl = _build_lattice_batch if ik.has_batch() else _build_lattice_scalar
     return impl(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
-                lat_of(pen_lat), float(phi))
+                lat_of(pen_lat), float(phi), tilt)
 
 
 def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
-                         pen_lat=0.0, phi=0.0):
+                         pen_lat=0.0, phi=0.0, tilt=None):
     """Vectorised `build_lattice`.  Numerically identical to the scalar path.
 
     The gates are ANDs over independent per-node quantities, so applying them
@@ -157,7 +191,7 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
     pts = np.asarray(pts_xy, float)
     Ns = len(pts)
     off = tool_offset(pen_ext, pen_lat)   # tip = TCP + R @ off
-    R_w = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)   # pen straight down
+    R_w = tool_lean(rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi), tilt)
 
     # (a) every (step, q7) target pose, in one (Ns*Nq, 16) array.  Row order is
     #     i*Nq + j so a reshape recovers the lattice axes.
@@ -201,6 +235,14 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
             # STRICTLY TIGHTER THAN THE CHECKER, see rig_final.STATIC_PLAN_MARGIN
             keep &= (rig_final.chain_static_clearance(P10, boxes)
                      >= rig_final.STATIC_PLAN_MARGIN)
+        # ...AND THE ARM AGAINST ITSELF (2026-08-26).  Nothing in this package
+        # checked that until the day the pen was allowed to lean; see
+        # `aris_sixarm/selfcoll.py`.  It costs the certified maps nothing (no
+        # pose of the shipped atlas fails it, the tightest holds 63.7 mm) and
+        # it is the only gate here that a leaning lattice node can newly need.
+        from . import selfcoll
+        keep &= selfcoll.self_ok(q, margin=selfcoll.SELF_PLAN_MARGIN,
+                                 pen_ext=pen_ext, pen_lat=pen_lat)
         idx, q, m = idx[keep], q[keep], m[keep]
 
     # (e) controllability: analytic tip Jacobians, one batched SVD
@@ -221,11 +263,12 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
     return dict(Q=Qo.reshape(*shape, 7), valid=vo.reshape(shape),
                 margin=mo.reshape(shape), sigma=so.reshape(shape), q7s=q7s,
                 yaw=float(phi), phi=float(phi), pen_lat=float(pen_lat),
+                tilt=None if tilt is None else tuple(map(float, tilt)),
                 Twb=Twb, pts=pts, pen_ext=pen_ext, spec=spec)
 
 
 def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
-                          pen_lat=0.0, phi=0.0):
+                          pen_lat=0.0, phi=0.0, tilt=None):
     """The original nested-loop lattice: one pybind crossing and one
     finite-difference Jacobian per node.  Still the fallback wherever the
     extension has no batch entry points, and the reference the batched path is
@@ -233,7 +276,7 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
     Twb, Twb_inv, q7s = _lattice_setup(spec, h_inv, n_q7)
     Ns = len(pts_xy)
     off = tool_offset(pen_ext, pen_lat)
-    R_w = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)
+    R_w = tool_lean(rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi), tilt)
     Q = np.full((Ns, n_q7, N_BRANCH, 7), np.nan)
     valid = np.zeros((Ns, n_q7, N_BRANCH), bool)
     marg = np.full((Ns, n_q7, N_BRANCH), -1.0)
@@ -273,6 +316,11 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
                         if (rig_final.chain_static_clearance(P10, boxes)[0]
                                 < rig_final.STATIC_PLAN_MARGIN):
                             continue
+                    from . import selfcoll          # the arm against itself
+                    if not selfcoll.self_ok(
+                            q[None], margin=selfcoll.SELF_PLAN_MARGIN,
+                            pen_ext=pen_ext, pen_lat=pen_lat)[0]:
+                        continue
                 s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext,
                                             pen_lat=pen_lat))
                 if s < HARD_SIGMA:
@@ -283,6 +331,7 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
                 sig[i, jq, kb] = s
     return dict(Q=Q, valid=valid, margin=marg, sigma=sig, q7s=q7s,
                 yaw=float(phi), phi=float(phi), pen_lat=float(pen_lat),
+                tilt=None if tilt is None else tuple(map(float, tilt)),
                 Twb=Twb, pts=np.asarray(pts_xy, float), pen_ext=pen_ext, spec=spec)
 
 

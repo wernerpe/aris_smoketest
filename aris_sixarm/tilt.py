@@ -381,6 +381,12 @@ def extend_lattice(lat, cells, clearance=True):
             k = _frame_clear(P10, boxes)
             idx, q, m, s = idx[k], q[k], m[k], s[k]
 
+    if len(idx):                       # ...and the arm against itself
+        from . import selfcoll
+        k = selfcoll.self_ok(q, margin=selfcoll.SELF_PLAN_MARGIN,
+                             pen_ext=pen_ext)
+        idx, q, m, s = idx[k], q[k], m[k], s[k]
+
     Qf = lat["Q"].reshape(-1, 7)
     Qf[idx] = q
     lat["valid"].reshape(-1)[idx] = True

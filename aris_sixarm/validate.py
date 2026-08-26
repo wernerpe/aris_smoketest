@@ -56,6 +56,81 @@ BOOM_R = 0.12            # m, inverted-mount boom cylinder radius (base frame)
 BOOM_Z = -0.02           # m, below which the boom cylinder is an obstacle
 EPS = 1e-6               # float slack on the gates
 
+# --- the arm against itself, re-derived here (2026-08-26) -----------------
+# `selfcoll` is the producers' implementation; this is the certificate's, and
+# the two share nothing but the MEASURED table and `frames`.  The table is a
+# mesh measurement (`scripts/self_collision_audit.py`, pinned against
+# out/self_collision_audit.json) and restating 29 fitted capsules by hand would
+# add typos, not independence — what has to be independent is the DERIVATION,
+# and all of it is below: this module builds its own capsule endpoints, its own
+# segment distance, its own pair list from its own chain-distance rule, and
+# holds them to its own copy of the margin.  `tests/test_selfcoll.py` runs the
+# two against each other over thousands of configurations.
+SELF_MARGIN = 0.020      # m, restated from selfcoll.SELF_MARGIN on purpose
+SELF_CHAIN_D = 4         # joints of separation below which the mechanism owns
+#                          the pair; restated from selfcoll.WATCH_CHAIN_D
+
+
+def _self_pairs(caps):
+    pos = dict(link0=0, link1=1, link2=2, link3=3, link4=4, link5=5, link6=6,
+               link7=7, hand=8, tool=8)
+    body = [c[0] for c in caps] + ["tool", "tool"]
+    n = len(body)
+    return [(i, j) for i in range(n) for j in range(i + 1, n)
+            if abs(pos[body[j]] - pos[body[i]]) >= SELF_CHAIN_D]
+
+
+def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
+    """Worst gap between two bodies of one arm, own derivation. (N,7) -> (N,)"""
+    from .frames import D_HAND_TCP, link_frames_many
+    from .selfcoll import BODY_CAPSULES, TOOL_R_INLINE, TOOL_R_LAT
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    if not len(qs):
+        return np.zeros(0)
+    lat = lat_of(pen_lat)
+    T = link_frames_many(qs)
+    A, B, R = [], [], []
+    for _, _, f, a, b, r in BODY_CAPSULES:
+        Rf, tf = T[:, f, :3, :3], T[:, f, :3, 3]
+        A.append(Rf @ np.asarray(a, float) + tf)
+        B.append(Rf @ np.asarray(b, float) + tf)
+        R.append(r)
+    Rf, tf = T[:, 9, :3, :3], T[:, 9, :3, 3]
+    rt = TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE
+    tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
+    cor = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf
+    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + float(pen_ext)]) + tf
+    A += [tcp, cor]
+    B += [cor, tip]
+    R += [rt, rt]
+    out = np.full(len(qs), np.inf)
+    for i, j in _self_pairs(BODY_CAPSULES):
+        out = np.minimum(out, _seg_seg(A[i], B[i], A[j], B[j]) - R[i] - R[j])
+    return out
+
+
+def _seg_seg(p0, p1, q0, q1):
+    """Segment-to-segment distance, by DENSE SAMPLING of one segment against
+    the other's exact point-to-segment distance, plus the sampling residual.
+
+    Own derivation on purpose, and deliberately not the closed form the
+    producers use: a bound that samples every <= 5 mm and subtracts half a step
+    cannot share an algebra bug with a stationary-point solve, and the capsules
+    here are 0.04-0.19 m long so 64 samples is well under that.
+    """
+    K = 64
+    ts = np.linspace(0.0, 1.0, K)
+    P = p0[:, None, :] + ts[:, None] * (p1 - p0)[:, None, :]
+    ab = q1 - q0
+    den = np.sum(ab * ab, -1)[:, None]
+    t = np.where(den > 1e-15,
+                 np.einsum("nkj,nj->nk", P - q0[:, None, :], ab)
+                 / np.where(den > 1e-15, den, 1.0), 0.0)
+    t = np.clip(t, 0.0, 1.0)
+    d = P - (q0[:, None, :] + t[..., None] * ab[:, None, :])
+    lo = np.sqrt(np.sum(d * d, -1)).min(axis=1)
+    return lo - np.linalg.norm(p1 - p0, axis=-1) / (2 * (K - 1))
+
 
 def _dist_to_polyline(P, poly):
     """Per-point distance from (M,2) points to a (N,2) polyline (segments)."""
@@ -249,6 +324,11 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
                 worst["min_frame_clearance"] = float(c.min())
                 for i in np.flatnonzero(c < rig_final.STATIC_MARGIN - eps):
                     add("frame_keepout", i, float(c[i]), rig_final.STATIC_MARGIN)
+            # ---- 4d. and the arm against itself ------------------------
+            sc = self_clearance(qs, pen_ext=pen_ext, pen_lat=pen_lat)
+            worst["min_self_clearance"] = float(sc.min())
+            for i in np.flatnonzero(sc < SELF_MARGIN - eps):
+                add("self_collision", i, float(sc[i]), SELF_MARGIN)
 
         # ---- 5. the clock --------------------------------------------------
         if times is not None:
@@ -334,6 +414,11 @@ def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
             if c < rig_final.STATIC_MARGIN - eps:
                 V.append(dict(kind="frame_keepout", index=0, value=c,
                               limit=rig_final.STATIC_MARGIN))
+        sc = float(self_clearance(q, pen_ext=pen_ext, pen_lat=pen_lat)[0])
+        worst["min_self_clearance"] = sc
+        if sc < SELF_MARGIN - eps:
+            V.append(dict(kind="self_collision", index=0, value=sc,
+                          limit=SELF_MARGIN))
     except Exception:                                  # never raise (see module doc)
         V.append(dict(kind="validator_error", index=-1, value=0.0, limit=0.0,
                       traceback=traceback.format_exc()))

@@ -681,7 +681,18 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 # so a span inside one of them never reaches the conductor at all.
 PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
                       17: (0.62, 0.20, -45.9), 31: (0.62, 0.30, 150.0),
-                      71: (0.30, 0.55, -60.0), 97: (0.62, 0.20, 45.9)}
+                      71: (0.62, 0.20, -60.0), 97: (0.62, 0.20, 45.9)}
+# ARM 71 MOVED, AND THE REASON IS A GATE THAT DID NOT EXIST (2026-08-26).
+# It used to park at (0.30, 0.55, -60.0): a 0.30 m radius and a 0.55 m hover,
+# the shortest reach and the highest lift in the fleet, which is a posture that
+# folds the wrist back over the arm's own base.  Nothing ever looked, because
+# nothing in this package checked an arm against ITSELF — and the manufacturer's
+# meshes put 26.9 mm of air between link6 and link0 at that pose, the tightest
+# self-approach anywhere in the shipped configuration set, held for the whole
+# of every phase arm 71 does not draw in.  `aris_sixarm/selfcoll.py` refuses it.
+# The repair is the smallest one available: SAME BEARING, and the (0.62, 0.20)
+# radius and hover four of the other five arms already use.  It certifies with
+# 190.3 mm of model clearance, and no other arm's pose changes by a digit.
 
 # THE PARKED FLEET: `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
 # PARK_GRID_PROPOSED)`, baked the way `frames.Q_READY_*` are baked and for the
@@ -697,6 +708,11 @@ PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
 # parked, because the bearing search no longer has to buy clearance with
 # height.
 #
+# ...AND RE-DERIVED AGAIN THE SAME DAY, once `check_pose` learned to ask
+# whether an arm is inside itself.  Only arm 71 moved; see the note by
+# PARK_GRID_PROPOSED for what it was doing and what the meshes measured.  The
+# self-clearances of the six are now 102-190 mm.
+#
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 Q_PARK_PROPOSED = {
@@ -704,7 +720,7 @@ Q_PARK_PROPOSED = {
     13: (0.6776, 1.0744, -1.5633, -2.1141, -2.0017, 1.3162, 0.5932),
     17: (-0.6777, -1.0400, -1.5916, -2.1168, 2.0272, 1.2889, 0.9886),
     31: (-0.5776, 1.1469, 1.2019, -1.7054, 1.9749, 1.1800, 2.1750),
-    71: (-0.1637, -1.4052, -2.4461, -2.5861, 0.8489, 1.0011, -1.7795),
+    71: (0.2177, -1.0513, -1.7899, -1.6846, 2.0788, 1.3245, -1.7795),
     97: (0.6776, -1.0744, 1.5783, -2.1141, -2.0017, 1.3162, 0.5932),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
@@ -713,7 +729,8 @@ PARK_HOVER_PROPOSED = {
     97: (1.638, 3.471),                         # hover 0.20 m
     31: (0.060, 2.125),                         # hover 0.30 m
     2:  (0.214, 3.421),                         # hover 0.35 m
-    71: (1.357, 1.556),                         # hover 0.55 m
+    71: (1.517, 1.278),                         # hover 0.20 m (moved: see
+    #                                             PARK_GRID_PROPOSED)
 }
 
 

@@ -253,6 +253,68 @@ def pair_clearance(Pi, Pj, radii=RADII):
     return d.reshape(d.shape[:-2] + (-1,)).min(-1)
 
 
+# ==========================================================================
+# ...AND THE ARM AGAINST ITSELF
+# ==========================================================================
+# The third question, and until 2026-08-26 nobody asked it: `pair_clearance`
+# above is arm i against arm j and is only ever called with i != j;
+# `static_clearance_lb` is the chain against somebody else's steel.  An arm
+# folded into its own shoulder passed every gate in this file.
+#
+# Restated here the way everything else in this module is restated: its own
+# margin literal, its own chain-distance rule, its own capsule endpoints, and
+# THIS module's own `segment_distance` — which is a closed form, where
+# `validate.self_clearance` samples and `selfcoll` solves the stationary point
+# with different code again.  What is NOT restated is the 29-row capsule table,
+# because that is a mesh MEASUREMENT (`scripts/self_collision_audit.py`, pinned
+# against out/self_collision_audit.json) and hand-copying 232 fitted numbers
+# would buy typos rather than independence.
+SELF_MARGIN = 0.020                  # m; mirrors selfcoll.SELF_MARGIN
+SELF_CHAIN_D = 4                     # joints; mirrors selfcoll.WATCH_CHAIN_D
+_CHAIN_POS = dict(link0=0, link1=1, link2=2, link3=3, link4=4, link5=5,
+                  link6=6, link7=7, hand=8, tool=8)
+
+
+def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
+    """Worst gap between two bodies of ONE arm. (N,7) -> (N,).  Own derivation.
+
+    Base frame throughout: a rigid motion of the whole arm cannot change the
+    answer, so no `T_world_base` is consulted and a frozen arm no timeline
+    mentions is checkable from its joints alone.
+    """
+    from .frames import D_HAND_TCP, link_frames_many
+    from .selfcoll import BODY_CAPSULES, TOOL_R_INLINE, TOOL_R_LAT
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    if not len(qs):
+        return np.zeros(0)
+    lat = _frames.PEN_LAT if pen_lat is None else float(pen_lat)
+    T = link_frames_many(qs)
+    A, B, R, body = [], [], [], []
+    for name, _, f, a, b, r in BODY_CAPSULES:
+        Rf, tf = T[:, f, :3, :3], T[:, f, :3, 3]
+        A.append(Rf @ np.asarray(a, float) + tf)
+        B.append(Rf @ np.asarray(b, float) + tf)
+        R.append(r)
+        body.append(name)
+    Rf, tf = T[:, 9, :3, :3], T[:, 9, :3, 3]
+    tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
+    cor = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf
+    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + float(pen_ext)]) + tf
+    rt = TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE
+    A += [tcp, cor]
+    B += [cor, tip]
+    R += [rt, rt]
+    body += ["tool", "tool"]
+    out = np.full(len(qs), np.inf)
+    for i in range(len(A)):
+        for j in range(i + 1, len(A)):
+            if abs(_CHAIN_POS[body[j]] - _CHAIN_POS[body[i]]) < SELF_CHAIN_D:
+                continue
+            out = np.minimum(out, segment_distance(A[i], B[i], A[j], B[j])
+                             - R[i] - R[j])
+    return out
+
+
 def static_clearance_lb(P, boxes, step=0.02):
     """LOWER BOUND on capsule-to-frame-box clearance — own derivation.
 
@@ -411,12 +473,22 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
         col_clear[a] = d
         if d < margin:
             col_bad.append(a)
-    ok = bool(worst >= margin and bad == 0 and not col_bad)
+    # ...and each arm against ITSELF, by this module's own derivation
+    self_clear, self_bad = {}, []
+    for a in arms:
+        d = float(self_clearance(np.asarray(q_by_arm[a], float).reshape(1, 7),
+                                 pen_len(pen_ext, a))[0])
+        self_clear[a] = d
+        if d < SELF_MARGIN:
+            self_bad.append(a)
+    ok = bool(worst >= margin and bad == 0 and not col_bad and not self_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, poses=poses, poses_failed=int(bad),
                pen_below_paper=sorted(dipped),
                column_clearance={int(a): v for a, v in col_clear.items()},
                column_failed=sorted(col_bad),
+               self_clearance={int(a): v for a, v in self_clear.items()},
+               self_failed=sorted(self_bad),
                per_pair={f"{i}-{j}": v for (i, j), v in per_pair.items()})
     if verbose:
         print(f"scene_check(static): {len(arms)} arms, min clearance "
@@ -645,9 +717,25 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                     arm=a, seg=k, ok=bool(rep["ok"]), cone_deg=cone,
                     lean_deg=float(rep["worst"].get("max_lean_deg", 0.0))))
 
+    # EVERY FRAME OF EVERY ARM AGAINST ITSELF.  Like the frame and paper gates
+    # this covers the transits and the hovers no per-segment validator sees —
+    # and a pen-up flown as a straight line in joint space is exactly where an
+    # arm would fold through itself, since `writing.py` says in as many words
+    # that its interpolation "makes no collision or self-collision guarantee".
+    # Same 1-Lipschitz sweep residual as the neighbours: the bound has to hold
+    # BETWEEN the fine samples and not only at them.
+    self_lo, self_bad = {}, []
+    for a in arms:
+        d = self_clearance(np.asarray(fine[a], float), pen_len(pen_ext, a)) \
+            - 0.55 * stepd[a]
+        k = int(np.argmin(d))
+        self_lo[a] = float(d[k])
+        if d[k] < SELF_MARGIN:
+            self_bad.append(a)
+
     ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
               and min(lim.values()) > 0.0 and not frame_bad and not paper_bad
-              and not col_bad)
+              and not col_bad and not self_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
                                               per_pair.items()},
@@ -666,10 +754,17 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                paper_tip_margin=float(PAPER_TIP),
                paper_failed=sorted(paper_bad),
                column_clearance={int(a): v for a, v in col_clear.items()},
-               column_failed=sorted(col_bad))
+               column_failed=sorted(col_bad),
+               self_clearance={int(a): v for a, v in self_lo.items()},
+               self_margin=float(SELF_MARGIN),
+               self_failed=sorted(self_bad))
     if verbose:
         print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
               f"{len(arms)} arms, {len(per_pair)} pairs")
+        if self_lo:
+            print(f"  self-collision: worst {1000 * min(self_lo.values()):.1f} mm"
+                  f" (margin {1000 * SELF_MARGIN:.0f} mm)"
+                  + (f" FAIL {self_bad}" if self_bad else ""))
         print(f"  min inter-arm clearance {worst * 1000:.1f} mm "
               f"(margin {margin * 1000:.0f} mm)"
               + (f" at t={worst_at[2]:.2f} s between arms {worst_at[0]} and "

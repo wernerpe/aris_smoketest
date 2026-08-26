@@ -285,30 +285,34 @@ def test_the_park_probe_finds_an_arm_standing_in_its_own_depot():
     p = _probe([13, 17, 31, 71, 2, 97])
     margin = coordination.SAFETY_M + coordination.CALIB_M
     assert p and p.partners(31) == [2, 13, 17, 71, 97]
-    # arm 71's own park pose, offered to arm 71: its own depot is not an
+    # arm 31's own park pose, offered to arm 31: its own depot is not an
     # obstacle to itself, so the only partners are the other five
-    q71 = np.asarray(fl[71].q_seed, float)[None, :]
-    assert p.clearance(71, q71) >= margin
-    # ...and the SAME pose flown by its transverse partner 31 is refused:
-    # 31 reaching into 71's depot comes within the conductor's margin of the
-    # arm that is standing there
-    assert p.clearance(31, q71) < margin
-    assert p.blocked(31, dict(stroke_id=0, s_range=(0.0, 1.0),
-                              plan=dict(qs=q71))) is True
+    #
+    # THE ROLES ARE 31-PARKED / 71-INTRUDING, and they used to be the other way
+    # round.  Arm 71 moved out of the huddle on 2026-08-26 (see the note by
+    # `layout.PARK_GRID_PROPOSED`: its old depot had the wrist 26.9 mm from its
+    # own base), and its new one is far enough out that arm 31 reaching it
+    # clears by 95 mm.  The pair is still transverse and the depot is still a
+    # wall — it is arm 31's depot that arm 71 cannot fly into now.
+    q31 = np.asarray(fl[31].q_seed, float)[None, :]
+    assert p.clearance(31, q31) >= margin
+    assert p.clearance(71, q31) < margin
+    assert p.blocked(71, dict(stroke_id=0, s_range=(0.0, 1.0),
+                              plan=dict(qs=q31))) is True
 
 
 def test_the_park_probe_respects_who_is_drawing_at_the_same_time():
     """An arm in the mover's own group is NOT parked: it has a programme, and
     the conductor is the thing that keeps two movers apart."""
     from aris_sixarm import layout
-    q71 = np.asarray(layout.FLEET_PROPOSED[71].q_seed, float)[None, :]
+    q31 = np.asarray(layout.FLEET_PROPOSED[31].q_seed, float)[None, :]
     margin = coordination.SAFETY_M + coordination.CALIB_M
     solo = _probe([2, 13, 17, 31, 71, 97], groups=[[a] for a in
                                                    (2, 13, 17, 31, 71, 97)])
     together = _probe([2, 13, 17, 31, 71, 97], groups=[[31, 71], [2, 13, 17, 97]])
-    assert solo.clearance(31, q71) < margin
-    assert 71 not in together.partners(31)
-    assert together.clearance(31, q71) >= margin, \
+    assert solo.clearance(71, q31) < margin
+    assert 31 not in together.partners(71)
+    assert together.clearance(71, q31) >= margin, \
         "a co-active partner must not be treated as a wall"
     # ...and with nobody parked at all the probe is silent and free
     assert not allocate.ParkProbe({}, {}, {})
@@ -319,14 +323,14 @@ def test_the_park_probe_memoises_and_is_cheap():
     """It is charged against the allocator's latency budget, so a span priced
     twice is probed once."""
     from aris_sixarm import layout
-    q = np.asarray(layout.FLEET_PROPOSED[71].q_seed, float)
-    p = _probe([2, 13, 17, 71, 97])
+    q = np.asarray(layout.FLEET_PROPOSED[31].q_seed, float)
+    p = _probe([2, 13, 17, 31, 97])
     e = dict(stroke_id=7, s_range=(0.0, 1.0),
              plan=dict(qs=np.repeat(q[None, :], 40, axis=0)))
     t0 = time.time()
-    assert p.blocked(31, e) is True
+    assert p.blocked(71, e) is True
     once = time.time() - t0
-    assert p.blocked(31, e) is True
+    assert p.blocked(71, e) is True
     assert p.stats["probes"] == 1 and p.stats["cached"] == 1
     assert p.stats["blocked"] == 1
     assert once < 1.0, f"one 40-sample probe took {once:.2f} s"
@@ -340,11 +344,11 @@ def test_the_park_probe_covers_the_gap_between_path_samples():
     fl = layout.FLEET_PROPOSED
     q31 = np.asarray(fl[31].q_seed, float)
     q71 = np.asarray(fl[71].q_seed, float)
-    p = _probe([71])
-    fine = p.clearance(31, np.linspace(q31, q71, 200))
-    coarse = p.clearance(31, np.linspace(q31, q71, 3))
+    p = _probe([31])
+    fine = p.clearance(71, np.linspace(q71, q31, 200))
+    coarse = p.clearance(71, np.linspace(q71, q31, 3))
     margin = coordination.SAFETY_M + coordination.CALIB_M
-    assert fine < margin, "the path ends inside arm 71's depot"
+    assert fine < margin, "the path ends inside arm 31's depot"
     assert coarse <= fine + 1e-9, \
         "a coarser sampling must not report MORE clearance than a fine one"
 
