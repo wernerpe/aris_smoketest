@@ -940,6 +940,44 @@ def residual_passes(a, phases, share=None, rounds=0, min_gain=None):
     return out, refused + holes(prev)
 
 
+def rescue_groups(a, ph, near=None):
+    """A phase the conductor refused, re-offered as fewer arms. -> [phase].
+
+    Empty when there is nothing coarser to try — one arm already, or an arm
+    grouping that would hand back the phase unchanged.
+
+    The ladder is `arm_groups`' own: the DISJOINT colouring first (on the
+    proposed rig's 2 x 3 grid that is the two columns, because the transverse
+    pairs at 0.61 m are the only edges), and singletons after it.  A group the
+    conductor refuses in turn arrives back here and is offered ITS groups, so
+    a refused column becomes three solos without anything special being
+    written for the second level.
+
+    NOTHING IS RE-ALLOCATED.  `split_by_arms` restricts a result to a subset of
+    its arms; who draws what and in which order is untouched, because an arm's
+    programme was sequenced without reference to any other arm's.  What changes
+    is only WHEN each arm draws — which is exactly the thing the conductor
+    refused — so this cannot move a metre of ink between arms and cannot invent
+    one.  The allocation was made with the parked fleet of the run's own
+    grouping and a rescue parks MORE arms than that, which is why it is a
+    RESCUE and not a plan: the conductor still rules on every group, and the
+    ones it refuses cost their own ink and nothing else.
+    """
+    near = float(getattr(a, "arm_phase_near", 0.70) if near is None else near)
+    arms = [int(x) for x in ph.get("arms", ()) if ph["programs"].get(x)]
+    if len(arms) < 2:
+        return []
+    for mode in ("disjoint", "solo"):
+        groups = [g for g in (arm_groups(mode, arms, near) or []) if g]
+        # a "grouping" that is one group is the phase that was just refused
+        if len(groups) < 2:
+            continue
+        parts = allocate.split_by_arms(ph, groups)
+        if len(parts) > 1:
+            return parts
+    return []
+
+
 def phase_by_arms(phases, alt, groups):
     """Split every phase by arm group. -> (phases, alt), indices re-mapped."""
     out, new_alt = [], {}
@@ -1194,9 +1232,18 @@ def build_phases(a, phases, dt, pens, alt=None):
     # it.  So an intermediate pass goes home — which is also what a human
     # walking in to swap the pens would ask for — and the LAST pass, the one
     # with nothing after it, freezes.
+    #
+    # A WORK LIST RATHER THAN A LOOP OVER `phases`, because a phase the
+    # conductor refuses may be re-offered as SEVERAL phases (`rescue_groups`),
+    # and the ones that produces have to be conducted right here — in order,
+    # against the same `q_start` chain and the same inter-phase hold check —
+    # rather than by a second, parallel copy of this loop.  With no rescue the
+    # queue is popped once per entry in `phases` and this is the loop it was.
     built, q_start = [], None
-    for k, ph in enumerate(phases):
-        last = k == len(phases) - 1
+    todo = [(k, ph) for k, ph in enumerate(phases)]
+    while todo:
+        k, ph = todo.pop(0)
+        last = not todo
         policy_k = a.idle_policy if (last or a.freeze_all_phases) \
             else idle.POLICY_HOME
         home_k = policy_k == idle.POLICY_HOME
@@ -1222,10 +1269,10 @@ def build_phases(a, phases, dt, pens, alt=None):
                           "home at the end: the pass after it starts from the "
                           "ready pose")
                     allocate.resequence(res, q_start=q_start, return_home=True)
-                elif k and q_start is not None \
+                elif built and q_start is not None \
                         and a.idle_policy != idle.POLICY_HOME:
                     print(f"\nre-sequencing {res['name']} from the poses pass "
-                          f"{k} froze in (the allocation is untouched)")
+                          f"{len(built)} froze in (the allocation is untouched)")
                     allocate.resequence(res, q_start=q_start,
                                         return_home=False)
             except (SystemExit, idle.Unconductable, RuntimeError) as exc:
@@ -1244,8 +1291,12 @@ def build_phases(a, phases, dt, pens, alt=None):
                 return None
 
         B = conduct(ph) if prepare(ph) else None
-        other = (alt or {}).get(k) if isinstance(alt, dict) else \
-            (alt[k] if alt and k < len(alt) else None)
+        # a RESCUE child (k is None) has no second allocation to be judged
+        # against: it is a bookkeeping restriction of a phase that was already
+        # A/B'd, drawing the same ink in the same tours
+        other = None if k is None else (
+            (alt or {}).get(k) if isinstance(alt, dict) else
+            (alt[k] if alt and k < len(alt) else None))
         if other is not None and not prepare(other):
             other = None
         if other is not None:
@@ -1270,7 +1321,8 @@ def build_phases(a, phases, dt, pens, alt=None):
                              f"{B['sch']['duration']:.1f} s")
                           + f" — {n} split(s) discarded")
                     B, ph = C, other
-                    phases[k] = other
+                    if k is not None:
+                        phases[k] = other
         if B is None:
             # A PHASE IS NOT A RUN.  With `--arm-phases` a phase is one group
             # of arms drawing part of the same picture, and a group the
@@ -1280,8 +1332,36 @@ def build_phases(a, phases, dt, pens, alt=None):
             # draws, and the coverage says what the refusal cost); refusing the
             # whole run is the honest default, because a picture missing a
             # quarter of itself is usually not the picture that was asked for.
+            # ...but FEWER ARMS AT ONCE IS A SCHEDULE, NOT AN ALLOCATION.  A
+            # refusal is the conductor saying "these arms cannot be on the
+            # paper together", and the answer to that is to put fewer of them
+            # there — which `allocate.split_by_arms` does without moving a
+            # single span between arms or re-ordering a single tour.  So the
+            # phase is re-offered as its arm groups, coarsest first, and each
+            # group that is refused in turn is re-offered as ITS groups, down
+            # to one arm on the paper at a time, which is always conductable
+            # if any schedule is.  It buys back ink at the price of a go-home
+            # and a pause per group, in the same currency as everything else
+            # here: coverage is the constraint, the clock is what pays.
+            rescue = rescue_groups(a, ph) if not getattr(
+                a, "no_rescue_grouping", False) else []
+            if rescue:
+                print(f"  !! {ph['name']} was refused with {len(ph['arms'])} "
+                      f"arms on the paper; re-offering it as {len(rescue)} "
+                      "phase(s) of fewer arms: "
+                      + "  ".join("{" + ",".join(str(x) for x in r["arm_group"])
+                                  + "}" for r in rescue))
+                for r in rescue:
+                    r["rescue_of"] = ph
+                # the parent's ink is the children's responsibility now; what
+                # none of them conducts is charged back to it below
+                ph["conducted"] = False
+                ph["skipped_m"] = float(ph["drawn_len"])
+                todo = [(None, r) for r in rescue] + todo
+                continue
             if getattr(a, "skip_unconductable", False):
                 ph["conducted"] = False
+                ph["skipped_m"] = float(ph["drawn_len"])
                 print(f"  !! SKIPPING {ph['name']}: "
                       f"{ph['drawn_len']:.4f} m of ink nobody will draw "
                       "(--skip-unconductable)")
@@ -1291,8 +1371,17 @@ def build_phases(a, phases, dt, pens, alt=None):
         B["split_kept"] = B["res"] is not other
         built.append(B)
         q_start = built[-1]["idle"]["q_end"]
+        # a rescued child pays its ink back to the parent it was cut from, so
+        # `skipped_m` ends up naming what NOBODY drew rather than the whole of
+        # a phase some of which was recovered
+        parent = ph.get("rescue_of")
+        while parent is not None:
+            parent["skipped_m"] = max(
+                0.0, float(parent.get("skipped_m", parent["drawn_len"]))
+                - float(ph["drawn_len"]))
+            parent = parent.get("rescue_of")
 
-        if k + 1 < len(phases):
+        if todo:
             hold = {aid: built[-1]["qtraj"][aid][-1] for aid in FLEET}
             rep = scene_check.check_static(hold, built[0]["sch"]["margin"],
                                            pen_ext=pens, verbose=False)
@@ -1484,6 +1573,17 @@ def schedule_args(ap):
     ap.add_argument("--reseq-tries", type=int, default=3,
                     help="times a refused phase may be re-sequenced without the "
                          "pen-up transits the conductor could not run")
+    ap.add_argument("--no-rescue-grouping", action="store_true",
+                    help="a phase the conductor refuses is DROPPED rather than "
+                         "re-offered as its arm groups.  Refusing a phase is "
+                         "the conductor saying those arms cannot share the "
+                         "paper, and the answer is fewer of them at once — "
+                         "`allocate.split_by_arms` restricts the same "
+                         "allocation to a subset of its arms without moving a "
+                         "span or re-ordering a tour, so the rescue can only "
+                         "add certified ink, at a go-home and a --pause per "
+                         "group.  Pass this to reproduce a pre-2026-08-26 "
+                         "number")
     ap.add_argument("--residual-passes", type=int, default=0,
                     metavar="N",
                     help="after the last pass, allocate WHAT IT LEFT EMPTY as "
@@ -1615,7 +1715,12 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
     summary = dict(
         profile=prof, qd_frac=float(a.qd_frac),
         skipped_phases=[p["name"] for p in skipped],
-        skipped_m=float(sum(p["drawn_len"] for p in skipped)),
+        # WHAT NOBODY DREW, not what one phase was refused: a phase re-offered
+        # as its arm groups (`rescue_groups`) is marked refused and yet most of
+        # its ink is usually drawn by the groups it became, which pay it back
+        # through `skipped_m` as they conduct.
+        skipped_m=float(sum(p.get("skipped_m", p["drawn_len"])
+                            for p in skipped)),
         name=getattr(a, "name", None), source=getattr(a, "image", None),
         inks=artwork.inks_of(strokes),
         palette={k: artwork.hex_of(k, getattr(a, "palette", None) or INK)
@@ -1623,7 +1728,19 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
         cluster=bool(getattr(a, "cluster", False)),
         band_objective=getattr(a, "band_objective", None),
         frames=nF, fps=a.fps, duration=(nF - 1) / a.fps, ink_chunks=nInk,
-        n_phases=len(phases), two_pass=len(phases) > 1,
+        # `n_phases` is what was ALLOCATED and `n_conducted` what was actually
+        # run — they differ whenever `--skip-unconductable` drops a phase, and
+        # a legend that reads the first one describes a piece nobody drew.
+        # `two_pass` is the flag every downstream reader already knows, so it
+        # keeps its name and stops lying: more than one CONDUCTED phase.
+        n_phases=len(phases), n_conducted=len(built),
+        two_pass=len(built) > 1,
+        # ...and whether any of those phase boundaries is a real PEN SWAP.  A
+        # residual pass follows its parent in the same colour and asks nothing
+        # of a human; a grey-to-orange boundary does.
+        pen_swaps=int(sum(1 for x, y in zip(built, built[1:])
+                          if (x["res"].get("ink") != y["res"].get("ink"))
+                          and y["res"].get("ink") is not None)),
         pen_swap_pause_s=(n_pause * dt if n_pause else 0.0),
         draw_speed=a.draw_speed, transit_speed=a.transit_speed,
         pens_mm={str(k): round(1000 * v, 1) for k, v in sorted(pens.items())},

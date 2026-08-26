@@ -245,12 +245,26 @@ the acceleration-limited version of the same schedule.</i><br>
 </div>
 """
 
-SWAP_NOTE = """<b>Two passes, one piece.</b>  Phase 1 lays every %(first)s line; all
-six arms then park for %(swapdur).1f s while a human swaps %(first)s pens for %(second)s;
-phase 2 lays every %(second)s line.  One pen per arm per phase &mdash; the constraint
-that is lifted is one pen per arm for the WHOLE piece, and lifting it is what
-takes the coverage to 100 %%.  Pen LENGTHS do not change at the swap: they are
-fixtures (%(pens)s).<br>"""
+# A PROGRAMME OF N PHASES DESCRIBES ITSELF; IT IS NOT ALWAYS TWO.  The note this
+# replaced was written for the grey/orange two-pass run and said "Two passes,
+# one piece" over any schedule with more than one phase — including a
+# single-ink solo run, where it invited the reader to watch a human swap grey
+# pens for grey.  A composed programme is a LIST: some boundaries are pen
+# swaps, some are the same arm taking a second tour at ink one tour could not
+# thread (`csail_schedule.residual_passes`), and the two read completely
+# differently on the floor.  So the phases are enumerated and the swaps are
+# counted rather than assumed.
+PHASE_NOTE = """<b>%(head)s</b>  %(phases)s<br>%(swap)s"""
+
+SWAP_LINE = """Every arm holds one pen per phase; what a swap lifts is one pen per
+arm for the WHOLE piece, which is what lets an arm draw ink no arm of that
+colour could reach.  Pen LENGTHS never change &mdash; they are fixtures
+(%(pens)s).<br>"""
+
+SAME_INK_LINE = """The passes after the first re-draw nothing: they are the ink no
+arm could thread into ONE tour of its own bag, handed back to the same fleet as
+a second tour from the depot.  Nobody touches the pens between them
+(%(pens)s).<br>"""
 
 
 # MeshcatVisualizer builds a geometry's path from its SCOPED name with `::`
@@ -420,23 +434,53 @@ def main():
         for a, m in ph["arm_metres"].items():
             per_arm.setdefault(int(a), []).append(
                 (ph["ink"] or "grey", float(m), int(ph["arm_segments"][a])))
-    swatch = inks.get(phase_ink[0], INK_HEX["grey"])
     for aid in fleet:
-        bits = [f"{ink} {m:.2f} m in {n} seg" for ink, m, n in per_arm.get(aid, [])
-                if n]
+        bits = [f'<span style="color:{inks.get(ink, INK_HEX["grey"])}">'
+                f"&#9632;</span> {ink} {m:.2f} m in {n} seg"
+                for ink, m, n in per_arm.get(aid, []) if n]
         rows.append(
-            f'<span style="color:{swatch}">&#9632;</span> arm {aid} '
-            f"{FLEET[aid].name} &mdash; <b>{1000 * pen_ext[aid]:.0f} mm</b> pen "
-            "&mdash; " + (" then ".join(bits) if bits
-                          else "reaches none of the drawing (idle)"))
-    swap = ""
-    if summary.get("two_pass"):
-        swap = SWAP_NOTE % dict(
-            swapdur=summary["pen_swap_pause_s"], first=phase_ink[0],
-            second=phase_ink[1] if len(phase_ink) > 1 else "the second ink",
-            pens=", ".join(f"arm {a} {v:.0f} mm"
-                           for a, v in sorted(summary["pens_mm"].items(),
-                                              key=lambda kv: int(kv[0]))))
+            f"arm {aid} {FLEET[aid].name} &mdash; "
+            f"<b>{1000 * pen_ext[aid]:.0f} mm</b> pen &mdash; "
+            + (" then ".join(bits) if bits
+               else "reaches none of the drawing (idle)"))
+    # ONE LINE PER CONDUCTED PHASE, in the order they run.  The swatch is the
+    # PHASE's ink rather than phase 0's, which is the whole point of a legend
+    # over a programme that changes colour partway through.
+    ph_bits = []
+    for i, ph in enumerate(summary["phases"]):
+        who = sorted((int(a) for a, n in ph["arm_segments"].items() if n))
+        ink = ph.get("ink") or "grey"
+        ph_bits.append(
+            f'<span style="color:{inks.get(ink, INK_HEX["grey"])}">&#9632;</span> '
+            f"<b>{i + 1}.</b> {ph['name']} &mdash; "
+            f"{len(who)} arm{'s' if len(who) != 1 else ''} "
+            f"({','.join(str(x) for x in who)}), "
+            f"{ph['drawn_m']:.2f} m in {ph['duration_s']:.1f} s")
+    n_ph = len(summary["phases"])
+    # `pen_swaps` is written by schedules from 2026-08-26 on; an older summary
+    # is asked the same question of its own phase list rather than defaulted to
+    # zero, which would describe a grey-then-orange run as needing no human.
+    n_swap = int(summary["pen_swaps"]) if "pen_swaps" in summary else sum(
+        1 for x, y in zip(summary["phases"], summary["phases"][1:])
+        if y.get("ink") is not None and x.get("ink") != y.get("ink"))
+    head = (f"{n_ph} phases, one piece." if n_ph > 1 else "One phase.")
+    pens_s = ", ".join(f"arm {a} {v:.0f} mm"
+                       for a, v in sorted(summary["pens_mm"].items(),
+                                          key=lambda kv: int(kv[0])))
+    tail = ""
+    if n_ph > 1:
+        gap = summary.get("pen_swap_pause_s", 0.0)
+        tail = (f"The fleet parks for {gap:.1f} s between phases"
+                + (f", and {n_swap} of those {n_ph - 1} boundaries is a real "
+                   "pen swap for a human to make. " if n_swap == 1 else
+                   f", and {n_swap} of those {n_ph - 1} boundaries are real "
+                   "pen swaps for a human to make. " if n_swap else
+                   ", and none of those boundaries needs a human: the ink "
+                   "never changes. "))
+        tail += (SWAP_LINE % dict(pens=pens_s) if n_swap
+                 else SAME_INK_LINE % dict(pens=pens_s))
+    swap = "" if n_ph <= 1 else PHASE_NOTE % dict(
+        head=head, phases="<br>".join(ph_bits), swap=tail)
     rot = float(summary["logo"].get("rotate_deg", 0.0) or 0.0)
     html = meshcat.StaticHtml().replace("</body>", LEGEND % dict(
         rows="<br>".join(rows), tot=summary["traced_m"],
