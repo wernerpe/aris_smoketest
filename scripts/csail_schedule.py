@@ -58,7 +58,7 @@ from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
                             program_json, totals, _override,
-                            _park_groups)
+                            _park_groups, alloc_kwargs)
 
 INK = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
        "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
@@ -783,6 +783,163 @@ def arm_groups(mode, arms, near=0.70, fleet=None):
             for c in sorted(set(colour.values()))]
 
 
+# ==========================================================================
+# A BAG THE ARM CANNOT FLY IN ONE TOUR IS NOT INK THE ARM CANNOT FLY
+# ==========================================================================
+# `allocate.prune_unflyable` asks ONE question — "is there a paper-legal
+# Hamiltonian path through this arm's whole bag" — and when the answer is no it
+# takes ink away until the answer is yes.  For the spans with no finite
+# predecessor that is exactly right and there is nothing else to do.  For the
+# rest it is a much stronger conclusion than the measurement supports, and on
+# the proposed rig at h = 0.940 it is the entire coverage story:
+#
+#   `out/residual_anatomy.py` routes every stroke of the logo from every arm's
+#   own DEPOT with a bag of ONE, nobody parked.  All 12.7783 m of it — every
+#   stroke, both inks — has at least one arm that certifies the ink and can fly
+#   to it.  Arm 31 alone certifies and can reach all thirty-eight.
+#
+# So none of the 4.84 m the 6-mover pass leaves empty is unreachable.  It is
+# ink whose arm could not visit it IN THE SAME TOUR as the rest of its bag:
+# `prune_unflyable` finds no isolated node, falls through to its
+# shortest-segment fallback, and drops eighteen strokes one at a time until a
+# path exists through what is left.
+#
+# A TOUR IS A PROPERTY OF A PASS, AND A RUN MAY HAVE MORE THAN ONE PASS.  Every
+# pass starts from the depot — an intermediate pass goes home, which is already
+# what `build_phases` makes it do — so the ink one tour could not thread is ink
+# a SECOND tour can be given, from the same arm, in the same scene, at the cost
+# of a go-home and a pause.  That is what this does: allocate the hole the last
+# pass left, again, with the identical allocator, and hand the conductor
+# another phase.  It adds ink and it costs makespan, which is the objective
+# hierarchy this repository already runs on — coverage is a constraint, and
+# the clock is what it is spent from.
+#
+# ESTIMATES PRUNE, CONDUCTION DECIDES, as always: a residual pass is an
+# ALLOCATION and the conductor still rules on it like any other phase.  A pass
+# that certifies no new ink is dropped before it costs a conduct.
+def residual_strokes(results, min_len=None):
+    """The ink a round left empty, as a stroke set. -> (strokes, refused).
+
+    `results` is EVERY pass of the round, not the last one: a two-pass round
+    allocates grey and orange independently and each leaves its own holes, so
+    chaining off `phases[-1]` alone would hand the next round the orange holes
+    and quietly abandon the grey ones.
+
+    `allocate.leftover` already carries the GEOMETRY of every hole — it
+    truncates the original polyline to the uncovered span — so the next pass
+    is handed real strokes and not a bookkeeping range, and it re-probes,
+    re-partitions the colours and re-sequences them from scratch.  Ids are
+    fresh and dense because `allocate.allocate` keys its interval map on them
+    and the next pass is a self-contained problem.
+
+    `refused` is every hole too short to be worth a segment of its own, handed
+    BACK rather than dropped on the floor: it is still empty paper and the
+    composed programme's coverage has to keep saying so.
+    """
+    min_len = allocate.MIN_SEG_M if min_len is None else float(min_len)
+    out, refused = [], []
+    for res in results:
+        for d in res.get("dropped") or ():
+            pts = np.asarray(d["pts"], float)
+            if len(pts) < 2 or allocate.polyline_length(pts) < min_len:
+                refused.append(d)
+                continue
+            out.append(dict(id=len(out), color=d["color"],
+                            kind=d.get("kind", ""), pts=pts))
+    return out, refused
+
+
+def residual_passes(a, phases, share=None, rounds=0, min_gain=None):
+    """Re-allocate what the last pass left empty. -> ([phase], refused holes).
+
+    Each round is a full `allocate.allocate` on the previous round's holes,
+    made with `alloc_kwargs` so it is the same allocator asking the same
+    question of the same fleet.  It stops early on two conditions: nothing
+    left to allocate, and a round that certified less than `min_gain` metres
+    (a pass costs a go-home and a pause and is not worth confetti).  A round
+    that gives back only a little is still KEPT if it clears that floor — the
+    conductor is the one that decides whether the phase is runnable, and it
+    has not been asked yet.
+
+    THE PICTURE'S BOOKKEEPING STAYS ON THE FIRST PASS.  `totals` sums
+    `total_len` and `dropped_len` over phases, so a residual pass must not
+    claim its input as newly traced metres — it is the same paper.  Every
+    returned pass carries `total_len = 0`, and the caller moves the FINAL
+    hole list onto phase 0, so "traced = drawn + dropped" still holds over the
+    composed programme by construction.
+    """
+    rounds = int(rounds or 0)
+    if rounds <= 0 or not phases:
+        return [], []
+    min_gain = allocate.MIN_SEG_M if min_gain is None else float(min_gain)
+    arms = allocate.active_arms(_override(a.arms))
+    # A ROUND HAS THE SAME SHAPE AS THE PASS IT FOLLOWS.  Under `--two-pass`
+    # every arm may hold either colour, one phase at a time, and the holes are
+    # re-allocated the same way — one sub-pass per ink — so the residual keeps
+    # the whole fleet on each colour instead of falling back to the
+    # one-pen-per-arm partition the two-pass run exists to escape.  Ordering by
+    # ink also means consecutive same-colour phases need no swap between them.
+    def holes(results):
+        return [d for res in results for d in (res.get("dropped") or [])]
+
+    out, refused, prev = [], [], list(phases)
+    for r in range(rounds):
+        st, tiny = residual_strokes(prev)
+        if not st:
+            print(f"\nresidual pass {r + 1}: nothing left to allocate")
+            break
+        left = trace.total_length(st)
+        print(f"\n=== residual pass {r + 1}: the {left:.4f} m in {len(st)} "
+              f"span(s) the last round left empty, allocated again over all "
+              f"{len(arms)} arms ===")
+        inks = artwork.inks_of(st)
+        if getattr(a, "two_pass", False) and len(inks) > 1:
+            bags = [(ink, [s for s in st if s["color"] == ink]) for ink in inks]
+        else:
+            bags = [(inks[0] if len(inks) == 1 else None, st)]
+        kw = alloc_kwargs(a, share=share)
+        made, gain = [], 0.0
+        for ink, sub in bags:
+            if not sub:
+                continue
+            tag = (f"residual pass {r + 1}" if len(bags) == 1
+                   else f"residual pass {r + 1}: {ink}")
+            print(f"\n  --- {tag} — {len(sub)} span(s), "
+                  f"{trace.total_length(sub):.4f} m ---")
+            res = allocate.allocate(
+                sub, colors=(None if ink is None else {x: ink for x in arms}),
+                **kw)
+            res.update(name=tag, ink=ink, strokes=sub, residual_round=r + 1,
+                       total_len=0.0)
+            for line in allocate.report(res, sub):
+                print(line)
+            made.append(res)
+            gain += float(res["drawn_len"])
+        if gain < min_gain:
+            print(f"  residual pass {r + 1} certifies {gain:.4f} m, under the "
+                  f"{min_gain:.4f} m a go-home and a pause are worth — dropped")
+            break
+        # A SUB-PASS THAT CERTIFIED NOTHING IS NOT A PHASE — it would buy a
+        # go-home and a pause and no ink — but its HOLES are still the next
+        # round's input, so it is dropped from the programme and kept in the
+        # chain.
+        kept = [x for x in made if x["drawn_len"] > 1e-9]
+        out += kept
+        print(f"\n  residual pass {r + 1} gives back {gain:.4f} m of the "
+              f"{left:.4f} m it was handed, in {len(kept)} phase(s)")
+        # THE CONFETTI IS ABANDONED ONLY NOW.  `tiny` is the part of this
+        # round's input too short to re-offer; it is permanently empty paper
+        # from here, whereas `prev`'s other holes have just been answered by
+        # `made` and must not be counted again.  Adding it before the round
+        # was known to be kept would double-count it against the refusal
+        # branches above, which return `prev`'s holes whole.
+        refused += tiny
+        prev = made
+    # what the composed programme finally leaves empty: every hole the last
+    # round still has, plus every scrap earlier rounds were too small to offer
+    return out, refused + holes(prev)
+
+
 def phase_by_arms(phases, alt, groups):
     """Split every phase by arm group. -> (phases, alt), indices re-mapped."""
     out, new_alt = [], {}
@@ -814,9 +971,28 @@ def allocate_all(a, verbose=False, share=None):
         print(f"\n=== {ph['name']} ===")
         for line in allocate.report(ph, ph["strokes"]):
             print(line)
+    n_primary = len(phases)
+    # ...and then the same allocator, again, on the holes (see `residual_passes`)
+    extra, empty = residual_passes(a, phases, share=share,
+                                   rounds=getattr(a, "residual_passes", 0))
+    if extra:
+        # THE HOLE THE COMPOSED PROGRAMME LEAVES IS THE LAST ONE, NOT THE FIRST.
+        # Every pass after the first was handed the pass before it as its
+        # picture, so the intermediate hole lists are already answered; leaving
+        # them on their phases would count the same empty paper once per pass.
+        # The picture's bookkeeping rides on phase 0 (the convention
+        # `allocate.split_by_arms` already uses), so the FINAL hole list moves
+        # there and every other phase's is emptied.
+        for ph in phases + extra:
+            ph["dropped"], ph["dropped_len"] = [], 0.0
+        phases[0]["dropped"] = list(empty)
+        phases[0]["dropped_len"] = float(sum(d["length"] for d in empty))
+        phases = phases + extra
     T = totals(phases)
     print(f"\nALL PHASES: {T['traced']:.4f} m traced, {T['dropped']:.4f} m left "
-          f"empty -> COVERAGE {100 * T['covered']:.4f} %")
+          f"empty -> COVERAGE {100 * T['covered']:.4f} %"
+          + (f"  ({n_primary} pass(es) + {len(extra)} residual)" if extra
+             else ""))
     want = 1.0 if a.require_full else float(a.min_coverage)
     if T["covered"] < want - 1e-12:
         raise SystemExit(
@@ -1308,6 +1484,17 @@ def schedule_args(ap):
     ap.add_argument("--reseq-tries", type=int, default=3,
                     help="times a refused phase may be re-sequenced without the "
                          "pen-up transits the conductor could not run")
+    ap.add_argument("--residual-passes", type=int, default=0,
+                    metavar="N",
+                    help="after the last pass, allocate WHAT IT LEFT EMPTY as "
+                         "a further pass, up to N times.  A span an arm can "
+                         "ink and can fly to from its depot is still dropped "
+                         "when no Hamiltonian path threads it into the rest of "
+                         "that arm's bag (allocate.prune_unflyable), and a "
+                         "second pass is a second tour from the same depot.  "
+                         "Costs a go-home and a --pause per pass and adds "
+                         "certified ink; 0 (the default) is the single-tour "
+                         "programme every published number was measured on")
     ap.add_argument("--min-coverage", type=float, default=0.0,
                     help="refuse to write a payload below this certified "
                          "coverage (fraction of traced metres)")

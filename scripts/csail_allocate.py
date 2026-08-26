@@ -619,6 +619,55 @@ def _parks(a, arms):
     return {x: np.asarray(FLEET[x].q_seed, float) for x in FLEET}
 
 
+def alloc_kwargs(a, pens=None, split=None, share=None, verbose=False):
+    """Every `allocate.allocate` argument this run's knobs imply. -> dict.
+
+    Split out of `run_allocation` so that a SECOND allocation in the same run
+    is made with byte-identical settings rather than with a hand-copied
+    subset.  `csail_schedule.residual_passes` re-allocates the ink a pass left
+    empty and has to ask the allocator exactly the question the first pass was
+    asked — same pens, same probe budget, same objective, same prefilter, same
+    parked fleet — or the comparison between the two is about two allocators.
+
+    `split=False` is how the caller asks for the SAME ink allocated without
+    cutting, which is what the conducted A/B in `csail_schedule.build_phases`
+    needs a second copy of.
+    """
+    return dict(
+        opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE),
+                  tilt_max_deg=float(getattr(a, "tilt_max_deg", 0.0))),
+        merge=not getattr(a, "no_merge", False),
+        cluster=getattr(a, "cluster", allocate.CLUSTER),
+        verbose=verbose,
+        pens=parse_pens(getattr(a, "pens", None)) if pens is None else pens,
+        active_override=_override(a.arms),
+        sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
+        max_probes=getattr(a, "max_probes", 3),
+        balance=not getattr(a, "no_balance", False),
+        split=(not getattr(a, "no_split", False)) if split is None
+              else bool(split),
+        min_split=getattr(a, "min_split", allocate.MIN_SPLIT_M),
+        draw_speed=getattr(a, "draw_speed", writing.DRAW_SPEED_FLEET),
+        seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
+        return_home=getattr(a, "idle_policy",
+                            idle.POLICY_FREEZE) == idle.POLICY_HOME,
+        # every plan call this allocation makes that another execution profile
+        # of the same plan family has already made (`plan_family`)
+        share={} if share is None else share,
+        atlas_dir=None if a.no_prefilter
+        else str(Path(getattr(a, "atlas", None) or a.out)),
+        # PARK-AWARE ALLOCATION (`--park-aware`, default on).  Every arm
+        # outside the group that is drawing stands at its own certified depot
+        # for the whole of that phase, and a span whose certified ink is INSIDE
+        # one of them is not that arm's span — see `allocate.ParkProbe`.  The
+        # grouping handed in here is the same one
+        # `csail_schedule.allocate_all` will later split the phases by, so
+        # allocation and conduct agree about who is parked; with
+        # `--arm-phases off` nobody is, and the probe is silent.
+        parks=_parks(a, allocate.active_arms(_override(a.arms))),
+        park_groups=_park_groups(a, allocate.active_arms(_override(a.arms))))
+
+
 def run_allocation(a, verbose=False, split=None, px=None, share=None):
     """Trace -> place -> allocate. -> (phases, strokes, info).
 
@@ -685,39 +734,8 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
     if pens:
         print("  pens: " + "  ".join(f"arm {k} = {1000 * v:.0f} mm"
                                      for k, v in sorted(pens.items())))
-    kw = dict(opts=dict(objective=getattr(a, "band_objective", pwl.OBJECTIVE),
-                        tilt_max_deg=float(getattr(a, "tilt_max_deg", 0.0))),
-              merge=not getattr(a, "no_merge", False),
-              cluster=getattr(a, "cluster", allocate.CLUSTER),
-              verbose=verbose, pens=pens,
-              active_override=_override(a.arms),
-              sequencer=getattr(a, "sequencer", allocate.SEQUENCER),
-              max_probes=getattr(a, "max_probes", 3),
-              balance=not getattr(a, "no_balance", False),
-              # `split=False` here is how the caller asks for the SAME ink
-              # allocated without cutting, which is what the conducted A/B in
-              # `csail_schedule.build_phases` needs a second copy of
-              split=(not getattr(a, "no_split", False)) if split is None
-                    else bool(split),
-              min_split=getattr(a, "min_split", allocate.MIN_SPLIT_M),
-              draw_speed=getattr(a, "draw_speed", writing.DRAW_SPEED_FLEET),
-              seq_opts=dict(transit_speed=a.transit_speed, qd_frac=a.qd_frac),
-              return_home=getattr(a, "idle_policy",
-                                  idle.POLICY_FREEZE) == idle.POLICY_HOME,
-              # every plan call this allocation makes that another execution
-              # profile of the same plan family has already made (`plan_family`)
-              share=share,
-              atlas_dir=None if a.no_prefilter
-              else str(Path(getattr(a, "atlas", None) or a.out)))
+    kw = alloc_kwargs(a, pens=pens, split=split, share=share, verbose=verbose)
     arms = allocate.active_arms(_override(a.arms))
-    # PARK-AWARE ALLOCATION (`--park-aware`, default on).  Every arm outside
-    # the group that is drawing stands at its own certified depot for the whole
-    # of that phase, and a span whose certified ink is INSIDE one of them is
-    # not that arm's span — see `allocate.ParkProbe`.  The grouping handed in
-    # here is the same one `csail_schedule.allocate_all` will later split the
-    # phases by, so allocation and conduct agree about who is parked; with
-    # `--arm-phases off` nobody is, and the probe is silent.
-    kw.update(parks=_parks(a, arms), park_groups=_park_groups(a, arms))
     inks = artwork.inks_of(strokes)
     if not getattr(a, "two_pass", False):
         one = inks[0] if len(inks) == 1 else None
