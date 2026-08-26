@@ -139,6 +139,18 @@ def _candidates(tilt_max_deg):
 GATE_CONE_DEG = (2.5, 5.0, 7.5, 10.0, 12.5, 15.0)
 _TILT_AXES = ((1, 0, 0), (0, 1, 0), (-1, 0, 0), (0, -1, 0))
 
+# THE FILTER AND THE RECORD MUST NOT DISAGREE ABOUT THE GATE.  The gated search
+# screens the fiber with the ANALYTIC batch Jacobian (one SVD for the whole
+# fiber) and the row it finally writes carries `metrics.sigma_min` of the
+# FINITE-DIFFERENCE Jacobian, because that is the number every atlas has ever
+# stored and every consumer compares against `GATE_SIGMA`.  The two agree to
+# ~3e-10 — but "agree to 3e-10" is not "agree", and a pose screened in at
+# exactly 0.140000000 could be recorded at 0.139999999 and then fail the very
+# gate it was selected for.  The invariant this file owes its callers is that
+# `min_lean_deg >= 0` means strict-GO, so the screen keeps a margin thirty
+# times the known disagreement and the invariant is pinned by a test.
+_SIGMA_EPS = 1e-8
+
 
 def _gated_groups(tilt_max_deg, cone=GATE_CONE_DEG):
     """Orientation groups for the GATED search, ordered by ascending lean.
@@ -309,7 +321,11 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
 
     def _pack(m, q, tilt_deg, n_sol, valid, lean):
         J = tip_jacobian(q, pen_ext=pen_ext, pen_lat=lat)
-        return (m, sigma_min(J), f_max(J, press_b), n_sol, float(valid.mean()),
+        s = sigma_min(J)
+        if lean >= 0.0 and (m < gate_margin or s < gate_sigma):
+            return None            # the screen and the record disagreed; the
+            #                        caller falls through to the legacy pick
+        return (m, s, f_max(J, press_b), n_sol, float(valid.mean()),
                 float(max(_q7_window(row) for row in valid)), tilt_deg, q, lean)
 
     # ---- the GATED search: least lean that certifies ----------------------
@@ -326,14 +342,16 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
         sig = np.linalg.svd(ik.tip_jacobian_batch(Q, pen_ext=pen_ext,
                                                   pen_lat=lat),
                             compute_uv=False)[:, -1]
-        idx = np.flatnonzero(sig >= gate_sigma)
+        idx = np.flatnonzero(sig >= gate_sigma + _SIGMA_EPS)
         if not len(idx):
             continue
         idx = idx[_self_mask(Q[idx], pen_ext, lat)]
         for k in idx:
             m, tilt_deg, q = keep[k]
             if _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
-                return _pack(m, q, tilt_deg, n_sol, valid, lean)
+                out = _pack(m, q, tilt_deg, n_sol, valid, lean)
+                if out is not None:
+                    return out
 
     # ---- the LEGACY pick, verbatim: best margin among the best six --------
     for cand in cand_sets:

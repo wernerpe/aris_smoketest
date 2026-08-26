@@ -89,3 +89,46 @@ Open issues inherited from upstream (not resolved here):
   real rig geometry lives in `aris_planning_scene.py` upstream and should replace them
   before trusting near-boom / near-edge cells.
 - Kinematics use the Panda visual/DH model (identical geometry to FR3; limits are FR3).
+
+## 2026-08-26 — the arm against itself, and the cone that was never asked to certify
+
+Three things shipped together because each one needs the one before it.
+
+**1. A self-collision guard exists** (`aris_sixarm/selfcoll.py`). Nothing in
+this package had ever checked an arm against its own metal; `dead_disc_anatomy`
+had written that down rather than fixed it. Measured: 8 of 1 200 configurations
+drawn from the joint box AND held to the strict 0.30 rad comfort margin put the
+arm's own metal within 10 mm of itself, so the joint limits are not the guard
+they were assumed to be. The model is measured from the manufacturer's meshes
+in each link's own frame (3 bands per body, 7 z-bands for link0 — the one body
+that never moves), watched over pairs four or more joints apart, at a 20 mm
+margin with no calibration term because an arm's links share its own encoders.
+It costs the shipped certified map NOTHING (0 of 23 376 strict-GO cells, the
+tightest holding 63.7 mm) and it invalidated exactly one shipped pose: **arm
+71's park, which had its wrist 26.9 mm from its own base.** Re-derived on the
+same bearing at the radius and hover four of the other five already used.
+
+The residual is published with it: three pairs closer than four joints can also
+reach contact in the metal, and this guard does not see them. What stands there
+is the FR3's joint limits and the mechanical design — the same thing that stood
+there before, now with a number on it.
+
+**2. The atlas searches for a pose that PASSES** (`atlas.solve_cell`). It used
+to return the best-MARGIN pose that cleared metal and let `strict_go` judge that
+one row afterwards; the 15-degree cone was a CLEARANCE fallback and was never
+asked to certify anything. Now: per lean in ascending order, every solution at
+margin >= 0.30, kept at sigma >= 0.14, clearance-checked best-margin first,
+first that clears wins — and the lean it stopped at is recorded per cell as
+`min_lean_deg`. Monotone by construction: the legacy pick is still in the gated
+search's own candidate set, so no cell that certified can stop certifying.
+`model_signature` carries the search policy now, not only the geometry.
+
+**3. The drawing planner can lean the pen** (`lateral.plan_adaptive`).
+`tilt_max_deg` used to be noted and dropped. It is restored as a RESCUE behind
+both flat stages, climbing 2.5 -> 15 and stopping at the first lean that
+certifies, with the validator handed the lean the plan actually used. A stroke
+that certifies flat is planned by byte-identical code.
+
+The 109.9 mm span of the v8 logo that nobody drew — the one the dead-disc
+decomposition called a base column's shadow — certifies whole for arm 71 at a
+7.5-degree lean, validator clean.

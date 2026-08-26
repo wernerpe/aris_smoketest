@@ -222,3 +222,34 @@ def test_signature_moves_when_the_model_moves():
     assert not np.array_equal(s, selfcoll.signature(pen_lat=0.0))
     from aris_sixarm import atlas
     assert len(atlas.model_signature()) > len(s)
+
+
+# --------------------------------------------------------------------------
+# the atlas invariant the gated search owes its callers
+# --------------------------------------------------------------------------
+def test_a_gated_atlas_row_is_a_strict_go_row():
+    """`min_lean_deg >= 0` MEANS strict-GO, on every row of every atlas.
+
+    The gated search screens with the analytic batch Jacobian and records the
+    finite-difference one; they agree to ~3e-10, which is not the same as
+    agreeing.  This is the invariant that gap could break.
+    """
+    import glob
+    from aris_sixarm import atlas
+    dirs = sorted(glob.glob(os.path.join(ROOT, "out", "atlas_gated*")))
+    found = False
+    for d in dirs:
+        for f in sorted(glob.glob(os.path.join(d, "atlas_arm*.npz"))):
+            arr = np.load(f)["data"]
+            if not len(arr) or arr.shape[1] <= atlas.LEANCOL:
+                continue
+            found = True
+            gated = arr[:, atlas.LEANCOL] >= 0.0
+            go = atlas.strict_go(arr)
+            assert np.all(go[gated]), f"{f}: a gated row is not strict-GO"
+            # ...and the lean recorded is the lean the pose was found at
+            assert np.allclose(arr[gated, 8], arr[gated, atlas.LEANCOL])
+            assert set(np.unique(arr[gated, atlas.LEANCOL]).tolist()) <= \
+                set((0.0,) + atlas.GATE_CONE_DEG)
+    if not found:
+        pytest.skip("no gated atlas on disk (out/ is gitignored)")
