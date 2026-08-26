@@ -73,6 +73,25 @@ TIP_CLEAR = 0.02           # m, the pen tip while flying
 TIP_TOL = 0.010            # m, the contact band (lift/lower/ink)
 EPS = 1e-9
 
+# THE ROUTER HAS TO LEAVE THE CHECKER ROOM TO CHECK.  `move_ok` compares
+# SAMPLES of a straight move against a floor; `scene_check`'s paper gate
+# compares the same quantity MINUS a 1-Lipschitz sweep residual (up to
+# 0.55 * scene_check.PAPER_STEP = 2.75 mm) against the same number.  So a
+# lower beat that sits exactly ON the contact band is certified by the router
+# and refused by the checker, and neither of them is wrong.
+#
+# That is not hypothetical: it is the whole of the first occupancy-aware CSAIL
+# run's refusal on the proposed rig.  Arm 31's entry read tip -10.3 mm against
+# a -10 mm floor — a 0.3 mm veto of a 7.5 mm dip, with every other gate
+# passing by tens of millimetres.
+#
+# The band a ROUTE may use is therefore the band minus that residual.  The
+# direction is the safe one: this can only refuse routes, never certify one
+# the checker would fail, and 7 mm of contact is still 3.5x the 2 mm the ink
+# itself is held to (`validate.TIP_TOL`).
+TIP_SWEEP_PAD = 0.003      # m, scene_check's worst refined sweep residual
+CONTACT_FLOOR = -(TIP_TOL - TIP_SWEEP_PAD)   # -0.007 m, lift/lower tip floor
+
 # THE SAME HOLE, ONE OBSTACLE OVER.  This module made the paper a thing a pen-up
 # is certified against, and left the STEEL exactly where it found it: `route`
 # asks `path_frame_clearance` only about a detour it is INSERTING, never about

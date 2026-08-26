@@ -120,12 +120,19 @@ def frame_boxes():
     elif ACTIVE_RIG == "final":
         boxes = rig_final.frame_boxes_canvas(zmin=-10)
     elif ACTIVE_RIG == "proposed":
+        # ...minus the `body:` boxes, which are the OTHER ARMS' base columns
+        # (`mounts.arm_column_box`).  Every gate measures against them and
+        # they are the reason this rig's atlas is 96.7 % and not 100 %, but
+        # the thing each one stands for is a robot that is ALREADY IN THE
+        # SCENE: drawing them would hide six shoulders behind their own
+        # conservative envelope.
         seen, boxes = set(), []
         for spec in FLEET.values():
             for b in spec.static_obstacles():
-                if b["name"] not in seen:
-                    seen.add(b["name"])
-                    boxes.append(b)
+                if b["name"] in seen or b["tag"].startswith("body:"):
+                    continue
+                seen.add(b["name"])
+                boxes.append(b)
     else:
         return []
     return [(b["name"].replace(":", "_"), b["lo"], b["hi"]) for b in boxes]

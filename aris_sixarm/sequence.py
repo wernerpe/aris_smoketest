@@ -511,7 +511,7 @@ def node_lift(spec, exi_q, exi_h, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
     """Seconds to lift the pen off each node's exit onto its hover. -> (N,)."""
     lift = _row_time(exi_q, exi_h, qd_frac, T_LIFT_F)
     if paper_safe:
-        lift = lift + _leg_surcharge(spec, exi_q, exi_h, -paper.TIP_TOL,
+        lift = lift + _leg_surcharge(spec, exi_q, exi_h, paper.CONTACT_FLOOR,
                                      T_LIFT_F, qd_frac, h_inv, pen_ext)
     return lift
 
@@ -521,7 +521,7 @@ def node_lower(spec, ent_h, ent_q, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
     """Seconds to lower from each node's hover onto its entry. -> (N,)."""
     lower = _row_time(ent_h, ent_q, qd_frac, T_LOWER_F)
     if paper_safe:
-        lower = lower + _leg_surcharge(spec, ent_h, ent_q, -paper.TIP_TOL,
+        lower = lower + _leg_surcharge(spec, ent_h, ent_q, paper.CONTACT_FLOOR,
                                        T_LOWER_F, qd_frac, h_inv, pen_ext)
     return lower
 

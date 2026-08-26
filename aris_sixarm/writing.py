@@ -661,7 +661,7 @@ def transit_beats(spec, q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
     capped by the hover the arm actually reached, since `lifted_or_lower` gives
     up height near the edge of reach.
     """
-    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, -paper.TIP_TOL,
+    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, paper.CONTACT_FLOOR,
                   qd_frac, T_LIFT_F, paper_safe)
     if lift is None:
         return None
@@ -671,7 +671,7 @@ def transit_beats(spec, q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
                   paper_safe, q_home)
     if trav is None:
         return None
-    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, -paper.TIP_TOL,
+    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, paper.CONTACT_FLOOR,
                  qd_frac, T_LOWER_F, paper_safe)
     if low is None:
         return None
@@ -695,7 +695,7 @@ def enter_beats(spec, q_home, q_hover_entry, q_entry, pen_ext=PEN_EXT,
                   paper_safe)
     if home is None:
         return None
-    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, -paper.TIP_TOL,
+    low = _route(spec, q_hover_entry, q_entry, pen_ext, h_inv, paper.CONTACT_FLOOR,
                  qd_frac, T_LOWER_F, paper_safe)
     if low is None:
         return None
@@ -713,7 +713,7 @@ def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=PEN_EXT,
     their way to `q_seed`, because that pose is a metre away and on the far side
     of a branch change.  It gets the same treatment and the same refusal.
     """
-    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, -paper.TIP_TOL,
+    lift = _route(spec, q_exit, q_hover_exit, pen_ext, h_inv, paper.CONTACT_FLOOR,
                   qd_frac, T_LIFT_F, paper_safe)
     if lift is None:
         return None
@@ -886,7 +886,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                                 h_inv, qd_frac, paper_safe), "go-home", k)
         else:                                     # freeze: lift, and stop
             r = _route(spec, D["qd"][-1], hox[k][0], pen_ext, h_inv,
-                       -paper.TIP_TOL, qd_frac, T_LIFT_F, paper_safe)
+                       paper.CONTACT_FLOOR, qd_frac, T_LIFT_F, paper_safe)
             b = need(None if r is None else dict(steps=r[0], modes=(r[1],)),
                      "final lift", k)
         beats.append(b["steps"])

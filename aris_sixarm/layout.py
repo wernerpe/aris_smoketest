@@ -552,8 +552,31 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850)
 # 92 % of entries flyable against the ladder's 62 %.  The two arms it rescues
 # are the two the first CSAIL run could not get home: every execution profile
 # refused at "go-home at segment N cannot clear the paper plane".
+#
+# ...AND A DEPOT MUST ALSO NOT STAND ON SOMEBODY ELSE'S INK (2026-08-26).  The
+# table above ranks a park pose on the job it does FOR ITS OWN ARM.  It is
+# held for the whole of every phase that arm is not drawing in, so it is also
+# an OBSTACLE for the whole of that phase, and on a rig whose transverse pairs
+# are 0.61 m apart that is the tighter of the two constraints.  Measured on
+# the first occupancy-aware CSAIL allocation — every parked arm's chain
+# against every other arm's certified drawing poses, the conductor's own
+# capsules and its 80 mm margin:
+#
+#      arm   worst clearance to another arm's ink, at (r, hover)
+#       13   771 mm    17   717 mm    31   119 mm    71   139 mm
+#        2   173 mm    97    20 mm   <- the whole fleet's refusal
+#
+# Arm 97 at r = 0.48 lies across the north half of the canvas with its own
+# partner's ink under it, 20 mm from arm 2's chain against the 80 mm the
+# conductor asks: not a schedule the conductor could fix by waiting, because
+# a parked arm's schedule is a constant.  Pulled IN to r = 0.30 / hover 0.10 —
+# a compact park, not a further one — it clears every arm's ink by 128 mm and
+# the fleet's worst park-vs-ink clearance becomes 119 mm.  The cost is 97's
+# own flyability, which the sweep above put at 20/24 entries at 0.48; the
+# 0.30 park is measured in the same units below, and a depot nobody can draw
+# next to is worth less than one entry.
 PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
-                      71: (0.48, 0.20), 2: (0.48, 0.10), 97: (0.48, 0.20)}
+                      71: (0.48, 0.20), 2: (0.48, 0.10), 97: (0.30, 0.10)}
 
 # THE PARKED FLEET: `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
 # PARK_GRID_PROPOSED)`, baked the way `frames.Q_READY_*` are baked and for the
@@ -577,13 +600,13 @@ Q_PARK_PROPOSED = {
     31: (-1.5008, 0.7729, 1.5216, -2.6713, 1.9695, 0.8583, -2.5704),
     71: (-1.5063, 1.1031, -1.4213, -2.3151, -1.8379, 1.1558, -0.1977),
     2:  (0.1476, 0.9605, 1.5459, -2.1233, 2.0982, 1.2470, -2.1750),
-    97: (0.8065, 0.9197, 1.1970, -2.0401, 2.0756, 1.0085, -2.5704),
+    97: (0.4026, -1.0020, 1.3172, -2.5686, -2.0932, 1.2260, -1.7795),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
     13: (0.499, 0.217), 17: (1.280, 0.314),
     31: (0.297, 1.815), 71: (1.687, 1.815),
-    2:  (0.479, 3.491), 97: (1.324, 3.491),
+    2:  (0.479, 3.491), 97: (1.280, 3.316),
 }
 
 

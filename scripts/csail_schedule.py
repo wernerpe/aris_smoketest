@@ -762,7 +762,7 @@ def arm_groups(mode, arms, near=0.70, fleet=None):
     """
     if mode in (None, "", "off", "none"):
         return None
-    ids = sorted(arms)
+    ids = sorted(set(arms))          # a two-pass run names its arms twice
     if mode == "solo":
         return [[a] for a in ids]
     if mode != "disjoint":
@@ -1441,6 +1441,11 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
                              rep.get("paper_clearance", {}).items()},
             paper_failed=[int(x) for x in rep.get("paper_failed", [])],
             frame_failed=[int(x) for x in rep.get("frame_failed", [])],
+            # every OTHER arm's base column, including the arms this phase
+            # left at the depot (scene_check's own gate)
+            column_clearance={str(k): v for k, v in
+                              rep.get("column_clearance", {}).items()},
+            column_failed=[int(x) for x in rep.get("column_failed", [])],
             arm_metres={str(x): float(sum(s["length"] for s in res["programs"][x]))
                         for x in res["arms"]},
             arm_segments={str(x): len(res["programs"][x]) for x in res["arms"]},
