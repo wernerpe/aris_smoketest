@@ -312,8 +312,15 @@ def pair_spacing_of(layout_d):
 # ===========================================================================
 # THE CERTIFIED READY POSE
 # ===========================================================================
+# metres out along the bearing, IN PREFERENCE ORDER: the first radius that
+# certifies anything is the one used, so this ladder is "how far out a ready
+# pose would like to stand", not a search.  `certified_park_poses` overrides
+# it per arm, because a DEPOT wants a different radius than a ready pose does.
+READY_RADII = (0.55, 0.62, 0.48, 0.70, 0.40)
+
+
 def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
-                         pen_lat=None, bearing=None):
+                         pen_lat=None, bearing=None, radii=None):
     """A gated READY pose for one study arm with the LATERAL tool.
 
     `h_inv` IS NO LONGER WHAT DECIDES THE HEIGHT — `study_spec` writes the base
@@ -365,7 +372,7 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
     u = u / max(float(np.linalg.norm(u)), 1e-9)
     Twb_inv = np.linalg.inv(spec.T_world_base(h_inv))
     off = tool_offset(pen_lat=lat)
-    for r in (0.55, 0.62, 0.48, 0.70, 0.40):
+    for r in READY_RADII if radii is None else tuple(np.atleast_1d(radii)):
         xy = np.clip(b + r * u, [0.05, 0.05], [W - 0.05, H - 0.05])
         best = None
         for phi in np.linspace(0, 2 * np.pi, 8, endpoint=False):
@@ -396,8 +403,8 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
     raise RuntimeError(f"no certified ready pose for arm {spec.arm_id}")
 
 
-def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None,
-                         clear=None):
+def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
+                         pen_lat=None, clear=None):
     """Where the six arms WAIT. -> {arm_id: q (7,)}, one certified pose each.
 
     THE PARK POSE IS NOT DECORATION AND IT IS NOT INHERITED.  `spec.q_seed` is
@@ -414,39 +421,48 @@ def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None,
     hung over the same canvas: on this layout it parks the fleet in a huddle
     and the closest pair (13, 17) INTERPENETRATES by 95.6 mm.  So each arm is
     sent along its own base's bearing AWAY from the fleet centroid — the one
-    direction that is different for every arm and that no two of them share —
-    and the fleet fans out to the canvas rim: >= 250 mm between every pair
-    (`coordination.BROAD_CAP`, i.e. the clip, i.e. "at least"), 0.508 m from
-    every neighbour's steel.  For `paired_grid` the centroid is the canvas
-    centre, so this is exactly "each arm reaches for its own nearest rim".
+    direction that is different for every arm and that no two of them share.
+    For `paired_grid` the centroid is the canvas centre, so this is exactly
+    "each arm stands off towards its own nearest rim".
 
-    Every pose is `certified_ready_pose`'s: gated by `validate.check_pose`
-    with the pen tip above the paper, best min(margin, 2.5 sigma).  Costs
-    ~0.4 s for six arms; `Q_PARK_PROPOSED` is this function's own output on
-    `LAYOUT_PROPOSED`, baked so that importing the rig does not re-solve it.
+    HOW FAR OUT, AND HOW HIGH, IS MEASURED — because a DEPOT IS NOT A READY
+    POSE.  `certified_ready_pose` ranks on min(margin, 2.5 sigma), which is
+    what a pose held under load wants; a park pose is held under no load at
+    all and its whole job is to be the node every tour starts and ends at.  So
+    `grid` is {arm_id: (radius, hover)} chosen on THAT: the fraction of the
+    arm's own certified drawing cells it can fly to (`writing.enter_beats`)
+    and back from (`exit_beats`), over 6 radii x 3 hovers x 24 cells per arm.
+    Ranking on the static key instead put every arm at r = 0.55 / 0.10 and
+    left 62 % of entries flyable; ranking on the job gives 92 %, and the two
+    arms it helps most are the two that were nearly stranded — 71 goes from
+    33 % to 92 %, 17 from 55 % to 96 %.  That is not a tidiness argument: on
+    the first CSAIL run every execution profile died at "go-home ... cannot
+    clear the paper plane", which is the conductor's own escape hatch (fall
+    back to conductor v1 and send everybody home) failing because home was
+    somewhere the arm could not fly to.
+
+    `grid=None` falls back to the `READY_RADII` ladder at `hover` for every
+    arm, which is what the ready-pose recipe does.
 
     AND THEN THE FLEET IS CHECKED AGAINST ITSELF, because six individually
     certified poses are not a certified fleet.  `certified_ready_pose` knows
     about one arm; the bearing keeps the six apart by construction and NOT by
-    proof, and the proof is cheap.  It is also not academic: the same recipe
-    at `hover = 0.20` picks a set that leaves 4 mm between two arms — every
-    pose gated, every pose fine, the fleet unflyable.  `clear` m is the floor
+    proof, and the proof is cheap.  It is also not academic: the ladder at
+    `hover = 0.20` picks a set that leaves 4 mm between two arms — every pose
+    gated, every pose fine, the fleet unflyable.  `clear` m is the floor
     (default `coordination.SAFETY_M + CALIB_M`, the margin the conductor holds
     every pair to); a fleet under it RAISES rather than being handed back.
-
-    THE HOVER IS 0.10 m AND THAT IS MEASURED, not inherited.  Re-allocating
-    the CSAIL placement with the fleet parked at 0.10 / 0.20 / 0.25 / 0.30 m
-    moves coverage by 0.13 pp — 20 mm of ink in 15.8 m — and costs 0.21 rad of
-    joint margin by 0.30 m.  The park height is not what the drawing is short
-    of, so it stays where the study's own ready poses are.
     """
     from .coordination import ArmPath, clearance_matrix, SAFETY_M, CALIB_M
     clear = SAFETY_M + CALIB_M if clear is None else float(clear)
+    grid = {} if grid is None else dict(grid)
     cent = np.mean([np.asarray(s.xy, float) for s in fleet.values()], axis=0)
     out = {}
     for aid, spec in sorted(fleet.items()):
+        r, hv = grid.get(aid, (None, hover))
         out[aid] = certified_ready_pose(
-            spec, hover=hover, sheet=sheet, pen_lat=pen_lat,
+            spec, hover=hv, sheet=sheet, pen_lat=pen_lat,
+            radii=None if r is None else (float(r),),
             bearing=np.asarray(spec.xy, float) - cent)[0]
     paths = {aid: ArmPath(aid, q[None, :], 0.05, spec=fleet[aid])
              for aid, q in out.items()}
@@ -510,37 +526,55 @@ LAYOUT_V1 = dict(
 # between six arms whose workspaces now overlap on 55.98 % of the canvas.
 LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850)
 
-# THE PARKED FLEET.  `certified_park_poses(build_fleet(LAYOUT_PROPOSED))`,
-# baked the way `frames.Q_READY_*` are baked and for the same two reasons: an
-# operator types these into Desk, and importing a rig should not re-solve
-# six IK searches.  `tests/test_layout.py` re-derives them and compares, so
-# the literals cannot drift from the function that made them.
+# WHERE EACH ARM WAITS, AND WHY THERE.  `(radius, hover)` per arm, on the
+# outward bearing, MEASURED as the depot it has to be rather than picked as
+# the ready pose it looks like: for each of 6 radii x 3 hovers, how many of
+# that arm's own 24 sampled certified drawing cells it can fly to
+# (`writing.enter_beats`) and back from (`exit_beats`).  The winners, entry
+# and go-home out of 24, against what the plain ready-pose ladder
+# (r = 0.55, hover = 0.10) scored:
 #
-# Every one of them: pen tip +0.100 m over the paper, min chain z 0.210 m,
-# 0.508 m from the nearest neighbour's steel, joint margin >= 0.644 (gate
-# 0.30), sigma >= 0.302 (gate 0.14), and >= 0.250 m from every other parked
-# arm.  WHERE they hold the pen is the layout's own figure — three pairs,
-# (13, 97), (17, 2), (31, 71), each the other's reflection through the canvas
-# centre, which is the check that this is a shape and not six coincidences.
-# The JOINT vectors mirror in two of the three pairs and not the third: the
-# q7 grid is not symmetric under that reflection, so which branch wins the
-# min(margin, 2.5 sigma) ranking need not be either.
+#      arm   r     hover   entry   home        ladder entry
+#       13   0.40  0.10    20/24   20/24        78 %
+#       17   0.30  0.10    23/24   23/24        55 %
+#       31   0.30  0.20    23/24   23/24        75 %
+#       71   0.48  0.20    22/24   22/24        33 %   <- nearly stranded
+#        2   0.48  0.10    24/24   24/24        90 %
+#       97   0.48  0.20    20/24   20/24        43 %
+#
+# 92 % of entries flyable against the ladder's 62 %.  The two arms it rescues
+# are the two the first CSAIL run could not get home: every execution profile
+# refused at "go-home at segment N cannot clear the paper plane".
+PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
+                      71: (0.48, 0.20), 2: (0.48, 0.10), 97: (0.48, 0.20)}
+
+# THE PARKED FLEET: `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
+# PARK_GRID_PROPOSED)`, baked the way `frames.Q_READY_*` are baked and for the
+# same two reasons — an operator types these into Desk, and importing a rig
+# should not re-solve six IK searches.  `tests/test_layout.py` re-derives them
+# and compares, so the literals cannot drift from the recipe that made them.
+#
+# Every one of them: pen tip 0.10 or 0.20 m over the paper, min chain z
+# 0.210 m, >= 0.436 m from the nearest neighbour's steel, joint margin >=
+# 0.314 (gate 0.30), sigma >= 0.235 (gate 0.14).  The tightest pair of parked
+# arms (13, 17) holds 181 mm — against the 80 mm the conductor asks of every
+# pair while they move.
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 Q_PARK_PROPOSED = {
-    13: (0.0711, 0.9323, -1.4449, -1.9738, -2.1391, 1.2382, -0.5932),
-    17: (-0.0673, -0.9058, -1.7116, -1.9764, 2.1624, 1.2186, 2.1750),
-    31: (1.0024, 1.0718, -1.3908, -1.6772, -2.0593, 1.3622, -1.7795),
-    71: (1.0024, -1.0718, 1.7508, -1.6772, -2.0593, 1.3622, -1.7795),
-    2:  (-0.0673, 0.9058, 1.4300, -1.9764, 2.1624, 1.2186, 2.1750),
-    97: (0.0711, -0.9323, 1.6967, -1.9738, -2.1391, 1.2382, -0.5932),
+    13: (0.0726, 1.1524, -1.6667, -2.2359, -1.9606, 1.3879, -1.7795),
+    17: (0.0132, 1.0882, -1.8163, -2.5609, -2.0390, 1.2974, -1.3841),
+    31: (-1.5008, 0.7729, 1.5216, -2.6713, 1.9695, 0.8583, -2.5704),
+    71: (-1.5063, 1.1031, -1.4213, -2.3151, -1.8379, 1.1558, -0.1977),
+    2:  (0.1476, 0.9605, 1.5459, -2.1233, 2.0982, 1.2470, -2.1750),
+    97: (0.8065, 0.9197, 1.1970, -2.0401, 2.0756, 1.0085, -2.5704),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
-    13: (0.462, 0.072), 17: (1.341, 0.072),
-    31: (0.050, 1.815), 71: (1.753, 1.815),
-    2:  (0.462, 3.559), 97: (1.341, 3.559),
+    13: (0.499, 0.217), 17: (1.280, 0.314),
+    31: (0.297, 1.815), 71: (1.687, 1.815),
+    2:  (0.479, 3.491), 97: (1.324, 3.491),
 }
 
 

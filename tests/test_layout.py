@@ -285,10 +285,12 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
 def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     """WHY THE BEARING IS OUTWARD.  Aimed at the canvas centre — which is what
     one arm alone wants — the six park in a huddle and the closest pair
-    overlaps by 95.6 mm.  Away from the fleet centroid they fan out to the rim
-    and no two come within the broad-phase cap."""
+    overlaps by 95.6 mm.  Away from the fleet centroid they stand off towards
+    their own rims and hold 181 mm, against the 80 mm the conductor asks of
+    every pair while they MOVE."""
     fl = layout.FLEET_PROPOSED
-    assert _park_clearance(layout.Q_PARK_PROPOSED, fl) >= 0.25 - 1e-6
+    from aris_sixarm.coordination import SAFETY_M, CALIB_M
+    assert _park_clearance(layout.Q_PARK_PROPOSED, fl) >= SAFETY_M + CALIB_M
 
     inward = {aid: layout.certified_ready_pose(s, pen_lat=LAT)[0]
               for aid, s in sorted(fl.items())}
@@ -303,30 +305,40 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
 
 def test_baked_park_poses_are_that_functions_own_output():
     """The literals in `layout.py` are `certified_park_poses`' output on
-    `LAYOUT_PROPOSED`, so they cannot drift from the recipe that made them.
-    Derived from the BARE fleet: the park pose is also the IK seed, and a
-    fleet already carrying one would be seeded by its own answer."""
+    `LAYOUT_PROPOSED` at `PARK_GRID_PROPOSED`, so they cannot drift from the
+    recipe that made them.  Derived from the BARE fleet: the park pose is also
+    the IK seed, and a fleet already carrying one would be seeded by its own
+    answer.
+
+    WHAT THIS DOES NOT RE-RUN is the (radius, hover) SEARCH behind the grid —
+    6 radii x 3 hovers x 24 cells x two directions of `paper.route` per arm is
+    a quarter of an hour, and it needs an atlas out of gitignored `out/`.  The
+    grid's scores are recorded where it is defined; what is pinned here is
+    that the six poses are what that grid produces.
+    """
     bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
     assert all(np.array_equal(s.q_seed, frames.Q_READY_INV)
                for s in bare.values()), "derive from the LEGACY seed"
-    made = layout.certified_park_poses(bare, pen_lat=LAT)
+    made = layout.certified_park_poses(bare, layout.PARK_GRID_PROPOSED,
+                                       pen_lat=LAT)
     assert sorted(made) == sorted(layout.Q_PARK_PROPOSED)
     for aid, q in made.items():
         assert np.allclose(q, layout.Q_PARK_PROPOSED[aid], atol=5e-5), aid
 
-    # WHERE they hold the pen is the layout's own symmetry — three pairs, each
-    # the other's reflection through the canvas centre.  The JOINT vectors are
-    # not required to mirror and two of the three pairs happen to (`q3` of
-    # 13/97 differs by 0.25 rad): `ik.Q7_GRID` is not symmetric under that map,
-    # so which branch wins the min(margin, 2.5 sigma) ranking need not be.
-    W, H = SHEET_FINAL6
-    hov = {}
+    # each arm stands off along its OWN outward bearing at its own radius, and
+    # holds the pen at its own hover — the three numbers the grid records
+    cent = np.mean([s.xy for s in bare.values()], axis=0)
     for aid, q in layout.Q_PARK_PROPOSED.items():
+        r, hv = layout.PARK_GRID_PROPOSED[aid]
         T = frames.fk(np.asarray(q, float))[0]
         tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(pen_lat=LAT)
         Twb = layout.FLEET_PROPOSED[aid].T_world_base()
-        hov[aid] = (Twb[:3, :3] @ tip + Twb[:3, 3])[:2]
-        assert np.allclose(hov[aid], layout.PARK_HOVER_PROPOSED[aid],
-                           atol=1e-3), aid
-    for a, b in ((13, 97), (17, 2), (31, 71)):
-        assert np.allclose(hov[a] + hov[b], [W, H], atol=2e-3), (a, b)
+        w = Twb[:3, :3] @ tip + Twb[:3, 3]
+        assert np.allclose(w[:2], layout.PARK_HOVER_PROPOSED[aid], atol=1e-3)
+        assert abs(w[2] - hv) < 1e-4, aid      # the literals are 4 decimals
+        b = np.asarray(bare[aid].xy, float)
+        u = (b - cent) / np.linalg.norm(b - cent)
+        # on the bearing, at the radius (or clipped to the sheet edge, which
+        # is why this is a bound and not an equality)
+        assert float(np.dot(w[:2] - b, u)) > 0.5 * r, aid
+        assert float(np.linalg.norm(w[:2] - b)) <= r + 1e-4, aid
