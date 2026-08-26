@@ -979,6 +979,67 @@ def test_prune_keeps_the_span_a_trip_home_can_reach():
     assert drop == [2], f"kept {keep}; segment 2 is unreachable from anywhere"
 
 
+def test_the_dead_end_is_named_and_it_is_the_one_given_back():
+    """`depot_round_trip` reads the two hovers out of the four depot legs.
+
+    A span offers two hovers, not four: the plan's FIRST sample carries
+    `into[0]` (fly out to it and draw forward) and `outof[1]` (draw backward and
+    leave from it); the LAST carries `into[1]` and `outof[0]`.  `fly_shrink`
+    gives back the end whose pair is broken, so getting the pairing wrong would
+    shave the good end and leave the pocket exactly where it was.
+    """
+    inf = float("inf")
+    rt = allocate.depot_round_trip
+    assert rt(None, None, {}, home=(np.ones(2), np.ones(2))) == (True, False, False)
+    # the LAST sample's hover is in a pocket: home cannot reach it (into[1])
+    # and it cannot reach home (outof[0])
+    assert rt(None, None, {}, home=(np.array([inf, 1.0]),
+                                    np.array([1.0, inf]))) == (False, False, True)
+    # ...and the same for the FIRST sample's
+    assert rt(None, None, {}, home=(np.array([1.0, inf]),
+                                    np.array([inf, 1.0]))) == (False, True, False)
+    assert rt(None, None, {}, home=(np.full(2, inf),
+                                    np.full(2, inf))) == (False, True, True)
+    # one WORKING direction is enough, even with the other one dead
+    assert rt(None, None, {}, home=(np.array([1.0, inf]),
+                                    np.array([1.0, inf])))[0] is True
+
+
+def test_the_blame_is_per_direction_and_not_per_span():
+    """A span that can be entered one way and left the other is in NO tour.
+
+    The shape is `fly_shrink`'s: the hover over one end is in a pocket, so the
+    forward node can be reached and never left and the backward node can be
+    left and never reached.  Read as a property of the SPAN — "some node has an
+    in-edge, some node has an out-edge" — it passes, `solve` still refuses, and
+    the fallback drops THE SHORTEST SPAN IN THE BAG instead: 30 mm of innocent
+    ink, over and over, until the real blocker happens to be the smallest thing
+    left.  Read per DIRECTION it is caught first time.
+    """
+    n = 2
+    N = 2 * n
+    C = np.full((N + 1, N + 1), np.inf)
+    # segment 0: fully connected, and short
+    C[N, 0] = C[N, 1] = 1.0
+    C[0, N] = C[1, N] = 1.0
+    # segment 1: node 2 can be entered from segment 0 and never left; node 3
+    # can be left and never entered
+    C[0, 2] = C[1, 2] = 1.0
+    C[3, 0] = C[3, 1] = C[3, N] = 1.0
+
+    segs = [dict(length=0.03), dict(length=0.50)]
+    real = allocate.sequence.cost_matrix
+    allocate.sequence.cost_matrix = lambda spec, sg, **kw: C
+    try:
+        keep, drop = allocate.prune_unflyable(None, segs, {})
+    finally:
+        allocate.sequence.cost_matrix = real
+    assert drop == [1], f"dropped {drop}; segment 1 is the one no order can use"
+    assert keep == [0], f"kept {keep}"
+    sub = allocate._sub_matrix(C, keep, n)
+    assert np.isfinite(allocate.sequence.solve(sub, 1)["cost"])
+
+
 def test_the_timeline_pays_exactly_what_a_bounce_was_priced_at():
     """A trip home mid-bag is `exit_beats` then `enter_beats`, to the float.
 

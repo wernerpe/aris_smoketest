@@ -752,9 +752,27 @@ def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
     arm 71's orange bag in this same phase has two spans the depot cannot reach
     and a perfectly good 14.5 s tour that reaches them from its other spans.
     Only the tour knows.  So the tour is what is asked, and the spans blamed are
-    the ones with no finite predecessor or no finite successor — the ones no
-    order could have used — with a shortest-span fallback for the rarer case
-    where every node has a neighbour and there is still no Hamiltonian path.
+    the ones no order could have used, with a fallback for the case where the
+    structure is subtler than a dead node.
+
+    "NO ORDER COULD HAVE USED" IS A PROPERTY OF A DIRECTION, NOT OF A SPAN, and
+    reading it as a property of the span is how this function spent a run's
+    coverage on innocent ink.  The first cut asked whether EITHER node had an
+    in-edge and whether EITHER had an out-edge — so a span whose forward node
+    can be entered and never left, and whose backward node can be left and never
+    entered, passed: the two clauses were satisfied by different directions and
+    no single direction satisfied both.  Such a span cannot be in any tour, and
+    it is not a curiosity — it is the exact shape of a span whose far end sits in
+    a pocket the router cannot join to anything (`fly_shrink` above).  Measured
+    on the proposed rig at h = 0.940, the test missed every one of them, fell
+    through to the fallback, and the fallback dropped THE SHORTEST SPAN IN THE
+    BAG — 30 mm of stroke 1 that the arm could fly to perfectly well — over and
+    over until the real blocker happened to be the shortest thing left.  So the
+    test is per DIRECTION (some direction must have both a way in and a way
+    out), and the fallback drops the LEAST CONNECTED span rather than the
+    smallest one: when the structure is subtler than a dead direction, the span
+    with the fewest ways in and out of it is the one an order is least likely to
+    have wanted, and the shortest span is merely the cheapest to lose.
     """
     n = len(segs)
     if n == 0:
@@ -770,12 +788,16 @@ def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
             break
         except RuntimeError:
             fin, m = np.isfinite(S), len(idx)
-            bad = [k for k in range(m)
-                   if not (fin[:, 2 * k].any() or fin[:, 2 * k + 1].any())
-                   or not (fin[2 * k, :].any() or fin[2 * k + 1, :].any())]
-            if not bad:            # no isolated node, and still no tour
+            # (ways in, ways out) of every node, the depot's row and column
+            # included — it is a legitimate predecessor and successor
+            n_in = fin.sum(axis=0)
+            n_out = fin.sum(axis=1)
+            usable = [max(min(int(n_in[2 * k + d]), int(n_out[2 * k + d]))
+                          for d in (0, 1)) for k in range(m)]
+            bad = [k for k in range(m) if usable[k] == 0]
+            if not bad:            # every direction has a way in and a way out
                 bad = [min(range(m),
-                           key=lambda k: (segs[idx[k]]["length"], k))]
+                           key=lambda k: (usable[k], segs[idx[k]]["length"], k))]
             for k in sorted(bad, reverse=True):
                 drop.append(idx.pop(k))
     return idx, sorted(drop)
@@ -1027,6 +1049,117 @@ def replan_segment(pts, span, spec, opts=None, backoff=BACKOFF_M,
     return None, dict(span, s0=s0, s1=s1, lost=lost, replans=tries)
 
 
+# ==========================================================================
+# CERTIFYING THE INK IS NOT CERTIFYING THE APPROACH — AND THE APPROACH HAS AN
+# END TO IT
+# ==========================================================================
+# `prune_unflyable` and the ban loop below it answer "can this arm fly this
+# BAG" and, when the answer is no, take the whole STROKE away from the arm.
+# That is a much blunter instrument than the measurement supports, and on the
+# proposed rig at h = 0.940 it is what the residual is made of.  Measured at
+# the shipped placement (`out/residual_anatomy.py`'s question, asked again):
+# of the 1.8622 m the primary allocation leaves empty, 1.8424 m is ink that ONE
+# arm certifies end to end AND can fly to from its own depot — and it is
+# dropped because the arm was banned from the whole stroke.
+#
+# THE THING THAT IS ACTUALLY UNREACHABLE IS AN END, NOT A STROKE.  Every one of
+# those spans has the same shape: the hover over one of its two ends is in a
+# pocket the depot cannot be joined to — `paper.route` refuses q_seed -> hover
+# AND hover -> q_seed, at every shape on its ladder — while the hover over the
+# OTHER end is 6 seconds away and perfectly ordinary.  A span like that can be
+# drawn; it just cannot be LEFT from the far end, so it can only ever be the
+# last thing an arm does in a pass, and an arm that holds four of them can
+# place one.
+#
+# So the far end is given back instead of the stroke.  It is exactly the
+# discipline `replan_segment` already applies to certification — back off until
+# it certifies — applied to the other half of the question: back off until the
+# arm can get its pen there and away again.  What is given back becomes a hole
+# like any other and goes to the residual pass, which offers it to the whole
+# fleet from scratch.
+#
+# THE PREDICATE IS A ROUND TRIP, AND IT IS THE ONE THAT MAKES MULTI-TOUR BAGS
+# TOTAL.  A span with a direction whose entry can be reached from `q_seed` and
+# whose exit can reach `q_seed` is a span that can be flown AS ITS OWN TOUR, in
+# any bag, in any order; a bag of nothing but such spans is flyable by
+# construction and `prune_unflyable` cannot drop anything from it.  That is why
+# this is checked here, at the span, rather than left to the bag.
+FLY_GIVE = (0.06, 0.15, 0.30, 0.50, 0.70)   # fractions of the span given back
+
+
+def depot_round_trip(spec, entry, mat, home=None):
+    """Can the arm fly out to this span from `q_seed` and fly home after it?
+
+    -> (ok, head_dead, tail_dead).  `head`/`tail` are the FIRST and LAST samples
+    of the plan as it will be drawn, so "tail_dead" means the far end is the one
+    in the pocket.  Both can be dead, and then both ends are given back.
+    """
+    outof, into = sequence.home_legs(spec, [entry], **mat) if home is None \
+        else home
+    if len(into) < 2:
+        return True, False, False
+    ok = [bool(np.isfinite(into[d]) and np.isfinite(outof[d])) for d in (0, 1)]
+    if any(ok):
+        return True, False, False
+    # node 0 enters at the plan's FIRST sample and exits at its LAST; node 1 is
+    # the same segment turned round.  So the head's hover carries into[0] and
+    # outof[1], and the tail's carries into[1] and outof[0].
+    head = bool(np.isfinite(into[0]) and np.isfinite(outof[1]))
+    tail = bool(np.isfinite(into[1]) and np.isfinite(outof[0]))
+    return False, not head, not tail
+
+
+def fly_shrink(st, sp, plan, spec, opts, mat, ladder=FLY_GIVE,
+               min_seg=MIN_SEG_M, verbose=False):
+    """Give an unreachable END back until the arm can fly what is left.
+
+    -> (plan, sp, given_back_metres), and THE SPAN IT WAS GIVEN when no shrink
+    of it is round-trippable.  Handing the original back rather than dropping it
+    is what makes this a pure improvement: a span the depot cannot round-trip
+    can still be the LAST thing an arm does in a pass — the tour ends with a
+    lift and the arm freezes — and `prune_unflyable` is the thing that knows
+    whether the bag has room for one more of those.  This only ever offers it a
+    better span than it would have had.
+
+    A GEOMETRIC LADDER AND NOT `replan_segment`'s 6 mm STEP, because the two are
+    backing off from different things.  A span that will not certify is usually
+    a millimetre from one that will; a hover in a pocket the depot cannot reach
+    is tens of centimetres from one that is not, and stepping there 6 mm at a
+    time would be forty re-plans and forty routes per span.
+    """
+    ent = _entry(st, sp, plan)
+    ok, bad_head, bad_tail = depot_round_trip(spec, ent, mat)
+    if ok:
+        return plan, sp, 0.0
+    L = polyline_length(st["pts"])
+    s0, s1, d = float(sp["s0"]), float(sp["s1"]), int(sp["direction"])
+    width = s1 - s0
+    for f in ladder:
+        a, b = s0, s1
+        give = f * width
+        # the plan's LAST sample sits at s1 when the span is drawn forward and
+        # at s0 when it is drawn backward; the head is the other one
+        if bad_tail:
+            b, a = (b - give, a) if d > 0 else (b, a + give)
+        if bad_head:
+            a, b = (a + give, b) if d > 0 else (a, b - give)
+        if (b - a) * L < min_seg or b <= a:
+            break
+        pl, s2 = replan_segment(st["pts"], dict(sp, s0=a, s1=b), spec, opts,
+                                min_seg=min_seg)
+        if pl is None:
+            continue
+        if depot_round_trip(spec, _entry(st, s2, pl), mat)[0]:
+            back = (width - (float(s2["s1"]) - float(s2["s0"]))) * L
+            if verbose:
+                print(f"  ~~ arm {getattr(spec, 'arm_id', '?')} gives back "
+                      f"{1000 * back:.0f} mm of stroke {st['id']} so it can "
+                      f"fly to the rest: [{s0:.4f},{s1:.4f}] -> "
+                      f"[{s2['s0']:.4f},{s2['s1']:.4f}]")
+            return pl, s2, back
+    return plan, sp, 0.0
+
+
 def merge_remainders(strokes, programs, specs, aopts, min_seg=MIN_SEG_M,
                      gap_tol=GAP_TOL_M, mat_of=None, tol=1e-9, rounds=3,
                      verbose=False):
@@ -1087,9 +1220,24 @@ def merge_remainders(strokes, programs, specs, aopts, min_seg=MIN_SEG_M,
       if `prune_unflyable` still finds the arm a tour with the merged span in
       it (`mat_of`); otherwise it is rolled back.  Skipping that check is how
       an improvement to coverage turns into a lost segment somewhere else.
+
+      ...AND A TOUR IS NOT ENOUGH, BECAUSE THE PHASE MAY HAVE TO GO HOME.  A
+      merge that grows a span back over the end `fly_shrink` gave away can
+      still pass the tour test — such a span is flyable as the LAST thing the
+      arm does, the tour ending in a lift — and then `build_phases` re-sequences
+      the phase with `return_home=True` (every pass but the last one does) and
+      there is no ordering at all, because the last leg is now the trip home
+      and that is the leg the far end cannot fly.  That refusal costs the whole
+      phase and the rescue ladder underneath it.  So a merge may not take a span
+      that could round-trip to the depot and hand back one that cannot: it is
+      1 cm of ink against the pass it is drawn in.
     """
     by_id = {st["id"]: st for st in strokes}
     recs = []
+
+    def _round_trips(arm, bag, m):
+        """How many of `bag`'s spans the arm can fly out to and home from."""
+        return sum(int(depot_round_trip(specs[arm], e, m)[0]) for e in bag)
 
     def _accept(arm, keep, what):
         """Commit `keep` as arm `arm`'s bag if the arm can still fly it."""
@@ -1101,6 +1249,11 @@ def merge_remainders(strokes, programs, specs, aopts, min_seg=MIN_SEG_M,
                 if verbose:
                     print(f"  merge: arm {arm} {what} certifies and breaks its "
                           f"own tour; rolled back")
+                return False
+            if _round_trips(arm, keep, m) < _round_trips(arm, programs[arm], m):
+                if verbose:
+                    print(f"  merge: arm {arm} {what} certifies and costs a "
+                          "span its trip home; rolled back")
                 return False
         programs[arm] = keep
         return True
@@ -3694,6 +3847,9 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     mk = round(float(min_seg), 9)
     replan_memo = share.setdefault(("replan", fam, mk), {})
     entry_memo = share.setdefault(("entry", fam, mk), {})
+    # NOT SHARED ACROSS PROFILES, because the answer depends on `q_start` and
+    # on the pen, which `_mat` carries and the plan family does not.
+    fly_memo, fly_given = {}, 0.0
 
     if colors is None:
         colors, cover, table = best_partition(strokes, ivmap, arms, min_seg,
@@ -3790,6 +3946,19 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                     plan, sp = hit[0], dict(hit[1])
                 if plan is None:
                     continue
+                # ...and the END the arm cannot fly to is given back before it
+                # can cost the whole stroke (`fly_shrink`).  Memoised on the
+                # same key: the ban loop re-covers up to three times and the
+                # same span is usually chosen again.
+                fk = rk + (int(sp["direction"]),)
+                hit = fly_memo.get(fk)
+                if hit is None:
+                    hit = fly_shrink(st, sp, plan, specs[span["arm"]],
+                                     aopts[span["arm"]], _mat(span["arm"]),
+                                     min_seg=min_seg, verbose=True)
+                    fly_memo[fk] = hit
+                plan, sp, gave = hit
+                fly_given += float(gave)
                 placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
                                    entry=_entry(st, sp, plan)))
         t_replan += time.time() - t2
@@ -3914,6 +4083,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
                unflyable=unflyable, banned=sorted(banned),
+               fly_given_m=float(fly_given),
                park_blocked=park_blocked, park=dict(park.stats),
                park_arms=sorted(park.caps), park_groups=park.groups,
                merges=merges, n_merged=int(n_merged),
@@ -3981,7 +4151,10 @@ def report(res, strokes):
     lines.append(f"strokes {len(strokes)}   traced {tot:.2f} m   "
                  f"drawn {res['drawn_len']:.2f} m   "
                  f"dropped {res['dropped_len']:.2f} m "
-                 f"({100 * res['dropped_len'] / max(tot, 1e-9):.1f} %)")
+                 f"({100 * res['dropped_len'] / max(tot, 1e-9):.1f} %)"
+                 + (f"   [{res['fly_given_m']:.3f} m of it is span ENDS the "
+                    "arm could not fly to, given back rather than costing the "
+                    "whole stroke]" if res.get("fly_given_m") else ""))
     lines.append(f"{'arm':>5} {'pen':>7} {'mm':>4} {'segs':>5} {'metres':>8} "
                  f"{'strokes':>8} {'cuts':>5} {'transit':>8} {'transit_s':>10} "
                  f"{'was':>8} {'rev':>4}")

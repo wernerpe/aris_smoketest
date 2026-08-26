@@ -229,14 +229,29 @@ def search_placement(px, arms, atlas_dir, margin=0.06, radius=0.03,
                 return float(g["proxy"])
         return float("nan")
 
+    # THE TIE-BREAK IS THE BUSIEST ARM, AND IT IS NOT COSMETIC.  A finer offset
+    # grid puts several translations of the same scale on the same coverage —
+    # exactly the case this search exists to resolve — and "the first one the
+    # loop saw" is not an answer.  `loads` carries the metres each arm ended up
+    # with, so among placements the coverage cannot separate, take the one whose
+    # ink is least piled on ONE arm: that is a lower floor for the phase
+    # (`nominal_floor` is the busiest arm's own programme) and less of the
+    # middle-row crowding the conductor pays for in pauses.  It can never
+    # outrank coverage, because it is only consulted at equality.
+    def _cell_key(r):
+        loads = [float(v) for v in (r.get("loads") or {}).values()]
+        busiest = max(loads) if loads else 0.0
+        return (round(r["cov"], 9), -busiest, -abs(r["dx"]) - abs(r["dy"]))
+
     per_cell = {}
     for r in real:
         k = (round(r["rot"], 6), round(r["f"], 6))
-        if k not in per_cell or r["cov"] > per_cell[k]["cov"]:
+        if k not in per_cell or _cell_key(r) > _cell_key(per_cell[k]):
             per_cell[k] = r
     best = max(r["cov"] for r in real)
     ok = [r for r in per_cell.values() if r["cov"] >= best - slack]
-    pick = max(ok, key=lambda r: (round(r["logo_w"] * r["logo_h"], 9), r["cov"]))
+    pick = max(ok, key=lambda r: (round(r["logo_w"] * r["logo_h"], 9),
+                                  _cell_key(r)))
 
     if verbose:
         print(f"\n{'rot':>5} {'scale':>6} {'w x h':>17} {'best offset':>16} "
