@@ -68,7 +68,7 @@ os.environ.setdefault("ARIS_TOOL", "lateral")
 from aris_sixarm import allocate, atlas, layout, paper, writing   # noqa: E402
 from aris_sixarm import frames                                    # noqa: E402
 
-ATLAS_DIR = ROOT / "out" / "atlas_proposed_h0940_banded"
+ATLAS_DIR = ROOT / "out" / "atlas_proposed_h0940_gated"
 OUT = ROOT / "out"
 GRID = 0.02
 SHEET = (1.8034, 3.63064)

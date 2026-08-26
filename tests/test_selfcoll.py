@@ -236,7 +236,7 @@ def test_a_gated_atlas_row_is_a_strict_go_row():
     """
     import glob
     from aris_sixarm import atlas
-    dirs = sorted(glob.glob(os.path.join(ROOT, "out", "atlas_gated*")))
+    dirs = sorted(glob.glob(os.path.join(ROOT, "out", "atlas_*gated*")))
     found = False
     for d in dirs:
         for f in sorted(glob.glob(os.path.join(d, "atlas_arm*.npz"))):

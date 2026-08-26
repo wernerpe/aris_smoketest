@@ -387,7 +387,7 @@ def lateral():
         paper.clear_cache()
 
 
-PROPOSED_ATLAS = ROOT / "out/atlas_proposed_h0940_banded"
+PROPOSED_ATLAS = ROOT / "out/atlas_proposed_h0940_gated"
 
 
 def _proposed_cells(aid, n):

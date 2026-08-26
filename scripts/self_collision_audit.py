@@ -105,7 +105,7 @@ OUT = ROOT / "out"
 CAPS = coordination.CAPSULES_LAT
 NB = coordination.N_BASE
 PEN_EXT, PEN_LAT = 0.110, 0.110
-ATLAS_DIR = "atlas_proposed_h0940_banded"
+ATLAS_DIR = "atlas_proposed_h0940_gated"
 
 # The BODIES of the self model: the rigid groups of an arm.  `hand` folds in
 # the fingers and `tool` the whole holder, because each group is one rigid body
