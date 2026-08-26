@@ -34,6 +34,88 @@ lateral pen, **mount obstacles active**), **55.98 % >= 2 arms**, 13.95 %
 single cells at canvas corners.  All six certified ready poses clear every
 other arm's steel by **>= 0.35 m**.
 
+> **v3 (2026-08-26) — AND THE OTHER FIVE ARMS WERE NOT IN THE ROOM EITHER.
+> Read §0a before quoting any number above.**  v2 made the STEEL an obstacle
+> and left the ARMS out: every gate in this repo modelled the booms above
+> z = 0.85 and nothing below the mount plane.  With each neighbour's
+> pose-invariant base column in the obstacle set the union is **96.69 %**, not
+> 99.98 %, and — the number this study never measured at all — the first
+> CSAIL programme this layout can actually CONDUCT draws **55 % of the mark
+> with one arm on the paper at a time**.
+
+## 0a. v3: the arms are obstacles too, and that is the whole answer
+
+**What changed.**  `mounts.arm_column_box` adds each OTHER arm's base column —
+capsule (0, 1) of the conductor's own chain, base flange to shoulder, 0.333 m
+along the base z axis — to every static-obstacle set, at radius
+`link_r + calib` = 0.09 + 0.03 = **0.12 m** (derived, not chosen: a box gate is
+compared against `STATIC_MARGIN` = 0.05 and the conductor's pair gate against
+`SAFETY + CALIB` = 0.08, so inflating by the difference makes the two the same
+statement).  It is the one part of a robot that is in the same place in every
+pose it can hold, so it is static truth; the rest of a parked arm stays the
+conductor's problem.
+
+**What it costs on paper — almost nothing, and it is all in one place.**
+
+| | union strict-GO | >= 2 arms | dead cells |
+|---|---:|---:|---:|
+| empty air (v2, published) | 99.98 % | 55.98 % | 3 |
+| neighbours' base columns | **96.69 %** | **50.33 %** | **548** |
+
+545 of the 548 dead cells are within **0.20 m of a base** — six small discs of
+paper, one under each arm, that no arm can reach because a neighbour's shoulder
+is standing on them.  The other 3 are v2's own corner cells.  At 2 cm that is
+2.2 % of the canvas and it is not where a picture has to go: the placement
+search finds 100 %-live placements without trying.
+
+**What it costs in PARALLELISM — everything.**  The first occupancy-aware CSAIL
+run (`ARIS_RIG=proposed ARIS_TOOL=lateral`, atlas re-swept under the new gate,
+placement chosen by `artwork.search_placement` on that atlas) allocates
+**97.8 % of the mark to four arms** and then cannot conduct it:
+
+| conduct mode | result |
+|---|---|
+| all six at once (4 draw) | REFUSED — no monotone pause schedule, all 24 priority orders |
+| the two columns (`--arm-phases disjoint`) | REFUSED |
+| the transverse pairs / the diagonals | REFUSED, both groups |
+| **one arm at a time (`--arm-phases solo`)** | **2 of 4 phases certified** |
+
+The certified programme is arms 2 and 31 drawing alone, 83.7 s, **55.25 %** of
+the mark, `scene_check` PASS on both phases, **0 s of conductor pauses** —
+because there is never a second arm to wait for.
+
+**Why, and it is the pair spacing.**  0.61 m between transverse partners is
+what makes the pair cover each other's under-base hole (§0), and it is also
+what makes them unable to be in the room together.  Measured on the certified
+allocation, every parked arm's chain against every other arm's certified
+drawing poses:
+
+| parked arm | 13 | 17 | 2 | 71 | 31 | 97 |
+|---|---:|---:|---:|---:|---:|---:|
+| clearance to the nearest other arm's ink | 771 mm | 717 mm | 173 mm | 139 mm | 121 mm | **20 mm** |
+
+The three transverse partners are the three tightest, by an order of
+magnitude, and a parked arm's schedule is a CONSTANT — no amount of waiting
+resolves it.  Arm 97's 20 mm was fixed by parking it compactly (r = 0.30, 128
+mm; `layout.PARK_GRID_PROPOSED`) and the fleet's worst is now 121 mm, above the
+80 mm the conductor asks — but a park pose is a hover 0.10-0.20 m over the
+canvas, so "out of the way" is a place that mostly does not exist on this
+layout.  Folding the arms up instead (`out/tuck_parks.json`, the
+shadow-minimising set) is WORSE: it puts each arm exactly where its partner
+reaches under its own base, and arm 2's tuck INTERPENETRATES arm 97's ink by
+15 mm.
+
+**What that means for the layout decision.**  The 2 x 3 grid at 0.61 m is a
+COVERAGE optimum measured one arm at a time, and it remains one: 96.7 % of the
+canvas, 50 % of it reachable by two or more arms.  What it is not is a
+CONCURRENCY optimum, and nothing in v1 or v2 measured that.  The pair spacing
+that buys the under-base hole is the same spacing that makes a partner
+unparkable, and on the first real programme the fleet's effective parallelism
+is **one**.  A layout study that ranks on union coverage will keep choosing it;
+the question this run puts to the redesign is whether the rig is being bought
+for coverage or for six arms drawing at once, because at 0.61 m it cannot be
+both.
+
 ## 1. How optimistic was 99.38 %?
 
 Barely, on union — and materially, on redundancy.  v1's winner re-scored on
@@ -290,10 +372,14 @@ same plumbing the final rig's frame uses, not a parallel path.
 
 ## 6a. What this study still does NOT claim
 
-- **Inter-arm collision is not modelled.**  Six arms whose workspaces overlap
-  on 55.98 % of the canvas will contend; v1 already flagged this at 50 % and
-  this layout raises it.  Handoffs get easier and traffic gets harder, and the
-  conductor is untested at this density.
+- ~~**Inter-arm collision is not modelled.**~~  **ANSWERED, v3 (§0a), and it
+  is the finding.**  Six arms whose workspaces overlap on half the canvas do
+  contend: the base columns cost 3.3 pp of union coverage and all of the
+  concurrency.  The conductor at this density certifies one arm at a time.
+- **The pose-dependent part of a PARKED arm is still not static truth.**  Only
+  the base column is (§0a); where the other five stand while one draws is the
+  conductor's problem and `layout.certified_park_poses`' choice, and on this
+  layout that choice has 121 mm of room in it.
 - The ceiling grid's own cross-members, hangers and services are not modelled
   — only the six booms.  A real grid adds structure the atlas must re-sweep.
 - Paper transport, cable routing and the web's own curl are not modelled.  The
@@ -440,3 +526,31 @@ Artefacts: `out/layout_candidates.json` (every stage, the mount parameters and
 the constraint set), `out/layout_study/{v1_*,med_*,fine_*,grid_h*,spacing/}`,
 `out/layout_study.png`, `out/proposed_scene.html` (the schematic booms, plates
 and pedestals are drawn at the dimensions the study treated as obstacles).
+
+**v3 (§0a) — the occupancy-aware atlas and the first certified programme:**
+
+```
+# the atlas, re-swept with every neighbour's base column in the obstacle set
+ARIS_TOOL=lateral python3 scripts/run_atlas6.py --rig proposed \
+        --out out/atlas_proposed_occ --png out/atlas_proposed_occ.png
+
+# where the picture goes, scored on THAT atlas (--slack 0 = 100 %-live)
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/draw.py \
+        assets/csail/csail_old_med.gif --out csail_proposed \
+        --atlas out/atlas_proposed_occ --place-only --rotate 0,90 \
+        --scales 0.6 1.0 9 --search-offset 1.10 --offset-step 0.10 \
+        --top 3 --slack 0.0
+
+# and the programme: one arm on the paper at a time
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/draw.py \
+        assets/csail/csail_old_med.gif --out csail_proposed \
+        --atlas out/atlas_proposed_occ --qd-frac 0.60 \
+        --placement out/csail_proposed_placement.json \
+        --arm-phases solo --skip-unconductable
+```
+
+Artefacts: `out/atlas_proposed_occ/` + `out/atlas_proposed_occ.png` (the
+coverage map), `out/csail_proposed_placement.{json,png}`,
+`out/csail_proposed_{program,schedule}.json`, `out/csail_proposed.html` /
+`.zip` (the animation).  Drop `--arm-phases`/`--skip-unconductable` to
+reproduce the six-arm refusal, and `--arm-phases disjoint` for the columns.
