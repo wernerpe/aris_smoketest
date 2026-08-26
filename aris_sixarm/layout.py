@@ -396,7 +396,8 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
     raise RuntimeError(f"no certified ready pose for arm {spec.arm_id}")
 
 
-def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None):
+def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None,
+                         clear=None):
     """Where the six arms WAIT. -> {arm_id: q (7,)}, one certified pose each.
 
     THE PARK POSE IS NOT DECORATION AND IT IS NOT INHERITED.  `spec.q_seed` is
@@ -423,13 +424,42 @@ def certified_park_poses(fleet, hover=0.10, sheet=SHEET_FINAL6, pen_lat=None):
     with the pen tip above the paper, best min(margin, 2.5 sigma).  Costs
     ~0.4 s for six arms; `Q_PARK_PROPOSED` is this function's own output on
     `LAYOUT_PROPOSED`, baked so that importing the rig does not re-solve it.
+
+    AND THEN THE FLEET IS CHECKED AGAINST ITSELF, because six individually
+    certified poses are not a certified fleet.  `certified_ready_pose` knows
+    about one arm; the bearing keeps the six apart by construction and NOT by
+    proof, and the proof is cheap.  It is also not academic: the same recipe
+    at `hover = 0.20` picks a set that leaves 4 mm between two arms — every
+    pose gated, every pose fine, the fleet unflyable.  `clear` m is the floor
+    (default `coordination.SAFETY_M + CALIB_M`, the margin the conductor holds
+    every pair to); a fleet under it RAISES rather than being handed back.
+
+    THE HOVER IS 0.10 m AND THAT IS MEASURED, not inherited.  Re-allocating
+    the CSAIL placement with the fleet parked at 0.10 / 0.20 / 0.25 / 0.30 m
+    moves coverage by 0.13 pp — 20 mm of ink in 15.8 m — and costs 0.21 rad of
+    joint margin by 0.30 m.  The park height is not what the drawing is short
+    of, so it stays where the study's own ready poses are.
     """
+    from .coordination import ArmPath, clearance_matrix, SAFETY_M, CALIB_M
+    clear = SAFETY_M + CALIB_M if clear is None else float(clear)
     cent = np.mean([np.asarray(s.xy, float) for s in fleet.values()], axis=0)
     out = {}
     for aid, spec in sorted(fleet.items()):
         out[aid] = certified_ready_pose(
             spec, hover=hover, sheet=sheet, pen_lat=pen_lat,
             bearing=np.asarray(spec.xy, float) - cent)[0]
+    paths = {aid: ArmPath(aid, q[None, :], 0.05, spec=fleet[aid])
+             for aid, q in out.items()}
+    ids = sorted(out)
+    for x, i in enumerate(ids):
+        for j in ids[x + 1:]:
+            d = float(np.min(clearance_matrix(paths[i], paths[j])))
+            if d < clear:
+                raise RuntimeError(
+                    f"arms {i} and {j} park {1000 * d:.1f} mm apart, under the "
+                    f"{1000 * clear:.0f} mm the conductor holds every pair to: "
+                    f"the six poses are individually certified and the FLEET "
+                    f"is not (hover {hover})")
     return out
 
 

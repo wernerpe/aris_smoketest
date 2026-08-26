@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from aris_sixarm import allocate, sequence, writing            # noqa: E402
@@ -349,6 +350,31 @@ def test_solver_handles_the_degenerate_arms():
     r = sequence.solve(C1, 1)
     assert r["order"] == [0] and r["dirs"][0] in (1, -1)
     assert abs(r["cost"] - sequence.sequence_cost(C1, 1, [0], r["dirs"])) < 1e-12
+
+
+def test_one_unreachable_segment_is_refused_and_not_priced_at_infinity():
+    """A BAG WITH NO PAPER-LEGAL TOUR IS A REFUSAL AT EVERY SIZE.
+
+    `cost_matrix` prices a pen-up `paper.route` will not fly as `inf`, and
+    `prune_unflyable` drops exactly the spans that make `solve` RAISE.  The
+    n == 1 fast path used to return the `inf` as a cost instead, so a span an
+    arm could ink and could not reach survived pruning and came back as
+    `writing.PaperRefused` after the whole allocation had been paid for.  Both
+    solvers must agree, and they must agree at n = 1 as much as at n = 4.
+    """
+    for n in (1, 2):
+        C = np.full((2 * n + 1, 2 * n + 1), 1.0)
+        C[2 * n, :2 * n] = np.inf          # the depot cannot reach any entry
+        with pytest.raises(RuntimeError, match="no feasible order"):
+            sequence.held_karp(C, n)
+        with pytest.raises(RuntimeError, match="no feasible order"):
+            sequence.solve(C, n)
+    # ONE reachable direction is still a tour: the refusal is "no finite
+    # ordering", not "some edge is infinite"
+    C = np.full((3, 3), 1.0)
+    C[2, 0] = np.inf                        # forward entry refused, backward ok
+    r = sequence.solve(C, 1)
+    assert r["order"] == [0] and r["dirs"] == [-1] and np.isfinite(r["cost"])
 
 
 if __name__ == "__main__":

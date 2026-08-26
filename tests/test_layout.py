@@ -294,6 +294,12 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
               for aid, s in sorted(fl.items())}
     assert _park_clearance(inward, fl) < 0.0       # INTERPENETRATING
 
+    # and the function will not hand back a fleet that does that.  0.20 m of
+    # hover is the near miss it was written for: six gated poses, 4 mm apart.
+    bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
+    with pytest.raises(RuntimeError, match="park .* mm apart"):
+        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT)
+
 
 def test_baked_park_poses_are_that_functions_own_output():
     """The literals in `layout.py` are `certified_park_poses`' output on

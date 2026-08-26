@@ -673,14 +673,29 @@ def held_karp(C, n):
 
     Ties go to the lowest node id (segment index first, forward before
     backward), which makes the result a function of the cost matrix alone.
+
+    RAISES `RuntimeError` when no ordering is finite — including over ONE
+    segment, where the only ordering is "fly there and draw it".  That case has
+    its own two-line branch and the branch used to hand back its `inf` as a
+    cost instead of refusing (2026-08-25): a bag whose single span the arm can
+    ink and cannot reach was reported as a tour, `prune_unflyable` only ever
+    drops what makes `solve` RAISE so the span stayed, and the refusal surfaced
+    a stage later as `writing.PaperRefused` with the whole run already
+    allocated.  On the proposed rig, where an arm ending a pass with one
+    segment is ordinary, that killed all four execution profiles.
+    `cluster_held_karp` has no such shortcut and always raised, so the two
+    solvers disagreed about the same bag — which is how it was found.
     """
     N = 2 * n
     if n == 0:
         return dict(order=[], dirs=[], cost=0.0, states=0, method="held_karp")
     if n == 1:
-        k = int(np.argmin([C[N, 0] + C[0, N], C[N, 1] + C[1, N]]))
+        tot = np.array([C[N, 0] + C[0, N], C[N, 1] + C[1, N]], float)
+        if not np.isfinite(tot).any():
+            raise RuntimeError(f"no feasible order over {n} segments")
+        k = int(np.argmin(tot))
         return dict(order=[0], dirs=[1 if k == 0 else -1],
-                    cost=float(C[N, k] + C[k, N]), states=2, method="held_karp")
+                    cost=float(tot[k]), states=2, method="held_karp")
     T = C[:N, :N]
     dp = np.full((1 << n, N), np.inf)
     par = np.full((1 << n, N), -1, np.int32)
