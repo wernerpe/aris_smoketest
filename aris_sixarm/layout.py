@@ -115,6 +115,12 @@ class StudySpec(ArmSpec):
     against them.  The legacy proxies stay on top: paper plane, and the
     inverted arms' OWN boom cylinder (rig stays "sixarm", so `planner`,
     `validate` and `atlas` keep gating it at the more conservative r = 0.12).
+
+    Since 2026-08-25 `mount_boxes` also carries the neighbours' BASE COLUMNS
+    (`mounts.arm_column_box`) — the arms themselves, in the only 0.333 m of
+    them that is the same in every pose.  On this rig that is not a detail:
+    a transverse pair sits 0.61 m apart, so each arm's partner stands inside
+    the ink the empty-air atlas was handing it.
     """
     mount_boxes: tuple = field(default=(), compare=False, repr=False)
 
@@ -123,8 +129,9 @@ class StudySpec(ArmSpec):
         return "study"        # fleet.sheet_for -> SHEET_FINAL6
 
     def static_obstacles(self):
-        """Every OTHER arm's mount hardware.  Own mount excluded by
-        construction — the arm is bolted to it (fleet.ArmSpec convention)."""
+        """Every OTHER arm's mount hardware and base column.  Own mount and
+        own column excluded by construction — the arm is bolted to the one
+        and IS the other (fleet.ArmSpec convention)."""
         return list(self.mount_boxes)
 
 
@@ -196,7 +203,8 @@ def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
 
     layout = dict(floor=[(x, y) x nf], inv=[(x, y) x (6 - nf)], h=0.922)
     `with_mounts=False` reproduces the v1 GREEN-FIELD specs exactly (no
-    boxes) — that is how the study re-scores v1's winner honestly.
+    boxes AT ALL — no hardware and no neighbour bodies) — that is how the
+    study re-scores v1's winner honestly.
     `q_park` is {arm_id: q} of park poses (`certified_park_poses`); `None`
     leaves every arm on its mount's legacy default seed, which is what the
     COVERAGE study wants and what nothing that FLIES the arm can use.
@@ -211,11 +219,10 @@ def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
         bare[aid] = study_spec(aid, "inv", xy, h=h, q_ready=q_park.get(aid))
     if not with_mounts:
         return bare
-    per = mounts.fleet_mount_boxes(bare, h, mount_model)
     return {aid: study_spec(s.arm_id, s.mount, s.xy, h=h,
                             q_ready=q_park.get(aid),
-                            mount_boxes=[b for o, bs in per.items()
-                                         if o != aid for b in bs])
+                            mount_boxes=mounts.obstacles_for(aid, bare, h,
+                                                             mount_model))
             for aid, s in bare.items()}
 
 
@@ -558,7 +565,9 @@ PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
 # 0.210 m, >= 0.436 m from the nearest neighbour's steel, joint margin >=
 # 0.314 (gate 0.30), sigma >= 0.235 (gate 0.14).  The tightest pair of parked
 # arms (13, 17) holds 181 mm — against the 80 mm the conductor asks of every
-# pair while they move.
+# pair while they move.  The nearest thing to a parked arm is not steel and
+# not a pose: it is the neighbouring ARM's base column, 122 mm from arm 17's
+# chain to arm 13's column BOX (152 mm to the robot inside it).
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.

@@ -31,10 +31,11 @@ that every published number still reproduces.  `activate(name)` (or the
 that accept a `fleet=` argument default to whatever is active, and passing
 `FLEET_SIXARM` reproduces the legacy behaviour bit for bit (tests pin that).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import mounts
 from . import rig_final
 from .frames import (Q_READY_FLOOR, Q_READY_INV, Q_READY_INV_FINAL,
                      Q_READY_WALL, PEN_EXT, rotz, roty)
@@ -59,6 +60,9 @@ class ArmSpec:
     R: tuple = None                 # explicit base rotation (9-tuple, row-major)
     pen_ext: float = None           # tool config; None -> frames.PEN_EXT
     q_ready: tuple = None           # explicit ready pose; None -> mount rule
+    # the OTHER arms' pose-invariant base columns, written in by
+    # `mounts.attach_body_columns` once the registry exists (see there).
+    column_boxes: tuple = field(default=(), compare=False, repr=False)
 
     @property
     def q_seed(self):
@@ -93,11 +97,17 @@ class ArmSpec:
         the mount boxes still constrain every OTHER arm).  Legacy rig: none —
         the sixarm proxies (paper plane + own-boom cylinder) stay in force
         unchanged.
+
+        PLUS, on any rig whose registry called `mounts.attach_body_columns`,
+        the other arms' pose-invariant BASE COLUMNS: an arm is an obstacle
+        even when it is not moving, and 0.333 m of it is an obstacle even
+        when nobody has decided what pose it will hold.
         """
+        cols = list(self.column_boxes)
         if self.rig != "final":
-            return []
+            return cols
         key = {13: "up", 31: "down", 2: "side"}[self.arm_id]
-        return rig_final.frame_boxes_canvas(exclude_tag=f"mount:{key}")
+        return rig_final.frame_boxes_canvas(exclude_tag=f"mount:{key}") + cols
 
 
 def _final(key, arm_id, name, color, active=True):
@@ -114,13 +124,17 @@ def _final(key, arm_id, name, color, active=True):
 # ids and mounts straight from the drawing's own text: "Three robot arms:
 # 13 floor, 31 left - upside down, 2 right side position".  Identity colors
 # carried over from the legacy registry.
-FLEET_FINAL = {
+FLEET_FINAL = mounts.attach_body_columns({
     13: _final("up", 13, "up-front", (0.12, 0.47, 0.71)),
     31: _final("down", 31, "down-left", (0.84, 0.15, 0.16)),
     2:  _final("side", 2, "side-right", (0.17, 0.63, 0.17)),
-}
+})
 
-# the legacy six-arm layout, VERBATIM (sources: docs/DECISIONS.md)
+# the legacy six-arm layout, VERBATIM (sources: docs/DECISIONS.md) — and
+# verbatim includes its obstacle model, which is the two legacy proxies and
+# nothing else: no structure, and no body columns.  Every published number in
+# this repo was earned against exactly that, and this registry exists so they
+# still reproduce.
 FLEET_SIXARM = {
     13: ArmSpec(13, "front", "floor", (-0.1118, 1.0008), 0.0, True, (0.12, 0.47, 0.71)),
     17: ArmSpec(17, "back", "floor", (3.7186, 1.0008), np.pi, True, (0.09, 0.75, 0.81)),

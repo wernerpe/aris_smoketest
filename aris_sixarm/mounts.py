@@ -1,4 +1,11 @@
-"""SCHEMATIC MOUNT HARDWARE as first-class static obstacles (layout study v2).
+"""SCHEMATIC MOUNT HARDWARE — and the arms' own base columns — as first-class
+static obstacles (layout study v2; body columns 2026-08-25).
+
+Two things live here.  The first is the STEEL (below).  The second, added
+after the proposed rig refused to conduct anything at all, is the part of a
+NEIGHBOUR ARM that is an obstacle in every configuration it can hold: its base
+column, `arm_column_box`, whose long note is at the bottom of this module.
+
 
 v1 of the layout study (docs/LAYOUT_STUDY.md v1, commit 83ad415) modelled NO
 mounting hardware: neighbouring booms and base plates were not obstacles, so
@@ -94,6 +101,19 @@ class MountModel:
     floor_chain_rise: float = 0.66
     inv_chain_drop: float = 0.30      # <= measured 0.330, rounded down
     tool_top: float = 0.12            # highest z of a tool capsule point
+
+    # --- THE NEIGHBOUR'S OWN BODY (see `arm_column_box`) -------------------
+    # link_r/calib restate coordination.LINK_R / coordination.CALIB_M and
+    # d1 restates frames.DH[0][2]; tests/test_mounts.py pins all three.
+    link_r: float = 0.09              # capsule radius of the base column
+    calib: float = 0.03               # unsurveyed-base allowance (inter-arm)
+    d1: float = 0.333                 # base flange -> shoulder, modified DH
+
+    @property
+    def column_r(self):
+        """Radius of the neighbour-body-column obstacle.  See
+        `arm_column_box` for why it is link_r + calib and not link_r."""
+        return self.link_r + self.calib
 
     def scaled(self, **kw):
         """A variant of this model — `MOUNTS.scaled(boom_r=0.12)`."""
@@ -201,12 +221,112 @@ def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
     return out
 
 
+# ---------------------------------------------------------------------------
+# THE NEIGHBOUR'S OWN BODY: the part of an arm that is an obstacle in EVERY
+# configuration it can ever hold
+# ---------------------------------------------------------------------------
+# Steel was not the only thing missing from the model.  Until 2026-08-25 an
+# arm's static obstacles were the rig's STRUCTURE and nothing else, so every
+# certifying stage in this repo — the atlas sweep, the stroke planner's
+# lattice gate, the transit router, the allocator's probes, the placement
+# scorer — planned as if the other five arms were not in the room.  On the
+# all-ceiling proposed rig that is not a small error: it is why the allocator
+# handed each arm ink that its own transverse partner's SHOULDER is standing
+# on, and why every conduct of the CSAIL logo refused with a monotone-schedule
+# deadlock the conductor could not resolve by waiting.
+#
+# WHAT IS STATIC ABOUT AN ARM.  Capsule (0, 1) of `coordination.CAPSULES` —
+# base flange to shoulder, `d1` = 0.333 m along the base z axis — does not
+# move when the arm does: q1 rotates ABOUT that axis and q2..q7 live beyond
+# its far end.  So a neighbour's base column is true in every pose, including
+# poses nobody has chosen yet, and it belongs with the booms and the plates.
+# The REST of a parked neighbour (upper arm, forearm, wrist, pen) is pose
+# DEPENDENT and stays the conductor's job, where a schedule can still move it:
+# baking a park pose into the static model would be a promise about a pose the
+# rig has not committed to.
+#
+# THE RADIUS, AND WHY IT IS 0.12 AND NOT 0.09.  The obstacle is a cylinder of
+# `link_r` = 0.09 m (the conductor's own capsule radius for that segment)
+# around the axis.  A box gate asks for `rig_final.STATIC_MARGIN` = 0.05 m of
+# clearance between the mover's capsule SURFACE and the box; the conductor
+# asks every pair of arms for `SAFETY_M + CALIB_M` = 0.08 m between two
+# capsule surfaces.  Inflating the cylinder by exactly that difference,
+#
+#     column_r = link_r + calib = 0.09 + 0.03 = 0.12 m,
+#
+# makes the two gates the SAME statement: a pose that clears the box by
+# STATIC_MARGIN clears the neighbour's real column by the 0.08 m the conductor
+# will later demand of it, so a cell the atlas certifies is a cell the
+# conductor can still be handed.  (It is also, by coincidence, the legacy
+# own-boom proxy radius.)  A larger number would refuse ink that runs fine; a
+# smaller one would certify ink that deadlocks, which is exactly the failure
+# this obstacle exists to end.
+#
+# THE BOX IS THE CAPSULE'S AABB, which for a column parallel to a canvas axis
+# — every mount in every rig here — is the circumscribed square column the
+# booms already use (`arm_mount_boxes`), tight on the four faces and up to
+# 41 % conservative on the diagonals.  The caps pad `column_r` past both ends:
+# past the flange that is inside the mount hardware anyway, and past the
+# shoulder it is inside the swept volume of the neighbour's own upper arm,
+# which starts at that point and can point anywhere.  A base whose axis is
+# NOT axis-aligned (none today) would get a fatter, still conservative, box.
+def arm_column_box(spec, tag=None, m=MOUNTS, h_inv=None):
+    """The pose-INVARIANT body column of ONE arm -> one box (canvas frame).
+
+    `spec` supplies the base pose; the column runs `m.d1` metres along the
+    base z axis, and the box is the AABB of that segment inflated by
+    `m.column_r`.  See the note above for every number in that sentence.
+    """
+    T = spec.T_world_base() if h_inv is None else spec.T_world_base(h_inv)
+    p0 = np.asarray(T[:3, 3], float)
+    p1 = p0 + m.d1 * np.asarray(T[:3, 2], float)
+    r = m.column_r
+    aid = spec.arm_id
+    return dict(name=f"body:{aid}_column",
+                lo=np.minimum(p0, p1) - r, hi=np.maximum(p0, p1) + r,
+                source=f"arm {aid} base column: capsule (0,1) of the "
+                       f"conductor's chain, r = link_r {m.link_r} + calib "
+                       f"{m.calib} = {r:.3f} m, over d1 = {m.d1} m of base z "
+                       "— pose-invariant, carried as the capsule's AABB",
+                tag=f"body:{aid}" if tag is None else tag)
+
+
+def fleet_body_boxes(fleet, m=MOUNTS, h_inv=None):
+    """Every arm's own body column -> {arm_id: [box]}, tagged body:<arm_id>."""
+    return {aid: [arm_column_box(spec, m=m, h_inv=h_inv)]
+            for aid, spec in fleet.items()}
+
+
 def obstacles_for(arm_id, fleet, h=0.850, m=MOUNTS):
-    """Every OTHER arm's hardware -> flat box list.  The own-mount exclusion
-    is the point: an arm is bolted to its own plate and boom (and the legacy
-    r = 0.12 own-boom proxy still gates its own column)."""
-    per = fleet_mount_boxes(fleet, h, m)
-    return [b for aid, boxes in per.items() if aid != arm_id for b in boxes]
+    """Every OTHER arm's hardware AND body column -> flat box list.
+
+    The own-arm exclusion is the point: an arm is bolted to its own plate and
+    boom (and the legacy r = 0.12 own-boom proxy still gates its own column),
+    and its own base column is the one capsule every static check skips
+    (`rig_final.STATIC_CAPSULES` starts at index 1).
+    """
+    hw = fleet_mount_boxes(fleet, h, m)
+    body = fleet_body_boxes(fleet, m)
+    return [b for aid in fleet if aid != arm_id
+            for b in hw[aid] + body[aid]]
+
+
+def attach_body_columns(fleet, m=MOUNTS, h_inv=None):
+    """Give every spec in `fleet` the OTHER arms' body columns. -> the fleet.
+
+    Written onto the frozen specs after construction (the `rig_final6._spec`
+    pattern), because a spec cannot know its neighbours until the registry it
+    belongs to exists.  A fleet that never gets this call keeps
+    `column_boxes = ()` and behaves exactly as it did before — which is what
+    the legacy six-arm registry wants (`fleet.FLEET_SIXARM` is kept verbatim
+    for regression and models no structure at all).
+    """
+    per = fleet_body_boxes(fleet, m, h_inv)
+    for aid, spec in fleet.items():
+        object.__setattr__(spec, "column_boxes",
+                           tuple(b for o in fleet if o != aid
+                                 for b in per[o]))
+    return fleet
 
 
 # ---------------------------------------------------------------------------

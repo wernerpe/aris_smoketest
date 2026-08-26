@@ -11,6 +11,12 @@ a kinematic ceiling.  These tests pin the machinery that closed that gap:
   * the coarse proxy's wedge subtraction removes what is behind a column and
     keeps what is beside it;
   * the z-band gate that decides shadow-vs-keep-out is the physical one.
+
+...and, since 2026-08-25, the same again for the OTHER ARMS THEMSELVES: the
+neighbour base column (`mounts.arm_column_box`), whose radius is derived from
+the conductor's own capsule table, which removes from the real atlas the cells
+a 0.61 m transverse partner is standing on, and which `scene_check` re-derives
+from the base transform without reading a line of this module.
 """
 import numpy as np
 import pytest
@@ -77,11 +83,14 @@ def test_every_arm_sees_all_other_mounts_and_never_its_own():
     for aid, spec in fl.items():
         tags = {b["tag"] for b in spec.static_obstacles()}
         assert f"mount:{aid}" not in tags, "an arm is bolted to its own mount"
-        assert tags == {f"mount:{o}" for o in fl if o != aid}
-    # ... and the count matches the hardware: 2 boxes per inverted arm, 1 per
-    # floor arm, minus the arm's own
+        assert f"body:{aid}" not in tags, "an arm is not its own obstacle"
+        assert tags == {f"mount:{o}" for o in fl if o != aid} \
+            | {f"body:{o}" for o in fl if o != aid}
+    # ... and the count matches the hardware PLUS one body column each: 2
+    # boxes per inverted arm, 1 per floor arm, 1 column per arm, minus own
     inv_ids = [a for a, s in fl.items() if s.mount == "inv"]
-    assert len(fl[inv_ids[0]].static_obstacles()) == 2 * (len(inv_ids) - 1) + 2
+    assert len(fl[inv_ids[0]].static_obstacles()) == \
+        2 * (len(inv_ids) - 1) + 2 + (len(fl) - 1)
 
 
 def test_obstacles_for_matches_the_fleet_minus_the_owner():
@@ -238,3 +247,109 @@ def test_check_spacing_catches_interpenetrating_hardware():
                                               (0.5, 2.8), (1.2, 2.8)]))
     assert any("hardware" in b for b in bad)
     assert layout.check_spacing(layout.LAYOUT_V1) == []
+
+
+# ---------------------------------------------------------------------------
+# THE NEIGHBOUR'S OWN BODY COLUMN (2026-08-25)
+# ---------------------------------------------------------------------------
+def test_the_column_radius_is_the_conductors_capsule_plus_its_calibration():
+    """The number is DERIVED, not chosen: a box gate is compared against
+    STATIC_MARGIN and the conductor's pair gate against SAFETY + CALIB, so the
+    obstacle carries the difference and the two gates become one statement."""
+    from aris_sixarm import coordination, frames
+    m = mounts.MOUNTS
+    assert m.link_r == coordination.LINK_R
+    assert m.calib == coordination.CALIB_M
+    assert m.d1 == frames.DH[0][2]
+    assert m.column_r == pytest.approx(m.link_r + m.calib)
+    # the capsule (0, 1) of the conductor's own table is what is being modelled
+    assert coordination.CAPSULES[0] == (0, 1, coordination.LINK_R)
+    # and the equality that makes the box gate mean the conductor's margin
+    assert m.column_r + rig_final.STATIC_MARGIN == pytest.approx(
+        coordination.LINK_R + coordination.SAFETY_M + coordination.CALIB_M)
+
+
+def test_the_column_box_is_the_capsule_aabb_at_the_base():
+    spec = layout.study_spec(31, "inv", (0.9, 1.20), h=H)
+    b = mounts.arm_column_box(spec)
+    m = mounts.MOUNTS
+    assert b["tag"] == "body:31" and b["name"] == "body:31_column"
+    # an inverted arm's column hangs DOWN from the flange, d1 long
+    assert b["hi"][2] == pytest.approx(H + m.column_r)
+    assert b["lo"][2] == pytest.approx(H - m.d1 - m.column_r)
+    assert (b["hi"][:2] - b["lo"][:2]) == pytest.approx(
+        [2 * m.column_r, 2 * m.column_r])
+    # a floor arm's runs UP from its plate instead
+    up = mounts.arm_column_box(layout.study_spec(13, "floor", (0.6, -0.2), h=H))
+    assert up["hi"][2] == pytest.approx(mounts.Z_FLOOR + m.d1 + m.column_r)
+
+
+def test_a_pose_that_clears_the_column_box_clears_the_real_arm():
+    """The box is conservative against the thing it stands for: clearing it by
+    STATIC_MARGIN means clearing the neighbour's real capsule by the margin
+    the conductor will ask for."""
+    from aris_sixarm import coordination, frames
+    rng = np.random.default_rng(11)
+    spec = layout.study_spec(31, "inv", (0.9, 1.20), h=H)
+    nb = layout.study_spec(71, "inv", (0.9 + 0.61, 1.20), h=H)
+    box = mounts.arm_column_box(nb)
+    Twb = spec.T_world_base()
+    p0, p1 = np.array(nb.T_world_base()[:3, 3]), None
+    p1 = p0 + mounts.MOUNTS.d1 * np.asarray(nb.T_world_base()[:3, 2], float)
+    n_checked = 0
+    for _ in range(400):
+        q = rng.uniform(frames.FR3_MIN, frames.FR3_MAX)
+        T, pts = frames.fk(q)
+        P = np.vstack([pts, (T[:3, 3] + T[:3, :3] @ [0, 0, 0.11])[None]])
+        Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
+        cl = float(rig_final.chain_static_clearance(Pw, [box])[0])
+        if cl < rig_final.STATIC_MARGIN:
+            continue
+        n_checked += 1
+        # the same chain against the REAL capsule, the conductor's way
+        worst = np.inf
+        for (i, j, r) in rig_final.STATIC_CAPSULES:
+            d = coordination.seg_seg_dist(Pw[i], Pw[j], p0, p1)
+            worst = min(worst, float(d) - r - coordination.LINK_R)
+        assert worst >= coordination.SAFETY_M + coordination.CALIB_M - 1e-9
+    assert n_checked > 50, "the sample must actually exercise the gate"
+
+
+def test_the_partners_column_removes_cells_from_the_real_atlas():
+    """The finding this obstacle exists for: on a 0.61 m transverse pair the
+    empty-air atlas certifies cells that the PARTNER is standing on."""
+    lay = layout.paired_grid(rows=1, h=H)          # one pair, 0.61 m apart
+    fl = layout.build_fleet(dict(lay, floor=[], h=H))
+    aid, other = sorted(fl)[0], sorted(fl)[1]
+    spec, nb = fl[aid], fl[other]
+    x, y = nb.xy                                   # dead under the partner
+    green = layout.study_spec(spec.arm_id, "inv", spec.xy, h=H)
+    assert _solve(green, x, y, ()) is not None, "empty air reaches it"
+    assert _solve(spec, x, y, spec.static_obstacles()) is None
+    # ...and the column is what did it, not the plate or the boom (which live
+    # at z >= h and no drawing pose can reach — the study's own claim)
+    hw = [b for b in spec.static_obstacles() if b["tag"].startswith("mount")]
+    assert _solve(spec, x, y, hw) is not None
+
+
+def test_scene_check_catches_a_column_graze_on_its_own():
+    """The checker re-derives the column from the base transform and its own
+    capsule radius — it never reads `mounts`, and it gates arms that are not
+    in the timeline at all."""
+    from aris_sixarm import frames, scene_check
+    fl = layout.FLEET_PROPOSED
+    aid, nb = 13, 17                               # a transverse pair
+    q = np.asarray(layout.Q_PARK_PROPOSED[aid], float)
+    P = scene_check._chain(q, fl[aid], None, 0.110)
+    cols = scene_check.neighbour_columns(fl, aid, {aid})
+    rr = scene_check.RADII_LAT if P.shape[0] >= 11 else scene_check.RADII_FINAL
+    assert len(cols) == 5, "five arms are still in the room"
+    good = float(scene_check.column_clearance(P[None], cols, rr)[0])
+    assert good >= 0.08, "the parked fleet already clears every column"
+    # a pose whose wrist is inside the partner's column is refused, and the
+    # refusal survives the partner being absent from the timeline
+    p0, p1 = scene_check.base_column(fl[nb])
+    bad = P.copy()
+    bad[5:9] = 0.5 * (p0 + p1)
+    assert float(scene_check.column_clearance(bad[None], cols, rr)[0]) < 0.0
+    assert frames.DH[0][2] == scene_check.COLUMN_D1

@@ -18,6 +18,11 @@ What it verifies, and refuses to pass without:
               residual between those samples is covered by the same
               1-Lipschitz displacement bound, so "densely sampled" here means
               "bounded everywhere", not "probably fine".
+  COLUMNS     every arm against every OTHER FLEET ARM'S BASE COLUMN, whether
+              or not that arm appears in the timeline — the one 0.333 m of a
+              robot that is in the same place in every configuration, and the
+              part a phase conducted by a subset of the fleet would otherwise
+              be checked as if it had been removed from the room.
   MONOTONE    each arm's progress only ever advances, and never by more than
               one index per step — the property the schedule's whole safety
               argument rests on.
@@ -98,6 +103,29 @@ PAPER_TIP = paper.TIP_TOL            # m, how far under the tip may ever be
 PAPER_STEP = 0.005                   # m of per-point motion the check refines to
 FRAME_STEP = 0.005                   # ...and the same for the frame gate, which
 #   was rate-dependent until the two-pass work found it refusing clear transits
+
+# ==========================================================================
+# ...AND THE SAME AGAIN FOR THE ARMS THAT ARE NOT IN THE TIMELINE
+# ==========================================================================
+# `pair_clearance` covers every arm the timeline CONTAINS.  An arm the timeline
+# leaves out is not out of the room: it is standing wherever it stands, and
+# 0.333 m of it — base flange to shoulder, the axis q1 turns about — is in the
+# same place whatever pose that is.  A phase conducted with three of six arms,
+# or a solo pass, would otherwise be checked as if the other three had been
+# carried out of the building.
+#
+# So this gate re-derives that column HERE, from the fleet's own base
+# transform and this module's own capsule radius, and holds every arm's chain
+# to the same `margin` the inter-arm gate uses.  It shares no code with
+# `mounts.arm_column_box` (which inflates the same cylinder into an AABB for
+# the planner to consume) and no number with it either: the planner's box is
+# 0.09 + 0.03 wide because a box gate is compared against STATIC_MARGIN, this
+# one is 0.09 wide because it is compared against the inter-arm margin.  Two
+# derivations, one geometric statement — which is the whole point of the
+# module (`d1` and the radius are restated from `frames.DH[0][2]` and
+# `coordination.LINK_R`; a test pins them).
+COLUMN_D1 = 0.333                    # m, base flange -> shoulder
+COLUMN_R = 0.09                      # m, capsule radius of that segment
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -203,6 +231,49 @@ def static_clearance_lb(P, boxes, step=0.02):
     return out
 
 
+def base_column(spec):
+    """The pose-invariant base column of one arm -> (p0 (3,), p1 (3,)).
+
+    `spec.T_world_base()` is the only thing read: the segment runs COLUMN_D1
+    along the base z axis, which is the axis joint 1 rotates about, so no
+    joint value can move it.
+    """
+    T = np.asarray(spec.T_world_base(), float)
+    p0 = T[:3, 3]
+    return p0, p0 + COLUMN_D1 * T[:3, 2]
+
+
+def column_clearance(P, columns, radii):
+    """Chain points (...,10|11,3) vs a list of (p0, p1) base columns.
+
+    -> (...,) worst capsule-to-column clearance.  The mover's OWN base column
+    (capsule 0) is skipped — it is the one segment that is bolted where it is —
+    exactly as `static_clearance_lb` and the planner's table skip it.
+    """
+    if not columns:
+        return np.full(np.asarray(P).shape[:-2], np.inf)
+    P = np.asarray(P, float)
+    out = np.full(P.shape[:-2], np.inf)
+    for (i, j, r) in radii[1:]:
+        a, b = P[..., i, :], P[..., j, :]
+        for p0, p1 in columns:
+            c0 = np.broadcast_to(np.asarray(p0, float), a.shape)
+            c1 = np.broadcast_to(np.asarray(p1, float), a.shape)
+            out = np.minimum(out, segment_distance(a, b, c0, c1) - r - COLUMN_R)
+    return out
+
+
+def neighbour_columns(fleet_dict, arm, present):
+    """[(p0, p1)] for every arm in the room that is not `arm`.
+
+    "In the room" = the spec says `active`, or the arm is in the timeline
+    (`present`) — an inactive registry entry is hardware that is not installed,
+    and the legacy six-arm preset has two of them.
+    """
+    return [base_column(s) for a, s in sorted(fleet_dict.items())
+            if a != arm and (getattr(s, "active", True) or a in present)]
+
+
 def pen_len(pen_ext, arm):
     """This arm's pen, whether `pen_ext` is one length or {arm_id: length}."""
     if isinstance(pen_ext, dict):
@@ -247,16 +318,30 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
         bad += 1 if hard else 0
         dipped += [a] if PEN_PAPER in kinds else []
         poses[a] = dict(ok=not hard, worst=rep["worst"], violations=kinds)
-    ok = bool(worst >= margin and bad == 0)
+    # ...and the arms that are standing there without being in this dict
+    col_clear, col_bad = {}, []
+    for a in arms:
+        cols = neighbour_columns(fl, a, set(arms))
+        if not cols:
+            continue
+        d = float(column_clearance(P[a][None], cols, rr)[0])
+        col_clear[a] = d
+        if d < margin:
+            col_bad.append(a)
+    ok = bool(worst >= margin and bad == 0 and not col_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, poses=poses, poses_failed=int(bad),
                pen_below_paper=sorted(dipped),
+               column_clearance={int(a): v for a, v in col_clear.items()},
+               column_failed=sorted(col_bad),
                per_pair={f"{i}-{j}": v for (i, j), v in per_pair.items()})
     if verbose:
         print(f"scene_check(static): {len(arms)} arms, min clearance "
               f"{1000 * worst:.1f} mm (margin {1000 * margin:.0f} mm)"
               + (f" between arms {worst_at[0]} and {worst_at[1]}" if worst_at else "")
               + f"; {len(arms) - bad}/{len(arms)} poses pass their own gates"
+              + (f"; base columns {1000 * min(col_clear.values()):.1f} mm"
+                 + (f" FAIL {col_bad}" if col_bad else "") if col_clear else "")
               + f" -> {'PASS' if ok else 'FAIL'}")
         if dipped:
             print(f"  !! WARNING: arms {dipped} hold a pose whose PEN TIP is "
@@ -362,6 +447,20 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
         if lb[k] < STATIC_MARGIN:
             frame_bad.append(a)
 
+    # EVERY OTHER ARM'S BASE COLUMN, in the room whether or not it is in this
+    # timeline (see the note by COLUMN_R).  Same sweep residual as the
+    # inter-arm gate, because it is the same kind of statement.
+    col_clear, col_bad = {}, []
+    for a in arms:
+        cols = neighbour_columns(fl, a, set(arms))
+        if not cols:
+            continue
+        lb = column_clearance(P[a], cols, rr) - 0.55 * stepd[a]
+        k = int(np.argmin(lb))
+        col_clear[a] = (float(lb[k]), float(k * dt / max(sub, 1)))
+        if lb[k] < margin:
+            col_bad.append(a)
+
     # THE PAPER: every arm's tip and chain, at every instant, including the
     # transits and hovers no per-segment validator ever sees.  The residual is
     # PER POINT — each body's own displacement between two fine samples, not
@@ -464,7 +563,8 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                     lean_deg=float(rep["worst"].get("max_lean_deg", 0.0))))
 
     ok = bool(worst >= margin and mono and seg_bad == 0 and frozen_bad == 0
-              and min(lim.values()) > 0.0 and not frame_bad and not paper_bad)
+              and min(lim.values()) > 0.0 and not frame_bad and not paper_bad
+              and not col_bad)
     rep = dict(ok=ok, min_clearance=float(worst), margin=float(margin),
                worst_pair=worst_at, per_pair={f"{i}-{j}": v for (i, j), v in
                                               per_pair.items()},
@@ -481,7 +581,9 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                paper_clearance={int(a): v for a, v in paper_clear.items()},
                paper_chain_margin=float(PAPER_CHAIN),
                paper_tip_margin=float(PAPER_TIP),
-               paper_failed=sorted(paper_bad))
+               paper_failed=sorted(paper_bad),
+               column_clearance={int(a): v for a, v in col_clear.items()},
+               column_failed=sorted(col_bad))
     if verbose:
         print(f"scene_check: {M} scheduled steps re-sampled to {F}, "
               f"{len(arms)} arms, {len(per_pair)} pairs")
@@ -497,6 +599,13 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
                   f"(margin {STATIC_MARGIN * 1000:.0f} mm), arm {wa} at "
                   f"t={frame_clear[wa][1]:.2f} s"
                   + (f"; FAIL: arms {frame_bad}" if frame_bad else ""))
+        if col_clear:
+            wc = min(col_clear, key=lambda a: col_clear[a][0])
+            print(f"  min neighbour-base-column clearance "
+                  f"{col_clear[wc][0] * 1000:.1f} mm (margin "
+                  f"{margin * 1000:.0f} mm), arm {wc} at "
+                  f"t={col_clear[wc][1]:.2f} s"
+                  + (f"; FAIL: arms {col_bad}" if col_bad else ""))
         wp = min(paper_clear, key=lambda a: paper_clear[a]["chain"])
         wt = min(paper_clear, key=lambda a: paper_clear[a]["tip"])
         print(f"  paper clearance: chain {paper_clear[wp]['chain'] * 1000:.1f} mm "

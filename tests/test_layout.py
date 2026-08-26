@@ -50,8 +50,9 @@ def test_study_specs_carry_the_other_arms_mounts_on_the_merged_canvas():
     for aid, spec in fl.items():
         boxes = spec.static_obstacles()
         assert boxes, "v2 specs are NOT green field any more"
-        assert {b["tag"] for b in boxes} == {f"mount:{o}" for o in fl
-                                             if o != aid}
+        assert {b["tag"] for b in boxes} == \
+            {f"mount:{o}" for o in fl if o != aid} \
+            | {f"body:{o}" for o in fl if o != aid}
         assert fleet.sheet_for(spec) == SHEET_FINAL6
         assert spec.mount in ("floor", "inv")
 
@@ -98,23 +99,50 @@ def test_pair_spacing_window_covers_the_under_base_hole():
 
 
 def test_proposed_inverted_arm_plans_lateral_stroke():
+    """A stroke out along the arm's own annulus, AWAY from its partner.
+
+    The direction matters now and it did not before.  This test used to run
+    the line towards +x, which on the paired grid is straight at the
+    transverse partner 0.61 m away: with the partner's base column in the
+    obstacle set (`mounts.arm_column_box`) that line ends INSIDE another
+    robot, and the planner says so — see the second half.
+    """
     fl, _ = fleet.rig("proposed")
     aid = next(a for a, s in fl.items() if s.mount == "inv")
     spec = fl[aid]
     bx, by = spec.xy
     h = layout.LAYOUT_PROPOSED["h"]
-    line = np.column_stack([np.linspace(bx + 0.30, bx + 0.60, 16),
-                            np.full(16, by)])
-    r = stroke_api.plan_stroke(line, spec,
-                               dict(pen_lat=frames.PEN_LAT_HOLDER, h_inv=h))
+    opts = dict(pen_lat=frames.PEN_LAT_HOLDER, h_inv=h)
+    line = np.column_stack([np.full(16, bx),
+                            np.linspace(by + 0.30, by + 0.60, 16)])
+    r = stroke_api.plan_stroke(line, spec, opts)
     assert r["status"] == "ok", (r["status"], r.get("reason"))
     assert r["validation"]["ok"]
     assert r["min_sigma"] >= 0.10 and r["min_margin"] >= 0.15
 
+    # ...and the partner-ward line, which the empty-air planner used to
+    # certify, is refused: the far end is under the partner's shoulder
+    at_partner = np.column_stack([np.linspace(bx + 0.30, bx + 0.60, 16),
+                                  np.full(16, by)])
+    other = min((a for a in fl if a != aid),
+                key=lambda a: np.hypot(*(np.asarray(fl[a].xy) - [bx, by])))
+    assert abs(fl[other].xy[0] - (bx + 0.61)) < 1e-6
+    bad = stroke_api.plan_stroke(at_partner, spec, opts)
+    assert bad["status"] != "ok", bad["status"]
+
 
 def test_every_proposed_ready_pose_clears_every_other_mount():
     """The v1 study could not make this check — there was no hardware to
-    check against.  The pose is the one the scene draws."""
+    check against.  The pose is the one the scene draws.
+
+    The tolerance is float noise on a gate the pose now sits exactly on:
+    `certified_ready_pose` aims at the canvas CENTRE, and on this grid that
+    walks arm 31 straight at arm 71's base column, so the first radius of the
+    ladder that certifies at all certifies at the margin itself (0.0500 m).
+    That is the same finding `certified_park_poses` exists for — a pose aimed
+    at the middle of a canvas with six arms over it is a pose aimed at
+    somebody — and it is why the PARK bearing is outward.
+    """
     # NOTE: no `activate_tool` here.  `certified_ready_pose` takes the tool
     # explicitly, so this test cannot leak `frames.PEN_LAT` into every module
     # that runs after it — which is exactly what it used to do.
@@ -130,7 +158,7 @@ def test_every_proposed_ready_pose_clears_every_other_mount():
         Twb = spec.T_world_base(h)
         Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
         cl = rig_final.chain_static_clearance(Pw, spec.static_obstacles())[0]
-        assert cl >= rig_final.STATIC_MARGIN, (aid, float(cl))
+        assert cl >= rig_final.STATIC_MARGIN - 1e-9, (aid, float(cl))
     assert frames.ACTIVE_TOOL == "inline" and frames.PEN_LAT == 0.0
 
 
@@ -279,7 +307,19 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
         assert rep["ok"], (aid, rep)
         assert rep["worst"]["tip_z"] >= 0.09, aid          # hovering, not down
         assert frames.joint_margin(q) >= 0.30, aid
-        assert rep["worst"]["min_frame_clearance"] >= 0.30, aid
+        # STEEL is far away (>= 0.436 m); the nearest obstacle a parked arm
+        # has is now a NEIGHBOUR — arm 17 holds 0.122 m to arm 13's base
+        # column box, which is 0.152 m to the arm inside it, against the
+        # 0.080 m the conductor asks of every moving pair.
+        assert rep["worst"]["min_frame_clearance"] >= 0.12, aid
+        steel = [b for b in spec.static_obstacles()
+                 if b["tag"].startswith("mount")]
+        T, pts = frames.fk(np.asarray(q, float))
+        P = np.vstack([pts] + list(frames.tool_points_many(T[None],
+                                                           pen_lat=LAT)))
+        Twb = spec.T_world_base()
+        Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
+        assert rig_final.chain_static_clearance(Pw, steel)[0] >= 0.43, aid
 
 
 def test_the_parked_fleet_does_not_park_inside_itself(lateral):

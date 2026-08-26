@@ -101,6 +101,7 @@ scripts/make_atlas6_preview.py EXACT rather than approximate.
 """
 import numpy as np
 
+from . import mounts
 from . import rig_final
 from .fleet import ArmSpec
 from .frames import (Q_READY_FLOOR, Q_READY_INV_FINAL, Q_READY_WALL,
@@ -352,7 +353,7 @@ class Arm6Spec(ArmSpec):
     def static_obstacles(self):
         return frame_boxes6_canvas(
             exclude_tag=f"mount:{self._key}@{self._unit}",
-            boxes_w=getattr(self, "_boxes_w", None))
+            boxes_w=getattr(self, "_boxes_w", None)) + list(self.column_boxes)
 
 
 UNIT_A_IDS = {"up": 13, "down": 31, "side": 2}
@@ -393,7 +394,9 @@ def _build_fleet6(dz_cm=0.0, boxes_w=None):
             aid = ids[key]
             out[aid] = _spec(key, unit, aid, names[aid], cols[aid],
                              dz_cm=dz_cm, boxes_w=boxes_w)
-    return out
+    # six arms in one room: each one's static obstacles include the other
+    # five's pose-invariant base columns (mounts.arm_column_box)
+    return mounts.attach_body_columns(out)
 
 
 # AS DRAWN: both side arms hang off the ends of their poles at canvas z 0.776.
