@@ -932,10 +932,16 @@ items 1 and 2 are DONE and the section below is what they found:
 
 # THE COMPOSED PROGRAMME (2026-08-26, h = 0.940, pitch 0.61)
 
-**70.82 % of the logo, seven phases, `scene_check` PASS on every one of them**,
-against the 62.19 % the single six-mover phase drew this morning.  194.8 s of
-makespan against 92.4.  `out/csail_proposed_h094_v4.{html,zip}` (44.2 / 18.1
-MiB, rendered at `--stride 2`).
+**91.92 % of the logo, seven phases, `scene_check` PASS on every one of them**,
+against the 62.19 % the single six-mover phase drew this morning — and on a
+BIGGER mark: 13.55 m of certified ink against 7.95, at 1.263 x 1.653 m against
+1.094 x 1.433.  205.2 s of makespan against 92.4.
+`out/csail_proposed_h094_v4.{html,zip}` (45.5 / 18.6 MiB at `--stride 2`).
+
+Two thirds of that came from the composition and one third from the PLACEMENT,
+and the placement was the bigger half of what was left.  The order the
+measurements landed in is the order they are written up in below, because the
+last one invalidates the emphasis of the first three.
 
 ## The 37.9 % was never the metal
 
@@ -980,6 +986,10 @@ is reachable from the depot.  They are not reachable in the SAME TOUR.
 | two-pass + rescue | 70.09 % | **69.81 %** | 189.4 s | 6 | 1.42 |
 | **two-pass + rescue + residual** | 73.35 % | **70.82 %** | **194.8 s** | **7** | **1.44** |
 
+(all five rows at the SHIPPED placement, so that the levers are compared
+against each other and not against a different picture; the placement itself is
+worth more than any of them and has its own section below)
+
 **The colour lever ALONE is a coverage regression.**  Two-pass moves ink onto
 arms that then cannot share the paper: the orange 6-mover phase comes back
 "arm 13 has no monotone pause schedule inside 136 s; all 24 priority orders of
@@ -1008,22 +1018,63 @@ and the allocator bans **exactly the same eighteen** (stroke, arm) pairs with it
 as without.  The first number I published for it, 98.1 %, was my own sampling
 error: `--cells 12` against a `--cells 10` baseline.  See the correction commit.
 
-## Where the last 29 % is
+## ...and then the placement, which was worth more than all of it
 
-3.73 m, and it is still the middle third.  It is not unreachable — the anatomy
-above says every metre of it has an arm that certifies it and can fly to it —
-it is ink that no arm can thread into a tour, and that eleven phases of
-composition did not shake loose.  The remaining levers, in the order the
-measurements rank them:
+**The shipped placement was chosen by a search that could not see the columns.**
+`out/csail_proposed_h094_v2_placement.json` was written at 04:50 on 2026-08-26,
+at commit 8c1e7b1; `paper.STATIC_SAFE` landed at 07:24 in 6c1c864.  The search's
+REAL stage is a full `allocate.allocate`, so its coverage number is a
+flyability-aware number NOW and was not one then — which is why it scored this
+placement 97.19 % and the honest allocator draws 62 % of it.
 
-1. **The placement.**  Not yet re-run under honest gates at the time of
-   writing; the shipped placement was chosen at 04:50 today, before
-   `paper.STATIC_SAFE` landed at 07:24, so its search never routed a pen-up
-   against a column at all — it scored this placement 97.19 % and the honest
-   allocator draws 62.15 % of it.  86 % of the ink lands on arms 31 and 71.
-2. **A real pen-up planner.**  26 of arm 31's 60 flagged crossings have no
+Re-run under the honest gate (78 real allocations, 1 h 24 m at `--jobs 10`,
+`out/csail_place_v3_placement.json`), the answer moves — and it moves UP in
+size, which nobody expected:
+
+| rot | scale | w x h (m) | offset | REAL cov | area |
+|---|---|---|---|---|---|
+| 90 | **0.750** | **1.263 x 1.651** | (−0.20, −0.10) | **96.16 %** | 2.084 |
+| 90 | 0.550 | 0.926 x 1.211 | (−0.30, −0.20) | 95.54 % | 1.121 |
+| 90 | 0.700 | 1.178 x 1.541 | (−0.20, −0.10) | 95.22 % | 1.816 |
+| 90 | 0.600 | 1.010 x 1.321 | (−0.30, −0.10) | 91.55 % | 1.334 |
+| 90 | 0.650 | 1.094 x 1.431 | (−0.20, **−0.20**) | 89.48 % | 1.566 |
+
+The shipped 0.65 is fifth, and note its offset: even at its own scale the
+shipped placement is not the best one — it uses (−0.20, −0.10) and the honest
+search wants (−0.20, −0.20).  **A bigger logo is a better logo here**, because
+scale 0.75 puts more of the mark into the end-row arms' reach instead of
+concentrating it in the middle band where only arms 31 and 71 can work.
+
+Conducted at 0.75, the same composition draws **91.92 %**:
+
+| | shipped placement | honest placement |
+|---|---|---|
+| logo | 1.094 x 1.433 m | **1.263 x 1.653 m** |
+| traced | 12.7783 m | 14.7442 m |
+| allocated | 73.35 % | **92.73 %** |
+| **conducted** | 70.82 % | **91.92 %** |
+| ink drawn | 9.050 m | **13.554 m** |
+| makespan | 194.8 s | 205.2 s |
+| phases | 7, all PASS | 7, all PASS |
+| min clearance | 82.6 mm | 83.9 mm |
+| nobody draws | 0.338 m | **0.170 m** |
+
+## Where the last 8 % is
+
+1.19 m, and it is the same shape as before, one lever down: ink no arm can
+thread into a tour, on a placement where far less of the mark is in that
+position.  It is still not unreachable.  The remaining levers:
+
+1. **A real pen-up planner.**  26 of arm 31's 60 flagged crossings have no
    route by any shape on the ladder, and the ladder is now nine families deep.
-3. **Fewer arms over the middle**, which is the physical fork and still open.
+2. **Fewer arms over the middle**, which is the physical fork and still open —
+   but it is now worth 8 points of one drawing, not 38.
+
+**And one thing that is NOT a lever, measured:** the balancer.
+`allocate.balance_loads` piles 6.94 m of the 12.78 onto arm 31 and a big bag is
+exactly what `prune_unflyable` cannot thread, so it looked like the obvious
+culprit.  `--no-balance` at the shipped placement draws **7.94 m against
+7.95 m**.  It is not the balancer.
 
 # SIX ARMS AT ONCE (2026-08-26, h = 0.940, pitch 0.61)
 
