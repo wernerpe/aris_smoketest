@@ -998,6 +998,70 @@ def residual_passes(a, phases, strokes=None, share=None, rounds=0,
     return out, refused + holes(prev)
 
 
+def split_by_segments(res, parts=2):
+    """A ONE-ARM phase, cut into consecutive runs of its own tour. -> [phase].
+
+    The last rung of the rescue ladder, below which there is nothing: when a
+    phase has a single arm moving there is no grouping left to coarsen, and the
+    only thing still shared between the ink is the TOUR.  Cutting it in two and
+    sending the arm home in between turns one long tour into two short ones,
+    which is the same medicine `residual_passes` gives an allocation and for
+    the same reason — a transit no order can avoid is not an edge of a tour
+    that does not contain it.
+
+    It cannot help a refusal whose impossible index is INK rather than a
+    transit; those are the ones `coordination` reports as "no order fixes
+    that, only a different allocation", and the halves will be refused in turn
+    and cost only their own conduct.
+
+    The BAG is cut with the programme, because `allocate.resequence` re-orders
+    from the bag and would otherwise hand the child every segment the parent
+    had.  Menus ride along in bag order, since `resequence` requires them to
+    line up one for one.
+    """
+    arms = [x for x in res["arms"] if res["programs"].get(x)]
+    if len(arms) != 1:
+        return []
+    a0 = arms[0]
+    prog = list(res["programs"][a0])
+    if len(prog) < 2:
+        return []
+    bag = list((res.get("bag") or {}).get(a0) or prog)
+    menus = list((res.get("menus") or {}).get(a0) or [])
+
+    def key(s):
+        return (int(s["stroke_id"]), round(min(*s["s_range"]), 9),
+                round(max(*s["s_range"]), 9))
+
+    idx = {key(s): i for i, s in enumerate(bag)}
+    order = [idx.get(key(s)) for s in prog]
+    if any(i is None for i in order):
+        return []                  # the tour does not map onto the bag
+    cut = len(prog) // 2
+    per_arm = ("programs", "bag", "menus", "menu_stats", "sequence",
+               "transit", "transit_time", "pens", "aopts", "q_start")
+    out = []
+    for j, (pr, bi) in enumerate(((prog[:cut], order[:cut]),
+                                  (prog[cut:], order[cut:]))):
+        r = dict(res)
+        r["arms"], r["arm_group"] = [a0], [a0]
+        for k in per_arm:
+            if isinstance(res.get(k), dict):
+                r[k] = {x: v for x, v in res[k].items() if x == a0}
+        r["programs"] = {a0: list(pr)}
+        r["bag"] = {a0: [bag[i] for i in bi]}
+        r["menus"] = ({a0: [menus[i] for i in bi]}
+                      if menus and len(menus) == len(bag) else {})
+        r["drawn_len"] = float(sum(s["length"] for s in pr))
+        first = j == 0
+        r["total_len"] = float(res["total_len"]) if first else 0.0
+        r["dropped"] = list(res["dropped"]) if first else []
+        r["dropped_len"] = float(res["dropped_len"]) if first else 0.0
+        r["name"] = f"{res.get('name', 'pass')} [{j + 1}/2]"
+        out.append(r)
+    return out
+
+
 def rescue_groups(a, ph, near=None):
     """A phase the conductor refused, re-offered as fewer arms. -> [phase].
 
@@ -1022,9 +1086,15 @@ def rescue_groups(a, ph, near=None):
     ones it refuses cost their own ink and nothing else.
     """
     near = float(getattr(a, "arm_phase_near", 0.70) if near is None else near)
-    arms = [int(x) for x in ph.get("arms", ()) if ph["programs"].get(x)]
-    if len(arms) < 2:
-        return []
+    # THE GROUPING COVERS EVERY ARM OF THE ALLOCATION, NOT ONLY THE ONES THAT
+    # DREW.  `split_by_arms` refuses a grouping that leaves a drawing arm
+    # unphased, and `res["arms"]` is the whole active fleet — an arm that
+    # certified nothing is still in it.  So the colouring is taken over all of
+    # them and the DRAWING ones only decide whether there is anything to
+    # rescue: a phase with one arm actually moving cannot be split by arm.
+    arms = [int(x) for x in ph.get("arms", ())]
+    if len([x for x in arms if ph["programs"].get(x)]) < 2:
+        return split_by_segments(ph)
     for mode in ("disjoint", "solo"):
         groups = [g for g in (arm_groups(mode, arms, near) or []) if g]
         # a "grouping" that is one group is the phase that was just refused
@@ -1033,7 +1103,8 @@ def rescue_groups(a, ph, near=None):
         parts = allocate.split_by_arms(ph, groups)
         if len(parts) > 1:
             return parts
-    return []
+    # nothing left to coarsen by ARM: cut the one remaining tour instead
+    return split_by_segments(ph)
 
 
 def phase_by_arms(phases, alt, groups):
