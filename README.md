@@ -792,17 +792,136 @@ certified phase (arm 31, 10 segments, 2.388 m), makespan 37.6 s, **zero
 conducted pause**, scene_check PASS, min inter-arm 146.2 mm, column 144.1 mm,
 frame 51.2 mm, paper chain 108.4 mm.  `out/csail_proposed_h094.{html,zip}`.
 
-**What would actually move it**, in the order the measurements rank them:
-1. **Park-aware allocation.**  The atlas certifies a cell against the
-   pose-invariant column only; the allocator then hands an arm ink that a
-   parked partner is standing in, and the conductor discovers it three stages
-   later.  Allocating against the parked fleet is the change with the
-   evidence behind it.
+**What would actually move it** — item 1 is DONE and the section below is what
+it found:
+1. ~~**Park-aware allocation.**~~  Shipped (`allocate.ParkProbe`), together
+   with the banded base column that made the parks clear the ink at all.  It
+   did not unlock a second arm: the refusal moved from the ink to the pen-up
+   transits, one layer down.  See the next section.
 2. **Pitch 0.65** — inside the window the raised annulus opens (0.26–0.73 m),
    worth +1.25 pp union, a 31 % bigger logo at 100 % allocation, and 26.1 %
    conducted.  A build-sheet number, so the rig owner's call.
 3. **Fewer arms over the middle**, or a wider canvas.  Two rows of two would
    give every arm an edge to park over.
+
+## The column has a waist, and the refusal moved one layer down (2026-08-26)
+
+Two evidence-backed changes, then the whole pipeline again at h = 0.940.
+
+### 1. The base column is four measured bands, not one flat capsule
+
+The mesh audit's own 12-band stack says the body is 0.171 at the plate,
+**waisted to 0.057** through the middle third and 0.129 where link1's swept
+solid runs past the shoulder.  The package shipped two bands flat at 0.185
+because the *conductor's* base column was one capsule at `link_r`, and a box
+thinner than that anywhere inside the span would certify cells the conductor
+then refuses.  Both ends moved together: `coordination.BODY_BANDS` is the
+profile, the base capsule became four **sub-segment** capsules of the same
+pose-invariant axis, `mounts.column_bands` is the same four one `calib` wider,
+`scene_check.COLUMN_BANDS` restates them a third time — and the
+gate-consistency identity holds *per band* and is now airtight (each box is its
+band's AABB grown by the band's radius along the axis too, so it contains that
+band's capsule caps included).
+
+| base z | | box was | is | measured max |
+|---|---|---|---|---|
+| −0.2325 … 0.0667 | connector | 0.207 | 0.207 | 0.1769 |
+| 0.0667 … 0.0988 | taper | 0.185 | **0.148** | 0.1172 |
+| 0.0988 … 0.2590 | **the waist** | 0.185 | **0.108** | 0.0779 |
+| 0.2590 … 0.3875 | link1 sweep | 0.185 | **0.160** | 0.1295 |
+
+Edges chosen by exhaustive search over the audit's own band edges, minimising
+the obstacle's cross-section over the slab a drawing arm's links reach: 1 band
+0.0118, 2 bands 0.0075, **3 bands 0.0053**, 4 bands 0.0051, 5 bands 0.0050,
+against 0.0100 for the flat pair.  On the real 2 cm six-arm sweep:
+
+| h = 0.940, pitch 0.61 | flat 2-band | **banded 4-band** |
+|---|---|---|
+| union strict-GO | 90.70 % | **92.02 %** |
+| ≥2-arm | 33.85 % | **36.35 %** |
+| dead | 9.30 % | **7.98 %** |
+| cross-unit | 23.16 % | **26.10 %** |
+| seam strip, ≥2 arms | 0.00 % | **1.83 %** |
+| best park-vs-ink | 72 mm | **97.3 mm** |
+
+The park set was re-derived against it over 7 radii × 10 hovers × **12
+bearings** per arm.  The bearing is what bought the last 22 mm: held to the
+outward ray the same search tops out at 75 mm, because the middle row's
+outward ray runs off the short edge of a 1.80 m canvas and the hover point is
+clipped into the sheet, so every radius past ~0.55 lands on the same xy.  Every
+candidate in the top bucket clears by 97–98 mm — a parked arm's own base column
+is pose-invariant, so the *layout* sets that ceiling — and the tie-break inside
+the plateau is the depot's own job (certified cells the arm can enter and leave).
+The shipped set dominates the one it replaces arm for arm; arm 71 goes from
+10/24 entries at 61 mm to **18/24 at 97.7 mm**.
+
+### 2. Park-aware allocation (`allocate.ParkProbe`)
+
+An arm outside the drawing group stands at its depot for the whole phase, and a
+parked arm's schedule is a *constant* — the conductor cannot wait it out.  The
+allocator now checks each certified span's own joint path against those parked
+chains at the conductor's margin (with the 1-Lipschitz residual between path
+samples subtracted) and bans a blocked span for that arm through the machinery
+`prune_unflyable` already uses, so the ink goes to a different arm instead of to
+a refusal three stages later.  `--arm-phases` decides who is parked and moved
+to the allocator's own argument set; allocation and conduct read one grouping.
+
+Measured on the logo, solo phases, same placement, same strokes: **51.9 s with
+the probe against 51.6 s without** (59 probes + 91 cached, 0.2 s), same cover to
+the digit.  It refuses **0 spans** on the shipped rig — because §1's park set
+already stands 97.3 mm off every arm's ink.  On the set this rig shipped
+yesterday it is what would have caught arm 71's depot at 61 mm.
+
+### The run: still one arm at a time, and the reason changed
+
+Full pipeline at h = 0.940, pitch 0.61: placement re-searched against the banded
+atlas (**1.094 × 1.431 m, turned 90°, 97.19 % allocated, 100 % live** — 47 %
+more logo area than the 1.178 × 0.901 m the flat model chose), 12.851 m traced,
+**12.490 m allocated over 43 certified segments** in 60 s.
+
+| conduct mode | verdict |
+|---|---|
+| 6-mover (`--arm-phases off`) | refused — 4 movers, no monotone schedule for arms 31/71 |
+| partner-disjoint `{2,13,31}` / `{17,71,97}` | both phases refused |
+| **solo** | 4 phases, **2 certified** (arms 2 and 13), 2 refused (arms 31, 71) |
+
+Shipped: makespan **54.333 s**, **0.0 s of conducted pause**, min inter-arm
+**124.3 mm**, frame 190.8 mm, neighbour column 261.7 mm, paper chain 109.2 mm,
+`scene_check` **PASS** on both phases, tip error 0.226 mm.  Effective
+parallelism **0.96 arm-seconds per second** — one arm, always.  Drawn 1.749 m of
+12.851 m = **13.61 %**.  `out/csail_proposed_h094_v2.{html,zip}` (34.6 / 16.3 MiB).
+
+**THE NEXT BOTTLENECK IS THE LIFT LAYER, AND IT IS NOT THE PARKS.**  The
+conductor names *pen-up transits*, and names the same ones whether the phase has
+one moving arm or three — which can only be a stationary obstacle.  It is not a
+park pose.  `atlas.solve_cell` certifies a cell on its **drawing** pose; the
+6 cm hover over that same cell is a different configuration that no stage
+certifies against the neighbours' pose-invariant base columns:
+
+| arm | certified cells | drawing pose vs columns | 6 cm hover vs columns |
+|---|---|---|---|
+| 2 | 3719 | 50.0 mm, 0 fail | **−131.0 mm, 564 fail (15.2 %)** |
+| 13 | 3757 | 50.0 mm, 0 fail | −131.0 mm, 558 fail (14.9 %) |
+| 17 | 3763 | 50.0 mm, 0 fail | −91.9 mm, 165 fail (4.4 %) |
+| 31 | 4211 | 50.1 mm, 0 fail | −131.0 mm, 560 fail (13.3 %) |
+| 71 | 4203 | 50.0 mm, 0 fail | −91.9 mm, 174 fail (4.1 %) |
+| 97 | 3723 | 50.0 mm, 0 fail | −91.9 mm, 164 fail (4.4 %) |
+
+Every drawing pose clears the gate exactly; the hover over 4–15 % of the same
+cells is up to 131 mm *inside* a neighbour's column.  The parked chains add
+essentially nothing on top — 0 to 4 cells per arm out of ~4200 are blocked by a
+park and not already by a column — and no park pose can fix it: a search over
+593 candidates for arm 2 that scores **both** layers tops out at −3.9 mm.
+
+**What would actually move it now**, in the order the measurements rank them:
+1. **Certify the lift layer.**  Gate the hover pose in `atlas.solve_cell`, or
+   make `writing.lifted_or_lower` search for a hover that clears the neighbours'
+   column boxes instead of taking the first that solves.  It is the one gate in
+   the chain that is missing, and it is what every current refusal names.
+2. **Route pen-ups around the arms**, not only around the paper.  `paper.route`
+   knows the table and the frame; it does not know that another robot is there.
+3. **Fewer arms over the middle**, or a wider canvas — unchanged, and now
+   second rather than first.
 
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
