@@ -1109,19 +1109,25 @@ def depot_round_trip(spec, entry, mat, home=None):
     return False, not head, not tail
 
 
+# ==========================================================================
 # A HOVER IS MOVED WHERE IT IS ABOUT TO COST INK, AND NOWHERE ELSE
 # ==========================================================================
 # `writing.HOVER_DEPOT_AWARE` re-searches the hover fiber for a pose that joins
-# the depot, and switched on globally it is a wash: it fires at all 14 pockets
-# and only 5 of them are about to lose anything, so the other 9 pay a longer
-# lift and a re-priced bag for ink that was never at risk (writing's note has
-# the +57.5/-81.5 mm).  This is the SELECTOR — the one place in the pipeline
-# that knows a pocket is about to be paid for, because it is the place that
-# pays.  It admits the offending end to `writing.HOVER_DEPOT_SITES`, asks the
-# round trip again, and KEEPS THE ADMISSION ONLY IF THE ANSWER CHANGED.  An
-# admission that buys nothing is rolled back, so a rejected candidate leaves
-# the run bit-identical; an accepted one moves exactly one hover, and it moves
-# it in exchange for a span the arm was otherwise going to shrink or drop.
+# the depot, and switched on globally it is a wash (writing's note has the
+# +57.5 / -81.5 mm).  It is a wash because it fires at every pocket and hardly
+# any of them are about to be paid for: measured over the CSAIL placement, the
+# six arms hold 63 depot pockets across 218 certified span ends, and the whole
+# programme only ever pays for four of them.  At the other 59 the tier swaps a
+# 6 cm lift for a pose most of a radian away and re-prices the entire bag
+# around ink that was never at risk.
+#
+# This is the SELECTOR — the one place in the pipeline that knows a pocket is
+# about to be paid for, because it is the place that pays.  It admits the
+# offending end to `writing.HOVER_DEPOT_SITES`, asks the round trip again, and
+# KEEPS THE ADMISSION ONLY IF THE ANSWER CHANGED.  An admission that buys
+# nothing is rolled back, so a rejected candidate leaves the run bit-identical;
+# an accepted one moves exactly one hover, and it moves it in exchange for a
+# span the arm was otherwise going to shrink or drop.
 DEPOT_HOVER_RESCUE = False   # the selector; `--depot-hover-selective`
 
 
