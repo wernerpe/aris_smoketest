@@ -300,17 +300,32 @@ def main():
     ap.add_argument("--title", default=None,
                     help="what the legend calls the drawing (default: the "
                          "schedule summary's `name`, else the CSAIL logo)")
+    ap.add_argument("--stride", type=int, default=1, metavar="N",
+                    help="render every Nth recorded frame at 1/N the frame "
+                         "rate.  THE PLAYBACK LASTS EXACTLY AS LONG either "
+                         "way — the same seconds, sampled more coarsely — so "
+                         "this trades animation smoothness for file size and "
+                         "changes nothing about the schedule, the certificates "
+                         "or the tip check, which still runs on every frame "
+                         "that is rendered.  A composed programme of twenty "
+                         "phases is ten minutes of playback and a quarter of a "
+                         "gigabyte of HTML at stride 1")
     args = ap.parse_args()
 
     d = np.load(args.schedule, allow_pickle=False)
     summary = json.loads(Path(args.summary).read_text())
-    fps = float(d["fps"])
-    nF = int(d["n_frames"])
+    stride = max(1, int(args.stride))
+    fps = float(d["fps"]) / stride
+    nF = len(range(0, int(d["n_frames"]), stride))
+    if stride > 1:
+        print(f"stride {stride}: {int(d['n_frames'])} recorded frames rendered "
+              f"as {nF} at {fps:g} fps — the same "
+              f"{(int(d['n_frames']) - 1) / float(d['fps']):.1f} s of playback")
     ts = np.arange(nF) / fps
     fleet = [int(x) for x in d["arms"]]
     drawing = [int(x) for x in d["drawing_arms"]]
     pen_ext = {a: float(v) for a, v in zip(sorted(FLEET), d["pen_ext"])}
-    phase = d["phase"] if "phase" in d else np.zeros(nF, np.int64)
+    phase = d["phase"][::stride] if "phase" in d else np.zeros(nF, np.int64)
     phase_ink = [str(x) for x in d["phase_ink"]] if "phase_ink" in d else ["grey"]
     if "ink_names" in d and "ink_palette" in d:
         inks = {str(k): str(v) for k, v in zip(d["ink_names"], d["ink_palette"])}
@@ -377,9 +392,12 @@ def main():
             meshcat.SetProperty(p, "visible", ink == phase_ink[0],
                                 time_in_recording=0.0)
 
-    q = {a: d[f"q_{a}"] for a in fleet}
-    seg = {a: d[f"seg_{a}"] for a in fleet}
-    uu = {a: d[f"u_{a}"] for a in fleet}
+    # the per-FRAME arrays are the only ones stride touches; `segpts`/`segoff`
+    # are per-segment geometry and `ink_t` is in seconds, which the matching
+    # change to `fps` leaves where it was
+    q = {a: d[f"q_{a}"][::stride] for a in fleet}
+    seg = {a: d[f"seg_{a}"][::stride] for a in fleet}
+    uu = {a: d[f"u_{a}"][::stride] for a in fleet}
     segpts = {a: d[f"segpts_{a}"] for a in fleet}
     segoff = {a: d[f"segoff_{a}"] for a in fleet}
     checks, n_draw, shown = [], 0, phase_ink[0]
