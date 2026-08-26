@@ -872,7 +872,7 @@ the digit.  It refuses **0 spans** on the shipped rig — because §1's park set
 already stands 97.3 mm off every arm's ink.  On the set this rig shipped
 yesterday it is what would have caught arm 71's depot at 61 mm.
 
-### The run: still one arm at a time, and the reason changed
+### The run: still one arm at a time, and the reason changed  (SUPERSEDED — see "SIX ARMS AT ONCE" below)
 
 Full pipeline at h = 0.940, pitch 0.61: placement re-searched against the banded
 atlas (**1.094 × 1.431 m, turned 90°, 97.19 % allocated, 100 % live** — 47 %
@@ -922,15 +922,136 @@ the worst case exactly where it was, at −131.0 mm.  That number is saturated �
 forearm fully through a neighbour's column and 4 cm of pitch is not the scale
 of that problem.  The full 0.65 run was not spent on that evidence.
 
-**What would actually move it now**, in the order the measurements rank them:
-1. **Certify the lift layer.**  Gate the hover pose in `atlas.solve_cell`, or
-   make `writing.lifted_or_lower` search for a hover that clears the neighbours'
-   column boxes instead of taking the first that solves.  It is the one gate in
-   the chain that is missing, and it is what every current refusal names.
-2. **Route pen-ups around the arms**, not only around the paper.  `paper.route`
-   knows the table and the frame; it does not know that another robot is there.
-3. **Fewer arms over the middle**, or a wider canvas — unchanged, and now
-   second rather than first.
+**What would actually move it now**, in the order the measurements rank them —
+items 1 and 2 are DONE and the section below is what they found:
+1. ~~**Certify the lift layer.**~~  Shipped.
+2. ~~**Route pen-ups around the arms**, not only around the paper.~~  Shipped
+   (`paper._skirt`).
+3. **Fewer arms over the middle**, or a wider canvas — still there, and now
+   measured at the lift layer rather than inferred.
+
+# SIX ARMS AT ONCE (2026-08-26, h = 0.940, pitch 0.61)
+
+**Yes.**  All six arms draw in one conducted phase, `scene_check` PASS,
+**62.15 % of the logo** against the 13.61 % this rig shipped yesterday.
+`out/csail_proposed_h094_v3.{html,zip}` (42.2 / 19.2 MiB).
+
+Nothing about the rig changed.  Three gates did.
+
+### 1. A hover is a pose the arm holds (`writing.lifted_or_lower`)
+
+`atlas.solve_cell` gates a **drawing** pose against the static set.  The 6 cm
+hover over that same cell is a **different configuration** — same tip,
+different elbow — and nothing gated it against anything.  Two findings, both
+measured over the six arms' certified cells:
+
+* 4–18 % of hovers stood **inside** a neighbour's base column, up to 131 mm
+  deep.  That is what every conduct refusal on this rig was naming, identically
+  with one moving arm as with three, which can only be a stationary obstacle.
+* worse, **55 %** of certified cells (330 of 600 sampled) had **no hover at
+  all**: `lifted_config` pinned the tool yaw to phi = 0, which is free for an
+  inline pen and a hard constraint for a holder with the tip 110 mm off the
+  wrist axis.  `lifted_or_lower` silently returned the drawing pose with a lift
+  of zero and the pen was dragged across the paper to the next stroke.
+
+The fix is the fiber the drawing pose already spent: a hover has to hold a tip
+position and nothing else, so phi, q7, the branch and the height are all free.
+`hover_solve` tries the old narrow slice first and opens the whole fiber — 8
+tool yaws x the q7 grid x every branch — when that answer is missing or sits on
+the gate, ranked by a **capped-clearance score** rather than a threshold (a
+threshold lands every hover a millimetre over the gate and makes every transit
+between two of them marginal).  15 of 1200 cells now get no lift.
+
+### 2. The way past a column is around it (`paper.STATIC_SAFE`, `_skirt`)
+
+`paper.route` frame-checked only the detours it inserted, never the direct
+move, so a transit that grazed a column was priced at zero and discovered by
+`scene_check`.  It is on now, and two things had to be fixed before it would
+converge — both bugs in the router, not facts about the rig:
+
+* the floor was a **contradiction at the endpoints**.  The atlas certifies ink
+  at `STATIC_MARGIN` and the router asked every leg for more, so a lift out of
+  the tightest certified cells could never be satisfied.
+  `effective_static_floor` clamps it, the same argument `effective_floors`
+  already made one obstacle over.
+* the only escape was **up**, on a rig whose blocker is a column and whose
+  ceiling is steel.  `_skirt` reads the blocking boxes' own footprints and
+  walks the hover plane around them — first when the metal is the only
+  complaint, last when it is not.
+
+### 3. The checker measures the same metal more roughly (`STATIC_PLAN_MARGIN`)
+
+Three conducted phases — a solo arm, a **three**-arm phase and a **six**-arm
+phase, each with a monotone schedule the conductor had already found and 83–88
+mm of inter-arm clearance — were refused on one number: *min frame clearance
+47.4 mm against a 50 mm margin*.  The ink under them measures 103 mm and the
+pen-up over it 58.8.  It was never a collision.
+
+`scene_check.static_clearance_lb` is an independent derivation, which is the
+whole point of it, and an independent derivation of a minimum is a **lower
+bound with slack in it**: it samples each capsule every 2 cm instead of
+minimising along it and subtracts half a step (10 mm), then the trajectory
+residual (2.75 mm) on top.  Every producer was gating at exactly
+`STATIC_MARGIN`, which inverts the one ordering this repo runs on.
+`rig_final.STATIC_PLAN_MARGIN` = 50 + 13 mm is what a producer pays now, ink
+and pen-up alike; the checkers keep 50 and stay independent.  A test computes
+the 13 from `scene_check`'s own constants, and a second one pushes real
+certified poses and their hovers **through** the checker's bound.
+
+### The run
+
+Same placement, same atlas, same h and pitch as the 13.61 % baseline
+(1.094 x 1.433 m at (0.702, 1.715), turned 90°, 100 % live).
+
+| conduct mode | phases certified | drawn | makespan | arm-s / s |
+|---|---|---|---|---|
+| **6-mover (`--arm-phases off`)** | **1 of 1, all six arms** | **7.95 m = 62.15 %** | **92.4 s** | **2.69** |
+| partner-disjoint | 1 of 2 (`{17,71,97}`) | 3.69 m = 28.9 % | 75.8 s | 1.5 |
+| solo | 4 of 5 (13 refused) | 5.89 m = 46.1 % | 191.2 s | 1.0 |
+| *baseline, 2026-08-26 am* | *2 of 4 solo* | *1.749 m = 13.61 %* | *54.3 s* | *0.96* |
+
+**Shipped: the 6-mover.**  Makespan **92.4 s** with **75.7 s** of conducted
+pause (all of it draw-vs-draw — no arm waits at a park), min inter-arm
+**84.0 mm** against the 80 mm margin, frame **60.9 mm** against 50, neighbour
+base column **150.6 mm** against 80, paper chain **42.2 mm** against 20, pen tip
+−2.7 mm against the −10 mm contact floor, tip error 0.234 mm.  Effective
+parallelism **2.69 arm-seconds per second** against the baseline's 0.96.
+
+**Allocation is 5.8x slower and that is the honest price**: 357 s against 61 s,
+almost all of it in `balance` (24 → 191 s), because a candidate bag is now
+priced against a router that certifies every pen-up against thirty boxes
+instead of against the canvas alone.  The screen was cut from flagging half of
+an arm's crossings to a fifth (`dive_screen` settles the undecidable band with
+`paper.leg_bounds` at 7 ms rather than handing it to `route` at 400), and the
+route memo is global and parallel; what is left is real work.
+
+### The next bottleneck is the middle row, and it is the layout
+
+37.9 % of the logo is still undrawn and **every metre of it is in the middle
+third of the sheet** (2.08 + 2.71 + 0.05 m by third).  Measured, per arm, over
+certified cells under the logo — every ordered crossing routed twice, once with
+the static set in play and once with it removed (`out/flyability.py`):
+
+| arm | row | crossings that route | with the metal removed | refused by metal alone |
+|---|---|---|---|---|
+| 13 | end | 99.1 % | 99.1 % | **0** |
+| 71 | middle | 80.0 % | 97.3 % | 19 |
+| 31 | middle | 70.9 % | 89.1 % | 20 |
+
+An **end-row** arm is untouched.  The two **middle-row** arms lose 17–18 points
+of their own workspace to their transverse partners' base columns, and 39 of
+their 54 refused crossings are refused by the column alone.  A base column is
+pose-invariant metal 0.6 m long standing 0.61 m from its neighbour: no search
+moves it, and the router has now exhausted every family it has (higher hovers,
+Cartesian traverses, folding through the depot, and lateral skirts around the
+footprints).
+
+**So the fork Pete needs is a physical one.**  Either fewer arms over the middle
+of a 1.80 m canvas (a wider pitch, a wider web, or a 2+4 row count), or the
+pen-up layer stops being a shape library and becomes a real motion planner —
+an RRT over the pen-up configuration space, which is roadmap item 3 and a
+serious piece of work with no guarantee the corridor exists.  The measurement
+says the first one is the cheap answer.
 
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
