@@ -1022,14 +1022,37 @@ def build_phases(a, phases, dt, pens, alt=None):
         home_k = policy_k == idle.POLICY_HOME
 
         def prepare(res):
-            if policy_k != a.idle_policy:
-                print(f"\n{res['name']} is not the last pass, so it goes home "
-                      "at the end: the pass after it starts from the ready pose")
-                allocate.resequence(res, q_start=q_start, return_home=True)
-            elif k and q_start is not None and a.idle_policy != idle.POLICY_HOME:
-                print(f"\nre-sequencing {res['name']} from the poses pass "
-                      f"{k} froze in (the allocation is untouched)")
-                allocate.resequence(res, q_start=q_start, return_home=False)
+            """-> True if the phase is ready to conduct.
+
+            RE-SEQUENCING CAN REFUSE, AND THAT IS A PHASE VERDICT (2026-08-26).
+            `resequence` prices every segment order against the transit
+            router, and on a rig whose parked arms stand in the transit
+            corridors the Held-Karp cost matrix can come out with no finite
+            tour at all — `no feasible order over N segments`.  That is the
+            same statement as "the conductor refuses this phase", reached one
+            stage earlier, so it is caught in the same place and by the same
+            dial: with `--skip-unconductable` the phase is dropped and the
+            rest of the picture still ships, without it the run stops.  It
+            used to propagate out of `build` as an unhandled RuntimeError and
+            take the whole programme with it.
+            """
+            try:
+                if policy_k != a.idle_policy:
+                    print(f"\n{res['name']} is not the last pass, so it goes "
+                          "home at the end: the pass after it starts from the "
+                          "ready pose")
+                    allocate.resequence(res, q_start=q_start, return_home=True)
+                elif k and q_start is not None \
+                        and a.idle_policy != idle.POLICY_HOME:
+                    print(f"\nre-sequencing {res['name']} from the poses pass "
+                          f"{k} froze in (the allocation is untouched)")
+                    allocate.resequence(res, q_start=q_start,
+                                        return_home=False)
+            except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+                print(f"  !! {res['name']} could not even be re-sequenced: "
+                      f"{exc}")
+                return False
+            return True
 
         def conduct(res):
             try:
@@ -1040,12 +1063,12 @@ def build_phases(a, phases, dt, pens, alt=None):
                       f"{exc}")
                 return None
 
-        prepare(ph)
-        B = conduct(ph)
+        B = conduct(ph) if prepare(ph) else None
         other = (alt or {}).get(k) if isinstance(alt, dict) else \
             (alt[k] if alt and k < len(alt) else None)
+        if other is not None and not prepare(other):
+            other = None
         if other is not None:
-            prepare(other)
             lb = nominal_floor(a, other, pens, q_start, policy_k)
             if B is not None and lb >= float(B["sch"]["duration"]) - 1e-9:
                 print(f"  the unsplit allocation of {ph['name']} floors at "

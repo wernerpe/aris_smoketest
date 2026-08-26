@@ -745,6 +745,65 @@ arrived at a second time and much harder.  The URDF's own arm collision
 spheres are a third, still-unaudited schematic; `gen_proposed_rig_urdf.py`
 now says so at the top of the file.
 
+## Re-certifying the rig at height: the decision package (2026-08-26)
+
+With the capsules corrected, the height question the audit reopened was put
+end to end at **h = 0.925 and h = 0.940** against the adopted **0.850** —
+parks re-derived, atlas re-swept, URDF regenerated, placement re-searched, the
+CSAIL logo re-allocated and re-conducted in every mode the conductor has.
+
+| | h = 0.850 | h = 0.925 | **h = 0.940** | 0.940, pitch 0.65 |
+|---|---|---|---|---|
+| union strict-GO | 87.00 % | **91.10 %** | 90.70 % | **91.95 %** |
+| ≥2-arm | **37.14 %** | 34.43 % | 33.85 % | 34.61 % |
+| dead | 13.00 % | 8.90 % | 9.30 % | **8.05 %** |
+| σ p1 / median | 0.1513 / 0.2633 | 0.1516 / 0.2511 | 0.1468 / 0.2483 | — |
+| σ within 1.25× gate | **2.7 %** | 6.0 % | 7.1 % | — |
+| pair clearance, worst / mean | 80.3 / 92.3 % | 82.8 / 93.7 % | **83.6 / 94.0 %** | — |
+| best park-vs-ink | 10 mm | 61 mm | **72 mm** | 68 mm |
+| placement (100 % live) | 1.263 × 0.966 m, 97.3 % | 1.094 × 0.837 m, 97.9 % | 1.178 × 0.901 m, 97.6 % | **1.347 × 1.030 m, 100 %** |
+| 6-mover conduct | refused | refused | refused | refused |
+| partner-disjoint | refused | refused | refused | refused |
+| solo | **refused** | **refused** | 1 phase, **22.6 %** | 1 phase, **26.1 %** |
+
+**Height helps, and it does not solve it.**  Union coverage gains 4 pp, the
+dead area falls by a third, pair clearance improves at every pitch, and the
+one number that decides whether anything runs at all — how far a parked arm
+can get from every other arm's certified ink — climbs monotonically from
+**10 mm at 0.850 to 72 mm at 0.940**.  The conductor asks 80 mm.  At 0.850 and
+0.925 the shortfall is total and the rig draws *nothing*; at 0.940 one solo
+phase clears and the rig draws 22.6 % of the logo with one arm.
+
+**It is not the margin.**  Re-conducting with the calibration term cut to zero
+(margin 0.08 → 0.05, i.e. the day a base survey lands) returns the *same*
+programme: same phase, same 22.6 %.  The blocker is geometric.
+
+**It is the middle row.**  A park's radius saturates — `certified_ready_pose`
+clips the hover point into the sheet, so past ~0.55 m every candidate lands on
+the same clamped xy — and its hover saturates too, because the middle-row arms
+certify nothing above 0.40–0.50 m.  Arms 31 and 71 sit over the middle of a
+1.80 m-wide canvas and have nowhere to stand that is not inside somebody's
+drawing.  The conductor says so in as many words: *the impossible indices are
+INK: arm 13 segment(s) [11] — no order fixes that, only a different
+allocation.*
+
+**Shipped**: h = 0.940, pitch 0.61 unchanged, `ARIS_RIG=proposed`.  One
+certified phase (arm 31, 10 segments, 2.388 m), makespan 37.6 s, **zero
+conducted pause**, scene_check PASS, min inter-arm 146.2 mm, column 144.1 mm,
+frame 51.2 mm, paper chain 108.4 mm.  `out/csail_proposed_h094.{html,zip}`.
+
+**What would actually move it**, in the order the measurements rank them:
+1. **Park-aware allocation.**  The atlas certifies a cell against the
+   pose-invariant column only; the allocator then hands an arm ink that a
+   parked partner is standing in, and the conductor discovers it three stages
+   later.  Allocating against the parked fleet is the change with the
+   evidence behind it.
+2. **Pitch 0.65** — inside the window the raised annulus opens (0.26–0.73 m),
+   worth +1.25 pp union, a 31 % bigger logo at 100 % allocation, and 26.1 %
+   conducted.  A build-sheet number, so the rig owner's call.
+3. **Fewer arms over the middle**, or a wider canvas.  Two rows of two would
+   give every arm an edge to park over.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm

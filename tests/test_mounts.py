@@ -434,18 +434,27 @@ def test_no_certified_pose_sits_in_a_neighbours_shoulder_ball():
     Skipped without an atlas: `out/` is gitignored, so this is a check the
     rig's own re-certification runs, not something a clean checkout can do.
     """
-    d = Path(__file__).resolve().parents[1] / "out" / "atlas_proposed_occ"
-    if not (d / "atlas_arm31.npz").exists():
-        pytest.skip("no proposed atlas in out/ — run scripts/run_atlas6.py")
     from aris_sixarm import atlas as atlas_mod, coordination, frames
     fl = layout.FLEET_PROPOSED
     h = float(layout.LAYOUT_PROPOSED["h"])
-    first = np.load(d / "atlas_arm31.npz")
-    ok, why = atlas_mod.is_current(first)
-    if not ok:
-        pytest.skip(f"stale proposed atlas: {why} — re-run the sweep")
-    if abs(float(first["base"][2, 3]) - h) > 1e-9:
-        pytest.skip("the atlas in out/ was swept at another height")
+    # ANY proposed sweep in out/ that is BOTH current and at the shipped
+    # height will do — the rig has been re-hung more than once and the
+    # directory name is not the contract, the stamped model and the base
+    # transform are (`atlas.model_signature`).
+    out = Path(__file__).resolve().parents[1] / "out"
+    d = first = None
+    for cand in sorted(out.glob("atlas_proposed*")):
+        f = cand / "atlas_arm31.npz"
+        if not f.is_file():
+            continue
+        meta = np.load(f)
+        if atlas_mod.is_current(meta)[0] \
+                and abs(float(meta["base"][2, 3]) - h) <= 1e-9:
+            d, first = cand, meta
+            break
+    if d is None:
+        pytest.skip(f"no current proposed atlas at h = {h:.3f} in out/ — "
+                    "run scripts/run_atlas6.py --rig proposed")
     worst, n = np.inf, 0
     for aid, spec in sorted(fl.items()):
         arr, _ = atlas.load(d, aid)

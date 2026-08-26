@@ -47,6 +47,13 @@ no boxes; yaw-invariant to the 2 cm probe across 5 bearings):
     inv      0.922      [0.38, 0.66]        [0.16, 0.82]
     inv      1.000      [0.26, 0.64]        [0.16, 0.78]
 
+The `inv` rows above are the 2026-08-25 probe, taken with NO boxes and the
+pre-audit capsules.  The shipped height's row is re-measured off the real
+six-arm atlas under the corrected collision model (`out/atlas_proposed_h0940`,
+every arm's certified strict-GO cell, radius from its own base):
+
+    inv      0.940      -                   [0.13, 0.86]
+
 The disc model the coarse search covers the canvas with is exactly these
 annuli.  `FLEET_PROPOSED` at the bottom is the study's winner, env-selectable
 (`ARIS_RIG=proposed`), and NOT the default.
@@ -65,6 +72,11 @@ PROFILES_LAT = {
     ("floor", None): (0.34, 0.90),
     ("inv", 0.850): (0.20, 0.84),
     ("inv", 0.922): (0.16, 0.82),
+    # MEASURED off the shipped atlas, not off the box-free probe the other
+    # rows come from — the tightest arm's inner lip and outer lip over all six
+    # (per-arm inner lips run 0.057-0.130; the common annulus is what a
+    # pair-spacing argument may use).
+    ("inv", 0.940): (0.13, 0.86),
     ("inv", 1.000): (0.16, 0.78),
 }
 PROFILES_INLINE = {
@@ -273,18 +285,29 @@ def check_spacing(layout, m=mounts.MOUNTS):
 # converges on the SAME regular figure — three transverse PAIRS, evenly
 # spaced along the canvas, each pair straddling the centre line.  The pair
 # spacing is set by one piece of geometry: an inverted arm's annulus is
-# [0.20, 0.84] at h = 0.85, so for a partner to cover the whole of an arm's
-# r < 0.20 under-base hole the two bases must be at least 0.40 apart (the far
-# lip of the hole must clear the partner's inner radius) and at most 0.64
-# (the near lip must stay inside the partner's outer radius).  The search
-# lands at ~0.61 — near the top of that window, which is also where the pair
-# reaches furthest sideways.  Rows sit at the centres of an even tiling of
-# the canvas length, which is what puts them 1.21 m apart here.
+# [0.13, 0.86] at the shipped h, so for a partner to cover the whole of an
+# arm's r < 0.13 under-base hole the two bases must be at least 0.26 apart
+# (the far lip of the hole must clear the partner's inner radius) and at most
+# 0.73 (the near lip must stay inside the partner's outer radius).  The
+# search landed at ~0.61, which was near the TOP of the window the 0.850
+# annulus implied (0.40-0.64); raising the rig opens the window at both ends
+# and 0.61 is now comfortably inside it.  Rows sit at the centres of an even
+# tiling of the canvas length, which is what puts them 1.21 m apart here.
+#
+# WHICH MATTERS MORE THAN IT USED TO (2026-08-26).  The window is now wide
+# enough to hold 0.65 and 0.70, and the re-certification measured what the
+# extra 4 cm buys: at h = 0.940 a pitch of 0.65 lifts union strict-GO from
+# 90.70 % to 91.95 %, takes the best CSAIL placement from 1.18 x 0.90 m at
+# 97.6 % allocated to 1.35 x 1.03 m at 100 %, and lifts the shipped
+# programme's coverage from 22.6 % to 26.1 %.  It does not change the verdict
+# below — nothing conducts more than one arm at a time at any pitch tested —
+# but it is the cheapest thing on the table and it is a BUILD SHEET number,
+# so it is measured here and decided by the rig owner, not changed here.
 #
 # So the build does not need the search's coordinates; it needs a spacing and
 # a row count.  `paired_grid` is that layout in round numbers.
 PAIR_SPACING = 0.61       # m, transverse pair separation (see above)
-PAIR_WINDOW = (0.40, 0.64)  # m, spacings that keep a partner over the hole
+PAIR_WINDOW = (0.26, 0.73)  # m, spacings that keep a partner over the hole
 
 
 def paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850, sheet=SHEET_FINAL6):
@@ -522,17 +545,67 @@ LAYOUT_V1 = dict(
 # indistinguishable from the search's own best (99.99 %) — with all six
 # certified ready poses clear of every neighbour's steel by >= 0.34 m.
 #
-#   h = 0.850 m       (beats 0.922 by 0.12 pp union / 1.8 pp overlap, 1.00
-#                      by 0.73 pp / 11.2 pp — the lateral tool's annulus is
-#                      widest here)
+#   h = 0.940 m       (was 0.850; re-certified 2026-08-26 under the audited
+#                      capsules — see the note below, and README)
 #   x = 0.5967, 1.2067    (canvas centre line +/- PAIR_SPACING/2)
 #   y = 0.6051, 1.8153, 3.0255    (H/6, H/2, 5H/6)
 #
 # NOT modelled, and the redesign must still answer them: the ceiling grid's
 # own cross-members, paper transport, cable routing, and inter-arm collision
 # between six arms whose workspaces now overlap on 55.98 % of the canvas.
-LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850)
+# THE HEIGHT WAS RE-DECIDED ON MEASURED GEOMETRY (2026-08-26).  0.850 came
+# out of a study whose collision model the mesh audit then disproved; every
+# number that chose it moved.  Re-swept under the corrected capsules and the
+# measured column, at 2 cm over all six arms:
+#
+#     h        union strict-GO   >=2 arms   sigma p1   park-vs-ink (best)
+#     0.850        87.00 %        37.14 %    0.1513         10 mm
+#     0.925        91.10 %        34.43 %    0.1516         61 mm
+#     0.940        90.70 %        33.85 %    0.1468         72 mm
+#
+# 0.940 is not the union-coverage optimum — 0.925 beats it by 0.4 pp — and it
+# is here anyway, because it is the only one of the three at which the CSAIL
+# logo produces a certified programme at all.  "Park-vs-ink" is why: the best
+# park set the (radius, hover) search can find, measured against every other
+# arm's certified drawing poses at the conductor's own 0.08 m.  It rises
+# monotonically with height and reaches 0.072 m at 0.940, and a phase whose
+# parked partners are inside its ink is a phase no schedule can fix.  At
+# 0.850 and 0.925 nothing conducts; at 0.940 one solo phase does.
+#
+# READ THAT AS A FLOOR, NOT A RESULT.  22.6 % of the logo, one arm, is worse
+# than the pre-audit programme claimed and better than the corrected 0.850
+# rig's nothing.  The blocking constraint is not the height and not the
+# margin (dropping calib to zero changes nothing): it is that the two
+# MIDDLE-ROW arms have nowhere over a 1.80 m canvas to stand that is not in
+# somebody's ink.  See README for what would actually move it.
+LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 
+# RE-SEARCHED AT THE SHIPPED HEIGHT (2026-08-26), AND ON THE OTHER
+# CRITERION.  The table below ranks a depot on its own arm's flyability, which
+# is what the 0.850 rig was tuned for.  Under the audited capsules the
+# criterion that decides whether a phase can be CONDUCTED at all is the other
+# one — how far the parked chain stands from every OTHER arm's certified ink —
+# and the grid in force is the one that maximises it, searched over 7 radii x
+# 10 hovers per arm against the shipped atlas.  The winners and what they
+# clear:
+#
+#      arm   (r, hover)     clears of everyone's ink
+#       13   (0.70, 0.50)      124 mm
+#       17   (0.70, 0.50)      127 mm
+#       31   (0.55, 0.40)       85 mm
+#       71   (0.55, 0.30)       72 mm   <- the fleet's binding depot
+#        2   (0.70, 0.50)      124 mm
+#       97   (0.70, 0.50)      127 mm
+#
+# 72 mm against the 80 mm the conductor asks, and that 8 mm is the whole
+# story of this rig: RADIUS SATURATES (`certified_ready_pose` clips the hover
+# point into the sheet, so past ~0.55 m every candidate lands on the same
+# clamped xy) and HOVER SATURATES (the middle row certifies nothing above
+# 0.40-0.50 m).  The two middle-row arms are boxed in by a 1.80 m canvas.
+#
+# The historical sweep, kept because its numbers are still the reason the
+# GRID has the shape it has:
+#
 # WHERE EACH ARM WAITS, AND WHY THERE.  `(radius, hover)` per arm, on the
 # outward bearing, MEASURED as the depot it has to be rather than picked as
 # the ready pose it looks like: for each of 6 radii x 3 hovers, how many of
@@ -575,8 +648,8 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850)
 # own flyability, which the sweep above put at 20/24 entries at 0.48; the
 # 0.30 park is measured in the same units below, and a depot nobody can draw
 # next to is worth less than one entry.
-PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
-                      71: (0.48, 0.20), 2: (0.48, 0.10), 97: (0.30, 0.10)}
+PARK_GRID_PROPOSED = {13: (0.70, 0.50), 17: (0.70, 0.50), 31: (0.55, 0.40),
+                      71: (0.55, 0.30), 2: (0.70, 0.50), 97: (0.70, 0.50)}
 
 # THE PARKED FLEET: `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
 # PARK_GRID_PROPOSED)`, baked the way `frames.Q_READY_*` are baked and for the
@@ -584,36 +657,28 @@ PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
 # should not re-solve six IK searches.  `tests/test_layout.py` re-derives them
 # and compares, so the literals cannot drift from the recipe that made them.
 #
-# Every one of them: pen tip 0.10 or 0.20 m over the paper, >= 0.466 m from
-# the nearest neighbour's steel, joint margin >= 0.314 (gate 0.30).  The
-# tightest pair of parked arms (13, 17) holds 195 mm — against the 80 mm the
-# conductor asks of every pair while they move.  The nearest thing to a parked
-# arm is not steel and not a pose: it is the neighbouring ARM's base column,
-# 97 mm from arm 17's chain to arm 13's column BOXES (169 mm to the robot
-# inside them).
-#
-# RE-DERIVED 2026-08-26 under the audited capsules and the measured column.
-# Only arm 17 moved, and it had to: at the true widths the pose the old model
-# certified stands 15 mm inside arm 13's corrected column box.  Nothing else
-# in the table changed, which is the reassuring half of the answer — a park
-# pose that was clear of a 0.12 m column is mostly still clear of a 0.185 m
-# one, because a depot's whole job is to be somewhere nobody is.
+# RE-DERIVED 2026-08-26 at h = 0.940 from the grid above.  Every one of them
+# passes `validate.check_pose` with the corrected capsules and the measured
+# column; the fleet's own worst numbers are in the re-certification record
+# (out/rig_report_h0940.json).  They hover 0.30-0.50 m over the paper, which
+# is much higher than the 0.10-0.20 m the 0.850 rig parked at — that is the
+# park search buying clearance the only way it still can.
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 Q_PARK_PROPOSED = {
-    13: (0.0726, 1.1524, -1.6667, -2.2359, -1.9606, 1.3879, -1.7795),
-    17: (0.0252, 0.6787, -1.9553, -2.6330, -2.3586, 0.9701, -2.1750),
-    31: (-1.5008, 0.7729, 1.5216, -2.6713, 1.9695, 0.8583, -2.5704),
-    71: (-1.5063, 1.1031, -1.4213, -2.3151, -1.8379, 1.1558, -0.1977),
-    2:  (0.1476, 0.9605, 1.5459, -2.1233, 2.0982, 1.2470, -2.1750),
-    97: (0.4026, -1.0020, 1.3172, -2.5686, -2.0932, 1.2260, -1.7795),
+    13: (-0.5087, 1.4337, -0.8944, -1.3963, -1.8746, 0.9435, -1.3841),
+    17: (0.0544, -1.3033, -2.2137, -2.1501, 1.4479, 0.8911, 0.1977),
+    31: (-0.9198, 1.2296, 1.1284, -2.0301, 1.7120, 1.0356, -1.7795),
+    71: (0.9018, -1.0637, 2.0190, -1.7151, -2.0667, 1.1099, -1.7795),
+    2:  (0.0544, 1.3033, 0.9279, -2.1501, 1.4479, 0.8911, 0.1977),
+    97: (-0.5087, -1.4337, 2.2472, -1.3963, -1.8746, 0.9435, -1.3841),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
-    13: (0.499, 0.217), 17: (1.280, 0.314),
-    31: (0.297, 1.815), 71: (1.687, 1.815),
-    2:  (0.479, 3.491), 97: (1.280, 3.316),
+    13: (0.426, 0.050), 17: (1.378, 0.050),
+    31: (0.050, 1.815), 71: (1.753, 1.815),
+    2:  (0.426, 3.581), 97: (1.378, 3.581),
 }
 
 

@@ -31,7 +31,7 @@ def test_proposed_layout_constraints_clean():
     for x, y in layout.LAYOUT_PROPOSED["floor"]:
         d = np.hypot(max(0.0 - x, x - W, 0.0), max(0.0 - y, y - H, 0.0))
         assert d >= layout.FLOOR_SETBACK[0] - 1e-9
-    assert layout.LAYOUT_PROPOSED["h"] in (0.85, 0.922, 1.00)
+    assert layout.LAYOUT_PROPOSED["h"] in (0.85, 0.922, 0.940, 1.00)
     assert len(layout.LAYOUT_PROPOSED["floor"]) \
         + len(layout.LAYOUT_PROPOSED["inv"]) == 6
 
@@ -91,7 +91,7 @@ def test_pair_spacing_window_covers_the_under_base_hole():
     """The window is geometry, not a preference: a partner must cover the
     whole of an arm's r < r0 under-base hole without falling outside its own
     outer radius."""
-    r0, r1 = layout.PROFILES_LAT[("inv", 0.850)]
+    r0, r1 = layout.PROFILES_LAT[("inv", layout.LAYOUT_PROPOSED["h"])]
     lo, hi = layout.PAIR_WINDOW
     assert lo == pytest.approx(2 * r0)          # far lip clears r0
     assert hi == pytest.approx(r1 - r0)         # near lip stays inside r1
@@ -233,7 +233,7 @@ def test_certified_ready_pose_is_gated_not_merely_solved():
 # the bare call is right, and the explicit call did not move.
 def test_proposed_specs_know_their_own_height_without_being_told():
     h = layout.LAYOUT_PROPOSED["h"]
-    assert h == 0.850
+    assert h == 0.940
     for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
         T = spec.T_world_base()                     # NO ARGUMENT — the trap
         assert T[2, 3] == h, (aid, T[2, 3])
@@ -314,16 +314,23 @@ def lateral():
 
 
 def test_the_parked_fleet_does_not_park_inside_the_table():
-    """The legacy inverted seed is NOT valid at h = 0.850 with the lateral
-    holder — it is 61.6 mm under the paper and 0.184 of joint margin, under
-    the 0.30 gate.  Six arms would park inside the table.  This pins the
-    refusal AND the replacement."""
+    """The legacy inverted seed is not a park pose, and this pins BOTH halves
+    of why — the half that is about the pose and the half that was only ever
+    about the height.
+
+    At h = 0.850 it hung 61.6 mm UNDER the paper.  Raising the rig to 0.940
+    lifts the same joints 90 mm and the tip now clears by 28 mm, so that
+    particular refusal is gone; what is left is the reason it was never a
+    depot anyway, which no height fixes: 0.184 of joint margin against the
+    0.30 gate.  The tip clearance is asserted as a height-derived quantity
+    rather than a constant, so this test says something true at any h.
+    """
     bad = frames.Q_READY_INV
     spec = layout.FLEET_PROPOSED[31]
+    h = float(layout.LAYOUT_PROPOSED["h"])
     rep = validate.check_pose(bad, spec, pen_lat=LAT)
-    assert not rep["ok"]
-    assert rep["worst"]["tip_z"] < -0.05          # under the paper
-    assert frames.joint_margin(bad) < 0.30
+    assert rep["worst"]["tip_z"] == pytest.approx(h - 0.9116, abs=2e-3)
+    assert frames.joint_margin(bad) < 0.30, "and THAT is why it is not a depot"
 
     for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
         q = spec.q_seed                            # what the pipeline reads
