@@ -182,35 +182,8 @@ def _paper_surcharge(spec, exi_h, ent_h, same, floor, qd_frac, h_inv, pen_ext):
     out = np.zeros((M, N))
     if M == 0 or N == 0:
         return out
-    c_exi, z_exi = paper.chain_tip_z(exi_h, spec, pen_ext, h_inv)
-    c_ent, z_ent = paper.chain_tip_z(ent_h, spec, pen_ext, h_inv)
-    tip_floor = np.minimum(np.minimum(z_exi[:, None], z_ent[None, :]),
-                           paper.TIP_CLEAR)
-    # `paper.route` clamps its floors to what the two endpoints can hold before
-    # it keys its memo on them; done here in bulk, the per-cell key is a tuple
-    # build rather than two forward-kinematics calls (`paper.key_maker`).
-    chain_floor = np.minimum(np.minimum(c_exi[:, None], c_ent[None, :]),
-                             paper.CHAIN_CLEAR)
-
-    # ---- one batched screen over every cell, in row blocks -----------------
-    # The screen is (M, N, K, 7) floats if it is built at once, which is a
-    # gigabyte before an arm has fifty spans; the FK is per configuration, so
-    # blocking the rows changes nothing but the size of the temporary.
-    K = paper.SAMPLES
-    f = np.linspace(0.0, 1.0, K).reshape(1, 1, K, 1)
-    cz = np.empty((M, N))
-    tz = np.empty((M, N))
-    rows = max(1, int(FK_BLOCK // max(N * K, 1)))
-    for a0 in range(0, M, rows):
-        a1 = min(a0 + rows, M)
-        L = exi_h[a0:a1, None, None, :] * (1.0 - f) + ent_h[None, :, None, :] * f
-        c, t = paper.chain_tip_z(L.reshape(-1, 7), spec, pen_ext, h_inv)
-        cz[a0:a1] = c.reshape(a1 - a0, N, K).min(-1)
-        tz[a0:a1] = t.reshape(a1 - a0, N, K).min(-1)
-    bad = (~same) & ((cz < paper.CHAIN_CLEAR - paper.EPS)
-                     | (tz < tip_floor - paper.EPS))
-
-    cells = [(int(a), int(b)) for a, b in zip(*np.where(bad))]
+    cells, tip_floor, chain_floor = dive_screen(spec, exi_h, ent_h, same,
+                                                h_inv, pen_ext)
     for a, b, val in _screen_routes(spec, exi_h, ent_h, tip_floor, chain_floor,
                                     floor, qd_frac, h_inv, pen_ext, cells):
         out[a, b] = val
@@ -219,34 +192,71 @@ def _paper_surcharge(spec, exi_h, ent_h, same, floor, qd_frac, h_inv, pen_ext):
 
 def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
                 pen_ext=PEN_EXT):
-    """Which crossings of this block go through the canvas. -> (cells, tip, chain).
+    """Which crossings of this block need routing. -> (cells, tip, chain).
 
     The cheap half of `_paper_surcharge`, exposed because `allocate._ArmMatrix`
     wants to know which crossings of ALL the blocks it is about to build need
     routing before it builds any of them — see `prewarm`.
+
+    IT SCREENS THE METAL TOO, and it has to, or the allocator prices a fiction.
+    `paper.STATIC_SAFE` makes a pen-up that grazes a neighbour's base column a
+    move `paper.route` will detour or refuse; a screen that only asked about the
+    canvas would leave those cells at zero surcharge, the tour would be chosen
+    against costs nobody will pay, and `arm_program` would then raise on a
+    transit the sequencer had already frozen into an order — or worse,
+    `prune_unflyable` would certify a bag as flyable and the conductor would
+    discover otherwise three stages later.  That is the inf-pricing lesson from
+    the held_karp work, one obstacle over.
+
+    Both floors are CLAMPED TO THE ENDPOINTS, exactly as `paper.route` clamps
+    them, so this and the router agree cell for cell about which crossings are
+    in trouble (`paper.effective_static_floor` explains why the clamp is not
+    optional).
     """
     M, N = len(exi_h), len(ent_h)
     if M == 0 or N == 0:
         return [], np.zeros((M, N)), np.zeros((M, N))
-    c_exi, z_exi = paper.chain_tip_z(exi_h, spec, pen_ext, h_inv)
-    c_ent, z_ent = paper.chain_tip_z(ent_h, spec, pen_ext, h_inv)
+    boxes = paper.static_boxes(spec) if paper.STATIC_SAFE else []
+    c_exi, z_exi, s_exi = paper.chain_screen(exi_h, spec, pen_ext, h_inv, boxes)
+    c_ent, z_ent, s_ent = paper.chain_screen(ent_h, spec, pen_ext, h_inv, boxes)
     tip = np.minimum(np.minimum(z_exi[:, None], z_ent[None, :]),
                      paper.TIP_CLEAR)
     chain = np.minimum(np.minimum(c_exi[:, None], c_ent[None, :]),
                        paper.CHAIN_CLEAR)
+    stat = np.minimum(np.minimum(s_exi[:, None], s_ent[None, :]),
+                      paper.FRAME_FLOOR)
     K = paper.SAMPLES
     f = np.linspace(0.0, 1.0, K).reshape(1, 1, K, 1)
     cz = np.empty((M, N))
     tz = np.empty((M, N))
-    rows = max(1, int(FK_BLOCK // max(N * K, 1)))
+    sz = np.full((M, N), np.inf)
+    sr = np.zeros((M, N))
+    # the block carries the whole 11-point CHAIN when the metal is in play, not
+    # two heights per configuration, so the row block shrinks to match
+    rows = max(1, int((FK_BLOCK // (33 if boxes else 1)) // max(N * K, 1)))
     for a0 in range(0, M, rows):
         a1 = min(a0 + rows, M)
         L = exi_h[a0:a1, None, None, :] * (1.0 - f) + ent_h[None, :, None, :] * f
-        c, t = paper.chain_tip_z(L.reshape(-1, 7), spec, pen_ext, h_inv)
-        cz[a0:a1] = c.reshape(a1 - a0, N, K).min(-1)
-        tz[a0:a1] = t.reshape(a1 - a0, N, K).min(-1)
+        cz[a0:a1], tz[a0:a1], sz[a0:a1], sr[a0:a1] = paper.block_screen(
+            L, spec, pen_ext, h_inv, boxes)
     bad = (~same) & ((cz < paper.CHAIN_CLEAR - paper.EPS)
-                     | (tz < tip - paper.EPS))
+                     | (tz < tip - paper.EPS)
+                     | (sz < stat - paper.EPS))
+    # ...AND THE CELLS THE COARSE BOUND CANNOT DECIDE ARE MEASURED, NOT ROUTED.
+    # `sz` is a minimum over 33 samples of a metre-long move, so `sz - sr` — the
+    # honest lower bound at that density — sits 10 to 20 mm under it, and every
+    # cell in that band would otherwise be handed to `paper.route` on the
+    # strength of a bound nobody believes.  A route costs 400 ms and the
+    # refined measurement `route` itself would make costs 7, so the band is
+    # settled here with `paper.leg_bounds`, at the router's own floor and by
+    # the router's own function.  On the proposed rig that is the difference
+    # between half of an arm's crossings being routed and a fifth.
+    if boxes:
+        maybe = (~same) & ~bad & (sz - sr < stat - paper.EPS)
+        for a, b in zip(*np.where(maybe)):
+            _, _, s = paper.leg_bounds(spec, exi_h[a], ent_h[b], pen_ext, h_inv,
+                                       boxes, K, float(stat[a, b]))
+            bad[a, b] = s < stat[a, b] - paper.EPS
     return [(int(a), int(b)) for a, b in zip(*np.where(bad))], tip, chain
 
 

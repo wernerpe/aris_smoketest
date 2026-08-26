@@ -800,12 +800,13 @@ class ParkProbe:
     """
 
     def __init__(self, parks, specs, pens, groups=None, h_inv=None,
-                 margin=None):
+                 margin=None, probe_hovers=True):
         from . import coordination
         self.margin = float(coordination.SAFETY_M + coordination.CALIB_M
                             if margin is None else margin)
         self.h_inv = H_INV_DEFAULT if h_inv is None else float(h_inv)
         self.specs, self.pens = specs, pens
+        self.probe_hovers = bool(probe_hovers)
         self.groups = [list(g) for g in groups] if groups else None
         self.stats = dict(probes=0, blocked=0, cached=0, seconds=0.0)
         self._memo = {}
@@ -833,11 +834,18 @@ class ParkProbe:
                 co |= {int(x) for x in g}
         return [b for b in sorted(self.caps) if b not in co]
 
-    def clearance(self, arm, qs):
+    def clearance(self, arm, qs, sweep=True):
         """Worst clearance of this joint path against the parked partners.
 
         -> metres, `inf` when nobody is parked behind this arm.  Negative
         means the path is inside a parked chain.
+
+        `sweep=False` reads the rows as a SET OF POSES rather than a path, so
+        the 1-Lipschitz residual between consecutive rows — which is about a
+        motion — is not charged against two poses with no motion between them.
+        That is what the hover probe wants: the two ends of a span are not a
+        trajectory, and charging half the distance between them would refuse
+        spans for being long.
         """
         from . import coordination
         others = self.partners(arm)
@@ -856,7 +864,7 @@ class ParkProbe:
         # through, which is what a 1-Lipschitz clearance can lose between two
         # samples of the path
         step = np.zeros(0)
-        if len(P) > 1:
+        if sweep and len(P) > 1:
             step = 0.5 * np.max([np.linalg.norm(np.diff(X, axis=0),
                                                 axis=2).max(1)
                                  for X in (P, A, B)], axis=0)
@@ -873,7 +881,23 @@ class ParkProbe:
         return worst
 
     def blocked(self, arm, entry, key=None):
-        """Does this entry's certified ink stand inside a parked arm? -> bool."""
+        """Does this entry's ink OR ITS HOVERS stand inside a parked arm?
+
+        -> bool.
+
+        THE HOVERS ARE PART OF THE SPAN, and leaving them out is how the
+        allocator hands an arm ink it can draw and cannot approach.  A hover is
+        a different configuration from the drawing pose under it — the whole
+        subject of `writing.lifted_or_lower`'s note — and since that solver
+        started SEARCHING the fiber for a hover that clears the static set, it
+        is a configuration this module has no other way of hearing about: the
+        pose it picks is chosen for its distance from the neighbours' COLUMNS,
+        which says nothing about their forearms.
+
+        Two poses, not a path, so no sweep residual (see `clearance`); and the
+        hover solver memoises, so a span the balancer prices fifty times pays
+        for them once.
+        """
         if not self.caps:
             return False
         k = key if key is not None else (
@@ -885,14 +909,30 @@ class ParkProbe:
             self.stats["cached"] += 1
             return hit
         t0 = time.time()
-        qs = (entry.get("plan") or {}).get("qs")
+        plan = entry.get("plan") or {}
+        qs = plan.get("qs")
         gap = float("inf") if qs is None else self.clearance(arm, qs)
+        if gap >= self.margin and qs is not None and self.probe_hovers:
+            gap = min(gap, self.clearance(arm, self._hovers(arm, plan),
+                                          sweep=False))
         bad = bool(gap < self.margin)
         self._memo[k] = bad
         self.stats["probes"] += 1
         self.stats["blocked"] += int(bad)
         self.stats["seconds"] += time.time() - t0
         return bad
+
+    def _hovers(self, arm, plan):
+        """The two pen-up poses this span is entered and left through. -> (2,7)."""
+        from . import writing
+        qs = np.asarray(plan["qs"], float)
+        pts = np.asarray(plan["pts"], float)
+        pen = float(self.pens.get(arm, 0.110))
+        tl = plan.get("tilt")
+        return np.stack([
+            writing.lifted_or_lower(self.specs[arm], qs[k], pts[k],
+                                    h_inv=self.h_inv, pen_ext=pen, tilt=tl)[0]
+            for k in (0, -1)])
 
 
 def replan_same_span(st, sp, spec, opts=None, min_seg=MIN_SEG_M, tol=1e-12):

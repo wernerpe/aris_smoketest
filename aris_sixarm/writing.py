@@ -21,10 +21,11 @@ import json
 
 import numpy as np
 
+from . import frames as _frames
 from . import ik, letters, paper, planner
 from .fleet import FLEET, H_INV_DEFAULT
 from .frames import (FR3_MIN, FR3_MAX, PEN_EXT, QD_MAX, joint_margin, rotx,
-                     tip_pos)
+                     rotz, tip_pos)
 
 DS = 0.01               # stroke resampling step, m
 DRAW_SPEED = 0.08       # m/s along a stroke
@@ -55,9 +56,18 @@ HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
 #   no reason to spend margin you do not have to.
 
 
+HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
+#   The TOOL YAW axis of the hover fiber, and it only became a real axis when
+#   the pen holder went lateral: with the tip 110 mm off the wrist axis, phi
+#   moves the whole arm around an 11 cm circle while the pen stays put.  Eight
+#   of them is what `atlas._candidates` and `layout.certified_ready_pose` both
+#   scan, so a hover is now searched over the same fiber every other CHOSEN
+#   pose in this package is searched over.
+
+
 def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
                   pen_ext=PEN_EXT, span=0.6, n_q7=25, margin_min=HOVER_MARGIN,
-                  tilt=None):
+                  tilt=None, phis=None, q7s=None, ok=None):
     """IK pose with the pen tip at (x, y, z), R = rotx(pi), nearest to q_ref.
 
     Scans q7 around q_ref[6] (the redundancy that q_ref already picked) and
@@ -66,6 +76,34 @@ def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     filter is inside the scan and not applied afterwards, so raising it does not
     merely reject the nearest solution — it picks the nearest ACCEPTABLE one,
     which is usually a different q7 rather than no answer at all.
+
+    `phis`, `q7s` and `ok` WIDEN THAT SCAN TO THE WHOLE FIBER, and they default
+    to exactly what this function always did (one orientation, a local q7
+    window, no extra gate) so the pose it returns where nothing is in the way
+    is the pose it has always returned.
+
+      `phis`  tool yaws to scan, each giving `rotz(phi) @ R`.  The pen points
+              the same way and the ARM does not: with the lateral holder that
+              is a metre of elbow travel for a tip that has not moved.
+      `q7s`   the q7 values to scan; `None` is the local window above.  The
+              whole grid is what a search that has ALREADY failed locally
+              should be asking for.
+      `ok`    a VECTORISED SCORE, (N,7) -> (N,) float, `-inf` for a pose that
+              is not allowed at all and higher-is-better for one that is.  It
+              is applied like the margin filter and for the same reason: a
+              hover that fails must be replaced by the best acceptable hover,
+              not by nothing.  `writing.static_gate` builds the one the lift
+              layer needs.
+
+              IT IS A SCORE AND NOT A PREDICATE BECAUSE THE THRESHOLD IS NOT
+              THE WHOLE STORY.  "Nearest pose that clears 53 mm" lands hovers a
+              millimetre over the gate, and then every straight line between
+              two of them dips under it and the cost matrix spends its budget
+              routing crossings between poses that were only just legal.  The
+              score is the clearance CAPPED at a comfortable value, so
+              candidates that are comfortable all tie and the nearest of them
+              wins — one scan, one forward-kinematics pass, and hovers that
+              stand off the metal wherever standing off is free.
 
     `tilt` LEANS THE HOVER, AND THE FLEET DOES NOT USE IT.  The hover above a
     tilt-rescued segment's endpoint could be asked for at the same lean, which
@@ -98,23 +136,46 @@ def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
         from .tilt import pen_rot
         R_w = pen_rot(np.asarray(tilt, float).reshape(1, 2))[0]
     from .frames import tool_offset
-    T_w = np.eye(4)
-    T_w[:3, :3] = R_w
-    # tip = TCP + R @ tool_offset (ACTIVE tool): the hover puts the TIP at
-    # (x, y, z) whichever holder is mounted.  One hover convention (phi = 0)
-    # for the whole fleet, same argument as the tilt note above.
-    T_w[:3, 3] = np.array([xy[0], xy[1], z]) - R_w @ tool_offset(pen_ext)
-    T_b = np.linalg.inv(Twb) @ T_w
-    q7s = np.clip(q_ref[6] + np.linspace(-span, span, n_q7),
-                  FR3_MIN[6] + 1e-3, FR3_MAX[6] - 1e-3)
-    best, best_d = None, np.inf
-    for q7 in q7s:
-        for q in ik.solve(T_b, q7, q_ref):
-            if joint_margin(q) < margin_min:
-                continue
-            d = float(np.max(np.abs(q - q_ref)))
-            if d < best_d:
-                best, best_d = q, d
+    Twb_inv = np.linalg.inv(Twb)
+    off = tool_offset(pen_ext)
+    if q7s is None:
+        q7s = np.clip(q_ref[6] + np.linspace(-span, span, n_q7),
+                      FR3_MIN[6] + 1e-3, FR3_MAX[6] - 1e-3)
+    else:
+        q7s = np.clip(np.asarray(q7s, float).reshape(-1),
+                      FR3_MIN[6] + 1e-3, FR3_MAX[6] - 1e-3)
+    best, best_d, cand = None, np.inf, []
+    for phi in ((None,) if phis is None else np.atleast_1d(phis)):
+        R = R_w if phi is None else rotz(float(phi)) @ R_w
+        T_w = np.eye(4)
+        T_w[:3, :3] = R
+        # tip = TCP + R @ tool_offset (ACTIVE tool): the hover puts the TIP at
+        # (x, y, z) whichever holder is mounted, at whichever yaw.
+        T_w[:3, 3] = np.array([xy[0], xy[1], z]) - R @ off
+        T_b = Twb_inv @ T_w
+        for q7 in q7s:
+            for q in ik.solve(T_b, q7, q_ref):
+                if joint_margin(q) < margin_min:
+                    continue
+                d = float(np.max(np.abs(q - q_ref)))
+                if ok is None:
+                    if d < best_d:
+                        best, best_d = q, d
+                elif d < best_d:
+                    cand.append((d, q))
+    if ok is not None and cand:
+        # RANK FIRST, SCORE ONCE.  The score is a forward-kinematics pass
+        # against thirty boxes, and the widened scan hands it five hundred
+        # candidates; asking it one at a time was 70 % of a route's clock.
+        # Sorted by ||dq||_inf, `argmax` returns the FIRST maximiser — so among
+        # equally comfortable candidates the nearest wins, and where nothing is
+        # comfortable the clearest wins.
+        cand.sort(key=lambda t: t[0])
+        Q = np.array([q for _, q in cand])
+        s = np.asarray(ok(Q), float).reshape(-1)
+        if np.isfinite(s).any():
+            i = int(np.argmax(np.where(np.isfinite(s), s, -np.inf)))
+            best, best_d = Q[i], float(cand[i][0])
     return best, best_d
 
 
@@ -727,22 +788,203 @@ def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=PEN_EXT,
                 modes=(lift[1], home[1]))
 
 
-def lifted_or_lower(spec, q_ref, xy, heights=(LIFT_Z, 0.045, 0.03), h_inv=H_INV_DEFAULT,
+# ==========================================================================
+# THE HOVER IS A POSE THE ARM HOLDS, AND NOTHING WAS CERTIFYING IT
+# ==========================================================================
+# `atlas.solve_cell` gates a DRAWING pose against the static set — every
+# neighbour's steel and every neighbour's pose-invariant base column — and the
+# hover 6 cm above it is a DIFFERENT CONFIGURATION.  Same tip, same paper cell,
+# a completely different elbow: the analytic IK nearest the drawing pose at
+# z = +0.06 can put the forearm a hundred millimetres inside a neighbour's
+# column while the ink under it clears by fifty.
+#
+# Measured on the proposed rig at h = 0.940 (`out/transit_block.py`,
+# `out/hover_fiber.py`): every one of the six arms' certified cells clears the
+# columns while DRAWING — 0 failures, worst 97.3 mm — and 4 to 18 % of the same
+# cells have a derived hover that does not, worst 131 mm INSIDE.  That is what
+# every conduct refusal on this rig has been naming: "the impossible indices
+# are pen-up transits", identically with one moving arm as with three, which
+# can only be a stationary neighbour doing it.
+#
+# THE FIX IS NOT A HIGHER HOVER, IT IS THE FIBER THE DRAWING POSE ALREADY
+# SPENT.  A stroke sample has to hold a tip position AND stay on a continuous
+# band, so the band DP spends q7 and the tool yaw buying continuity.  A hover
+# has to hold a tip position and nothing else — phi, q7, the IK branch and the
+# height are all free up there.  So where the derived hover is blocked, SEARCH
+# that fiber for one that is not: 8 yaws x the whole q7 grid x every branch,
+# keeping the NEAREST acceptable pose so the lift stays short and the elbow
+# stays near the ink the conductor already cleared.  It recovers 92 % of the
+# blocked cells (173 of 189 sampled) and refuses the rest honestly.
+HOVER_LADDER = (LIFT_Z, 0.045, 0.03, 0.09, 0.12)
+#   ...and the height is on the fiber too.  The first three rungs are the ones
+#   this function has always had; the two above them only ever run when all
+#   three have failed, which used to mean "do not lift at all".
+
+# A HOVER THAT SITS ON THE GATE MAKES EVERY TRANSIT OUT OF IT MARGINAL.  The
+# fiber search keeps the NEAREST acceptable pose, and "acceptable" is a
+# threshold, so left alone it lands hovers a millimetre over `FRAME_FLOOR` —
+# and then the straight line between two such hovers dips under it, every
+# crossing needs routing, and the cost matrix spends its whole budget proving
+# that transits between poses which are only just legal are only just illegal.
+#
+# So the search asks for COMFORT first and settles for the floor second.  The
+# tier costs nothing where the plain solver already had a comfortable answer
+# (which is most cells: a hover 6 cm over the paper is usually nowhere near a
+# column), and where it does run it buys 4 cm of clearance for a slightly
+# longer lift.  Measured on the proposed rig it is the difference between half
+# of every arm's crossings needing a route and a fifth of them.
+HOVER_COMFORT = 0.04    # m of static clearance ABOVE the floor, if it is there
+
+_HOVERS = {}                # (arm, pen, tool, h, q_ref, xy, tilt) -> (q, z)
+
+
+def _clear_hovers():
+    _HOVERS.clear()
+
+
+paper.on_clear(_clear_hovers)
+
+
+def static_gate(spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, floor=None,
+                comfort=None):
+    """How good a CHOSEN pen-up pose is. -> fn (N,7) -> (N,) float.
+
+    `-inf` for a pose that may not be held at all; otherwise the static
+    clearance capped at `floor + comfort`, which is the ranking key
+    `lifted_config` maximises (see there for why a threshold alone is not
+    enough).
+
+    Two conditions decide the `-inf`, and the second one is only here because
+    the first widened the search:
+
+      THE STATIC SET.  Every neighbour's steel and base column, at
+      `paper.FRAME_FLOOR` — the FULL floor, not the endpoint-clamped one, since
+      this pose is being CHOSEN and there is no reason to spend clearance you
+      do not have to.  `paper.effective_static_floor` clamps only where a pose
+      is being ACCEPTED: the certified ink at the ends of a leg.
+
+      THE PAPER.  `atlas.solve_cell` refuses a drawing pose whose chain dips
+      under `CHAIN_CLEAR`, and while the hover was pinned to phi = 0 directly
+      above such a pose it inherited that for free.  A search over eight tool
+      yaws does not: the same tip at the same height with the arm swung a
+      quarter turn round the holder's 11 cm circle can put an elbow through the
+      table.  So the hover is held to the floor its own ink is held to, and the
+      widening cannot buy column clearance with the canvas.
+
+    `None` when there is nothing in the room to hit and no gate to apply, which
+    is also what makes the widened scan cost nothing on the legacy rigs: with
+    no predicate to fail, `hover_solve` still reaches its second stage only
+    when the first found no pose at all.
+    """
+    boxes = paper.static_boxes(spec) if paper.STATIC_SAFE else []
+    fl = paper.FRAME_FLOOR if floor is None else float(floor)
+    cap = fl + (HOVER_COMFORT if comfort is None else float(comfort))
+
+    def score(Q):
+        Q = np.asarray(Q, float).reshape(-1, 7)
+        cz, _, sc = paper.chain_screen(Q, spec, pen_ext, h_inv, boxes)
+        good = (cz >= paper.CHAIN_CLEAR - paper.EPS) & (sc >= fl - paper.EPS)
+        return np.where(good, np.minimum(sc, cap), -np.inf)
+    score.cap = cap          # `hover_solve` reads it to decide when to widen
+    return score
+
+
+def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
+                pen_ext=PEN_EXT, tilt=None, margin_min=HOVER_MARGIN, ok=None):
+    """The best hover over (xy, z) that `ok` allows. -> q (7,) | None.
+
+    Two stages, cheap first, and the first stage is bit-for-bit the call this
+    module has always made: one orientation, q7 near the drawing pose's own.
+    Where that answer exists and is COMFORTABLE — clear of the static set by
+    `ok.cap`, which most of a canvas is — nothing else runs and nothing else
+    changes.  Where it does not exist, or exists only just inside the gate, the
+    second stage opens the whole fiber: 8 tool yaws x the whole q7 grid x every
+    branch, ranked by the same score.  The escalation is bounded by geometry —
+    it is the cells near a neighbour's column, and no others, that pay for it.
+
+    AND "WHERE IT DOES NOT" IS NOT A CORNER CASE ON THE LATERAL TOOL.  phi = 0
+    is a free choice for an INLINE pen — the pen is on the wrist axis, so
+    rotating the tool about it moves nothing but q7 — and it is a hard
+    constraint for a holder that puts the tip 110 mm off that axis: it pins the
+    whole arm to one point of an 11 cm circle.  `atlas.solve_cell` certifies a
+    drawing pose over EIGHT yaws for exactly that reason; the hover above it
+    was pinned to one, and measured over 600 certified cells of the proposed
+    rig, 330 of them — 55 % — had no hover at any of the three heights.  Not a
+    blocked hover: no hover.  Those transits lifted the pen by nothing at all
+    and dragged it across the paper to the next stroke, and the only thing that
+    ever said so was `arm_program`'s `lifts` list full of zeros.  With the
+    fiber open it is 15 of 1200.
+    """
+    q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                         margin_min=margin_min, tilt=tilt, ok=ok)
+    cap = getattr(ok, "cap", None)
+    if q is not None and (cap is None
+                          or float(np.asarray(ok(q[None, :]), float)[0])
+                          >= cap - paper.EPS):
+        return q
+    w, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                         margin_min=margin_min, tilt=tilt, phis=HOVER_YAWS,
+                         q7s=ik.Q7_GRID, ok=ok)
+    if w is None or q is None:
+        return w if w is not None else q
+    # both exist: keep whichever the score prefers, the narrow one on a tie —
+    # it is the nearer pose and the shorter lift
+    s = np.asarray(ok(np.stack([q, w])), float)
+    return q if s[0] >= s[1] else w
+
+
+def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
                     pen_ext=PEN_EXT, tilt=None):
-    """`lifted_config`, retrying at lower heights. -> (q, height_used).
+    """A CERTIFIED hover over `xy`, as high as the arm can hold one.
+    -> (q, height_used).
 
     Near the edge of an arm's reach the 6 cm hover has no IK solution with the
     margin we insist on even though the stroke's endpoint does; dropping the
     hover is strictly better than dropping the transit.  A last resort of "do
     not lift at all" keeps the timeline well-formed (the pen scuffs the paper,
-    which the report says out loud rather than hiding).
+    which the report says out loud rather than hiding) — and it is a pose the
+    atlas certified, so the leg out of it is clamped rather than contradictory.
+
+    Memoised because the balancer prices the same span dozens of times and the
+    second stage of `hover_solve` is a 500-solution scan; `paper.clear_cache`
+    drops this with the rest.
     """
-    for z in heights:
-        q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
-                             tilt=tilt)
-        if q is not None:
-            return np.asarray(q, float), float(z)
-    return np.asarray(q_ref, float), 0.0
+    key = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
+           np.round(np.asarray(q_ref, float), 9).tobytes(),
+           np.round(np.asarray(xy, float), 9).tobytes(),
+           None if tilt is None else np.round(np.asarray(tilt, float),
+                                              9).tobytes(),
+           tuple(float(z) for z in heights), bool(paper.STATIC_SAFE))
+    hit = _HOVERS.get(key)
+    if hit is not None:
+        return hit
+
+    def ladder(ok):
+        for z in heights:
+            q = hover_solve(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                            tilt=tilt, ok=ok)
+            if q is not None:
+                return np.asarray(q, float), float(z)
+        return None
+
+    gate = static_gate(spec, pen_ext, h_inv)
+    out = ladder(gate)
+    if out is None and gate is not None:
+        # ...AND THE HOVER IS CLAMPED TO ITS OWN INK, for the third time and
+        # the same reason (`paper.effective_static_floor`).  A cell certified
+        # at 51 mm has no hover anywhere on its fiber that keeps 53, so the
+        # first ladder returns nothing and the arm gets "do not lift at all" —
+        # a pen dragged across the paper to save a clearance the ink under it
+        # never had.  Asking the hover for what the drawing pose holds is the
+        # honest question: such a hover ships exactly when its own ink does.
+        fl = float(paper.chain_static(np.asarray(q_ref, float).reshape(1, 7),
+                                      spec, pen_ext, h_inv)[0])
+        if fl < paper.FRAME_FLOOR:
+            out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl))
+    if out is None:
+        out = (np.asarray(q_ref, float), 0.0)
+    _HOVERS[key] = out
+    return out
 
 
 PARK_FREEZE = "freeze"      # stop at the hover pose above the last stroke

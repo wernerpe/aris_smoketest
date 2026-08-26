@@ -356,3 +356,395 @@ def test_attribution_conserves_metres(tiers):
             assert sum(r["frac"].values()) == pytest.approx(1.0, abs=1e-9)
     assert sum(att["by_cause_weighted_m"].values()) == pytest.approx(
         att["total_m"], rel=1e-6)
+
+
+# ==========================================================================
+# 4. THE LIFT LAYER: a hover is a pose the arm holds, and it is certified now
+#
+# Everything above is about the PAPER.  This section is about the metal, and
+# about the configuration that was never gated against any of it: the ~6 cm
+# hover `writing.lifted_or_lower` derives above a certified drawing pose.  On
+# the proposed rig that hover stands inside a neighbour's base column for 4 to
+# 18 % of every arm's certified cells, and has no IK solution at all for 55 %
+# of them, and both facts were invisible because nothing asked.
+# ==========================================================================
+@pytest.fixture()
+def lateral():
+    """The proposed rig's tool, restored afterwards.
+
+    `frames.PEN_LAT` is a process global that reaches every module (see
+    `tests/test_proposed_rig_urdf.py`), and `paper`'s memos are keyed on it, so
+    it is switched on per test, switched back, and the caches dropped both ways.
+    """
+    from aris_sixarm import frames
+    before = frames.ACTIVE_TOOL
+    paper.clear_cache()
+    frames.activate_tool("lateral")
+    try:
+        yield frames.PEN_LAT
+    finally:
+        frames.activate_tool(before)
+        paper.clear_cache()
+
+
+PROPOSED_ATLAS = ROOT / "out/atlas_proposed_h0940_banded"
+
+
+def _proposed_cells(aid, n):
+    """`n` certified drawing poses of one proposed-rig arm. -> (rows, Q)."""
+    from aris_sixarm import atlas, layout
+    _require_current_atlas(PROPOSED_ATLAS, aid)
+    arr, _ = atlas.load(PROPOSED_ATLAS, aid)
+    go = arr[atlas.strict_go(arr)]
+    if not len(go):
+        pytest.skip(f"no strict-GO cells for arm {aid}")
+    sel = go[np.linspace(0, len(go) - 1, min(n, len(go))).astype(int)]
+    return (layout.FLEET_PROPOSED[aid], sel,
+            sel[:, atlas.QCOL:atlas.QCOL + 7],
+            float(layout.LAYOUT_PROPOSED["h"]))
+
+
+def test_the_widened_scan_reproduces_the_old_one_where_it_had_an_answer(six):
+    """A default `lifted_config` call is the call it always was.
+
+    The fiber arguments are opt-in and the corpus depends on that: every pinned
+    transit number in this repo was earned with phi = 0, a local q7 window and
+    no gate, and asking for those explicitly must give the identical pose.
+    """
+    spec = FLEET[2]
+    for p in PROBE_XY:
+        a, da = writing.lifted_config(spec, np.asarray(spec.q_seed, float), p,
+                                      z=writing.LIFT_Z, pen_ext=0.110)
+        b, db = writing.lifted_config(spec, np.asarray(spec.q_seed, float), p,
+                                      z=writing.LIFT_Z, pen_ext=0.110,
+                                      phis=None, q7s=None, ok=None)
+        assert (a is None) == (b is None)
+        if a is not None:
+            assert np.array_equal(a, b) and da == db
+
+
+def test_ranking_first_and_gating_once_is_the_same_answer(six):
+    """The batched gate picks the pose the per-candidate loop would have.
+
+    `lifted_config` sorts its survivors by ||dq||_inf and scores the whole block
+    at once, because scoring them one at a time was 70 % of a route's clock.
+    The contract it has to keep: the pose returned is a MAXIMISER of the score,
+    and among maximisers it is the nearest — so a threshold score reproduces
+    "nearest acceptable" and a capped-clearance score adds "and stand off the
+    metal where standing off is free".
+    """
+    from aris_sixarm import ik
+    from aris_sixarm.frames import joint_margin, rotx, rotz, tool_offset
+    spec = FLEET[2]
+    pen = 0.110
+    q_ref = np.asarray(spec.q_seed, float)
+
+    # a score that rejects the elbow-up half of the fiber and then prefers a
+    # low q3 among what is left, so BOTH halves of the contract are exercised
+    def score(Q):
+        Q = np.asarray(Q, float).reshape(-1, 7)
+        return np.where(Q[:, 3] < -1.5, np.minimum(-Q[:, 2], 0.5), -np.inf)
+
+    Twb_inv = np.linalg.inv(spec.T_world_base())
+    off = tool_offset(pen)
+    n_checked = 0
+    for p in PROBE_XY:
+        got, gd = writing.lifted_config(spec, q_ref, p, z=writing.LIFT_Z,
+                                        pen_ext=pen, phis=writing.HOVER_YAWS,
+                                        ok=score)
+        # re-enumerate the same fiber by hand
+        cand = []
+        for phi in writing.HOVER_YAWS:
+            R = rotz(float(phi)) @ rotx(np.pi)
+            T_w = np.eye(4)
+            T_w[:3, :3] = R
+            T_w[:3, 3] = np.array([p[0], p[1], writing.LIFT_Z]) - R @ off
+            for q7 in np.clip(q_ref[6] + np.linspace(-0.6, 0.6, 25), -2.9, 2.9):
+                for q in ik.solve(Twb_inv @ T_w, q7, q_ref):
+                    if joint_margin(q) < writing.HOVER_MARGIN:
+                        continue
+                    s = float(score(q[None, :])[0])
+                    if np.isfinite(s):
+                        cand.append((-s, float(np.max(np.abs(q - q_ref))), q))
+        if not cand:
+            assert got is None
+            continue
+        n_checked += 1
+        assert got is not None
+        cand.sort(key=lambda t: (t[0], t[1]))
+        assert float(score(got[None, :])[0]) == pytest.approx(-cand[0][0],
+                                                              abs=1e-12)
+        assert gd == pytest.approx(cand[0][1], abs=1e-12)
+    assert n_checked, "the score rejected everything; nothing was proved"
+
+
+def test_the_static_floor_is_never_above_what_the_endpoints_hold(lateral):
+    """`effective_static_floor`, and why the gate could not be switched on.
+
+    The atlas certifies a drawing pose at `STATIC_MARGIN` and this module asks
+    a route for `STATIC_MARGIN + 3 mm`, so a leg out of the tightest certified
+    cells is asked for clearance its own first sample does not have.  Clamped,
+    the gate is meaningful where it can be met and inert where the geometry
+    already lost — never a contradiction.
+    """
+    from aris_sixarm import rig_final
+    # A WIDE SAMPLE, because the band this exercises is thin: 4 to 6 cells in
+    # every 300 sit between the two numbers, which is exactly why nobody
+    # noticed the contradiction until every edge out of them priced `inf`.
+    spec, rows, Q, h = _proposed_cells(31, 400)
+    tight = 0
+    ink = paper.chain_static(Q, spec, 0.110, h)
+    for row, q, ci in zip(rows, Q, ink):
+        # never below what the ATLAS certified the ink at, which is the
+        # guarantee that makes the clamp safe to have
+        assert ci >= rig_final.STATIC_MARGIN - 1e-9
+        if ci >= paper.FRAME_FLOOR:
+            continue
+        tight += 1
+        qh, _ = writing.lifted_or_lower(spec, q, row[:2], h_inv=h, pen_ext=0.110)
+        fl = paper.effective_static_floor(spec, q, qh, 0.110, h)
+        ends = paper.chain_static(np.stack([q, qh]), spec, 0.110, h).min()
+        assert fl <= paper.FRAME_FLOOR + 1e-12
+        assert fl <= ends + 1e-12
+        assert fl < paper.FRAME_FLOOR - 1e-12, "the clamp did not bite"
+    assert tight, ("no cell in this sample sits between STATIC_MARGIN and "
+                   "FRAME_FLOOR, so the clamp was never exercised")
+
+
+def test_every_hover_over_a_certified_cell_clears_the_columns(lateral):
+    """THE POINT OF THE WHOLE SECTION.  Certified ink in, certified hover out.
+
+    Measured at HEAD this failed for 4 to 18 % of each arm's cells with the
+    forearm up to 131 mm INSIDE a neighbour's base column, and every conduct
+    refusal on this rig named those transits.  The honest fallback — "do not
+    lift at all", which returns the drawing pose the atlas certified — is
+    allowed and counted, because a pen that does not lift is a report and not a
+    collision.
+    """
+    from aris_sixarm import layout
+    no_lift = total = 0
+    for aid in sorted(layout.FLEET_PROPOSED):
+        spec, rows, Q, h = _proposed_cells(aid, 24)
+        for row, q in zip(rows, Q):
+            qh, z = writing.lifted_or_lower(spec, q, row[:2], h_inv=h,
+                                            pen_ext=0.110)
+            total += 1
+            if z == 0.0:
+                no_lift += 1
+                assert np.array_equal(qh, np.asarray(q, float))
+                continue
+            floor = min(paper.FRAME_FLOOR,
+                        float(paper.chain_static(q[None], spec, 0.110, h)[0]))
+            assert paper.pose_static_ok(qh, spec, 0.110, h, floor), (
+                f"arm {aid} hover over {row[:2]} stands in the static set")
+            # and the widened fiber did not buy that with the canvas
+            cz, _, _ = paper.chain_screen(qh[None], spec, 0.110, h, [])
+            assert cz[0] >= paper.CHAIN_CLEAR - 1e-9
+    assert no_lift / total < 0.10, (
+        f"{no_lift}/{total} cells got no hover at all; the fiber search is "
+        "supposed to have taken that from 55 % to about 1 %")
+
+
+def test_the_fiber_finds_hovers_phi_zero_does_not_have(lateral):
+    """The tool yaw is a REAL degree of freedom on the lateral holder.
+
+    phi = 0 is free for an inline pen and a hard constraint for a holder that
+    puts the tip 110 mm off the wrist axis.  Over 600 certified cells of this
+    rig the pinned solver found no hover at any of its three heights for 330 of
+    them; this asserts the widened one does much better, on a sample.
+    """
+    from aris_sixarm import layout
+    pinned = widened = total = 0
+    for aid in sorted(layout.FLEET_PROPOSED):
+        spec, rows, Q, h = _proposed_cells(aid, 16)
+        for row, q in zip(rows, Q):
+            total += 1
+            pinned += writing.lifted_config(spec, q, row[:2], z=writing.LIFT_Z,
+                                            h_inv=h, pen_ext=0.110)[0] is not None
+            widened += writing.lifted_or_lower(spec, q, row[:2], h_inv=h,
+                                               pen_ext=0.110)[1] > 0.0
+    assert widened > pinned, (f"widened {widened}, pinned {pinned} of {total}")
+    assert pinned / total < 0.75, "this sample is too easy to prove anything"
+
+
+def test_the_broad_phase_never_moves_a_clearance_that_matters(lateral):
+    """`near_boxes` drops boxes, and must not drop an answer.
+
+    Pruned against unpruned over real hover poses: below `NEAR_SLACK` the two
+    have to agree exactly, because every floor in this module is an order of
+    magnitude under it.
+    """
+    from aris_sixarm import rig_final
+    spec, rows, Q, h = _proposed_cells(2, 16)
+    full = spec.static_obstacles()
+    assert len(full) > 6, "this rig is supposed to carry a crowd of boxes"
+    dropped = 0
+    for row, q in zip(rows, Q):
+        qh, _ = writing.lifted_or_lower(spec, q, row[:2], h_inv=h, pen_ext=0.110)
+        P = paper.world_chain(paper.line_samples(q, qh, 9), spec, 0.110, h)
+        near = paper.near_boxes(P, full)
+        dropped += len(full) - len(near)
+        a = float(rig_final.chain_static_clearance(P, full).min())
+        b = float(rig_final.chain_static_clearance(P, near).min()) \
+            if near else np.inf
+        if a <= paper.NEAR_SLACK:
+            assert b == pytest.approx(a, abs=1e-12)
+        else:
+            assert b >= a - 1e-12
+    assert dropped, "the broad phase pruned nothing, so it proved nothing"
+
+
+def test_the_static_bound_is_a_lower_bound(lateral):
+    """The router's number must never be above the truth.
+
+    `leg_static_lb` samples at 33 and refines; a denser measurement of the same
+    leg may find a dip between two of those samples, and the bound has to have
+    already allowed for it.  This is the property the 41.0 mm refusal came from
+    not having.
+    """
+    from aris_sixarm import rig_final
+    spec, rows, Q, h = _proposed_cells(13, 10)
+    hov = [writing.lifted_or_lower(spec, q, r[:2], h_inv=h, pen_ext=0.110)[0]
+           for r, q in zip(rows, Q)]
+    boxes = spec.static_obstacles()
+    n_checked = 0
+    for a in hov[:5]:
+        for b in hov[5:]:
+            lb = paper.leg_static_lb(spec, a, b, 0.110, h, boxes)
+            P = paper.world_chain(paper.line_samples(a, b, 513), spec, 0.110, h)
+            dense = float(rig_final.chain_static_clearance(P, boxes).min())
+            assert lb <= dense + 1e-9, (
+                f"router bound {1000 * lb:.1f} mm is ABOVE a dense measurement "
+                f"of {1000 * dense:.1f} mm")
+            n_checked += 1
+    assert n_checked >= 20
+
+
+def test_a_skirt_goes_round_the_footprint_it_was_given(lateral):
+    """The lateral escape is derived from the obstacle, not guessed.
+
+    Every waypoint `_skirt` proposes for a blocked crossing must sit OUTSIDE
+    the footprint of the boxes that block it — that is the whole content of
+    "route around" as opposed to "route somewhere else".
+    """
+    spec, rows, Q, h = _proposed_cells(31, 6)
+    boxes = spec.static_obstacles()
+    fp = paper._box_xy(boxes)
+    xy0 = np.asarray(rows[0][:2], float)
+    xy1 = np.asarray(rows[-1][:2], float)
+    wps = paper._skirt(spec, xy0, xy1, boxes)
+    assert wps, "no detour offered for a crossing of the whole workspace"
+    assert len(wps) <= paper.SKIRT_TRIES
+    for wp in wps:
+        for p in wp:
+            inside = ((fp[:, 0, 0] <= p[0]) & (p[0] <= fp[:, 1, 0])
+                      & (fp[:, 0, 1] <= p[1]) & (p[1] <= fp[:, 1, 1]))
+            assert not inside.any(), f"waypoint {p} is inside a box footprint"
+
+
+def test_the_router_is_strictly_tighter_than_the_checker(lateral):
+    """THE ONE RELATIONSHIP THIS REPO DOES NOT ALLOW TO INVERT.
+
+    Every pen-up `route` certifies is re-measured here against the FULL static
+    set at 8x its own sampling — the way `scene_check` measures — and must
+    clear `rig_final.STATIC_MARGIN`, or what it holds its own endpoints to
+    where the atlas certified them tighter.  A conducted timeline was refused
+    at 41.0 mm against that 50 mm gate; this is the test that would have said
+    so first.
+    """
+    from aris_sixarm import rig_final, sequence as seq
+    spec, rows, Q, h = _proposed_cells(31, 8)
+    hov = np.array([writing.lifted_or_lower(spec, q, r[:2], h_inv=h,
+                                            pen_ext=0.110)[0]
+                    for r, q in zip(rows, Q)])
+    same = np.eye(len(hov), dtype=bool)
+    cells, tip, _ = seq.dive_screen(spec, hov, hov, same, h_inv=h, pen_ext=0.110)
+    assert cells, "no crossing of this set needs routing; nothing is proved"
+    boxes = spec.static_obstacles()
+    n_routed = n_refused = 0
+    for i, j in cells:
+        r = paper.route(spec, hov[i], hov[j], pen_ext=0.110, h_inv=h,
+                        tip_floor=float(tip[i, j]))
+        if r is None:
+            n_refused += 1
+            continue
+        n_routed += 1
+        qs = [hov[i]] + list(r["vias"]) + [hov[j]]
+        floor = min(rig_final.STATIC_MARGIN,
+                    float(paper.chain_static(np.stack([hov[i], hov[j]]), spec,
+                                             0.110, h).min()))
+        for u, v in zip(qs[:-1], qs[1:]):
+            # THE CHECKER'S RULE, NOT A FIXED SAMPLE COUNT.  `scene_check`
+            # refines until the residual between two samples is under
+            # `FRAME_STEP` and only then subtracts it; a fixed grid subtracts
+            # the residual of a coarse grid, which on a metre of
+            # reconfiguration is 8 mm and would fail routes for being measured
+            # badly.  Twice the checker's refinement cap, so this bound is at
+            # least as tight as the one that will judge the timeline.
+            P = paper.world_chain(paper.line_samples(u, v, 33), spec, 0.110, h)
+            n2 = paper.refine_n(P, 33, cap=64)
+            if n2 > 33:
+                P = paper.world_chain(paper.line_samples(u, v, n2), spec,
+                                      0.110, h)
+            got = float(rig_final.chain_static_clearance(P, boxes).min()
+                        - paper.sample_residual(P))
+            assert got >= floor - 1e-9, (
+                f"routed leg misses the checker's gate by "
+                f"{1000 * (floor - got):.1f} mm — the router is LOOSER")
+    assert n_routed, "every crossing was refused; the router did nothing"
+
+
+def test_the_screen_flags_every_crossing_the_router_would_change(lateral):
+    """The allocator must not price a fiction.
+
+    `prune_unflyable` certifies a bag against `sequence.cost_matrix`, and that
+    matrix only routes the cells `dive_screen` hands it.  A crossing the screen
+    misses is priced at zero and discovered at conduct time — the inf-pricing
+    lesson, one obstacle over.  So: every pair the screen passes must be a pair
+    `move_ok` also passes.
+    """
+    from aris_sixarm import sequence as seq
+    spec, rows, Q, h = _proposed_cells(2, 8)
+    hov = np.array([writing.lifted_or_lower(spec, q, r[:2], h_inv=h,
+                                            pen_ext=0.110)[0]
+                    for r, q in zip(rows, Q)])
+    same = np.eye(len(hov), dtype=bool)
+    cells, tip, _ = seq.dive_screen(spec, hov, hov, same, h_inv=h, pen_ext=0.110)
+    flagged = set(cells)
+    assert flagged, "nothing flagged; this probe set proves nothing"
+    for i in range(len(hov)):
+        for j in range(len(hov)):
+            if i == j or (i, j) in flagged:
+                continue
+            ok, _, _ = paper.move_ok(spec, hov[i], hov[j], 0.110, h,
+                                     tip_floor=float(tip[i, j]))
+            assert ok, (f"the screen passed crossing {i}->{j} and the router "
+                        "would have routed it")
+
+
+def test_the_park_probe_looks_at_the_hovers_too(lateral):
+    """A span the arm can draw and cannot approach is not this arm's span.
+
+    `ParkProbe` used to look only at the certified ink.  Since the hover is
+    SEARCHED over the fiber for column clearance — which says nothing about a
+    parked neighbour's forearm — it is a configuration the allocator has no
+    other way of hearing about, so it is probed with the ink.
+    """
+    from aris_sixarm import allocate, layout
+    spec, rows, Q, h = _proposed_cells(31, 6)
+    fl = layout.FLEET_PROPOSED
+    parks = {a: np.asarray(layout.Q_PARK_PROPOSED[a], float) for a in fl}
+    pens = {a: 0.110 for a in fl}
+    entry = dict(stroke_id=0, s_range=(0.0, 1.0), length=0.05,
+                 plan=dict(qs=np.stack([Q[0], Q[0]]),
+                           pts=np.stack([rows[0][:2], rows[0][:2]])))
+    on = allocate.ParkProbe(parks, fl, pens, h_inv=h, probe_hovers=True)
+    off = allocate.ParkProbe(parks, fl, pens, h_inv=h, probe_hovers=False)
+    # the ink of this span is certified, so the ink-only probe passes it...
+    assert off.blocked(31, entry) is False
+    # ...and the hover-aware one is never MORE permissive
+    assert on.blocked(31, entry) in (False, True)
+    ink = off.clearance(31, entry["plan"]["qs"])
+    hov = on.clearance(31, on._hovers(31, entry["plan"]), sweep=False)
+    assert np.isfinite(ink) and np.isfinite(hov)
+    assert on.blocked(31, entry) == bool(min(ink, hov) < on.margin)

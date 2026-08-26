@@ -98,6 +98,35 @@ CONTACT_FLOOR = -(TIP_TOL - TIP_SWEEP_PAD)   # -0.007 m, lift/lower tip floor
 # 48.8 mm against 50 mm on the run that found this — so a route must clear it
 # by the margin plus the residual.
 FRAME_FLOOR = rig_final.STATIC_MARGIN + TIP_SWEEP_PAD    # 0.053 m
+SKIRT_STEP = 0.30          # m of paper per hop when a route SKIRTS an obstacle
+
+# ...AND A PAD IS NOT A BOUND.  `TIP_SWEEP_PAD` covers the residual the CHECKER
+# loses between two of ITS samples.  It says nothing about the residual this
+# module loses between two of its own, and this module samples a whole pen-up
+# leg — a metre of tip travel and more of elbow — at a fixed 33 points.  33
+# points over a metre is 30 mm of chain motion per step, and a 1-Lipschitz
+# quantity can be 16 mm lower between two samples than at either of them.  So
+# the router could read 53 mm at its samples on a leg whose true minimum was
+# 37, certify it, and hand `scene_check` — which refines until its own residual
+# is under 2.75 mm — a timeline to refuse.
+#
+# THAT IS NOT A HYPOTHESIS.  It is `out/run_solo_p0.log`: arm 2's conducted solo
+# timeline, every other gate passing by 60 mm, refused at "min frame clearance
+# 41.0 mm (margin 50 mm)".  The router's gate has to be STRICTLY TIGHTER than
+# the checker's on every path or the checker is not a second opinion, it is a
+# lottery — and a 9 mm disagreement about the same metal is the loosest a gate
+# in this repo has ever been.
+#
+# So the static measurement refines the way the checker refines, to the same
+# per-point step, and subtracts the same 1-Lipschitz coefficient — and then
+# asks for `FRAME_FLOOR`, which is 3 mm MORE than the checker asks for.  Both
+# sides now compute a lower bound on the same quantity, at the same density,
+# and the router's is held to the higher number.  That ordering is the whole
+# property.
+STATIC_STEP = 0.005        # m of per-point motion the static gate refines to
+#                            (= scene_check.FRAME_STEP, deliberately)
+SWEEP_K = 0.55             # ...and its 1-Lipschitz coefficient, likewise
+REFINE_CAP = 32            # ...and its cap on the refinement factor
 
 # THE SAME HOLE, ONE OBSTACLE OVER.  This module made the paper a thing a pen-up
 # is certified against, and left the STEEL exactly where it found it: `route`
@@ -114,13 +143,36 @@ FRAME_FLOOR = rig_final.STATIC_MARGIN + TIP_SWEEP_PAD    # 0.053 m
 # 49.1 and 49.4 mm against a 50 mm margin.  Eight refusals, and not one of them
 # is a transit anybody priced.
 #
-# `FRAME_SAFE` closes it: the direct move is held to `rig_final.STATIC_MARGIN`
-# too, so a frame-grazing pen-up is routed around the steel exactly as a
+# `STATIC_SAFE` closes it: the direct move is held to the same static floor,
+# so a steel-grazing pen-up is routed around the metal exactly as a
 # paper-breaking one is routed around the table, and refused honestly when no
-# shape on the ladder clears both.  It is OFF by default, because every
-# published number in this repo was earned with it off and the corpus has to
-# stay reproducible by the command that produced it; `--frame-safe` turns it on.
-FRAME_SAFE = False
+# shape on the ladder clears both.
+#
+# IT IS ON NOW, AND TWO THINGS HAD TO CHANGE FIRST (2026-08-26).  It shipped
+# OFF as `FRAME_SAFE` because turning it on refused everything: the CSAIL logo
+# would not route a single pen-up on the proposed rig.  Both reasons were bugs
+# in this module, not facts about the rig.
+#
+#   1. THE FLOOR WAS A CONTRADICTION AT THE ENDPOINTS.  `FRAME_FLOOR` is
+#      53 mm and `atlas.solve_cell` certifies a drawing pose at exactly
+#      `STATIC_MARGIN` = 50 mm, so 4-6 of every 300 certified cells stand
+#      between 50 and 53 mm from a neighbour's column.  A lift OUT of such a
+#      pose was asked to keep 53 mm at its own first sample and no shape on
+#      any ladder could — the identical failure `effective_floors` was written
+#      for, one obstacle over.  `effective_static_floor` clamps it the same
+#      way: never ask a move to clear the metal by more than its own endpoints
+#      already do.
+#   2. THE LADDER ONLY WENT UP.  Every escape this module offered was a higher
+#      hover, and on a rig with a ceiling grid up is where the steel is.  The
+#      obstacle that actually blocks a pen-up here is a neighbour's BASE
+#      COLUMN — a vertical body 0.6 m long standing between two arms 0.61 m
+#      apart — and the way past a column is around it.  `_skirt` reads the
+#      blocking boxes' own footprints and walks the hover plane around them.
+#
+# With those two, the static gate converges: it is the honest question and it
+# now has honest answers.  `--no-static-safe` restores the old behaviour for a
+# reproduction of a pre-2026-08-26 number.
+STATIC_SAFE = True
 
 # Extra hover heights `route` climbs to when a direct move is refused.  Low
 # first: a via costs joint-space seconds and the sequencer pays them, so the
@@ -132,6 +184,16 @@ SAMPLES = 33               # configurations sampled along one straight move
 
 _CACHE = {}                # (spec key, pen, h_inv, q0, q1, floors) -> result
 _LIFTS = {}                # (spec key, pen, h_inv, q, z) -> hover pose | None
+_LEGS = {}                 # (spec key, pen, tool, h_inv, q0, q1, floor)
+#                            -> (chain z, tip z, static lower bound)
+#   THE LEGS ARE SHARED, NOT THE ROUTES.  Every shape on the ladder is built
+#   out of the same handful of hover poses, and so is every OTHER crossing
+#   between the same two spans: `[a0]`, `[a0, a1]` and `[a0, m, a1]` all begin
+#   with q0 -> a0, and the return crossing begins with the same a1 -> q1 the
+#   outward one ended with.  Measuring a leg is a forward-kinematics pass over
+#   33 configurations against the static set, so measuring each distinct one
+#   once instead of once per shape is most of what makes the static gate
+#   affordable at all.
 
 
 _ON_CLEAR = []             # memos elsewhere that are derived from these two
@@ -151,6 +213,7 @@ def clear_cache():
     """Drop the memos.  Tests that mutate a fleet in place need this."""
     _CACHE.clear()
     _LIFTS.clear()
+    _LEGS.clear()
     for fn in _ON_CLEAR:
         fn()
 
@@ -190,14 +253,14 @@ def _pose_bytes(q):
 
 
 def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
-    # FRAME_SAFE is part of the question, so it is part of the key: the same
+    # STATIC_SAFE is part of the question, so it is part of the key: the same
     # pair has a different answer with the steel gated in, and a memo that
     # forgot that would hand a run the other run's route.  So is the ACTIVE
     # TOOL (frames.PEN_LAT): the lateral holder sweeps a different envelope.
     return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
-            bool(FRAME_SAFE))
+            bool(STATIC_SAFE))
 
 
 def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
@@ -214,7 +277,7 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
 
     def key(a, b, tip_floor, chain_floor):
         return base + (rb[a], cb[b], round(float(tip_floor), 9),
-                       round(float(chain_floor), 9), bool(FRAME_SAFE))
+                       round(float(chain_floor), 9), bool(STATIC_SAFE))
     return key
 
 
@@ -241,6 +304,229 @@ def chain_tip_z(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
         # it can dip where no FK point does, so it joins the chain minimum
         chain_z = np.minimum(chain_z, (tool[1] @ R.T + t)[:, 2])
     return chain_z, tip_z
+
+
+def world_chain(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+    """(M,7) -> (M,K,3) world chain points, tool points included.
+
+    The 10- or 11-point chain every gate in this package measures: `frames.fk`'s
+    nine, the pen tip, and (lateral holder) the bracket corner.
+    """
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    Twb = spec.T_world_base(h_inv)
+    R, t = Twb[:3, :3], Twb[:3, 3]
+    T, p = fk_many(qs)
+    pw = p @ R.T + t
+    tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
+    return np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
+
+
+def sample_residual(P):
+    """The 1-Lipschitz residual between consecutive samples of a path. -> m.
+
+    `scene_check`'s own expression, restated: the worst distance any single
+    chain point travels between two samples, times the coefficient the checker
+    charges.  A clearance measured AT the samples can be this much lower
+    between them, and no further.
+    """
+    if len(P) < 2:
+        return 0.0
+    return SWEEP_K * float(np.max(np.linalg.norm(np.diff(P, axis=0), axis=2)))
+
+
+def refine_n(P, n, step=STATIC_STEP, cap=REFINE_CAP):
+    """How many samples this leg needs for a residual under `step`. -> int."""
+    if len(P) < 2:
+        return n
+    mv = float(np.max(np.linalg.norm(np.diff(P, axis=0), axis=2)))
+    return (n - 1) * int(np.clip(np.ceil(mv / max(step, 1e-9)), 1, cap)) + 1
+
+
+NEAR_SLACK = 0.35          # m of clearance the broad phase stays exact to
+
+
+def near_boxes(P, boxes, slack=NEAR_SLACK):
+    """The boxes these configurations could come within `slack` of.
+
+    A BROAD PHASE, because the static set is thirty boxes on this rig and a
+    pen-up leg is within reach of half a dozen of them, and the narrow phase is
+    a 36-step ternary search per capsule per box.
+
+    THE BOUND IS PER CAPSULE AND EXACT.  A capsule's segment runs between two
+    chain points, so every point on it is within `|P_i - P_j|` of the nearer
+    end: if BOTH ends are farther from a box than that plus the capsule radius
+    plus `slack`, no point of that capsule is within `slack` of it, in any of
+    these configurations.  A box no capsule can reach is dropped, and the
+    minimum the narrow phase then reports is unchanged wherever it is under
+    `slack` — which is every floor this module compares against, seven times
+    over.  Above `slack` the answer may come back `inf` instead of a large
+    number, and nothing asks.
+    """
+    if not boxes or not len(P):
+        return boxes
+    caps = (rig_final.STATIC_CAPSULES_LAT if P.shape[1] >= 11
+            else rig_final.STATIC_CAPSULES)
+    lo = np.stack([np.asarray(b["lo"], float) for b in boxes])
+    hi = np.stack([np.asarray(b["hi"], float) for b in boxes])
+    d = rig_final._point_box_d(P[:, :, None, :], lo, hi)      # (M,K,B)
+    keep = np.zeros(len(boxes), bool)
+    for i, j, r in caps:
+        L = np.linalg.norm(P[:, i] - P[:, j], axis=1)         # (M,)
+        m = np.minimum(d[:, i, :], d[:, j, :]) - L[:, None]
+        keep |= (m <= r + slack).any(axis=0)
+        if keep.all():
+            break
+    return [b for b, k in zip(boxes, keep) if k]
+
+
+def leg_static_lb(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+                  boxes=None, n=SAMPLES, floor=None):
+    """A LOWER BOUND on the static clearance over the whole straight move.
+
+    -> metres.  Not "the clearance at 33 sampled configurations" — the
+    clearance anywhere along the move, refined and residual-corrected the way
+    `scene_check` does it (see STATIC_STEP).  This is the quantity the router
+    gates on, and it is a bound the checker cannot beat by finding a dip
+    between two of the router's samples.
+
+    `floor` IS WHAT MAKES IT AFFORDABLE, and it costs nothing in rigour.  A
+    refinement to 32x is a thousand configurations against thirty boxes, and
+    almost every leg is decided without it: if the COARSE bound already clears
+    the floor the leg is certified (refining can only raise a lower bound
+    towards the truth, never lower the verdict), and if the coarse MINIMUM is
+    already under the floor the leg is refused (refining can only lower it).
+    Only a leg in the band between those two — sampled clear, bounded unclear —
+    has to be looked at closely.  Given a floor the returned number is only
+    guaranteed to be on the right side of it, which is all any caller asks.
+    """
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return np.inf
+    P = world_chain(line_samples(q0, q1, n), spec, pen_ext, h_inv)
+    boxes = near_boxes(P, boxes)
+    if not boxes:
+        return np.inf
+    m = float(rig_final.chain_static_clearance(P, boxes).min())
+    res = sample_residual(P)
+    if floor is not None:
+        if m - res >= float(floor) - EPS:
+            return m - res                       # certified without refining
+        if m < float(floor) - EPS:
+            return m                             # refused without refining
+    n2 = refine_n(P, n)
+    if n2 > n:
+        P = world_chain(line_samples(q0, q1, n2), spec, pen_ext, h_inv)
+        m, res = float(rig_final.chain_static_clearance(P, boxes).min()), \
+            sample_residual(P)
+    return m - res
+
+
+def leg_bounds(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+               n=SAMPLES, floor=None):
+    """Every gate's question about one straight move, off ONE FK pass.
+
+    -> (chain_z, tip_z, static_lb).  `route` asks about thirty shapes built out
+    of a handful of distinct legs and every one of them used to cost two
+    forward-kinematics passes over the same configurations — one for the paper
+    and one for the metal.  They are the same 11 points; this computes them
+    once.  The static term keeps `leg_static_lb`'s early-outs and its broad
+    phase, so a leg that is decided coarsely still is.
+    """
+    P = world_chain(line_samples(q0, q1, n), spec, pen_ext, h_inv)
+    ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
+    cz = float(P[:, ccols, 2].min())
+    tz = float(P[:, 9, 2].min())
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return cz, tz, np.inf
+    bx = near_boxes(P, boxes)
+    if not bx:
+        return cz, tz, np.inf
+    m = float(rig_final.chain_static_clearance(P, bx).min())
+    res = sample_residual(P)
+    if floor is not None:
+        if m - res >= float(floor) - EPS or m < float(floor) - EPS:
+            return cz, tz, (m - res if m - res >= float(floor) - EPS else m)
+    n2 = refine_n(P, n)
+    if n2 > n:
+        P = world_chain(line_samples(q0, q1, n2), spec, pen_ext, h_inv)
+        m, res = float(rig_final.chain_static_clearance(P, bx).min()), \
+            sample_residual(P)
+    return cz, tz, m - res
+
+
+def path_static_lb(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+                   n=SAMPLES, floor=None):
+    """`leg_static_lb` along every straight leg of a polyline. -> metres.
+
+    Stops at the first leg that fails `floor`: a polyline is only as clear as
+    its worst leg, and the shapes this is asked about are mostly going to be
+    refused (that is what a ladder is).
+    """
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return np.inf
+    qs = [np.asarray(q, float).reshape(7) for q in qs]
+    out = np.inf
+    for a, b in zip(qs[:-1], qs[1:]):
+        out = min(out, leg_static_lb(spec, a, b, pen_ext, h_inv, boxes, n,
+                                     floor))
+        if floor is not None and out < float(floor) - EPS:
+            break
+    return float(out)
+
+
+def chain_screen(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+    """`chain_tip_z` and `chain_static` off ONE forward-kinematics pass.
+
+    -> (chain_z (M,), tip_z (M,), static (M,)).  The cost-matrix screens sample
+    tens of thousands of configurations along the lines they are pricing and
+    now have to ask both questions of every one of them; asking them separately
+    is two FK passes over the same array, which on a full cluster matrix is
+    seconds of the allocator's latency budget for nothing.
+    """
+    boxes = static_boxes(spec) if boxes is None else boxes
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    P = world_chain(qs, spec, pen_ext, h_inv)
+    ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
+    chain_z = P[:, ccols, 2].min(axis=1)
+    tip_z = P[:, 9, 2]
+    boxes = near_boxes(P, boxes) if boxes else boxes
+    if not boxes:
+        return chain_z, tip_z, np.full(len(qs), np.inf)
+    return chain_z, tip_z, rig_final.chain_static_clearance(P, boxes)
+
+
+def block_screen(L, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+    """A whole block of sampled lines. -> (chain_z, tip_z, static, residual).
+
+    `L` is (R, N, K, 7): R x N straight moves, each sampled at K points.  One
+    forward-kinematics pass answers every question, and the static minimum
+    comes back with its 1-Lipschitz RESIDUAL alongside rather than folded into
+    it, because the caller needs the two apart.  `min` is an upper bound on the
+    truth and `min - residual` a lower one; a cell between them is a cell that
+    has to be LOOKED AT more closely rather than believed either way, and
+    `dive_screen` is where that decision belongs.
+
+    The screen itself does not refine — that would be R x N x 32
+    configurations for a question whose only job is to decide what to look at.
+    """
+    L = np.asarray(L, float)
+    R, N, K = L.shape[:3]
+    P = world_chain(L.reshape(-1, 7), spec, pen_ext, h_inv)
+    Pb = P.reshape(R, N, K, P.shape[1], 3)
+    ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
+    cz = Pb[:, :, :, ccols, 2].min(axis=(2, 3))
+    tz = Pb[:, :, :, 9, 2].min(axis=2)
+    boxes = near_boxes(P, boxes) if boxes else boxes
+    if not boxes:
+        return cz, tz, np.full((R, N), np.inf), np.zeros((R, N))
+    sc = rig_final.chain_static_clearance(P, boxes).reshape(R, N, K).min(axis=2)
+    res = SWEEP_K * np.linalg.norm(np.diff(Pb, axis=2), axis=4).max(axis=(2, 3))
+    return cz, tz, sc, res
 
 
 def line_samples(q0, q1, n=SAMPLES):
@@ -286,7 +572,7 @@ def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, n=SAMPLES):
     """Does the straight move keep its floors? -> (ok, chain, tip).
 
-    "Fine as it is, do not route it" — which is why `FRAME_SAFE` has to be
+    "Fine as it is, do not route it" — which is why `STATIC_SAFE` has to be
     answered HERE and not only in `route`.  `sequence._leg_surcharge` and
     `_paper_surcharge` call this first and skip the router entirely when it says
     yes, so a frame-grazing move that clears the paper would never reach the
@@ -296,11 +582,13 @@ def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     """
     tip_floor, chain_floor = effective_floors(spec, q0, q1, pen_ext, h_inv,
                                               tip_floor, chain_floor)
-    cz, tz = line_clearance(spec, q0, q1, pen_ext, h_inv, n)
+    boxes = static_boxes(spec) if STATIC_SAFE else []
+    sf = (effective_static_floor(spec, q0, q1, pen_ext, h_inv, boxes=boxes)
+          if boxes else None)
+    cz, tz, sc = leg_bounds(spec, q0, q1, pen_ext, h_inv, boxes, n, sf)
     ok = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
-    if ok and FRAME_SAFE:
-        ok = bool(frame_clearance(line_samples(q0, q1, n), spec, pen_ext, h_inv)
-                  >= FRAME_FLOOR - EPS)
+    if ok and boxes:
+        ok = bool(sc >= sf - EPS)
     return ok, cz, tz
 
 
@@ -314,8 +602,39 @@ def path_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, n=SAMPLES):
     return float(cz), float(tz)
 
 
-def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
-    """Worst clearance from the chain (pen tip included) to the rig's steel.
+def static_boxes(spec):
+    """The full static set this arm must clear. -> list of boxes.
+
+    Every neighbour's steel AND every neighbour's pose-invariant base column,
+    which on the all-ceiling rig is the obstacle that actually blocks pen-ups
+    (`mounts.attach_body_columns`).  One accessor, so the router, the hover
+    solver and the screen cannot end up asking about different rooms.
+    """
+    return spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
+
+
+def chain_static(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+    """Per-configuration clearance to the static set. -> (M,).
+
+    The PER-POSE form, which `frame_clearance` then minimises over.  It is the
+    per-pose one that the lift layer needs: a hover is a configuration an arm
+    HOLDS, and "is this pose legal" is not a question about a path.
+    """
+    boxes = static_boxes(spec) if boxes is None else boxes
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    if not boxes or not len(qs):
+        return np.full(len(qs), np.inf)
+    Twb = spec.T_world_base(h_inv)
+    R, t = Twb[:3, :3], Twb[:3, 3]
+    T, p = fk_many(qs)
+    pw = p @ R.T + t
+    tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
+    P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
+    return rig_final.chain_static_clearance(P10, boxes)
+
+
+def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+    """Worst clearance from the chain (pen tip included) to the static set.
 
     A VIA THAT TRADES A PAPER HIT FOR A FRAME HIT IS NOT A FIX, and the two
     failure modes pull in opposite directions: the way out of the paper is UP,
@@ -326,27 +645,68 @@ def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     the router making.  Same geometry as `validate.validate_plan`'s frame gate,
     via `rig_final.chain_static_clearance`.
     """
-    boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
+    if boxes is None:
+        boxes = static_boxes(spec)
     if not boxes:
         return np.inf
-    qs = np.asarray(qs, float).reshape(-1, 7)
-    Twb = spec.T_world_base(h_inv)
-    R, t = Twb[:3, :3], Twb[:3, 3]
-    T, p = fk_many(qs)
-    pw = p @ R.T + t
-    tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
-    P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
-    return float(rig_final.chain_static_clearance(P10, boxes).min())
+    return float(chain_static(qs, spec, pen_ext, h_inv, boxes).min())
+
+
+def pose_static_ok(q, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+                   floor=FRAME_FLOOR, boxes=None):
+    """May the arm STAND here, as far as the static set is concerned? -> bool.
+
+    The gate the lift layer was missing.  `atlas.solve_cell` asks it of every
+    drawing pose it certifies; nothing asked it of the hover 6 cm above that
+    pose, which is a DIFFERENT configuration — same tip, different elbow — and
+    on the proposed rig it is inside a neighbour's base column for 4 to 15 % of
+    every arm's certified cells (`out/transit_block.py`).
+    """
+    if not STATIC_SAFE:
+        return True
+    return bool(chain_static(np.asarray(q, float).reshape(1, 7), spec, pen_ext,
+                             h_inv, boxes)[0] >= float(floor) - EPS)
+
+
+def effective_static_floor(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+                           floor=FRAME_FLOOR, boxes=None):
+    """The static floor a move can actually be held to. -> metres.
+
+    `effective_floors`' argument, one obstacle over, and it is the whole reason
+    the static gate could not be switched on before.  `FRAME_FLOOR` is 53 mm —
+    `STATIC_MARGIN` plus the checker's sweep residual — and the ATLAS certifies
+    a drawing pose at exactly `STATIC_MARGIN`.  So a certified cell may stand
+    51 mm from a neighbour's column (4-6 of every 300 do), and a lift out of it
+    that is asked for 53 mm is asked for something its own first sample does
+    not have: no route can satisfy it, every edge out of that span prices
+    `inf`, and the arm is stranded on ink it can draw.
+
+    Clamping to the endpoints keeps the gate meaningful where it can be met and
+    inert where the geometry already lost — and `scene_check`, which does not
+    clamp anything, still has the last word on whether such a pose may ship.
+    """
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return -np.inf
+    ends = np.stack([np.asarray(q0, float).reshape(7),
+                     np.asarray(q1, float).reshape(7)])
+    return float(min(float(floor), float(chain_static(ends, spec, pen_ext,
+                                                      h_inv, boxes).min())))
 
 
 def path_frame_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
-                         n=SAMPLES):
+                         n=SAMPLES, boxes=None):
     """`frame_clearance` along every straight leg of a polyline of configs."""
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return np.inf
     qs = [np.asarray(q, float).reshape(7) for q in qs]
     out = np.inf
     for a, b in zip(qs[:-1], qs[1:]):
         out = min(out, frame_clearance(line_samples(a, b, n), spec, pen_ext,
-                                       h_inv))
+                                       h_inv, boxes))
     return float(out)
 
 
@@ -361,6 +721,107 @@ def tip_xy(q, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
 # routing
 # --------------------------------------------------------------------------
 TRAVERSE_STEPS = (0.30, 0.20, 0.12)   # m of paper per hop, coarsest first
+
+
+SKIRT_PADS = (0.18, 0.30)      # m the hover plane keeps around a blocking box
+SKIRT_HEIGHTS = (0.08, 0.15)   # hover heights a sidestep is tried at
+SKIRT_TRIES = 16               # detour shapes one crossing may be offered
+
+
+def _box_xy(boxes):
+    """The xy footprints of a box list. -> (B,2,2) [lo/hi] x [x/y]."""
+    if not boxes:
+        return np.zeros((0, 2, 2))
+    return np.stack([np.stack([np.asarray(b["lo"], float)[:2],
+                               np.asarray(b["hi"], float)[:2]])
+                     for b in boxes])
+
+
+def _seg_box_xy(xy0, xy1, lo, hi, n=17):
+    """Does the xy segment come within nothing of this footprint? -> bool."""
+    f = np.linspace(0.0, 1.0, n)[:, None]
+    P = np.asarray(xy0, float) * (1 - f) + np.asarray(xy1, float) * f
+    d = np.maximum(lo[None] - P, P - hi[None])
+    return bool((np.linalg.norm(np.maximum(d, 0.0), axis=1) <= 1e-9).any())
+
+
+def _skirt(spec, xy0, xy1, boxes, pads=SKIRT_PADS):
+    """xy waypoint lists that walk AROUND the boxes in the way. -> [[xy, ...]].
+
+    THE WAY PAST A COLUMN IS AROUND IT.  Everything this module offered before
+    was a higher hover, which is the right escape from the PAPER — the paper is
+    below and the air above it is empty — and the wrong escape from a neighbour
+    that stands 0.6 m tall between two arms 0.61 m apart.  Worse, on this rig up
+    is where the ceiling grid is, so the vertical ladder trades one static hit
+    for another and the router reports "no route" for a crossing whose obstacle
+    a 25 cm sidestep clears.
+
+    The obstacles are known: they are the same boxes every other gate measures
+    against, with published footprints.  For each one the straight hover walk
+    would cross, this offers the four corners of its footprint grown by `pad`,
+    singly (round one corner) and in adjacent pairs (round one whole side), for
+    three pads.  The waypoints are xy only — `_traverse` turns each into a
+    chain of certified hovers, and a waypoint that no hover can reach simply
+    drops out.
+    """
+    xy0 = np.asarray(xy0, float).reshape(2)
+    xy1 = np.asarray(xy1, float).reshape(2)
+    fp = _box_xy(boxes)
+    out, seen = [], set()
+
+    def add(pts):
+        k = np.round(np.asarray(pts, float), 4).tobytes()
+        if k not in seen:
+            seen.add(k)
+            out.append([np.asarray(p, float).reshape(2) for p in pts])
+
+    for pad in pads:
+        # cluster every footprint the walk would cross, at this pad, into one
+        # rectangle: two columns side by side are one obstacle to go round.
+        hit = [f for f in fp
+               if _seg_box_xy(xy0, xy1, f[0] - pad, f[1] + pad)]
+        if not hit:
+            continue
+        lo = np.min([f[0] for f in hit], axis=0) - pad
+        hi = np.max([f[1] for f in hit], axis=0) + pad
+        c = [np.array([lo[0], lo[1]]), np.array([hi[0], lo[1]]),
+             np.array([hi[0], hi[1]]), np.array([lo[0], hi[1]])]
+        # nearest corner first: the cheapest way round is the short way
+        order = sorted(range(4), key=lambda i: float(
+            np.linalg.norm(c[i] - xy0) + np.linalg.norm(c[i] - xy1)))
+        for i in order:
+            add([c[i]])
+        for i in order[:2]:                  # round ONE side, the near two
+            for j in ((i + 1) % 4, (i - 1) % 4):
+                add([c[i], c[j]])
+    # ...and a plain perpendicular sidestep, for an obstacle whose footprint is
+    # not what the chain is hitting (a boom overhead, a plate off to one side)
+    u = xy1 - xy0
+    nrm = float(np.linalg.norm(u))
+    if nrm > 1e-6:
+        nvec = np.array([-u[1], u[0]]) / nrm
+        for d in pads:
+            for s in (1.0, -1.0):
+                add([0.5 * (xy0 + xy1) + s * d * nvec])
+    return out[:SKIRT_TRIES]
+
+
+def _walk(spec, q_from, xy_pts, z, pen_ext, h_inv, mm, step, lift):
+    """Hovers walking a POLYLINE of xy waypoints at height `z`. -> [q] | None.
+
+    `_traverse` for more than one leg, each leg solved nearest to the hover the
+    previous one ended on, so the whole detour stays on one analytic branch for
+    the same reason a straight traverse does.
+    """
+    out, ref = [], q_from
+    for a, b in zip(xy_pts[:-1], xy_pts[1:]):
+        leg = _traverse(spec, ref, a, b, z, pen_ext, h_inv, mm, step, lift,
+                        ends=True)
+        if not leg:
+            return None
+        out += leg
+        ref = leg[-1]
+    return out
 
 
 def _traverse(spec, q_from, xy0, xy1, z, pen_ext, h_inv, mm, step, lift,
@@ -401,15 +862,18 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
           tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, heights=VIA_HEIGHTS,
           n=SAMPLES, margin_min=None, cache=True, q_home=None,
           steps=TRAVERSE_STEPS):
-    """A pen-up route from q0 to q1 that clears the paper. -> dict | None.
+    """A pen-up route from q0 to q1 that clears the paper AND the metal.
+    -> dict | None.
 
     -> dict(vias, mode, chain_z, tip_z, tried) where `vias` is the (possibly
     empty) list of intermediate configurations such that EVERY consecutive
     straight joint-space move in [q0, *vias, q1] keeps the pen tip at least
-    `tip_floor` and every chain point at least `chain_floor` above the paper.
-    `None` means no shape on the ladder certified — the caller must refuse the
-    move rather than fly it, which is the entire point, and `sequence`'s cost
-    matrix turns that refusal into an infinite edge so the tour goes round it.
+    `tip_floor` and every chain point at least `chain_floor` above the paper —
+    and, under `STATIC_SAFE`, at least `effective_static_floor` from every
+    neighbour's steel and base column.  `None` means no shape on the ladder
+    certified — the caller must refuse the move rather than fly it, which is
+    the entire point, and `sequence`'s cost matrix turns that refusal into an
+    infinite edge so the tour goes round it.
 
     The shapes tried, cheapest first, at each height of the ladder in turn:
 
@@ -424,6 +888,11 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     and, when `q_home` is given (the arm's ready pose), `[q_home]` and
     `[a0, q_home, a1]` — folding back to the pose the arm parks in is the one
     reconfiguration that is certified by construction.
+
+    ...and then, when the whole ladder has failed, a SKIRT: the same hover walk
+    routed around the footprint of whatever static box is in the way.  Every
+    shape above it goes UP, which is the answer to a table and not to a column;
+    see `_skirt`.
 
     THE TRAVERSE IS THE ONE THAT EARNS ITS KEEP.  On the shipped timeline the
     two offending crossings have endpoints on different IK branches — arm 2
@@ -440,53 +909,85 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     sampling, so nothing is assumed from the parts.
     """
     # writing imports this module, so the hover solver is fetched on use.
-    from .writing import HOVER_MARGIN, lifted_config
+    from .writing import HOVER_MARGIN, hover_solve, static_gate
     mm = HOVER_MARGIN if margin_min is None else float(margin_min)
+    boxes = static_boxes(spec)
+    # A VIA IS A POSE THIS FUNCTION CHOOSES, so it is held to the full static
+    # floor and searched over the whole fiber when the nearest one is blocked —
+    # the same treatment `writing.lifted_or_lower` now gives a stroke's own
+    # hover, for the same reason.  `None` on the legacy rigs, where the scan
+    # never widens because there is nothing to fail.
+    gate = static_gate(spec, pen_ext, h_inv) if boxes else None
 
     def lift(sp, ref, xy, z, pe, hi, margin):
-        """`lifted_config`, memoised on (arm, reference pose, target, height).
+        """`hover_solve`, memoised on (arm, reference pose, target, height).
 
         THE FAILURE PATH IS THE HOT ONE.  A pair that routes does so on the
         first or second shape; a pair that CANNOT route walks the whole ladder,
         and the fiber-menu matrices ask about tens of thousands of pairs whose
         endpoints are drawn from a few hundred distinct hover poses.  The lift
         over a given pose at a given height is the same solution every time it
-        is asked for — `lifted_config` is deterministic — so solving it once
+        is asked for — `hover_solve` is deterministic — so solving it once
         per (pose, height) instead of once per PAIR is the difference between
         the cluster profile costing seconds and costing minutes.  Nothing about
         the answer changes; a test pins the memo against the direct call.
         """
-        k = (id(sp), float(pe), float(hi), float(z), round(float(margin), 9),
+        k = (id(sp), float(pe), float(_frames.PEN_LAT), float(hi), float(z),
+             round(float(margin), 9), gate is not None,
              np.round(np.asarray(ref, float), 9).tobytes(),
              np.round(np.asarray(xy, float), 9).tobytes())
         if k not in _LIFTS:
-            _LIFTS[k] = lifted_config(sp, ref, xy, z=z, h_inv=hi, pen_ext=pe,
-                                      margin_min=margin)[0]
+            _LIFTS[k] = hover_solve(sp, ref, xy, z=z, h_inv=hi, pen_ext=pe,
+                                    margin_min=margin, ok=gate)
         return _LIFTS[k], None
 
     q0 = np.asarray(q0, float).reshape(7)
     q1 = np.asarray(q1, float).reshape(7)
     tip_floor, chain_floor = effective_floors(spec, q0, q1, pen_ext, h_inv,
                                               tip_floor, chain_floor)
+    # ...and the same clamp for the metal.  See `effective_static_floor`: the
+    # atlas certifies ink at STATIC_MARGIN and this module asks for
+    # STATIC_MARGIN + the checker's residual, so an unclamped floor refuses
+    # every leg out of the tightest certified cells.
+    static_floor = (effective_static_floor(spec, q0, q1, pen_ext, h_inv,
+                                           boxes=boxes)
+                    if boxes and STATIC_SAFE else -np.inf)
     ck = _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor) if cache \
         else None
     if ck is not None and ck in _CACHE:
         return _CACHE[ck]
 
+    gate_floor = static_floor if STATIC_SAFE else FRAME_FLOOR
+    lk = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
+          round(float(gate_floor), 9), int(n))
+
+    def leg(a, b):
+        """`leg_bounds`, memoised on the pair (see `_LEGS`)."""
+        k = lk + (_pose_bytes(a), _pose_bytes(b))
+        if k not in _LEGS:
+            _LEGS[k] = leg_bounds(spec, a, b, pen_ext, h_inv, boxes, n,
+                                  gate_floor if boxes else None)
+        return _LEGS[k]
+
     def legs_ok(seq, frame=True):
         qs = [q0] + list(seq) + [q1]
-        cz, tz = path_clearance(spec, qs, pen_ext, h_inv, n)
+        cz, tz, sc = np.inf, np.inf, np.inf
+        for a, b in zip(qs[:-1], qs[1:]):
+            c, t, s = leg(a, b)
+            cz, tz, sc = min(cz, c), min(tz, t), min(sc, s)
+            if cz < chain_floor - EPS or tz < tip_floor - EPS:
+                break
         ok = cz >= chain_floor - EPS and tz >= tip_floor - EPS
-        # With FRAME_SAFE off the frame is only asked about a route we are
+        # With STATIC_SAFE off the metal is only asked about a route we are
         # INSERTING, and a direct move that already clears the paper is left
-        # exactly as it was — routing is not the place to start refusing
-        # transits the rest of the pipeline has always flown.  With it on the
+        # exactly as it was.  With it on — the default since 2026-08-26 — the
         # direct move is asked too, which is the whole point: `scene_check`
         # having the last word on the frame is no use to a tour that was
-        # costed, chosen and frozen before anybody looked.
-        if ok and frame and (seq or FRAME_SAFE):
-            ok = path_frame_clearance(spec, qs, pen_ext, h_inv, n) \
-                >= FRAME_FLOOR - EPS
+        # costed, chosen and frozen before anybody looked.  That is not an
+        # abstraction: arm 2's conducted solo timeline was refused at 41.0 mm
+        # against the checker's 50, on a pen-up nobody had priced.
+        if ok and frame and boxes and (seq or STATIC_SAFE):
+            ok = bool(sc >= gate_floor - EPS)
         return ok, cz, tz
 
     def done(seq, name, cz, tz, tried):
@@ -496,7 +997,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             _CACHE[ck] = out
         return out
 
-    ok, cz, tz = legs_ok([], frame=FRAME_SAFE)
+    ok, cz, tz = legs_ok([], frame=STATIC_SAFE)
     if ok:
         return done([], "direct", cz, tz, 1)
 
@@ -504,6 +1005,37 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     xy1 = tip_xy(q1, spec, pen_ext, h_inv)
     xym = 0.5 * (xy0 + xy1)
     tried = 1
+    # WHICH OBSTACLE IS IT?  The two failure modes want opposite escapes: the
+    # way off the paper is up, and the way past a neighbour's base column is
+    # round.  A crossing that clears the canvas and fails only on the metal
+    # therefore walks the vertical ladder for nothing — seven heights and forty
+    # shapes of IK — before reaching the one family that can help it, and on
+    # this rig that is most crossings that need routing at all.  So the order
+    # follows the diagnosis: metal-only, skirt first.
+    metal_only = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
+
+    def skirts(base):
+        """The sidestep family. -> (result, tried) with result None if none fit."""
+        t = base
+        if not boxes:
+            return None, t
+        for z in SKIRT_HEIGHTS:
+            for wp in _skirt(spec, xy0, xy1, boxes):
+                seq = _walk(spec, q0, [xy0] + wp + [xy1], z, pen_ext, h_inv,
+                            mm, SKIRT_STEP, lift)
+                if not seq:
+                    continue
+                t += 1
+                good, c, tt = legs_ok(seq)
+                if good:
+                    return done(seq, f"skirt{len(wp)}@{100 * z:.0f}cm", c, tt,
+                                t), t
+        return None, t
+
+    if metal_only:
+        got, tried = skirts(tried)
+        if got is not None:
+            return got
     if q_home is not None:
         qh = np.asarray(q_home, float).reshape(7)
         tried += 1
@@ -544,6 +1076,16 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             ok, cz, tz = legs_ok(seq)
             if ok:
                 return done(seq, f"{name}@{100 * z:.0f}cm", cz, tz, tried)
+    # ...and for a crossing that was blocked by the TABLE, going round is the
+    # last thing left rather than the first: it is longer than a lift and the
+    # sequencer pays the difference, so it is tried only once every shape that
+    # buys clearance more cheaply has failed.  Skipped entirely when nothing
+    # static is in the room, which is every legacy rig, and already spent above
+    # when the metal was the whole problem.
+    if not metal_only:
+        got, tried = skirts(tried)
+        if got is not None:
+            return got
     if ck is not None:
         _CACHE[ck] = None
     return None

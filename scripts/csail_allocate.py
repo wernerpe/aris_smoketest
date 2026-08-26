@@ -520,13 +520,15 @@ def add_args(ap):
                          "arms not named keep frames.PEN_EXT (110 mm).  A pen "
                          "is a fixture: it is the same length in both phases, "
                          "only the ink changes at the swap")
-    ap.add_argument("--frame-safe", action="store_true",
-                    help="certify every pen-up against the rig's STEEL as well "
-                         "as the paper, and route around it.  Off by default: "
-                         "`paper.route` has only ever frame-checked a detour it "
-                         "was inserting, so a direct transit that grazes a frame "
-                         "box is priced at zero and only scene_check ever sees "
-                         "it (see aris_sixarm/paper.FRAME_SAFE)")
+    ap.add_argument("--no-static-safe", action="store_true",
+                    help="do NOT certify pen-ups against the rig's steel and "
+                         "the neighbours' base columns.  On by default since "
+                         "2026-08-26: without it a direct transit that grazes a "
+                         "column is priced at zero and only scene_check ever "
+                         "sees it — which is how a conducted solo timeline got "
+                         "as far as 41.0 mm against a 50 mm gate.  Pass this "
+                         "only to reproduce a pre-2026-08-26 number "
+                         "(see aris_sixarm/paper.STATIC_SAFE)")
     ap.add_argument("--two-pass", action="store_true",
                     help="draw grey, stop for a human to swap the pens, then "
                          "draw orange.  Lifts the one-colour-per-arm constraint "
@@ -657,11 +659,15 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
     # once, here, before anything plans, rather than threaded through six
     # signatures that could disagree.  The memo is keyed on it either way.
     share = {} if share is None else share
-    if bool(getattr(a, "frame_safe", False)) != paper.FRAME_SAFE:
-        paper.FRAME_SAFE = bool(getattr(a, "frame_safe", False))
+    want = not bool(getattr(a, "no_static_safe", False))
+    if want != paper.STATIC_SAFE:
+        paper.STATIC_SAFE = want
         paper.clear_cache()          # and, through its hook, sequence's
-        print(f"  pen-ups are certified against the frame too "
-              f"(margin {1000 * rig_final.STATIC_MARGIN:.0f} mm)")
+    print("  pen-ups are certified against the steel and the neighbours' base "
+          f"columns (margin {1000 * rig_final.STATIC_MARGIN:.0f} mm + "
+          f"{1000 * paper.TIP_SWEEP_PAD:.0f} mm sweep)" if paper.STATIC_SAFE
+          else "  !! pen-ups are NOT certified against the static set "
+               "(--no-static-safe)")
     t0 = time.time()
     if px is None:
         px, _ = trace.trace_logo(a.image)
