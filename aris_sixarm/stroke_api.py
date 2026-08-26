@@ -80,6 +80,13 @@ DEFAULTS = dict(
     phi=None,              # tool yaw about the pen axis; None -> auto (0.0 for
                            # the inline pen; a coarse search for the lateral
                            # holder, see lateral.plan_adaptive)
+    tilt=None,             # a FIXED pen lean for the whole stroke, as the
+                           # tool-frame 2-vector `planner.tool_lean` takes
+                           # (None = perpendicular).  This is the pinned axis
+                           # `lateral.plan_adaptive` searches over, the way it
+                           # searches `phi`; `tilt_max_deg` above is the CONE
+                           # it may search inside, and the two are different
+                           # things — one is a plan, the other a permission.
 )
 
 # THE GATES ARE ARGUMENTS, NOT MODULE CONSTANTS.  `margin_gate` and
@@ -335,7 +342,8 @@ def prepare(pts_xy, spec, o, depth=0):
     # ---- 2. the lattice ----------------------------------------------------
     lat = planner.build_lattice(pts, spec, h_inv=o["h_inv"], pen_ext=o["pen_ext"],
                                 n_q7=o["n_q7"], pen_lat=o.get("pen_lat"),
-                                phi=float(o.get("phi") or 0.0))
+                                phi=float(o.get("phi") or 0.0),
+                                tilt=o.get("tilt"))
     fiber = lat["valid"].any(axis=(1, 2))
     if not fiber[0]:
         # where the arm could pick the stroke up again — the tail the caller
@@ -425,13 +433,22 @@ def plan_from_ctx(ctx, spec, o, depth=0):
                      ds_m=sm["ds"], dqds=sm["dqds"])
 
     # ---- 5. the independent certificate ------------------------------------
+    # THE CONE THE CERTIFICATE IS GIVEN IS THE LEAN THE PLAN COMMANDED, and
+    # not one degree more.  `validate.CONE_GATE` defaults to 0 and has since
+    # the tilt era, which is why a perpendicular plan is still checked against
+    # a perpendicular pen; a leaning plan is checked against ITS lean, so a
+    # plan that leaned further than it was allowed to is a violation and not a
+    # rounding.
+    cone = planner.lean_deg(lat.get("tilt"))
     rep = validate_plan(dense_pts, spec, qs, times=pc["t"], h_inv=o["h_inv"],
                         pen_ext=o["pen_ext"], pen_lat=lat.get("pen_lat", 0.0),
                         margin_gate=o["margin_gate"],
-                        sigma_gate=o["sigma_gate"]) \
+                        sigma_gate=o["sigma_gate"], tilt_max_deg=cone) \
         if o["validate"] else dict(ok=True)
     out = dict(base, status="ok", reason="",
                phi=float(lat.get("phi", 0.0)),
+               lean_vec=lat.get("tilt"), tilt_max_deg=float(cone),
+               lean_deg=float(cone),
                pen_lat=float(lat.get("pen_lat", 0.0)),
                knots=knots, qs=qs, pts=dense_pts,
                times=pc["t"], s=sm["s"], q7=sm["q7"], sigmas=sm["sigmas"],

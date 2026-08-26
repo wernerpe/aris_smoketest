@@ -87,7 +87,7 @@ def arc_length(points):
     return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
 
 
-def pen_down_poses(pts_xy, Twb_inv, pen_ext, phi=0.0, pen_lat=None):
+def pen_down_poses(pts_xy, Twb_inv, pen_ext, phi=0.0, pen_lat=None, tilt=None):
     """(M,4,4) base-frame hand-TCP poses for a pen-down stroke.
 
     The pen convention: R = rotz(phi) @ rotx(pi) points tool z straight down
@@ -97,7 +97,7 @@ def pen_down_poses(pts_xy, Twb_inv, pen_ext, phi=0.0, pen_lat=None):
     drawing, the lateral direction chosen by phi.
     """
     p = np.asarray(pts_xy, float)
-    R = rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi)
+    R = planner.tool_lean(rotz(phi) @ rotx(np.pi) if phi else rotx(np.pi), tilt)
     T = np.tile(np.eye(4), (len(p), 1, 1))
     T[:, :3, :3] = R
     T[:, :3, 3] = np.column_stack([p[:, 0], p[:, 1], np.zeros(len(p))]) \
@@ -691,9 +691,10 @@ class Corridor:
         self.pen_ext, self.pts = lat["pen_ext"], lat["pts"]
         self.pen_lat = float(lat.get("pen_lat", 0.0))
         self.phi = float(lat.get("phi", 0.0))
+        self.tilt = lat.get("tilt")
         self._poses = pen_down_poses(lat["pts"], np.linalg.inv(lat["Twb"]),
                                      lat["pen_ext"], phi=self.phi,
-                                     pen_lat=self.pen_lat)
+                                     pen_lat=self.pen_lat, tilt=self.tilt)
         self._jidx = np.arange(free.shape[1])
 
     def _grid_ok(self, ii, jf):
@@ -919,7 +920,7 @@ def backout(stroke_pts, spec, knots, lat=None, ds=0.005, sheet=None, q_seed=None
 
 def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
                  q_seed=None, h_inv=None, pen_ext=None, phi=None,
-                 pen_lat=None):
+                 pen_lat=None, tilt=None):
     """Everything a chase needs before it can take its first step.
 
     Resamples the stroke at `ds` METRES, reads the redundancy plan off
@@ -942,13 +943,15 @@ def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
     pen_ext = (lat["pen_ext"] if lat is not None else PEN_EXT) if pen_ext is None else pen_ext
     if phi is None:
         phi = float(lat.get("phi", 0.0)) if lat is not None else 0.0
+    if tilt is None and lat is not None:
+        tilt = lat.get("tilt")
     if pen_lat is None:
         pen_lat = float(lat.get("pen_lat", 0.0)) if lat is not None \
             else lat_of(None)
     pts, s = planner.resample(stroke_pts, ds)
     q7 = np.atleast_1d(np.asarray(q7_of_s(s), float))
     poses = pen_down_poses(pts, np.linalg.inv(Twb), pen_ext, phi=phi,
-                           pen_lat=pen_lat)
+                           pen_lat=pen_lat, tilt=tilt)
 
     if q_seed is None and sheet is not None and lat is not None:
         j0 = int(np.argmin(np.abs(lat["q7s"] - q7[0])))
@@ -960,7 +963,7 @@ def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
         cand = ik.solve(poses[0], q7[0], spec.q_seed)
         q_seed = max(cand, key=joint_margin) if cand else None
     return dict(pts=pts, s=s, q7=q7, poses=poses, Twb=Twb, pen_ext=pen_ext,
-                pen_lat=float(pen_lat), phi=float(phi),
+                pen_lat=float(pen_lat), phi=float(phi), tilt=tilt,
                 ds=ds, arc_len=arc_length(stroke_pts), q_seed=q_seed)
 
 

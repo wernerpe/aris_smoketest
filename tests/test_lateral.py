@@ -232,3 +232,112 @@ def test_lateral_extends_reach():
 
     r_in, r_lat = reach(0.0), reach(LAT)
     assert r_lat >= r_in + 0.05, (r_in, r_lat)
+
+
+# ==========================================================================
+# THE PEN LEAN, THROUGH THE LATERAL PLANNER (2026-08-26)
+# ==========================================================================
+# `plan_adaptive` used to drop `tilt_max_deg` with a note.  What these pin is
+# that restoring it is additive: flat still plans flat, byte for byte; a lean
+# is only ever reached when flat has already failed; the lean the plan uses is
+# the lean the validator is told about and no more; and the least lean that
+# certifies is the one that wins.
+def test_a_cone_does_not_change_a_stroke_that_certifies_flat():
+    """The fa0544d discipline: an opt-in must not move a shipped number."""
+    spec, poly = SPEC, LINE
+    flat = lateral.plan_adaptive(poly, spec,
+                                 opts=dict(pen_lat=LAT, validate=True))
+    coned = lateral.plan_adaptive(poly, spec,
+                                  opts=dict(pen_lat=LAT, tilt_max_deg=15.0,
+                                            validate=True))
+    assert flat["status"] == "ok"
+    assert coned["status"] == "ok"
+    assert np.array_equal(flat["qs"], coned["qs"])
+    assert coned["lean_deg"] == 0.0
+    assert coned["lateral"]["lean_used"] is False
+    assert coned["lateral"]["cone_deg"] == 15.0
+
+
+def test_the_lean_ring_is_the_atlas_cone():
+    from aris_sixarm import atlas
+    assert lateral.LEAN_GRID_DEG == atlas.GATE_CONE_DEG
+    for deg in (2.5, 15.0):
+        ring = lateral.lean_ring(deg)
+        assert len(ring) == lateral.LEAN_DIRS
+        for t in ring:
+            assert planner.lean_deg(t) == pytest.approx(deg, abs=1e-9)
+
+
+def test_a_pinned_lean_is_exactly_the_lean_the_pen_gets():
+    """|tilt| is the angle from vertical, by construction and by measurement."""
+    spec, poly = SPEC, LINE
+    for deg in (2.5, 7.5, 15.0):
+        for tilt in lateral.lean_ring(deg):
+            r = stroke_api.plan_stroke(poly, spec,
+                                       dict(pen_lat=LAT, phi=0.0, tilt=tilt,
+                                            validate=True))
+            if r["status"] != "ok":
+                continue
+            assert r["lean_deg"] == pytest.approx(deg, abs=1e-9)
+            # the INDEPENDENT validator re-derives it from the FK
+            got = r["validation"]["worst"]["max_lean_deg"]
+            assert got == pytest.approx(deg, abs=1e-6)
+            return
+    pytest.skip("no leaned plan certified on this stroke")
+
+
+def test_the_validator_refuses_a_lean_it_was_not_told_about():
+    spec, poly = SPEC, LINE
+    tilt = lateral.lean_ring(10.0)[0]
+    r = stroke_api.plan_stroke(poly, spec, dict(pen_lat=LAT, phi=0.0,
+                                                tilt=tilt, validate=True))
+    if r["status"] != "ok":
+        pytest.skip("stroke does not certify at this lean")
+    from aris_sixarm.validate import validate_plan
+    strict = validate_plan(r["pts"], spec, r["qs"], pen_lat=r["pen_lat"],
+                           tilt_max_deg=0.0)
+    assert not strict["ok"]
+    assert any(v["kind"] == "pen_cone" for v in strict["violations"])
+    loose = validate_plan(r["pts"], spec, r["qs"], pen_lat=r["pen_lat"],
+                          tilt_max_deg=r["lean_deg"])
+    assert loose["ok"]
+
+
+def test_the_ladder_climbs_and_stops_at_the_first_lean_that_works():
+    """Least lean that certifies, the same rule `atlas.solve_cell` follows.
+
+    Sourced from wherever this arm's own fiber runs out rather than from an
+    atlas file, so the test needs no artefact and no rig environment.
+    """
+    spec = SPEC
+    leaned = tried_flat = 0
+    grid = [(x, y) for y in np.linspace(0.10, 0.60, 6)
+            for x in np.linspace(0.20, 1.40, 25)]
+    for x, y in grid:
+        poly = np.column_stack([[x - 0.015, x + 0.015], [y, y]])
+        flat = lateral.plan_adaptive(poly, spec,
+                                     opts=dict(pen_lat=LAT, validate=True))
+        if flat["status"] == "ok":
+            continue
+        tried_flat += 1
+        r = lateral.plan_adaptive(poly, spec,
+                                  opts=dict(pen_lat=LAT, tilt_max_deg=15.0,
+                                            validate=True))
+        if r["status"] == "ok" and r["lateral"].get("lean_used"):
+            leaned += 1
+            assert r["lean_deg"] in lateral.LEAN_GRID_DEG
+            assert r["validation"]["ok"]
+            # THE LADDER CLIMBS AND STOPS.  Every full plan it attempted was
+            # at a lean no larger than the one that won, the attempts are in
+            # ascending order, and the LAST one is the winner — smaller leans
+            # were either screened out with an empty fiber (so no plan is
+            # recorded for them) or planned and refused, never skipped over.
+            tried = [a[0] for a in r["lateral"]["lean_tried"]]
+            assert tried == sorted(tried)
+            assert max(tried) == r["lean_deg"]
+            assert all(d <= r["lean_deg"] + 1e-9 for d in tried)
+        if leaned >= 3:
+            break
+    if not tried_flat:
+        pytest.skip("no stroke on this grid fails flat")
+    assert leaned > 0, "the ladder recovered nothing where flat failed"

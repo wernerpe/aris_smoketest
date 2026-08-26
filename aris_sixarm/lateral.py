@@ -40,9 +40,25 @@ reach become reachable — the wrist stands off from the work.  That is the
 reach-extending orientation the screen tries first; well inside reach other
 phis may score better and the screen is what decides.
 
-Pen TILT is NOT combined with the lateral holder: the tilt disc machinery
-leans on the inline pen's yaw degeneracy.  `tilt_max_deg` > 0 is noted and
-ignored here.
+  3. AND THEN, AND ONLY THEN, THE LEAN (2026-08-26).  `tilt_max_deg` used to
+     be dropped on the floor here with a note — "pen tilt is not supported with
+     the lateral holder" — because `aris_sixarm/tilt.py`'s disc machinery is
+     built on the INLINE pen's yaw degeneracy and cannot be pointed at a tool
+     whose TCP is 11 cm off the pen axis.  But the lean itself has nothing to
+     do with that machinery: it is one more fixed tool rotation, and this
+     module was already built to search fixed tool rotations.  So a lean is
+     planned exactly the way a phi is: pinned, through the UNCHANGED certified
+     pipeline, with the validator handed the cone the plan actually used.
+
+     FLAT FIRST, AND FLAT WHOLE.  The ladder is only entered when every fixed
+     phi has failed AND the flat coupled rescue has failed, so a stroke that
+     certifies perpendicular is planned by byte-identical code to the one that
+     planned it yesterday — `tilt_max_deg` cannot take a stroke away, only add
+     one.  Inside the ladder the leans are tried in ASCENDING order and the
+     first that certifies wins, so a stroke that needs 2.5 degrees is not given
+     15: the same "least lean that certifies" rule `atlas.solve_cell` follows,
+     and for the same reason — the lean is a cost to the drawing, not a
+     resource to spend.
 """
 import time
 
@@ -74,6 +90,18 @@ def phi_ring(pts_xy, spec, n_phi=N_PHI):
     return np.array([phi0 + o for o in offs[:n_phi]])
 
 
+def _screen(pts_xy, spec, o, phi, tilt=None):
+    """How much fiber one (phi, tilt) opens on a 3-point probe. -> int."""
+    p = np.asarray(pts_xy, float)
+    probes = p[np.unique(np.linspace(0, len(p) - 1, SCREEN_PTS).astype(int))]
+    lat = planner.build_lattice(probes, spec, h_inv=o["h_inv"],
+                                pen_ext=o["pen_ext"], n_q7=o["n_q7"],
+                                pen_lat=o["pen_lat"], phi=float(phi),
+                                tilt=tilt)
+    fib = lat["valid"].any(axis=(1, 2))
+    return int(fib[0]) * 2 + int(fib[-1]) * 2 + int(fib[1:-1].sum())
+
+
 def screen_phis(pts_xy, spec, phis, o):
     """Order the ring by how much fiber each phi opens on a 3-point probe.
 
@@ -82,17 +110,59 @@ def screen_phis(pts_xy, spec, phis, o):
     cannot start is dead however healthy its middle), tie-break = the ring's
     own heuristic order.  -> (ordered phis, scores)
     """
-    p = np.asarray(pts_xy, float)
-    probes = p[np.unique(np.linspace(0, len(p) - 1, SCREEN_PTS).astype(int))]
-    scores = []
-    for phi in phis:
-        lat = planner.build_lattice(probes, spec, h_inv=o["h_inv"],
-                                    pen_ext=o["pen_ext"], n_q7=o["n_q7"],
-                                    pen_lat=o["pen_lat"], phi=float(phi))
-        fib = lat["valid"].any(axis=(1, 2))
-        scores.append(int(fib[0]) * 2 + int(fib[-1]) * 2 + int(fib[1:-1].sum()))
+    scores = [_screen(pts_xy, spec, o, phi) for phi in phis]
     order = np.argsort(-np.asarray(scores), kind="stable")
     return phis[order], [scores[i] for i in order]
+
+
+# --------------------------------------------------------------------------
+# the lean ladder
+# --------------------------------------------------------------------------
+LEAN_GRID_DEG = (2.5, 5.0, 7.5, 10.0, 12.5, 15.0)   # = atlas.GATE_CONE_DEG
+LEAN_DIRS = 4            # tool-frame lean directions per magnitude (+-x, +-y)
+LEAN_PHIS = 3            # how many of the flat ring's best phis to re-screen
+LEAN_PLANS = 3           # full plans attempted per lean magnitude
+
+
+def lean_ring(lean_deg, n_dir=LEAN_DIRS):
+    """The tool-frame lean vectors of one magnitude. -> [(tx, ty), ...] rad.
+
+    The same four directions `atlas._candidates` leans in, so a lean the atlas
+    certified for a cell is a lean this planner can ask for at that cell.
+    """
+    a = np.deg2rad(float(lean_deg))
+    return [(a * np.cos(t), a * np.sin(t))
+            for t in np.linspace(0, 2 * np.pi, n_dir, endpoint=False)]
+
+
+def _lean_ladder(pts_xy, spec, o, phis, tilt_max_deg, notes, tried):
+    """Ascending lean, first certified wins. -> (plan | None, attempts)."""
+    attempts = []
+    head = list(phis[:LEAN_PHIS])
+    for deg in LEAN_GRID_DEG:
+        if deg > float(tilt_max_deg) + 1e-9:
+            break
+        cand = []
+        for tilt in lean_ring(deg):
+            for phi in head:
+                try:
+                    cand.append((_screen(pts_xy, spec, o, phi, tilt),
+                                 float(phi), tilt))
+                except Exception:
+                    continue
+        cand.sort(key=lambda c: -c[0])
+        for score, phi, tilt in cand[:LEAN_PLANS]:
+            if score <= 0:
+                break
+            r = stroke_api.plan_stroke(pts_xy, spec,
+                                       dict(o, phi=phi, tilt=tilt))
+            attempts.append((deg, phi, tuple(tilt), r.get("status")))
+            if r.get("status") == "ok":
+                r.setdefault("notes", [])
+                r["notes"] = list(r["notes"]) + notes + [
+                    f"leaned {deg:.1f} deg (flat did not certify)"]
+                return r, attempts
+    return None, attempts
 
 
 # --------------------------------------------------------------------------
@@ -316,10 +386,10 @@ def plan_adaptive(pts_xy, spec, opts=None, n_phi=N_PHI, rescue=True):
     o.update(opts or {})
     o["pen_lat"] = lat_of(o.get("pen_lat"))
     notes = []
-    if float(o.get("tilt_max_deg", 0.0)) > 0:
-        notes.append("pen tilt is not supported with the lateral holder; "
-                     "planned with the pen vertical")
-        o["tilt_max_deg"] = 0.0
+    cone = float(o.get("tilt_max_deg", 0.0) or 0.0)
+    o["tilt_max_deg"] = 0.0      # the ladder pins a lean; nothing below reads
+    #                              the cone, and `tilt.plan_adaptive` must not
+    #                              be entered with a lateral tool
     ring = phi_ring(pts_xy, spec, n_phi)
     try:
         phis, scores = screen_phis(pts_xy, spec, ring, o)
@@ -338,7 +408,8 @@ def plan_adaptive(pts_xy, spec, opts=None, n_phi=N_PHI, rescue=True):
                                 screen_scores=scores, tried=tried,
                                 t_screen=t_screen,
                                 t_total=time.perf_counter() - t0,
-                                rescue_used=False)
+                                rescue_used=False, cone_deg=cone,
+                                lean_used=False)
             return r
         if st == "degenerate":
             return r                      # input hygiene is phi-independent
@@ -355,15 +426,30 @@ def plan_adaptive(pts_xy, spec, opts=None, n_phi=N_PHI, rescue=True):
             rr["lateral"] = dict(n_phi=int(n_phi), screen_scores=scores,
                                  tried=tried, t_screen=t_screen,
                                  t_total=time.perf_counter() - t0,
-                                 rescue_used=True)
+                                 rescue_used=True, cone_deg=cone,
+                                 lean_used=False)
             return rr
+
+    # ---- and only now, the lean --------------------------------------------
+    leans = []
+    if cone > 0:
+        rl, leans = _lean_ladder(pts_xy, spec, o, phis, cone, notes, tried)
+        if rl is not None:
+            rl["lateral"] = dict(n_phi=int(n_phi), screen_scores=scores,
+                                 tried=tried, t_screen=t_screen,
+                                 t_total=time.perf_counter() - t0,
+                                 rescue_used=False, cone_deg=cone,
+                                 lean_used=True, lean_tried=leans,
+                                 lean_deg=float(rl.get("lean_deg", 0.0)))
+            return rl
 
     out = best_split if best_split is not None else dict(
         status="split", reason="empty_fiber", s_star=0.0, s_reach=0.0,
         head=None, arm=getattr(spec, "arm_id", None), depth=0)
     out["lateral"] = dict(n_phi=int(n_phi), screen_scores=scores, tried=tried,
                           t_screen=t_screen,
-                          t_total=time.perf_counter() - t0, rescue_used=False)
+                          t_total=time.perf_counter() - t0, rescue_used=False,
+                          cone_deg=cone, lean_used=False, lean_tried=leans)
     out.setdefault("notes", [])
     out["notes"] = list(out["notes"]) + notes
     return out
