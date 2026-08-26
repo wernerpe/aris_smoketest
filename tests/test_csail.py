@@ -1024,6 +1024,122 @@ def test_a_hover_in_a_pocket_is_replaced_by_one_on_the_same_fiber():
         assert np.isfinite(writing.static_gate(spec, 0.110)(fib)).all()
 
 
+def test_an_empty_allow_set_makes_the_tier_bit_identical_to_off():
+    """The selective tier's whole claim, stated as a property of the memo key.
+
+    `--depot-hover-selective` arms the tier with an EMPTY `HOVER_DEPOT_SITES`,
+    so `depot_hover_selected` is False at every end and every end takes the
+    same branch, and files its answer under the same key, that a run with the
+    tier off takes.  Whatever the global switch was worth (writing's note:
+    +57.5 mm of grey against -81.5 mm of orange), an empty allow-set is worth
+    exactly nothing and costs exactly nothing — which is what makes admitting
+    ONE end a measurable change rather than a re-run.
+    """
+    from aris_sixarm import writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    s0 = _short_segment(31, bx + 0.30, by - 0.30)
+    qs = np.asarray(s0["plan"]["qs"], float)
+    pts = np.asarray(s0["plan"]["pts"], float)
+
+    old = (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES)
+    try:
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = False, None
+        writing._clear_hovers()
+        off = [writing.lifted_or_lower(spec, qs[k], pts[k], pen_ext=0.110)
+               for k in (0, -1)]
+        assert not writing.depot_hover_selected(spec, qs[0], pts[0])
+
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = True, set()
+        writing._clear_hovers()
+        for k, (q, z) in zip((0, -1), off):
+            assert not writing.depot_hover_selected(spec, qs[k], pts[k]), \
+                "an empty allow-set fired the tier"
+            q2, z2 = writing.lifted_or_lower(spec, qs[k], pts[k], pen_ext=0.110)
+            assert np.array_equal(q, q2) and z == z2, \
+                "an empty allow-set moved a hover"
+
+        # ...and admitting ONE end leaves the OTHER one where it was.  A site
+        # names an arm, a drawing pose and a point, so it cannot spill.
+        site = writing.hover_site(spec, qs[0], pts[0])
+        assert site != writing.hover_site(spec, qs[-1], pts[-1])
+        assert site != writing.hover_site(FLEET[71], qs[0], pts[0])
+        writing.HOVER_DEPOT_SITES.add(site)
+        assert writing.depot_hover_selected(spec, qs[0], pts[0])
+        assert not writing.depot_hover_selected(spec, qs[-1], pts[-1])
+        q2, z2 = writing.lifted_or_lower(spec, qs[-1], pts[-1], pen_ext=0.110)
+        assert np.array_equal(off[1][0], q2) and off[1][1] == z2, \
+            "admitting one end moved the other one"
+        # the admitted end either keeps its pose (it was never stuck) or joins
+        # the depot now; it may never come back stuck AND moved
+        q1, _ = writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        assert np.array_equal(off[0][0], q1) \
+            or writing.hover_joins_depot(spec, qs[0], q1, pen_ext=0.110)
+
+        # ...AND THE GATE IS THE ALLOW-SET, NOT THE SWITCH.  The end above is
+        # not in a pocket, so leaving the branch on `HOVER_DEPOT_AWARE` would
+        # pass this test and still fire the tier everywhere — which is exactly
+        # the bug the selective run was built to avoid.  Making EVERY hover a
+        # pocket is the only way to see the branch itself.
+        real = writing.hover_joins_depot
+        writing.hover_joins_depot = lambda *_a, **_k: False
+        try:
+            writing.HOVER_DEPOT_SITES = set()
+            writing._clear_hovers()
+            for k, (q, z) in zip((0, -1), off):
+                q2, z2 = writing.lifted_or_lower(spec, qs[k], pts[k],
+                                                 pen_ext=0.110)
+                assert np.array_equal(q, q2) and z == z2, \
+                    "the tier fired at an end the allow-set does not name"
+        finally:
+            writing.hover_joins_depot = real
+    finally:
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = old
+        writing._clear_hovers()
+
+
+def test_a_rescue_that_buys_nothing_is_rolled_back():
+    """`_rescue_pocket` admits a site only for the ink the admission saves.
+
+    The selector is the only thing allowed to grow the allow-set, and it grows
+    it on one condition: the span it was asked about round-trips AFTERWARDS and
+    did not before.  A candidate that fails leaves the set exactly as it found
+    it, so a rejected rescue is not a hover that quietly moved — it is no
+    change at all, and the run downstream of it is the run that would have
+    happened.
+    """
+    from aris_sixarm import writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    seg = _short_segment(31, bx + 0.30, by - 0.30)
+    st = dict(id=0, pts=seg["pts"], color="grey", kind="")
+    sp = dict(s0=0.0, s1=1.0, direction=1)
+
+    old = (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+           allocate.DEPOT_HOVER_RESCUE, allocate.depot_round_trip)
+    try:
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = True, set()
+        allocate.DEPOT_HOVER_RESCUE = True
+        # the round trip never gets better, however far round the fiber we go
+        allocate.depot_round_trip = lambda *_a, **_k: (False, True, True)
+        assert not allocate._rescue_pocket(spec, st, sp, seg["plan"], {})
+        assert writing.HOVER_DEPOT_SITES == set(), \
+            "a rescue that bought nothing kept its admission"
+        # ...and one that does help keeps exactly the ends it moved
+        allocate.depot_round_trip = lambda *_a, **_k: (True, False, False)
+        assert allocate._rescue_pocket(spec, st, sp, seg["plan"], {})
+        assert len(writing.HOVER_DEPOT_SITES) in (1, 2)
+        # off, the selector is inert whatever the round trip says
+        allocate.DEPOT_HOVER_RESCUE = False
+        writing.HOVER_DEPOT_SITES = set()
+        assert not allocate._rescue_pocket(spec, st, sp, seg["plan"], {})
+        assert writing.HOVER_DEPOT_SITES == set()
+    finally:
+        (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+         allocate.DEPOT_HOVER_RESCUE, allocate.depot_round_trip) = old
+        writing._clear_hovers()
+
+
 def test_the_dead_end_is_named_and_it_is_the_one_given_back():
     """`depot_round_trip` reads the two hovers out of the four depot legs.
 

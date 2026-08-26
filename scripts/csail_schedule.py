@@ -1379,7 +1379,6 @@ def build_phases(a, phases, dt, pens, alt=None):
         last = not todo
         policy_k = a.idle_policy if (last or a.freeze_all_phases) \
             else idle.POLICY_HOME
-        home_k = policy_k == idle.POLICY_HOME
 
         def prepare(res):
             """-> True if the phase is ready to conduct.
@@ -1395,24 +1394,53 @@ def build_phases(a, phases, dt, pens, alt=None):
             rest of the picture still ships, without it the run stops.  It
             used to propagate out of `build` as an unhandled RuntimeError and
             take the whole programme with it.
+
+            ...AND THE TRIP HOME IS A POLICY, NOT A LAW (2026-08-26).  An
+            intermediate pass goes home because walking home BETWEEN passes is
+            worse than walking home during one — a clock argument, and the
+            clock is only an objective.  Coverage is the constraint, and a
+            phase whose ink can be flown TO and not FROM is refused by that
+            clock argument alone: the arm could draw it and stop there.  So a
+            refusal is retried ONCE with the pass frozen, and only where the
+            alternative is dropping the ink.  Nothing else moves: the
+            allocation is untouched, the next pass already starts from
+            `q_start` (which is now the frozen pose rather than `q_seed`), the
+            frozen pose still has to pass `scene_check`'s own gate, and the
+            inter-phase hold is still checked before the next pass begins.  The
+            v7 programme lost 31.2 mm of certified grey here, to a phase of one
+            arm and one segment whose far hover joins no depot on its fiber.
             """
-            try:
-                if policy_k != a.idle_policy:
-                    print(f"\n{res['name']} is not the last pass, so it goes "
-                          "home at the end: the pass after it starts from the "
-                          "ready pose")
-                    allocate.resequence(res, q_start=q_start, return_home=True)
-                elif built and q_start is not None \
-                        and a.idle_policy != idle.POLICY_HOME:
-                    print(f"\nre-sequencing {res['name']} from the poses pass "
-                          f"{len(built)} froze in (the allocation is untouched)")
-                    allocate.resequence(res, q_start=q_start,
-                                        return_home=False)
-            except (SystemExit, idle.Unconductable, RuntimeError) as exc:
-                print(f"  !! {res['name']} could not even be re-sequenced: "
-                      f"{exc}")
-                return False
-            return True
+            nonlocal policy_k
+            for attempt in (0, 1):
+                home = policy_k == idle.POLICY_HOME
+                try:
+                    if policy_k != a.idle_policy:
+                        print(f"\n{res['name']} is not the last pass, so it "
+                              "goes home at the end: the pass after it starts "
+                              "from the ready pose")
+                        allocate.resequence(res, q_start=q_start,
+                                            return_home=True)
+                    elif built and q_start is not None \
+                            and a.idle_policy != idle.POLICY_HOME:
+                        print(f"\nre-sequencing {res['name']} from the poses "
+                              f"pass {len(built)} froze in (the allocation is "
+                              "untouched)")
+                        allocate.resequence(res, q_start=q_start,
+                                            return_home=False)
+                except (SystemExit, idle.Unconductable, RuntimeError) as exc:
+                    print(f"  !! {res['name']} could not even be re-sequenced: "
+                          f"{exc}")
+                    if attempt or not home \
+                            or not getattr(a, "freeze_refused_phase", False):
+                        return False
+                    print(f"  !! ...retrying {res['name']} FROZEN: the arm can "
+                          "fly to this ink and not away from it, and stopping "
+                          "there is the only way anybody draws it "
+                          "(--freeze-refused-phase)")
+                    policy_k = idle.POLICY_FREEZE
+                    continue
+                return True
+            return False
 
         def conduct(res):
             try:
@@ -1712,6 +1740,13 @@ def schedule_args(ap):
                     help="freeze at the end of EVERY pass, not just the last "
                          "one; the pass after a frozen one is then sequenced "
                          "from the poses it froze in")
+    ap.add_argument("--freeze-refused-phase", action="store_true",
+                    help="a pass that cannot be re-sequenced WITH the trip home "
+                         "is retried frozen before it is dropped.  Only ever "
+                         "reached on the path that would otherwise lose the "
+                         "ink; the frozen pose still has to pass scene_check "
+                         "and the inter-phase hold check, and the next pass "
+                         "already starts from wherever this one stopped")
     ap.add_argument("--no-verify", action="store_true",
                     help="ship the split allocation without conducting the "
                          "unsplit one as well.  The A/B is the only thing that "

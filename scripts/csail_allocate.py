@@ -583,6 +583,13 @@ def add_args(ap):
                          "placement and it moves every other hover it touches, "
                          "which on the logo is +57 mm of grey and -81 mm of "
                          "orange — a wash, measured (writing.HOVER_DEPOT_AWARE)")
+    ap.add_argument("--depot-hover-selective", action="store_true",
+                    help="the same tier, fired ONE SPAN END AT A TIME and only "
+                         "where `fly_shrink` is about to pay for the pocket. "
+                         "Every other hover keeps the pose — and the memo slot "
+                         "— a run without it computes, so this cannot move a "
+                         "hover that was not costing ink "
+                         "(allocate.DEPOT_HOVER_RESCUE)")
     ap.add_argument("--no-multi-tour", action="store_true",
                     help="require an arm's whole bag to thread into ONE tour "
                          "per phase.  On by default since 2026-08-26 a bag may "
@@ -741,12 +748,27 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
     # balancer's price and the sequencer all have to agree about whether a bag
     # may be flown as several tours, and they reach `allocate` by three
     # different routes (see allocate.MULTI_TOUR).
-    want_h = bool(getattr(a, "depot_hover", False))
-    if want_h != writing.HOVER_DEPOT_AWARE:
+    # THE TIER AND ITS AIM ARE TWO SWITCHES, because they answer two different
+    # questions: whether the fiber may be re-searched at all, and WHERE.
+    # `--depot-hover` fires it at every pocket (the measured wash);
+    # `--depot-hover-selective` arms it with an EMPTY allow-set, which is
+    # bit-identical to off until `allocate.fly_shrink` admits an end that is
+    # about to cost ink and keeps the admission only because it did.
+    sel = bool(getattr(a, "depot_hover_selective", False))
+    want_h = bool(getattr(a, "depot_hover", False)) or sel
+    want_sites = set() if sel and not getattr(a, "depot_hover", False) else None
+    if want_h != writing.HOVER_DEPOT_AWARE \
+            or (want_sites is None) != (writing.HOVER_DEPOT_SITES is None):
         writing.HOVER_DEPOT_AWARE = want_h
+        writing.HOVER_DEPOT_SITES = want_sites
         paper.clear_cache()          # the hover memo is keyed on it, but the
                                      # routes bought under the old answer are not
-    if writing.HOVER_DEPOT_AWARE:
+    allocate.DEPOT_HOVER_RESCUE = sel
+    if writing.HOVER_DEPOT_SITES is not None:
+        print("  a hover the arm cannot fly home from is replaced by one on the "
+              "same fiber ONLY where the alternative is giving ink back "
+              "(--depot-hover-selective)")
+    elif writing.HOVER_DEPOT_AWARE:
         print("  !! a hover the arm cannot fly home from is replaced by one on "
               "the same fiber (--depot-hover)")
     allocate.MULTI_TOUR = not bool(getattr(a, "no_multi_tour", False))

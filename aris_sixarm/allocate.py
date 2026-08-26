@@ -1109,6 +1109,52 @@ def depot_round_trip(spec, entry, mat, home=None):
     return False, not head, not tail
 
 
+# A HOVER IS MOVED WHERE IT IS ABOUT TO COST INK, AND NOWHERE ELSE
+# ==========================================================================
+# `writing.HOVER_DEPOT_AWARE` re-searches the hover fiber for a pose that joins
+# the depot, and switched on globally it is a wash: it fires at all 14 pockets
+# and only 5 of them are about to lose anything, so the other 9 pay a longer
+# lift and a re-priced bag for ink that was never at risk (writing's note has
+# the +57.5/-81.5 mm).  This is the SELECTOR — the one place in the pipeline
+# that knows a pocket is about to be paid for, because it is the place that
+# pays.  It admits the offending end to `writing.HOVER_DEPOT_SITES`, asks the
+# round trip again, and KEEPS THE ADMISSION ONLY IF THE ANSWER CHANGED.  An
+# admission that buys nothing is rolled back, so a rejected candidate leaves
+# the run bit-identical; an accepted one moves exactly one hover, and it moves
+# it in exchange for a span the arm was otherwise going to shrink or drop.
+DEPOT_HOVER_RESCUE = False   # the selector; `--depot-hover-selective`
+
+
+def _rescue_pocket(spec, st, sp, plan, mat, verbose=False):
+    """Admit this span's pocket ends to the tier's allow-set. -> bool (kept).
+
+    Both ends are offered at once because `depot_round_trip` is a property of
+    a DIRECTION — a span with a dead head and a dead tail needs both moved or
+    neither — and the rollback is all-or-nothing for the same reason.
+    """
+    sites = writing.HOVER_DEPOT_SITES
+    if not (DEPOT_HOVER_RESCUE and writing.HOVER_DEPOT_AWARE
+            and sites is not None):
+        return False
+    qs = np.asarray(plan["qs"], float)
+    pts = np.asarray(plan["pts"], float)
+    new = [s for s in (writing.hover_site(spec, qs[k], pts[k])
+                       for k in (0, -1)) if s not in sites]
+    if not new:
+        return False
+    sites.update(new)
+    if depot_round_trip(spec, _entry(st, sp, plan), mat)[0]:
+        if verbose:
+            print(f"  ~~ arm {getattr(spec, 'arm_id', '?')} keeps all "
+                  f"{1000 * polyline_length(_entry(st, sp, plan)['pts']):.0f} "
+                  f"mm of stroke {st['id']} on a hover further round the "
+                  f"fiber ({len(new)} end(s) moved, "
+                  f"{len(sites)} in the allow-set)")
+        return True
+    sites.difference_update(new)
+    return False
+
+
 def fly_shrink(st, sp, plan, spec, opts, mat, ladder=FLY_GIVE,
                min_seg=MIN_SEG_M, verbose=False):
     """Give an unreachable END back until the arm can fly what is left.
@@ -1126,10 +1172,17 @@ def fly_shrink(st, sp, plan, spec, opts, mat, ladder=FLY_GIVE,
     a millimetre from one that will; a hover in a pocket the depot cannot reach
     is tens of centimetres from one that is not, and stepping there 6 mm at a
     time would be forty re-plans and forty routes per span.
+
+    AND BEFORE ANY OF IT, THE HOVER ITSELF IS ASKED AGAIN (`_rescue_pocket`).
+    Giving ink back is the second-best answer to a pocket; the best is a pose
+    on the same fiber that is not in one, and this is the only place that knows
+    the pocket is about to be paid for.
     """
     ent = _entry(st, sp, plan)
     ok, bad_head, bad_tail = depot_round_trip(spec, ent, mat)
     if ok:
+        return plan, sp, 0.0
+    if _rescue_pocket(spec, st, sp, plan, mat, verbose=verbose):
         return plan, sp, 0.0
     L = polyline_length(st["pts"])
     s0, s1, d = float(sp["s0"]), float(sp["s1"]), int(sp["direction"])

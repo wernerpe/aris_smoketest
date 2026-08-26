@@ -973,8 +973,43 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
 # behind `--depot-hover`, and the fleet keeps the hover it had: `fly_shrink`
 # already answers the pocket by giving the far end back, for a few centimetres
 # of ink that the residual pass then offers to somebody else.
+#
+# ...AND THAT IS AN ARGUMENT AGAINST THE SWITCH, NOT AGAINST THE TIER.  Read
+# the A/B again: the tier fires only at a pocket, and a pocket is only a
+# PROBLEM where the allocator is about to pay for it.  Most of the 14 are not —
+# `fly_shrink` gives a few centimetres back, or the span is the last thing the
+# arm does anyway — and at those the tier still swaps a 6 cm lift for a pose
+# most of a radian away and re-prices the whole bag around it.  That is the
+# -81.5 mm.  So the tier gets an ALLOW-SET: `HOVER_DEPOT_SITES` is None for the
+# old global switch and a `set()` of span-END identities for the selective one,
+# which `allocate.fly_shrink` fills in one end at a time and only when the
+# admission is what makes the span round-trippable.  A site outside the set
+# takes the `sel = False` branch and the `sel = False` memo slot — the same
+# code and the same key a tier-off run computes, so "every other hover is
+# untouched" is a property of the key and not a measurement.
 HOVER_DEPOT_AWARE = False
 HOVER_DEPOT_TRIES = 24      # fiber poses routed before the pocket is accepted
+HOVER_DEPOT_SITES = None    # None = every pocket; a set = only these ends
+
+
+def hover_site(spec, q_ref, xy):
+    """The identity of ONE SPAN END, for the depot-hover allow-set. -> tuple.
+
+    The part of `lifted_or_lower`'s memo key that names the end rather than the
+    tool or the run: which arm, the drawing pose it lifts off, and the point it
+    lifts over.  `allocate.fly_shrink` admits these; nothing else may.
+    """
+    return (int(getattr(spec, "arm_id", -1)),
+            np.round(np.asarray(q_ref, float), 9).tobytes(),
+            np.round(np.asarray(xy, float), 9).tobytes())
+
+
+def depot_hover_selected(spec, q_ref, xy):
+    """Does the depot-aware tier fire at this end? -> bool."""
+    if not HOVER_DEPOT_AWARE:
+        return False
+    return (HOVER_DEPOT_SITES is None
+            or hover_site(spec, q_ref, xy) in HOVER_DEPOT_SITES)
 
 
 def hover_fiber(spec, q_ref, xy, z, ok, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
@@ -1049,14 +1084,21 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
     Memoised because the balancer prices the same span dozens of times and the
     second stage of `hover_solve` is a 500-solution scan; `paper.clear_cache`
     drops this with the rest.
+
+    THE MEMO IS KEYED ON WHETHER THE TIER FIRES *HERE*, not on whether it is
+    switched on.  `allocate.fly_shrink` admits a site in the middle of a run and
+    does not clear anything: every other end keeps computing under `sel = False`
+    and hitting the `sel = False` slot it already filled, which is bit for bit
+    the entry a tier-off run stores.  Only the admitted end gets a second slot.
     """
+    sel = depot_hover_selected(spec, q_ref, xy)
     key = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
            np.round(np.asarray(q_ref, float), 9).tobytes(),
            np.round(np.asarray(xy, float), 9).tobytes(),
            None if tilt is None else np.round(np.asarray(tilt, float),
                                               9).tobytes(),
            tuple(float(z) for z in heights), bool(paper.STATIC_SAFE),
-           bool(HOVER_DEPOT_AWARE))
+           bool(sel))
     hit = _HOVERS.get(key)
     if hit is not None:
         return hit
@@ -1085,12 +1127,15 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
             out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl))
     if out is None:
         out = (np.asarray(q_ref, float), 0.0)
-    elif HOVER_DEPOT_AWARE and gate is not None and out[1] > 0 \
+    elif sel and gate is not None and out[1] > 0 \
             and not hover_joins_depot(spec, q_ref, out[0], h_inv, pen_ext):
         # ...AND THE POSE HAS TO BE SOMEWHERE THE ARM CAN GET TO AND FROM.
-        # Only ever reached where the chosen hover is in a pocket; the ranking
-        # is `hover_solve`'s own, so the NEAREST acceptable pose still wins and
-        # the lift stays as short as the pocket allows.
+        # Only ever reached where the chosen hover is in a pocket AND this end
+        # is one the allow-set names; the ranking is `hover_solve`'s own, so
+        # the NEAREST acceptable pose still wins and the lift stays as short as
+        # the pocket allows.  `sel`, not `HOVER_DEPOT_AWARE`: the branch and
+        # the memo key have to agree about whether the tier fired HERE, or an
+        # answer computed under one is filed under the other.
         n = 0
         for z in heights:
             for cand in hover_fiber(spec, q_ref, xy, z, gate, h_inv, pen_ext,
