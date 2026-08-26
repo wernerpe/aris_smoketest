@@ -930,6 +930,101 @@ items 1 and 2 are DONE and the section below is what they found:
 3. **Fewer arms over the middle**, or a wider canvas — still there, and now
    measured at the lift layer rather than inferred.
 
+# THE COMPOSED PROGRAMME (2026-08-26, h = 0.940, pitch 0.61)
+
+**70.82 % of the logo, seven phases, `scene_check` PASS on every one of them**,
+against the 62.19 % the single six-mover phase drew this morning.  194.8 s of
+makespan against 92.4.  `out/csail_proposed_h094_v4.{html,zip}` (44.2 / 18.1
+MiB, rendered at `--stride 2`).
+
+## The 37.9 % was never the metal
+
+This morning's post mortem said the undrawn third was physics: middle-row arms
+losing 17–18 points of their workspace to a transverse partner's base column,
+and a base column is pose-invariant metal no search moves.  Every measurement
+in it is still true.  The conclusion was wrong, because nobody had asked the
+question the other way round.
+
+`out/residual_anatomy.py` asks it — route every stroke from every arm's own
+DEPOT with a bag of ONE segment and nobody parked, which is the most permissive
+scene this rig has (a bigger bag only adds predecessors; a parked partner only
+takes them away):
+
+| | metres | what it would take |
+|---|---|---|
+| traced | 12.7783 | |
+| no arm certifies the INK | **0.0000** | the layout, and nothing else |
+| ink certified, no arm can FLY to it alone | **0.0000** | an RRT, or the layout |
+| some arm certifies it AND can fly to it | **12.7783** | a programme |
+
+All of it.  Every stroke, both inks, and **arm 31 alone certifies and can fly to
+all thirty-eight**.  Nothing at this placement is out of reach.  Two SOFTWARE
+constraints held the 4.84 m, and both are properties of a PASS:
+
+**One pen per arm is a constraint within a phase.**  17 of the 18 strokes the
+single pass gives back are orange, and one partition puts orange on arms 13 and
+31 only.  `--two-pass` gives every arm every colour, one phase at a time:
+62.15 % → **70.09 %** allocated, nothing else changed.
+
+**A bag is flown in one tour.**  `prune_unflyable` wants a Hamiltonian path
+through the arm's whole bag; finding no isolated node it falls through to its
+shortest-segment fallback and drops eighteen strokes one at a time.  Every one
+is reachable from the depot.  They are not reachable in the SAME TOUR.
+
+## What each lever is actually worth, conducted
+
+| composition | allocated | **conducted** | makespan | phases | par |
+|---|---|---|---|---|---|
+| single pass, 6-mover | 62.15 % | **62.19 %** | 92.4 s | 1 | 2.70 |
+| two-pass, no rescue | 70.09 % | **32.43 %** | 55.1 s | 1 of 2 | 2.68 |
+| two-pass + rescue | 70.09 % | **69.81 %** | 189.4 s | 6 | 1.42 |
+| **two-pass + rescue + residual** | 73.35 % | **70.82 %** | **194.8 s** | **7** | **1.44** |
+
+**The colour lever ALONE is a coverage regression.**  Two-pass moves ink onto
+arms that then cannot share the paper: the orange 6-mover phase comes back
+"arm 13 has no monotone pause schedule inside 136 s; all 24 priority orders of
+the 4 moving arms were searched and none completed", and `--skip-unconductable`
+threw all 4.83 m of it away.  32.43 %, from a change that allocated more.
+
+A refusal is the conductor saying those arms cannot be on the paper together,
+and the answer is fewer of them there — a SCHEDULE, not an allocation.  The
+rescue ladder re-offers a refused phase as its arm columns, then as solos, then
+cuts the one remaining arm's TOUR in half with a trip home between: 32.43 % →
+**69.81 %**, 0.05 m lost, every phase signed off.
+
+## What did NOT work, measured
+
+**The residual chain plateaus.**  Re-allocating the holes as a further pass
+gives back 0.4166 m in round 1 and **0.0000 m in round 2** — the same arm gets
+the same untourable bag and nothing between rounds changes it.  `--residual-
+passes 10` buys exactly one useful round.
+
+**The routed depot fold is worth 5.5 points, not the 27 I first claimed.**
+`paper.route` offered the depot only as a STRAIGHT joint-space line in and out;
+routing each half instead and certifying the concatenation is a real
+improvement — arm 31's crossings go 70.9 % → **76.4 %** — but `fold_home` is
+chosen on four of sixty flagged crossings, 26 still have no route by any shape,
+and the allocator bans **exactly the same eighteen** (stroke, arm) pairs with it
+as without.  The first number I published for it, 98.1 %, was my own sampling
+error: `--cells 12` against a `--cells 10` baseline.  See the correction commit.
+
+## Where the last 29 % is
+
+3.73 m, and it is still the middle third.  It is not unreachable — the anatomy
+above says every metre of it has an arm that certifies it and can fly to it —
+it is ink that no arm can thread into a tour, and that eleven phases of
+composition did not shake loose.  The remaining levers, in the order the
+measurements rank them:
+
+1. **The placement.**  Not yet re-run under honest gates at the time of
+   writing; the shipped placement was chosen at 04:50 today, before
+   `paper.STATIC_SAFE` landed at 07:24, so its search never routed a pen-up
+   against a column at all — it scored this placement 97.19 % and the honest
+   allocator draws 62.15 % of it.  86 % of the ink lands on arms 31 and 71.
+2. **A real pen-up planner.**  26 of arm 31's 60 flagged crossings have no
+   route by any shape on the ladder, and the ladder is now nine families deep.
+3. **Fewer arms over the middle**, which is the physical fork and still open.
+
 # SIX ARMS AT ONCE (2026-08-26, h = 0.940, pitch 0.61)
 
 **Yes.**  All six arms draw in one conducted phase, `scene_check` PASS,
