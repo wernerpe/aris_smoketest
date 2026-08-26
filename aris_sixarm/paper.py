@@ -97,7 +97,15 @@ CONTACT_FLOOR = -(TIP_TOL - TIP_SWEEP_PAD)   # -0.007 m, lift/lower tip floor
 # steel by exactly the margin is a route the checker refuses — arm 31 read
 # 48.8 mm against 50 mm on the run that found this — so a route must clear it
 # by the margin plus the residual.
-FRAME_FLOOR = rig_final.STATIC_MARGIN + TIP_SWEEP_PAD    # 0.053 m
+#
+# ...AND THAT PAD WAS THE WRONG ONE, measured 2026-08-26.  `TIP_SWEEP_PAD`
+# covers the checker's trajectory residual and nothing else, and the checker's
+# STATIC bound carries a second, larger piece of slack: it samples each capsule
+# every 2 cm instead of minimising along it, and subtracts half a step.  A
+# route that cleared 53 mm exactly read 47.4 mm there.  The floor is now
+# `rig_final.STATIC_PLAN_MARGIN` — the same 63 mm the stroke planner keeps, so
+# the ink and the pen-up over it are held to one number.
+FRAME_FLOOR = rig_final.STATIC_PLAN_MARGIN               # 0.063 m
 SKIRT_STEP = 0.30          # m of paper per hop when a route SKIRTS an obstacle
 
 # ...AND A PAD IS NOT A BOUND.  `TIP_SWEEP_PAD` covers the residual the CHECKER

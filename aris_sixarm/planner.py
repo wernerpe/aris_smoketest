@@ -198,8 +198,9 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
             tool_b = tool_points_many(T, pen_ext, pen_lat)   # [tip(,corner)]
             tool_w = [t @ Twb[:3, :3].T + Twb[:3, 3] for t in tool_b]
             P10 = np.concatenate([pw] + [t[:, None, :] for t in tool_w], axis=1)
+            # STRICTLY TIGHTER THAN THE CHECKER, see rig_final.STATIC_PLAN_MARGIN
             keep &= (rig_final.chain_static_clearance(P10, boxes)
-                     >= rig_final.STATIC_MARGIN)
+                     >= rig_final.STATIC_PLAN_MARGIN)
         idx, q, m = idx[keep], q[keep], m[keep]
 
     # (e) controllability: analytic tip Jacobians, one batched SVD
@@ -268,8 +269,9 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
                         tool_w = [Twb[:3, :3] @ t[0] + Twb[:3, 3]
                                   for t in tool_b]
                         P10 = np.vstack([pw] + [t[None] for t in tool_w])
+                        # ...and the same floor here as in the batched gate
                         if (rig_final.chain_static_clearance(P10, boxes)[0]
-                                < rig_final.STATIC_MARGIN):
+                                < rig_final.STATIC_PLAN_MARGIN):
                             continue
                 s = _sigma_min(tip_jacobian(q, pen_ext=pen_ext,
                                             pen_lat=pen_lat))

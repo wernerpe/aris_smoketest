@@ -748,3 +748,65 @@ def test_the_park_probe_looks_at_the_hovers_too(lateral):
     hov = on.clearance(31, on._hovers(31, entry["plan"]), sweep=False)
     assert np.isfinite(ink) and np.isfinite(hov)
     assert on.blocked(31, entry) == bool(min(ink, hov) < on.margin)
+
+
+def test_the_producers_pad_covers_the_checkers_own_slack(lateral):
+    """THE GATE ORDERING, MEASURED RATHER THAN ASSERTED.
+
+    `scene_check.static_clearance_lb` is an independent derivation and
+    therefore a LOWER bound with slack in it — it samples each capsule every
+    `step` metres instead of minimising along it, and subtracts half a step,
+    and then the trajectory residual on top.  `rig_final.STATIC_SWEEP_PAD` is
+    what a producer pays so that its own exact measurement still clears the
+    checker's bounded one.  The two numbers live in two modules that may not
+    import each other, so this is where they are held together: the pad is
+    computed from the CHECKER's own constants and compared with the producer's.
+
+    It is not academic.  Under-sized at 3 mm it refused a solo phase at
+    47.4 mm, a three-arm phase and a six-arm phase, on a rig where the ink
+    measured 103 mm and the pen-up over it 58.8.
+    """
+    from aris_sixarm import rig_final
+    # the checker's capsule-sampling half-step, from its own default
+    step = scene_check.static_clearance_lb.__defaults__[0]
+    seg = 0.5 * step
+    sweep = 0.55 * scene_check.FRAME_STEP
+    assert rig_final.STATIC_SEG_SLACK == pytest.approx(seg, abs=1e-12)
+    assert rig_final.STATIC_SWEEP_SLACK == pytest.approx(sweep, abs=1e-12)
+    assert rig_final.STATIC_SWEEP_PAD >= seg + sweep - 1e-12, (
+        "a producer that pays less than the checker's own slack will be "
+        "refused for measuring the same metal more accurately")
+    # ...and every producer in the chain actually pays it
+    assert paper.FRAME_FLOOR >= rig_final.STATIC_MARGIN + seg + sweep - 1e-12
+    assert (rig_final.STATIC_PLAN_MARGIN
+            >= rig_final.STATIC_MARGIN + seg + sweep - 1e-12)
+    # ...and the checkers do NOT, so they stay a second opinion
+    from aris_sixarm.scene_check import STATIC_MARGIN as checker_margin
+    assert checker_margin == rig_final.STATIC_MARGIN
+
+
+def test_a_plannable_pose_survives_the_checkers_own_measurement(lateral):
+    """The pad is enough on real poses, not only in arithmetic.
+
+    Every certified drawing pose and its hover, measured the way `scene_check`
+    measures — its bound, its capsules, its slack — must clear
+    `STATIC_MARGIN`.  This is the property the three refused phases did not
+    have and the whole point of `STATIC_PLAN_MARGIN`.
+    """
+    from aris_sixarm import rig_final
+    spec, rows, Q, h = _proposed_cells(2, 60)
+    keep = paper.chain_static(Q, spec, 0.110, h) >= rig_final.STATIC_PLAN_MARGIN
+    Q, rows = Q[keep], rows[keep]
+    assert len(Q) > 20, "not enough plannable cells in this sample"
+    P = paper.world_chain(Q, spec, 0.110, h)
+    lb = scene_check.static_clearance_lb(P, spec.static_obstacles())
+    assert lb.min() >= rig_final.STATIC_MARGIN - 1e-9, (
+        f"a plannable drawing pose reads {1000 * lb.min():.1f} mm at the "
+        "checker against its 50 mm gate")
+    H = np.array([writing.lifted_or_lower(spec, q, r[:2], h_inv=h,
+                                          pen_ext=0.110)[0]
+                  for r, q in zip(rows, Q)])
+    lbh = scene_check.static_clearance_lb(
+        paper.world_chain(H, spec, 0.110, h), spec.static_obstacles())
+    assert lbh.min() >= rig_final.STATIC_MARGIN - 1e-9, (
+        f"a certified hover reads {1000 * lbh.min():.1f} mm at the checker")

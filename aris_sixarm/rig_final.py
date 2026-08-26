@@ -237,6 +237,53 @@ Z_STATIC = 0.02
 CALIB_STATIC = 0.03
 STATIC_MARGIN = Z_STATIC + CALIB_STATIC
 
+# ...AND WHAT A PRODUCER MUST KEEP, WHICH IS MORE (2026-08-26).
+#
+# `STATIC_MARGIN` is what the CHECKER compares against — and what it compares
+# is not this quantity.  `scene_check.static_clearance_lb` is a deliberately
+# independent derivation (see its docstring: "the two code paths share nothing
+# but the geometry itself"), and an independent derivation of a minimum is a
+# LOWER BOUND with slack in it.  Two pieces of slack, both of them explicit
+# there and neither of them optional:
+#
+#   0.010 m  it does not minimise along a capsule analytically the way
+#            `segment_box_clearance` does — it SAMPLES the segment every
+#            <= 0.02 m and subtracts `|b - a| / (2 (K - 1))`, which is half a
+#            step: up to 10 mm on a 0.4 m link.
+#   0.00275  and then the 1-Lipschitz residual between two samples of the
+#            TRAJECTORY, 0.55 * FRAME_STEP, after its own refinement.
+#
+# So a configuration whose exact clearance is 50.0 mm reads 37 to 47 mm at the
+# checker, and a timeline that met every gate it was given is refused by a
+# checker that is right.  THE PRODUCERS HAVE TO PAY BOTH, or the checker is not
+# a second opinion but a lottery.
+#
+# That is not a hypothesis.  On 2026-08-26 it refused, on one number each, a
+# solo phase (47.4 mm), a THREE-arm phase and a SIX-arm phase — every one of
+# them a monotone schedule the conductor had already found, with 83-88 mm of
+# inter-arm clearance and every other gate passing by tens of millimetres.  The
+# ink under them measures 103 mm exactly; the pen-up over them measured 58.8.
+# It was never a collision.  It was a gate ordering that had been inverted
+# since the frame boxes were introduced.
+#
+# 13 mm, restated here rather than imported: `scene_check` may not depend on
+# this module and this module may not depend on it, so the number is written
+# twice and `tests/test_paper.py` pins it against the checker's own constants.
+# It costs the tightest ~2 % of certified cells and every pen-up that only just
+# cleared, which is the difference between a certified programme and a
+# programme that is certified until somebody measures it.
+#
+# The CHECKERS keep `STATIC_MARGIN`: `validate.validate_plan` and `scene_check`
+# are second opinions and must stay independent of what a planner chose to
+# spend.  So does `atlas.solve_cell`, whose gate is baked into every swept
+# atlas and into `atlas.model_signature`; an atlas is now an OPTIMISTIC
+# prefilter by up to 13 mm, which costs probe time and not safety —
+# `probe_stroke` plans for real and the planner refuses.
+STATIC_SEG_SLACK = 0.010     # scene_check's capsule-sampling half-step
+STATIC_SWEEP_SLACK = 0.00275  # ...and its trajectory 1-Lipschitz residual
+STATIC_SWEEP_PAD = 0.013     # >= the sum, rounded up
+STATIC_PLAN_MARGIN = STATIC_MARGIN + STATIC_SWEEP_PAD
+
 # capsules for static checks: the conductor's chain topology (a test pins
 # them against coordination.CAPSULES) MINUS the base column's bands — the base
 # is bolted to its mount by construction, and its capsule radius would
