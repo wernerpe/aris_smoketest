@@ -1409,6 +1409,17 @@ def build_phases(a, phases, dt, pens, alt=None):
             inter-phase hold is still checked before the next pass begins.  The
             v7 programme lost 31.2 mm of certified grey here, to a phase of one
             arm and one segment whose far hover joins no depot on its fiber.
+
+            THE FALLBACK IS PER WORK ITEM, NOT PER ALLOCATION, and that is
+            visible on this logo: `policy_k` is a local of the loop, so once a
+            phase's SPLIT allocation has been refused with the trip home, the
+            UNSPLIT alternative beside it is prepared and conducted frozen too
+            rather than being asked the go-home question again.  Measured, that
+            is what happens to the orange pass — and it conducts, passes
+            `scene_check` at 82.2 mm and comes out 8.8 s shorter than the v7
+            programme, so it is left alone.  Resetting the policy per candidate
+            would be the tidier rule and it is a different experiment: it
+            changes which of two allocations the conductor is comparing.
             """
             nonlocal policy_k
             for attempt in (0, 1):

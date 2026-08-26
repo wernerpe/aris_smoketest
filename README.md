@@ -1373,8 +1373,9 @@ splitting:
 
 The mandate was **"make it draw 100 % of the logo."**  It cannot, and the
 reason is 110 mm long and sits 48 mm from arm 71's mount.  What the schedule
-CAN do it now does: **99.3018 % of the paper covered against 99.2573 %**, no ink
-allocated that no phase draws, and a makespan 8.8 s shorter.
+CAN do it now does: **99.3018 % of the paper covered against 99.2573 %** — the
+certified maximum here is 99.3435 % — with no ink allocated that no phase
+draws, and a makespan 8.8 s shorter.
 `out/csail_proposed_h094_v6.{html,zip}` (43.9 / 18.7 MiB).
 
 ## The ceiling, measured before any allocator gets a vote
@@ -1467,12 +1468,10 @@ while coverage is the constraint.  So such a pass is retried frozen before its
 ink is dropped.  The allocation is untouched, the frozen pose still has to pass
 `scene_check`'s own gate, and the inter-phase hold is still checked.
 
-**The two are coupled, and not in the direction you would guess.**  Lever 1 keeps
-arm 71 a span it used to be banned from, which gives arm 71 an eight-segment
-orange bag with no ordering at all under `return_home=True` — so lever 1
-CREATES the refusal lever 2 catches, on the 10.66 m orange pass.  Without lever
-2 that pass falls through to the arm-group rescue ladder.  Shipping either one
-alone would have been worse than shipping neither.
+Lever 2 fires twice on this logo: on the 10.66 m orange pass, whose SPLIT
+allocation has no ordering at all under `return_home=True` (v7 hit that too and
+fell through to the unsplit one), and on the residual grey pass of one arm and
+one segment that v7 dropped whole.
 
 ## The A/B, and the accounting it is measured in
 
@@ -1486,17 +1485,35 @@ that matters is measured off the npz instead (`out/geocover.py`): every traced
 stroke sampled at 1 mm, a sample DRAWN if some CONDUCTED segment of the same
 colour passes within 1.5 mm.
 
-| | v7 | v8 |
-|---|---:|---:|
-| **paper covered** (1 mm sampling) | 99.2573 % | **99.3018 %** |
-| empty | 124.3 mm | **116.9 mm** |
-| reported `drawn_m / traced_m` | 99.3649 % | 99.5217 % |
-| ink allocated that no phase draws | 31.2 mm | **0** |
-| makespan | 201.65 s | **192.83 s** |
-| pause | 88.40 s | 130.33 s |
-| min clearance (margin 80 mm) | 83.2 mm | 82.2 mm |
-| conducted phases / segments | 5 / 46 | 4 / 45 |
-| `scene_check` | PASS on all | **PASS on all** |
+Each lever was also run ALONE, so what each is worth is measured and not
+apportioned:
+
+| | v7 | v8b — lever 2 only | v8 — both, shipped |
+|---|---:|---:|---:|
+| **paper covered** (1 mm sampling) | 99.2573 % | **99.3018 %** | **99.3018 %** |
+| empty | 124.3 mm | **116.9 mm** | **116.9 mm** |
+| reported `drawn_m / traced_m` | 99.3649 % | 99.5516 % | 99.5217 % |
+| ink allocated that no phase draws | 31.2 mm | **0** | **0** |
+| makespan | 201.65 s | 195.62 s | **192.83 s** |
+| pause | 88.40 s | **97.69 s** | 130.33 s |
+| min clearance (margin 80 mm) | 83.2 mm | **83.2 mm** | 82.2 mm |
+| conducted phases / segments | 5 / 46 | 4 / 47 | 4 / 45 |
+| `scene_check` | PASS on all | **PASS on all** | **PASS on all** |
+
+**Lever 2 buys all of the coverage and lever 1 buys none of it.**  Every one of
+the 7.5 mm is the phase v7 dropped whole; the selective hover changes what the
+ALLOCATOR keeps (40 mm more grey in the primary pass, stroke 26 no longer
+banned, the pocket give-backs halved) and the residual passes had recovered all
+of it anyway.  What it buys instead is 2.8 s of makespan, for 32.6 s more pause
+and 1.0 mm of clearance.  The objective hierarchy says makespan first and pause
+only as the tie-break, so **v8 ships** — but v8b is the same picture at the same
+coverage with the v7 allocation untouched and a millimetre more clearance, and
+on a rig somebody has to stand next to that is a real alternative rather than a
+worse one.  `out/run_v8b.sh`.
+
+And the refusal lever 2 catches on the orange pass is NOT lever 1's doing: v7
+hit it too (`no feasible order over 7 segments`, log line 291) and fell through
+to the unsplit allocation.  Lever 2 simply answers it one rung earlier.
 
 **What is left is two holes and only one of them is geometry.**  106.9 mm of the
 109.9 mm no arm can reach (the tolerance eats 1.5 mm at each end), and 13.0 mm
