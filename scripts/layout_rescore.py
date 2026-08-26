@@ -89,7 +89,8 @@ os.environ.setdefault("ARIS_TOOL", "lateral")     # the study's settled tool
 
 from aris_sixarm import ik, layout, metrics, mounts, rig_final  # noqa: E402
 from aris_sixarm.coordination import (ArmPath, CAPSULES_LAT,    # noqa: E402
-                                      LINK_R, clearance_matrix, seg_seg_dist)
+                                      LINK_R, cap_endpoints,
+                                      clearance_matrix, seg_seg_dist)
 from aris_sixarm.frames import (PEN_LAT_HOLDER, fk_many,        # noqa: E402
                                 joint_margin, rotx, rotz,
                                 tool_offset, tool_points_many)
@@ -104,8 +105,7 @@ MARGIN = 0.08                    # coordination.SAFETY_M + CALIB_M
 NEAR_BASE = 0.35                 # m, the handoff annulus the report reads
 YAWS = np.linspace(0, 2 * np.pi, 8, endpoint=False)
 CAP_R = np.array([c[2] for c in CAPSULES_LAT], float)
-CAP_I = [c[0] for c in CAPSULES_LAT]
-CAP_J = [c[1] for c in CAPSULES_LAT]
+NCAP = len(CAPSULES_LAT)         # 11 since the base column became 4 bands
 XS = np.arange(0.0, W + 1e-9, GRID)
 YS = np.arange(0.0, H + 1e-9, GRID)
 NCELL = len(XS) * len(YS)
@@ -301,9 +301,10 @@ def _steel(fleet, aid, h):
 
 
 def _chain_caps(q, spec, h):
-    """A pose -> its 8 capsules in world. -> (A (8,3), B (8,3), r (8,))."""
+    """A pose -> its capsules in world. -> (A (C,3), B (C,3), r (C,))."""
     Pw = _world_chain(np.asarray(q, float).reshape(1, 7), spec, h)
-    return Pw[0, CAP_I, :], Pw[0, CAP_J, :], CAP_R
+    A, B = cap_endpoints(Pw, CAPSULES_LAT)
+    return A[0], B[0], CAP_R
 
 
 def _world_chain(Q, spec, h):
@@ -315,7 +316,7 @@ def _world_chain(Q, spec, h):
 
 
 def _clear(A, B, others):
-    """(K,8,3) capsules vs [(Ab,Bb,rb)] -> (K,) worst clearance."""
+    """(K,C,3) capsules vs [(Ab,Bb,rb)] -> (K,) worst clearance."""
     worst = np.full(len(A), np.inf)
     for Ab, Bb, rb in others:
         d = seg_seg_dist(A[:, :, None, :], B[:, :, None, :],
@@ -410,7 +411,7 @@ def score_arm(job):
             Q, jm, Pw = Q[keep], jm[keep], Pw[keep]
             if not len(Q):
                 continue
-        A, B = Pw[:, CAP_I, :], Pw[:, CAP_J, :]
+        A, B = cap_endpoints(Pw, CAPSULES_LAT)
         order = np.argsort(-jm)
         sig = {}
         for nm in scen_names:

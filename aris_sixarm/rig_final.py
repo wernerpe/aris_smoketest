@@ -238,7 +238,7 @@ CALIB_STATIC = 0.03
 STATIC_MARGIN = Z_STATIC + CALIB_STATIC
 
 # capsules for static checks: the conductor's chain topology (a test pins
-# them against coordination.CAPSULES) MINUS the base column (0,1) — the base
+# them against coordination.CAPSULES) MINUS the base column's bands — the base
 # is bolted to its mount by construction, and its capsule radius would
 # false-positive against the very plate it is bolted to.  Radii mirror
 # coordination.UPPER_R / ELBOW_R / FORE_R / WRIST_R / HAND_R, which since

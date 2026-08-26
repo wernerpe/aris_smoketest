@@ -83,7 +83,8 @@ os.environ.setdefault("ARIS_TOOL", "lateral")
 
 import trimesh                                                   # noqa: E402
 
-from aris_sixarm import ik, layout, metrics, mounts, rig_final    # noqa: E402
+from aris_sixarm import (coordination, ik, layout, metrics,       # noqa: E402
+                         mounts, rig_final)
 from aris_sixarm.coordination import (CAPSULES_LAT, LINK_R,       # noqa: E402
                                       seg_seg_dist)
 from aris_sixarm.frames import (DH, D_HAND_TCP, FR3_MAX, FR3_MIN, # noqa: E402
@@ -127,10 +128,10 @@ MESH_FRAME.update(hand="hand", leftfinger="hand", rightfinger="hand")
 
 MARGIN = 0.08              # coordination.SAFETY_M + CALIB_M
 D1 = float(DH[0][2])       # 0.333, base flange -> shoulder
-COLUMN_R = mounts.MOUNTS.column_r        # 0.12
-CAP_I = [c[0] for c in CAPSULES_LAT]
-CAP_J = [c[1] for c in CAPSULES_LAT]
+COLUMN_R = mounts.MOUNTS.column_r        # the legacy one-capsule radius
 CAP_R = np.array([c[2] for c in CAPSULES_LAT], float)
+NCAP = len(CAPSULES_LAT)
+N_BASE = coordination.N_BASE   # leading entries that are the base column
 
 
 def _coll_dir():
@@ -421,8 +422,8 @@ def capsule_clearance(Pa, Pb):
     -> (clearance, capsule index on a, capsule index on b).  Exactly what
     `coordination.clearance_matrix` computes for one sample pair.
     """
-    A0, A1 = Pa[CAP_I], Pa[CAP_J]
-    B0, B1 = Pb[CAP_I], Pb[CAP_J]
+    A0, A1 = coordination.cap_endpoints(Pa, CAPSULES_LAT)
+    B0, B1 = coordination.cap_endpoints(Pb, CAPSULES_LAT)
     n = len(CAP_R)
     d = seg_seg_dist(A0[:, None], A1[:, None], B0[None], B1[None])
     d = d - CAP_R[:, None] - CAP_R[None, :]
@@ -791,18 +792,37 @@ def capsule_excess(parts, tools, q, sample=4000, rng=None):
     return out
 
 
-# WHICH CAPSULE IS RESPONSIBLE FOR WHICH LINK.  `CAPSULES_LAT` runs
-# 0:(0,1) base->shoulder  1:(1,3) upper arm  2:(3,4) elbow offset
-# 3:(4,5) forearm  4:(5,7) wrist  5:(7,8) hand  6:(8,10) bracket  7:(10,9) pen,
-# and `frames.fk`'s chain points are the URDF link-frame origins, so each link
+# WHICH CAPSULE IS RESPONSIBLE FOR WHICH LINK.  `CAPSULES_LAT` runs the base
+# column's `N_BASE` BANDS — all of them sub-segments of (0,1), base->shoulder
+# — and then 1:(1,3) upper arm  2:(3,4) elbow offset  3:(4,5) forearm
+# 4:(5,7) wrist  5:(7,8) hand  6:(8,10) bracket  7:(10,9) pen, and
+# `frames.fk`'s chain points are the URDF link-frame origins, so each link
 # body lies along one or two consecutive capsules.  The attribution has to be
 # STRUCTURAL and not nearest-capsule: in a folded pose the base casting's
 # nearest capsule can be the hand's, and inflating the hand capsule by the
 # base's overhang is arithmetically valid and physically meaningless.
-CAP_OF = {"link0": (0,), "link1": (0, 1), "link2": (1,), "link3": (1, 2),
-          "link4": (2, 3), "link5": (3, 4), "link6": (4,), "link7": (4, 5),
-          "link8": (5,), "hand": (5,), "leftfinger": (5,), "rightfinger": (5,),
-          "housing": (6, 7), "cap": (6, 7), "lead": (6, 7)}
+#
+# The numbers below are written in the LEGACY one-capsule-per-base indexing
+# (0 = the whole base column) and translated by `_caps`, so this table still
+# reads like the arm and the shipped fixture
+# (tests/data/collision_audit_geometry.json, an 8-entry record) stays
+# comparable across the banding.
+_CAP_OF_LEGACY = {"link0": (0,), "link1": (0, 1), "link2": (1,),
+                  "link3": (1, 2), "link4": (2, 3), "link5": (3, 4),
+                  "link6": (4,), "link7": (4, 5), "link8": (5,),
+                  "hand": (5,), "leftfinger": (5,), "rightfinger": (5,),
+                  "housing": (6, 7), "cap": (6, 7), "lead": (6, 7)}
+
+
+def _caps(legacy):
+    """Legacy capsule indices -> indices into the shipped `CAPSULES_LAT`."""
+    out = []
+    for k in legacy:
+        out.extend(range(N_BASE) if k == 0 else [N_BASE + k - 1])
+    return tuple(sorted(set(out)))
+
+
+CAP_OF = {k: _caps(v) for k, v in _CAP_OF_LEGACY.items()}
 
 
 def _part_key(name):

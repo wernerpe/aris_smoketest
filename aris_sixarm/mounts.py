@@ -112,37 +112,61 @@ class MountModel:
     tool_top: float = 0.12            # highest z of a tool capsule point
 
     # --- THE NEIGHBOUR'S OWN BODY (see `arm_column_boxes`) -----------------
-    # link_r/calib restate coordination.LINK_R / coordination.CALIB_M and
-    # d1 restates frames.DH[0][2]; tests/test_mounts.py pins all three.
-    link_r: float = 0.155             # capsule radius of the base column
-    calib: float = 0.03               # unsurveyed-base allowance (inter-arm)
-    d1: float = 0.333                 # base flange -> shoulder, modified DH
+    # `body_bands` restates coordination.BODY_BANDS, link_r/calib restate
+    # coordination.LINK_R / coordination.CALIB_M and d1 restates
+    # frames.DH[0][2]; tests/test_mounts.py pins all four, and the same four
+    # bands again against the mesh audit's own measurement.
+    #
     # MEASURED, and none of it derivable from the DH table (mesh audit
     # 2026-08-26; the numbers are `out/collision_audit.json` ["column"] and
-    # tests/data/collision_audit_geometry.json).  `d1` above is still the DH
+    # tests/data/collision_audit_geometry.json).  `d1` is still the DH
     # constant; where the BODY ends is a different question and a bigger
     # number.  See the long note at the bottom of this module.
-    column_z1: float = 0.3875         # far end of the body, base z (not d1)
-    connector_r: float = 0.177        # base connector + cable stub, radial
-    connector_z1: float = 0.0667      # ...how far below the flange it reaches
-    connector_up: float = 0.2325      # ...and how far ABOVE it, up the back
+    body_bands: tuple = ((-0.2325, 0.0667, 0.177),   # connector + cable stub
+                         (0.0667, 0.0988, 0.118),    # the shoulder-ward taper
+                         (0.0988, 0.2590, 0.078),    # THE WAIST
+                         (0.2590, 0.3875, 0.130))    # link1's swept solid
+    link_r: float = 0.155             # widest radius of the casting proper
+    calib: float = 0.03               # unsurveyed-base allowance (inter-arm)
+    d1: float = 0.333                 # base flange -> shoulder, modified DH
+
+    @property
+    def column_z1(self):
+        """Far end of the body, base z (not d1)."""
+        return self.body_bands[-1][1]
+
+    @property
+    def connector_r(self):
+        """Base connector + cable stub, radial."""
+        return self.body_bands[0][2]
+
+    @property
+    def connector_z1(self):
+        """...how far below the flange the connector band reaches."""
+        return self.body_bands[0][1]
+
+    @property
+    def connector_up(self):
+        """...and how far ABOVE the flange it runs, up the back."""
+        return -self.body_bands[0][0]
 
     @property
     def column_r(self):
-        """Radius of the neighbour-body-column obstacle.  See
-        `arm_column_boxes` for why it is link_r + calib and not link_r."""
+        """Radius the LEGACY single-capsule column obstacle wore — link_r one
+        `calib` wider.  No band is this fat below the connector any more (the
+        widest is 0.160); it is kept because it is the number the
+        gate-consistency identity is stated in.  See `arm_column_boxes`."""
         return self.link_r + self.calib
 
     @property
     def column_bands(self):
         """The body column as (z0, z1, r) bands in BASE z, flange downwards.
 
-        Two bands, and every number in them is forced — see the long note at
-        the bottom of this module for the derivation.
+        Four bands, each the measured profile of `body_bands` grown by
+        `calib` — see the long note at the bottom of this module for why that
+        is the whole derivation and where the four edges come from.
         """
-        return ((-self.connector_up, self.connector_z1,
-                 self.connector_r + self.calib),
-                (self.connector_z1, self.column_z1, self.column_r))
+        return tuple((z0, z1, r + self.calib) for z0, z1, r in self.body_bands)
 
     def scaled(self, **kw):
         """A variant of this model — `MOUNTS.scaled(boom_r=0.12)`."""
@@ -269,23 +293,24 @@ def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
 # on, and why every conduct of the CSAIL logo refused with a monotone-schedule
 # deadlock the conductor could not resolve by waiting.
 #
-# WHAT IS STATIC ABOUT AN ARM.  Capsule (0, 1) of `coordination.CAPSULES` —
-# base flange to shoulder, `d1` = 0.333 m along the base z axis — does not
-# move when the arm does: q1 rotates ABOUT that axis and q2..q7 live beyond
-# its far end.  So a neighbour's base column is true in every pose, including
+# WHAT IS STATIC ABOUT AN ARM.  The leading `coordination.N_BASE` capsules of
+# `coordination.CAPSULES` — bands of the base flange -> shoulder segment,
+# `d1` = 0.333 m along the base z axis — do not move when the arm does: q1
+# rotates ABOUT that axis and q2..q7 live beyond its far end.  So a
+# neighbour's base column is true in every pose, including
 # poses nobody has chosen yet, and it belongs with the booms and the plates.
 # The REST of a parked neighbour (upper arm, forearm, wrist, pen) is pose
 # DEPENDENT and stays the conductor's job, where a schedule can still move it:
 # baking a park pose into the static model would be a promise about a pose the
 # rig has not committed to.
 #
-# THE RADIUS, AND WHY IT IS link_r + calib.  A box gate asks for
+# THE RADIUS, AND WHY IT IS THE MEASURED BAND + calib.  A box gate asks for
 # `rig_final.STATIC_MARGIN` = 0.05 m of clearance between the mover's capsule
 # SURFACE and the box; the conductor asks every pair of arms for
 # `SAFETY_M + CALIB_M` = 0.08 m between two capsule surfaces.  Inflating the
-# neighbour's own capsule by exactly that difference,
+# neighbour's own capsule by exactly that difference — PER BAND,
 #
-#     column_r = link_r + calib,
+#     box_r(band k) = coordination.BODY_BANDS[k].r + calib,
 #
 # makes the two gates the SAME statement: a pose that clears the box by
 # STATIC_MARGIN clears the neighbour's column by the 0.08 m the conductor will
@@ -293,7 +318,15 @@ def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
 # can still be handed.  A larger number would refuse ink that runs fine; a
 # smaller one would certify ink that deadlocks, which is exactly the failure
 # this obstacle exists to end.  That identity is the invariant here; the
-# NUMBERS on both sides of it moved on 2026-08-26 and it still holds.
+# NUMBERS on both sides of it moved on 2026-08-26, twice, and it still holds.
+#
+# AND IT IS AIRTIGHT, WHICH IT WAS NOT BEFORE.  Each box is the band's AABB
+# grown by the band's own radius in EVERY direction (`arm_column_boxes`), so
+# it contains that band's capsule inflated by `calib` — the segment's AABB
+# contains the segment, and an L-inf ball of radius R contains an L-2 one.
+# Hence `d(p, box) >= mover_r + 0.05` implies `d(p, band axis) >= mover_r +
+# band_r + 0.08`, which is the conductor's own criterion, at every point and
+# with no residual left over for the far spherical caps to hide in.
 #
 # WHAT MOVED (mesh audit, commit 5c8d803, `scripts/collision_audit.py`).  The
 # whole model used to be one box: r = 0.09 + 0.03 = 0.12 over `d1` = 0.333 m.
@@ -301,7 +334,8 @@ def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
 # and the full-resolution visual mesh says all three numbers were wrong:
 #
 #   * the body is 0.1546 m at its widest, not 0.09 — so `link_r` is 0.155 and
-#     `column_r` is 0.185 (`coordination.LINK_R` carries the same 0.155);
+#     the legacy one-capsule `column_r` was 0.185 (`coordination.LINK_R`
+#     carries the same 0.155);
 #   * it does not stop at the shoulder.  link1's swept volume about q1 is a
 #     solid of revolution and therefore pose-invariant too, and it carries the
 #     body to `column_z1` = 0.3875 m — 54.5 mm PAST `d1`.  `d1` is untouched:
@@ -311,46 +345,63 @@ def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
 #     outside the plate box (0.113 x 0.095 half-extent, 50 mm thick), outside
 #     the boom box (0.1), and outside every model this package had.
 #
-# TWO BANDS, NOT TWELVE.  The audit re-derived the column as a 12-band
-# cylinder stack (fat 0.171 at the plate, waisted to 0.057 in the middle, 0.129
-# at the far end).  This ships TWO because the middle bands cannot be used:
-# the conductor's own base-column capsule is ONE capsule at `link_r` over the
-# whole span, so a box that is thinner than `link_r + calib` anywhere inside
-# that span certifies cells the conductor then refuses — the gate-consistency
-# identity above, read backwards.  Band 2 is therefore flat at `column_r`, and
-# it dominates every measured band below the connector (worst 0.1295 + 0.03 =
-# 0.1595 < 0.185).  Band 1 is the connector, where the measurement is FATTER
-# than the capsule and the capsule does not dominate.  Measured against the
-# real atlas the 12-band stack buys 0.02-0.04 pp of union coverage at the
-# heights under consideration, which is not a reason to carry ten more boxes
-# through every gate in the package.
+# FOUR BANDS, AND WHY NOT TWO (2026-08-26, the second pass).  The audit
+# re-derived the column as a 12-band cylinder stack: fat 0.171 at the plate,
+# WAISTED to 0.057 through the middle third, and back out to 0.129 where
+# link1's swept solid carries it past the shoulder.  The first version of this
+# module shipped TWO bands, flat at `column_r` = 0.185 below the connector,
+# and gave the honest reason: the conductor's own base column was ONE capsule
+# at `link_r` over the whole span, so a box thinner than `link_r + calib`
+# anywhere inside it would certify cells the conductor then refuses — the
+# gate-consistency identity above, read backwards.
 #
-# THE FAR END IS THE METAL, AND THE IDENTITY IS NOT AIRTIGHT THERE — THE ONE
-# PLACE THIS MODULE IS WEAKER THAN THE CONDUCTOR, STATED PLAINLY.  A capsule
-# is a segment thickened, so the conductor's cap0 carries a SPHERICAL CAP that
-# bulges `link_r` past the shoulder: its far surface is at base z 0.518, while
-# the metal stops at `column_z1` = 0.3875.  Containing that cap would mean
-# running these boxes to 0.518, and the atlas says what that costs — measured
-# on the real 2 cm sweep of all six arms, the corrected capsules included:
+# That reason was about the CONDUCTOR'S model, not about the arm.  So the
+# conductor's model moved too: `coordination.BODY_BANDS` is now the same four
+# bands, as sub-segment capsules of the same pose-invariant axis, and the
+# identity holds band for band.  What the flat 0.185 was costing is 13 cm of
+# fictitious metal across exactly the slab two transverse arms' forearms have
+# to cross in:
 #
-#     h = 0.940   boxes to 0.3875 (the metal)   union 99.70 %   >=2 arms 48.8 %
-#                 boxes to 0.518  (the cap)     union 92.13 %   >=2 arms 36.9 %
+#     base z          box half-extent   was    is     measured band max
+#     [-0.2325, 0.0667]  connector      0.207  0.207  0.1769  (unchanged)
+#     [ 0.0667, 0.0988]  taper          0.185  0.148  0.1172   -37 mm
+#     [ 0.0988, 0.2590]  THE WAIST      0.185  0.108  0.0779   -77 mm
+#     [ 0.2590, 0.3875]  link1 sweep    0.185  0.160  0.1295   -25 mm
+#
+# WHERE THE FOUR EDGES COME FROM.  They are the audit's own 12-band edges,
+# chosen by exhaustive search over that edge set: for each band count, the
+# cover of the measurement that minimises the obstacle's cross-section
+# integrated over the slab a drawing arm's links can reach (base z >= 0.095 at
+# these heights: `inv_chain_drop` 0.30 less `chain_r` + `margin`).  The
+# search's answer, in that proxy's units — 1 band 0.0118, 2 bands 0.0075,
+# 3 bands 0.0053, 4 bands 0.0051, 5 bands 0.0050, against 0.0100 for the flat
+# pair this replaces.  Three bands below the connector take 96 % of everything
+# a twelve-band stack could take, and the fourth and fifth take 0.4 % between
+# them, which is not worth eight more boxes through every gate in the package.
+# Each edge is rounded off the audit's grid in the direction that makes the
+# FATTER of its two neighbours grow, so no shipped band is ever thinner than a
+# measured band it touches; `tests/test_mounts.py` checks that overlap by
+# overlap against `tests/data/collision_audit_geometry.json`.
+#
+# THE FAR END IS THE METAL, AND THE CAPS ARE INSIDE THE BOXES.  A capsule is a
+# segment thickened, so each band carries a SPHERICAL CAP past its own ends —
+# the last one to base z 0.5175, while the metal stops at `column_z1` =
+# 0.3875.  Nothing has to be done about that: the box is the band's AABB grown
+# by the band's radius along the axis as well as across it, so it contains the
+# cap it belongs to (see the identity above).  What the boxes must NOT do is
+# run out to the cap as a BAND — the atlas says what a fat column standing in
+# the forearms' slab costs, measured on the real 2 cm sweep of all six arms:
+#
+#     h = 0.940   bands to 0.3875 (the metal)   union 99.70 %   >=2 arms 48.8 %
+#                 bands to 0.518  (the cap)     union 92.13 %   >=2 arms 36.9 %
 #
 # 7.6 points of canvas and 12 points of concurrency, to model a shape that is
-# not there.  Tapering the box down the cap's own profile recovers almost none
-# of it (the ball is still 0.178 m wide 50 mm past the shoulder), because what
-# costs the coverage is any fat column standing in the slab the forearms work
-# in.  So the boxes stop at the metal, and the residual is DISCHARGED BY
-# MEASUREMENT rather than by conservatism: `tests/test_mounts.py` walks the
-# certified atlas poses of every arm and checks the conductor's own cap0
-# criterion — `seg_seg_dist(mover capsule, neighbour base->shoulder) >=
-# mover_r + link_r + 0.08` — directly.  If a rig ever puts a certified pose
-# inside a neighbour's shoulder ball, that test fails and says so, which is
-# worth more than a box nobody can reach past.  (The cap is not pure fiction:
-# it is what makes cap0 CONTAIN link1's swept volume out to 0.3875, which is
-# why the capsule cannot simply be shortened.)
+# not there.  `tests/test_mounts.py` still walks the certified atlas poses of
+# every arm against the conductor's own base-column criterion directly, band
+# for band, because a measured discharge of the identity is worth more than
+# an argument about it.
 #
-# Band 1 runs `connector_up` above the flange because the connector is really
+# Band 0 runs `connector_up` above the flange because the connector is really
 # there — 0.177 m of it, outside the plate box and outside the boom box, and
 # outside every model this package had before the audit.  Nothing reaches it:
 # a hanging arm's chain never rises above `d1` below its own mount plane, so

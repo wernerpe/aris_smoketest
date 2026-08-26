@@ -100,7 +100,7 @@ def test_every_arm_sees_all_other_mounts_and_never_its_own():
     # minus own
     inv_ids = [a for a, s in fl.items() if s.mount == "inv"]
     nb = len(mounts.MOUNTS.column_bands)
-    assert nb == 2, "the connector band and the column proper"
+    assert nb == 4, "connector, taper, waist, link1's swept solid"
     assert len(fl[inv_ids[0]].static_obstacles()) == \
         2 * (len(inv_ids) - 1) + 2 + nb * (len(fl) - 1)
 
@@ -272,18 +272,37 @@ def test_check_spacing_catches_interpenetrating_hardware():
 def test_the_column_radius_is_the_conductors_capsule_plus_its_calibration():
     """The number is DERIVED, not chosen: a box gate is compared against
     STATIC_MARGIN and the conductor's pair gate against SAFETY + CALIB, so the
-    obstacle carries the difference and the two gates become one statement."""
-    from aris_sixarm import coordination, frames
+    obstacle carries the difference and the two gates become one statement —
+    and since the column became four bands, PER BAND."""
+    from aris_sixarm import coordination, frames, scene_check
     m = mounts.MOUNTS
     assert m.link_r == coordination.LINK_R
     assert m.calib == coordination.CALIB_M
-    assert m.d1 == frames.DH[0][2]
+    assert m.d1 == frames.DH[0][2] == coordination.D1_BASE
     assert m.column_r == pytest.approx(m.link_r + m.calib)
-    # the capsule (0, 1) of the conductor's own table is what is being modelled
-    assert coordination.CAPSULES[0] == (0, 1, coordination.LINK_R)
-    # and the equality that makes the box gate mean the conductor's margin
+    # THE SAME PROFILE, RESTATED IN THREE MODULES.  The conductor's capsules,
+    # this module's boxes and the independent checker's own bands all have to
+    # be the same measurement or the gates stop meaning each other.
+    assert tuple(m.body_bands) == coordination.BODY_BANDS
+    assert tuple(m.body_bands) == scene_check.COLUMN_BANDS
+    # the leading capsules of the conductor's own table are what is modelled:
+    # sub-segments of (0, 1), at t = base z / d1
+    base = coordination.CAPSULES[:coordination.N_BASE]
+    assert len(base) == len(m.column_bands)
+    for (i, j, r, t0, t1), (z0, z1, _) in zip(base, m.body_bands):
+        assert (i, j) == (0, 1)
+        assert t0 == pytest.approx(z0 / m.d1)
+        assert t1 == pytest.approx(z1 / m.d1)
+    # and the equality that makes the box gate mean the conductor's margin,
+    # band for band
+    for (_, _, box_r), (_, _, cap_r) in zip(m.column_bands, m.body_bands):
+        assert box_r + rig_final.STATIC_MARGIN == pytest.approx(
+            cap_r + coordination.SAFETY_M + coordination.CALIB_M)
+    # the legacy single-capsule statement is still true of the constant it is
+    # written in, and no band below the connector is that fat any more
     assert m.column_r + rig_final.STATIC_MARGIN == pytest.approx(
         coordination.LINK_R + coordination.SAFETY_M + coordination.CALIB_M)
+    assert max(r for z0, _, r in m.column_bands if z0 >= 0) < m.column_r
 
 
 def test_the_column_boxes_are_the_measured_bands_aabbs():
@@ -300,39 +319,74 @@ def test_the_column_boxes_are_the_measured_bands_aabbs():
         assert b["lo"][2] == pytest.approx(H - z1 - r)
         assert (b["hi"][:2] - b["lo"][:2]) == pytest.approx([2 * r, 2 * r])
     # the stack spans the connector above the flange down to the measured end
+    tip_r = m.column_bands[-1][2]
     lo = min(float(b["lo"][2]) for b in bs)
     hi = max(float(b["hi"][2]) for b in bs)
     assert hi == pytest.approx(H + m.connector_up + m.connector_r + m.calib)
-    assert lo == pytest.approx(H - m.column_z1 - m.column_r)
+    assert lo == pytest.approx(H - m.column_z1 - tip_r)
     # a floor arm's runs UP from its plate instead
     up = mounts.arm_column_boxes(layout.study_spec(13, "floor", (0.6, -0.2),
                                                    h=H))
     assert max(float(b["hi"][2]) for b in up) == pytest.approx(
-        mounts.Z_FLOOR + m.column_z1 + m.column_r)
+        mounts.Z_FLOOR + m.column_z1 + tip_r)
+    # THE BANDS ARE CONTIGUOUS AND COVER THE WHOLE BODY: no gap between two
+    # boxes for a forearm to be certified into
+    zs = [(z0, z1) for z0, z1, _ in m.column_bands]
+    assert all(a[1] == pytest.approx(b[0]) for a, b in zip(zs, zs[1:]))
+    assert zs[0][0] == pytest.approx(-m.connector_up)
+    assert zs[-1][1] == pytest.approx(m.column_z1)
 
 
 def test_the_shipped_bands_contain_the_audits_measured_column():
-    """The model is not a choice: every band of the mesh audit's own 12-band
-    stack, grown by `calib`, fits inside the two bands this package ships —
-    and so does the connector the audit found above the plate."""
+    """The model is not a choice: EVERY shipped band contains EVERY measured
+    band it overlaps, so no point of the column is thinner in the model than
+    it is in the metal.
+
+    Overlap, not midpoint: since the shipped stack became finer than the
+    audit's coarse 7-band reduction, "which band is this measurement in" stops
+    having one answer, and the only statement that still means containment is
+    that a shipped band dominates everything it touches.  The FINE record
+    (`corrected_stack`, 12 bands at the audit's own 5 mm resolution) is the
+    truth below the flange; the coarse `corrected_stack_full` is a band-max
+    reduction of the same profile, so above the flange — where it is the only
+    record there is — it is used, and below it is not (a coarse band's max is
+    attained somewhere inside it, and asking a fine band to carry it would be
+    asking the model to contain a measurement of a different piece of metal).
+    """
     m = mounts.MOUNTS
     aud = json.loads((Path(__file__).parent / "data"
                       / "collision_audit_geometry.json").read_text())
-    bands = m.column_bands
-    for b in aud["column"]["corrected_stack"] + \
-            aud["column"]["corrected_stack_full"]:
+    fine = aud["column"]["corrected_stack"]
+    above = [b for b in aud["column"]["corrected_stack_full"] if b["z0"] < 0]
+    assert len(fine) == 12 and above, "the fixture must carry both records"
+    n = 0
+    for b in fine + above:
         need = b["r"] + m.calib
-        mid = 0.5 * (b["z0"] + b["z1"])
-        cover = [r for z0, z1, r in bands if z0 - 1e-9 <= mid <= z1 + 1e-9]
-        assert cover, f"base z {mid:.4f} is outside every shipped band"
-        assert max(cover) >= need - 1e-9, (
-            f"band at base z {mid:.4f} needs {need:.4f}, "
-            f"ships {max(cover):.4f}")
-    # the two numbers the model is built out of, against the measurement
+        for z0, z1, r in m.column_bands:
+            if b["z1"] <= z0 + 1e-12 or b["z0"] >= z1 - 1e-12:
+                continue                      # no overlap: nothing to contain
+            n += 1
+            assert r >= need - 1e-9, (
+                f"shipped band [{z0:+.4f}, {z1:+.4f}] r {r:.4f} overlaps a "
+                f"measured band [{b['z0']:+.4f}, {b['z1']:+.4f}] that needs "
+                f"{need:.4f}")
+    assert n >= len(fine) + len(above), "every measured band must be covered"
+    # ...and no band is more than a millimetre + calib past what it contains,
+    # which is what makes this a COVER of the measurement and not a guess
+    for z0, z1, r in m.column_bands:
+        hit = [b["r"] for b in fine + above
+               if b["z1"] > z0 + 1e-12 and b["z0"] < z1 - 1e-12]
+        assert r - m.calib - max(hit) < 0.001 + 1e-12, (
+            f"band [{z0:+.4f}, {z1:+.4f}] is {1000 * (r - m.calib - max(hit)):.2f} "
+            "mm fatter than the metal it covers")
+    # the numbers the model is built out of, against the measurement
     assert m.link_r >= aud["column"]["band_r_max"]["link0_collision"]
     assert m.connector_r >= aud["column"]["band_r_max"]["link0_all"]
-    assert m.column_z1 >= max(b["z1"] for b in
-                              aud["column"]["corrected_stack"]) - 1e-9
+    assert m.column_z1 >= max(b["z1"] for b in fine) - 1e-9
+    # THE WAIST IS THE POINT OF THE BANDING: the middle of the column is
+    # measured at 0.057-0.078 and the flat model carried 0.155 there
+    waist = [r for z0, z1, r in m.body_bands if z0 >= 0.09 and z1 <= 0.26]
+    assert waist and max(waist) <= 0.08, "the waist is half the flat model"
     # and the claim the audit refuted, kept as the record of what moved
     assert aud["column"]["claimed_capsule_r"] == 0.09
     assert aud["column"]["claimed_box_r"] == 0.12
@@ -340,44 +394,66 @@ def test_the_shipped_bands_contain_the_audits_measured_column():
 
 
 def test_the_capsule_radii_are_the_audits_measured_inflation():
-    """Every arm capsule is its old radius plus what the mesh audit measured,
-    rounded UP to the millimetre.  The tool capsules were validated as they
-    stood and did not move."""
+    """Every MOVING arm capsule is its old radius plus what the mesh audit
+    measured, rounded UP to the millimetre.  The tool capsules were validated
+    as they stood and did not move.
+
+    The fixture is an 8-entry record written when the base column was one
+    capsule; the shipped table carries `N_BASE` bands there instead, so entry
+    0 is checked against the column stack (the finer record of the same
+    metal, in `test_the_shipped_bands_contain_the_audits_measured_column`)
+    and entries 1.. line up one for one after the bands.
+    """
     from aris_sixarm import coordination
     aud = json.loads((Path(__file__).parent / "data"
                       / "collision_audit_geometry.json").read_text())
     grow = aud["capsule_inflation_m"]
     old = aud["old_capsule_r"]
+    nb = coordination.N_BASE
     caps = coordination.CAPSULES_LAT
-    assert len(caps) == len(grow) == len(old)
-    for (_, _, r), g, o in zip(caps, grow, old):
+    assert len(grow) == len(old) == 8
+    assert len(caps) == nb + 7, "N_BASE bands, then the seven that move"
+    for (_, _, r), g, o in zip(caps[nb:], grow[1:], old[1:]):
         want = o + g
         assert r >= want - 1e-12, f"{r} does not contain the measured {want}"
         assert r - want < 0.001 + 1e-12, f"{r} is more than a mm past {want}"
         assert abs(r * 1000 - round(r * 1000)) < 1e-9, "radii are whole mm"
+    # the band table is whole millimetres too, and contains what the audit
+    # measured the SINGLE base capsule to need (0.09 + 0.0646 = 0.1546) —
+    # somewhere, which is what a profile means
+    for _, _, r in coordination.BODY_BANDS:
+        assert abs(r * 1000 - round(r * 1000)) < 1e-9, "band radii are whole mm"
+    assert max(r for _, _, r in coordination.BODY_BANDS) >= old[0] + grow[0]
     # the tool capsules are the two the audit signed off unchanged
     assert grow[-2:] == [0.0, 0.0]
     assert [c[2] for c in caps[-2:]] == [0.05, 0.05]
 
 
 def _cap0_clearance(Pw, nb, caps):
-    """The CONDUCTOR's own cap0 criterion, its way: worst over the mover's
-    static capsules of (distance to the neighbour's base->shoulder segment
-    minus the two radii).  Vectorised over a stack of chains."""
+    """The CONDUCTOR's own base-column criterion, its way: worst over the
+    mover's static capsules AND the neighbour's column BANDS of (distance
+    between the two segments minus the two radii).  Vectorised over a stack of
+    chains.
+
+    Four bands instead of one capsule since 2026-08-26 — which is the whole
+    point: the flat 0.155 the old form used was 13 cm of metal that is not
+    there through the middle of the column.
+    """
     from aris_sixarm import coordination
     P = np.asarray(Pw, float)
     single = P.ndim == 2
     P = P[None] if single else P
     T = np.asarray(nb.T_world_base(), float)
     p0 = np.asarray(T[:3, 3], float)
-    p1 = p0 + mounts.MOUNTS.d1 * np.asarray(T[:3, 2], float)
-    A = np.broadcast_to(p0, (len(P), 3))
-    B = np.broadcast_to(p1, (len(P), 3))
+    zc = np.asarray(T[:3, 2], float)
     worst = np.full(len(P), np.inf)
-    for (i, j, r) in caps:
-        d = coordination.seg_seg_dist(P[:, i], P[:, j], A, B)
-        worst = np.minimum(worst, np.asarray(d, float).reshape(-1)
-                           - r - coordination.LINK_R)
+    for z0, z1, cr in coordination.BODY_BANDS:
+        A = np.broadcast_to(p0 + z0 * zc, (len(P), 3))
+        B = np.broadcast_to(p0 + z1 * zc, (len(P), 3))
+        for (i, j, r) in caps:
+            d = coordination.seg_seg_dist(P[:, i], P[:, j], A, B)
+            worst = np.minimum(worst,
+                               np.asarray(d, float).reshape(-1) - r - cr)
     return float(worst[0]) if single else worst
 
 
@@ -386,12 +462,13 @@ def test_a_pose_that_clears_the_column_boxes_clears_the_real_arm():
     the span the conductor's capsule is a CYLINDER.
 
     This is the gate-consistency identity in its testable form: clearing the
-    boxes by STATIC_MARGIN means clearing the neighbour's own cap0 by the
-    SAFETY + CALIB the conductor will later ask for.  It holds wherever the
-    nearest point of that capsule is on its shaft; where the nearest point is
-    on the far spherical CAP the boxes stop at the metal and the identity is
-    discharged by measurement instead — see the long note in `mounts` and
-    `test_no_certified_pose_sits_in_a_neighbours_shoulder_ball`.
+    boxes by STATIC_MARGIN means clearing the neighbour's own base column by
+    the SAFETY + CALIB the conductor will later ask for.  Since the column
+    became BANDS it holds everywhere and not only on the shaft — each box is
+    its band's AABB grown by the band's own radius along the axis as well as
+    across it, so it contains that band's spherical caps too.  No pose is
+    skipped here any more, and `zb.max()` past the metal is COUNTED rather
+    than excused.
     """
     from aris_sixarm import coordination, frames
     rng = np.random.default_rng(11)
@@ -401,7 +478,7 @@ def test_a_pose_that_clears_the_column_boxes_clears_the_real_arm():
     Twb = spec.T_world_base()
     zc = np.asarray(nb.T_world_base()[:3, 2], float)
     p0 = np.asarray(nb.T_world_base()[:3, 3], float)
-    n_checked = n_shaft = 0
+    n_checked = n_cap = 0
     for _ in range(1200):
         q = rng.uniform(frames.FR3_MIN, frames.FR3_MAX)
         T, pts = frames.fk(q)
@@ -411,16 +488,14 @@ def test_a_pose_that_clears_the_column_boxes_clears_the_real_arm():
         if cl < rig_final.STATIC_MARGIN:
             continue
         n_checked += 1
-        # is the whole chain inside the band the boxes actually cover?  (base
-        # z along the neighbour's own axis, which for a hanging arm is -world)
+        # base z along the neighbour's own axis, which for a hanging arm is
+        # -world: how many of these poses reach past the metal at all
         zb = (Pw[1:] - p0) @ zc
-        if zb.max() > mounts.MOUNTS.column_z1:
-            continue                      # past the metal: the cap region
-        n_shaft += 1
+        n_cap += int(zb.max() > mounts.MOUNTS.column_z1)
         worst = _cap0_clearance(Pw, nb, rig_final.STATIC_CAPSULES)
         assert worst >= coordination.SAFETY_M + coordination.CALIB_M - 1e-9
     assert n_checked > 50, "the sample must actually exercise the gate"
-    assert n_shaft > 20, "the sample must reach the shaft, not only the cap"
+    assert n_cap > 20, "the sample must reach past the metal, not only the shaft"
 
 
 def test_no_certified_pose_sits_in_a_neighbours_shoulder_ball():

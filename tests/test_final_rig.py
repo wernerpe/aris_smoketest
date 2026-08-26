@@ -176,9 +176,16 @@ def test_capsule_models_agree_between_modules():
     assert scene_check.RADII == coordination.CAPSULES
     assert scene_check.RADII_FINAL[:-1] == coordination.CAPSULES[:-1]
     assert scene_check.RADII_FINAL[-1] == (8, 9, rig_final.PEN_R_FINAL)
-    # static capsules = the conductor's chain minus the bolted base column
+    # static capsules = the conductor's chain minus the bolted base column,
+    # which is `N_BASE` banded entries now and not one
+    assert scene_check.N_BASE == coordination.N_BASE
     assert rig_final.STATIC_CAPSULES == \
-        tuple(c[:2] + (c[2],) for c in scene_check.RADII_FINAL[1:])
+        tuple(c[:2] + (c[2],)
+              for c in scene_check.RADII_FINAL[scene_check.N_BASE:])
+    # ...and "the base column" is exactly the entries that ride chain 0 -> 1
+    assert all(c[:2] == (0, 1) and len(c) == 5
+               for c in coordination.CAPSULES[:coordination.N_BASE])
+    assert all(c[0] != 0 for c in coordination.CAPSULES[coordination.N_BASE:])
     # per-rig pen capsule radius in the conductor
     q = np.asarray(FLEET[31].q_seed, float)[None, :]
     pf = coordination.ArmPath(31, q, 0.02, spec=FLEET[31])

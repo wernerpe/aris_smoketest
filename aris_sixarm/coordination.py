@@ -8,8 +8,9 @@ advances along its path or waits where it is.  That keeps every guarantee the
 per-segment planner earned (`stroke_api`'s certificate is about a path, not a
 schedule) and makes the coordination problem small enough to solve exactly.
 
-  MODEL     Each arm is 7 capsules built from `frames.fk`'s own chain points:
-            base column (LINK_R), upper arm (UPPER_R), elbow offset (ELBOW_R),
+  MODEL     Each arm is 10 capsules built from `frames.fk`'s own chain points:
+            the base column as four measured BANDS (`BODY_BANDS`), upper arm
+            (UPPER_R), elbow offset (ELBOW_R),
             forearm (FORE_R), wrist (WRIST_R), hand (HAND_R) and the tool.
             Since 2026-08-26 every one of those radii is MEASURED — the
             smallest that contains the manufacturer's mesh over the sampled
@@ -130,7 +131,40 @@ from .rig_final import PEN_R_FINAL
 # are carried unchanged — see `rig_final.BRACKET_R_LAT` / `PEN_R_LAT`.  The
 # inline pen's 0.03 (`PEN_R`, legacy three-arm rig) was NOT audited: that tool
 # is not built, and no rig this repo ships still flies it.
-LINK_R = 0.155       # m, base column: link0's casting + its connector
+#
+# ...AND THE BASE COLUMN IS FOUR BANDS, NOT ONE CAPSULE (2026-08-26, later).
+# `LINK_R` below is still the widest radius the casting proper reaches, and it
+# is still what a single capsule over the whole base->shoulder span would have
+# to wear.  But the arm is not that shape.  The audit's own 12-band cylinder
+# stack (`out/collision_audit.json` ["column"]["corrected_stack"]) says the
+# body is fat at the plate (0.171), WAISTED to 0.057 through the middle third,
+# and back out to 0.129 where link1's q1 sweep carries it past the shoulder —
+# and a single 0.155 capsule is 13 cm of fictitious metal across the slab two
+# transverse arms' forearms have to cross in.
+#
+# So the column ships as BANDS: sub-segments of the same pose-invariant
+# base->shoulder axis, each at its own measured radius.  `BODY_BANDS` is the
+# profile; `BASE_CAPSULES` is it as capsules.  The banding is not a taste —
+# it is the cheapest cover of the measurement that a search over the audit's
+# own band edges finds (see `mounts`' long note for the table).
+#
+# WHY THE SAME FOUR BANDS APPEAR IN THREE MODULES.  A neighbour's body is an
+# obstacle to a planner (`mounts.column_bands`, as AABBs one `calib` wider), a
+# capsule to the conductor (here) and a capsule again to the independent
+# checker (`scene_check.COLUMN_BANDS`).  All three restate the same measured
+# profile as literals and a test pins them together, band for band, because
+# the gate-consistency identity has to hold PER BAND: a cell whose clearance
+# to the box is `STATIC_MARGIN` is a cell whose clearance to this capsule is
+# the `SAFETY_M + CALIB_M` the conductor will later demand of it.
+BODY_BANDS = ((-0.2325, 0.0667, 0.177),   # connector + cable stub, plate end
+              (0.0667, 0.0988, 0.118),    # the shoulder-ward taper
+              (0.0988, 0.2590, 0.078),    # THE WAIST (measured 0.057-0.078)
+              (0.2590, 0.3875, 0.130))    # link1's swept solid, past the DH d1
+D1_BASE = 0.333      # m, base flange -> shoulder; restates frames.DH[0][2]
+LINK_R = 0.155       # m, base column: the widest radius of link0's casting —
+                     # no longer a capsule of its own, kept because it is what
+                     # `mounts.column_r` and the legacy single-capsule column
+                     # are still derived from (a test pins the three)
 UPPER_R = 0.130      # m, shoulder -> elbow (link1 + link2)
 ELBOW_R = 0.117      # m, the elbow offset segment (link3)
 FORE_R = 0.131       # m, forearm (link4)
@@ -164,16 +198,28 @@ _IMAGE_BYTES = 0
 _BATCH = None             # the paths an image worker reads, inherited by fork
 _IMAGE_STATS = dict(built=0, cached=0, transposed=0, cells=0, wall=0.0, jobs=0)
 
-# (chain point i, chain point j, radius); indices into the 10-point chain
-# (frames.fk's 9 points + the pen tip).  Points 1/2 and 5/6 coincide by
-# construction (zero DH offset), so they are not given their own capsule.
-CAPSULES = ((0, 1, LINK_R), (1, 3, UPPER_R), (3, 4, ELBOW_R), (4, 5, FORE_R),
-            (5, 7, WRIST_R), (7, 8, HAND_R), (8, 9, PEN_R))
+# (chain point i, chain point j, radius) — or (i, j, radius, t0, t1) for a
+# SUB-SEGMENT of [i, j].  Indices into the 10-point chain (frames.fk's 9
+# points + the pen tip).  Points 1/2 and 5/6 coincide by construction (zero DH
+# offset), so they are not given their own capsule.
+#
+# The first four entries are the base column's bands: all of them run along
+# [0, 1] — the base flange to the shoulder, the axis q1 turns about, so they
+# do not move when the arm does — and `t` is that segment's own parameter,
+# base z / d1.  t leaves [0, 1] at both ends and is meant to: the connector
+# reaches 0.2325 m back past the flange and link1's swept solid 0.0545 m past
+# the shoulder, and both are metal.
+BASE_CAPSULES = tuple((0, 1, r, z0 / D1_BASE, z1 / D1_BASE)
+                      for z0, z1, r in BODY_BANDS)
+N_BASE = len(BASE_CAPSULES)      # how many leading entries are the base column
+CAPSULES = BASE_CAPSULES + ((1, 3, UPPER_R), (3, 4, ELBOW_R), (4, 5, FORE_R),
+                            (5, 7, WRIST_R), (7, 8, HAND_R), (8, 9, PEN_R))
 # LATERAL HOLDER: an 11-point chain (bracket corner at index 10) and a
 # TWO-capsule tool, bracket TCP->corner + pen corner->tip, both at the
 # holder envelope radius.  Mirrors rig_final.STATIC_CAPSULES_LAT and
 # scene_check.RADII_LAT (a test pins the three together).
 CAPSULES_LAT = CAPSULES[:-1] + ((8, 10, PEN_R_FINAL), (10, 9, PEN_R_FINAL))
+NCAP = max(len(CAPSULES), len(CAPSULES_LAT))   # the widest table in play
 
 
 # ==========================================================================
@@ -221,6 +267,23 @@ def seg_seg_dist(p0, p1, q0, q1):
     return np.sqrt(np.maximum(np.sum(w * w, -1), 0.0))
 
 
+def cap_endpoints(P, caps):
+    """Chain points (...,K,3) + a capsule table -> (A, B) (...,C,3) endpoints.
+
+    A 3-tuple `(i, j, r)` is the whole segment between two chain points; a
+    5-tuple `(i, j, r, t0, t1)` is the sub-segment `[t0, t1]` of it, which is
+    how the base column's bands are written.  `t` outside [0, 1] is legal and
+    used (see `BASE_CAPSULES`).  One expression covers both, so nothing
+    downstream — boxes, tiles, the exact distances — has to know which it got.
+    """
+    P = np.asarray(P, float)
+    t0 = np.array([c[3] if len(c) > 3 else 0.0 for c in caps], float)
+    t1 = np.array([c[4] if len(c) > 4 else 1.0 for c in caps], float)
+    Pi = P[..., [c[0] for c in caps], :]
+    D = P[..., [c[1] for c in caps], :] - Pi
+    return Pi + t0[:, None] * D, Pi + t1[:, None] * D
+
+
 def _box_of(p, r0, r1):
     """Each capsule's axis-aligned box over samples [r0, r1), grown by r."""
     A, B = p.A[r0:r1], p.B[r0:r1]
@@ -241,8 +304,9 @@ class ArmPath:
         P = chain_world(self.q, spec, h_inv, pen_ext)
         self.n = len(P)
         caps = CAPSULES_LAT if P.shape[1] >= 11 else CAPSULES
-        self.A = np.ascontiguousarray(P[:, [c[0] for c in caps], :], np.float32)
-        self.B = np.ascontiguousarray(P[:, [c[1] for c in caps], :], np.float32)
+        A, B = cap_endpoints(P, caps)
+        self.A = np.ascontiguousarray(A, np.float32)
+        self.B = np.ascontiguousarray(B, np.float32)
         self.r = np.array([c[2] for c in caps], np.float32)
         if getattr(spec, "rig", "sixarm") == "final" and caps is CAPSULES:
             # the pen capsule carries the HOLDER envelope union (both CAD
@@ -250,10 +314,22 @@ class ArmPath:
             # (the lateral table already carries the envelope radius)
             self.r = self.r.copy()
             self.r[-1] = PEN_R_FINAL
-        self.center = P.mean(axis=1).astype(np.float32)
-        self.radius = (np.linalg.norm(P - P.mean(axis=1, keepdims=True), axis=2).max(1)
-                       + self.r.max()).astype(np.float32)
-        self.step = np.linalg.norm(np.diff(P, axis=0), axis=2).max(1).astype(np.float32)
+        # THE BOUNDING SPHERE IS DRAWN ROUND THE CAPSULES, NOT THE CHAIN.
+        # Since the base column became bands, two capsule endpoints lie
+        # OUTSIDE the chain's own point set (the connector reaches back past
+        # the flange), so a sphere sized on `P` alone would no longer contain
+        # what the broad phase is rejecting on.
+        cen = P.mean(axis=1, keepdims=True)
+        self.center = cen[:, 0, :].astype(np.float32)
+        far = np.maximum(np.linalg.norm(A - cen, axis=2),
+                         np.linalg.norm(B - cen, axis=2)) + self.r[None, :]
+        self.radius = np.maximum(
+            far.max(1), np.linalg.norm(P - cen, axis=2).max(1)).astype(np.float32)
+        self.step = np.maximum(
+            np.linalg.norm(np.diff(P, axis=0), axis=2).max(1),
+            np.maximum(np.linalg.norm(np.diff(A, axis=0), axis=2).max(1),
+                       np.linalg.norm(np.diff(B, axis=0), axis=2).max(1))
+        ).astype(np.float32)
         self.moves = bool(np.max(np.abs(self.q - self.q[0])) > 1e-9)
         self.motion = float(self.step.sum())
         # PER-CAPSULE BOXES, because the per-SAMPLE one never rejects anything.
@@ -261,7 +337,7 @@ class ArmPath:
         # covering the whole chain — and a Franka is a metre long standing a
         # metre from its neighbour, so those spheres always overlap: on the
         # Trollface 100.0 % of the 19.3 M sample pairs its three moving arms
-        # make survived it and paid all 49 exact capsule distances.  A box per
+        # make survived it and paid every exact capsule distance.  A box per
         # CAPSULE over the whole path is a different question with a useful
         # answer (the base column is 0.85 m from anything arm 2 ever does),
         # and it is exact: a capsule pair whose
@@ -271,7 +347,7 @@ class ArmPath:
         self._tiles = {}
 
     def boxes(self, r0=0, r1=None):
-        """Each capsule's swept box over samples [r0, r1). -> (lo, hi) (7,3)."""
+        """Each capsule's swept box over samples [r0, r1). -> (lo, hi) (C,3)."""
         r1 = self.n if r1 is None else int(r1)
         if r0 == 0 and r1 == self.n:
             if getattr(self, "_box", None) is None:
@@ -335,12 +411,13 @@ def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None, fleet=None):
 
 
 def live_capsules(pi, pj, cap=BROAD_CAP):
-    """Which of the 49 capsule pairs can EVER come within `cap`. -> (P, Q).
+    """Which of the C x C capsule pairs can EVER come within `cap`. -> (P, Q).
 
     Box-to-box distance is a lower bound on capsule-to-capsule distance — a
     capsule lies inside the box of its two endpoints grown by its radius — so a
     pair this rejects contributes nothing a `cap`-clipped matrix would record.
-    It costs 49 box tests for a whole matrix and on the Trollface's three real
+    It costs one box test per pair for a whole matrix and on the Trollface's
+    three real
     pairs it retires 14 %, 51 % and 45 % of the exact work: the base column
     never approaches anything, and neither does the upper arm of an arm working
     the far side of its sheet.
@@ -366,7 +443,7 @@ def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000, rows=None, tile=None):
 
     There are two broad phases and they reject different things.  The
     per-CAPSULE one (`live_capsules`) is a property of the two whole paths and
-    decides which of the 49 capsule pairs are worth carrying at all; the
+    decides which of the capsule pairs are worth carrying at all; the
     per-SAMPLE one below is a property of two instants.  On arms that share a
     sheet the second rejects nothing and the first does the work.
 
@@ -381,7 +458,7 @@ def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000, rows=None, tile=None):
     cap2 = float(cap) ** 2
     if not len(_live(pi.boxes(), pj.boxes(), cap2)[0]):
         return D                       # these two never come near each other
-    work = max(1, int(chunk) * len(CAPSULES) ** 2)   # distances per numpy call
+    work = max(1, int(chunk) * NCAP ** 2)            # distances per numpy call
     col = pj.tile_boxes(int(tile))
     for a0 in range(r0, r1, tile):
         a1 = min(a0 + tile, r1)
@@ -392,7 +469,9 @@ def clearance_matrix(pi, pj, cap=BROAD_CAP, chunk=15000, rows=None, tile=None):
             # forearm gets everywhere; over `tile` consecutive samples of it it
             # does not, and the tile-local boxes retire most of the capsule
             # pairs the whole-path boxes have to keep — on the Trollface's
-            # biggest pair, 42 of 49 globally against 14 of 49 per tile.
+            # biggest pair, 42 of 49 globally against 14 of 49 per tile (the
+            # counts predate the base column's four bands; the ratio holds,
+            # and the bands are the cheapest pairs the broad phase rejects).
             # Rejection is exact either way, so the matrix is the same matrix
             # however it was tiled; only the arithmetic skipped changes.
             P, Q = _live(row, (col[0][t], col[1][t]), cap2)

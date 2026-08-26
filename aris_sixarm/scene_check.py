@@ -47,8 +47,23 @@ from .validate import check_pose as validate_pose, validate_plan
 
 # same envelope as the conductor, restated here on purpose: if someone widens
 # a capsule there and the two disagree, this check is supposed to notice.
-RADII = ((0, 1, 0.155), (1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
-         (5, 7, 0.091), (7, 8, 0.104), (8, 9, 0.03))
+#
+# THE BASE COLUMN IS `COLUMN_BANDS`, WRITTEN AS SUB-SEGMENT CAPSULES.  Entries
+# are `(i, j, r)` for a whole segment between two chain points, or
+# `(i, j, r, t0, t1)` for the sub-segment `[t0, t1]` of it; the base column's
+# bands all ride the pose-invariant [0, 1] axis at `t = base z / d1`, and t
+# leaves [0, 1] at both ends because the metal does (see COLUMN_BANDS).  The
+# table is built from THIS module's own band literals, not imported from
+# `mounts` or `coordination` — a test pins all three together.
+COLUMN_D1 = 0.333                    # m, base flange -> shoulder (DH)
+# (z0, z1, r) in base z, flange downwards — the measured envelope, no margin.
+COLUMN_BANDS = ((-0.2325, 0.0667, 0.177), (0.0667, 0.0988, 0.118),
+                (0.0988, 0.2590, 0.078), (0.2590, 0.3875, 0.130))
+N_BASE = len(COLUMN_BANDS)           # leading RADII entries that are the column
+RADII = tuple((0, 1, r, z0 / COLUMN_D1, z1 / COLUMN_D1)
+              for z0, z1, r in COLUMN_BANDS) \
+    + ((1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
+       (5, 7, 0.091), (7, 8, 0.104), (8, 9, 0.03))
 # FINAL-RIG pen capsule: the holder envelope union (r 0.05), restated from
 # rig_final.PEN_R_FINAL on purpose — a test pins the two together.
 RADII_FINAL = RADII[:-1] + ((8, 9, 0.05),)
@@ -56,6 +71,32 @@ RADII_FINAL = RADII[:-1] + ((8, 9, 0.05),)
 # TWO-capsule tool — bracket TCP->corner, pen corner->tip — restated from
 # rig_final.STATIC_CAPSULES_LAT on purpose; a test pins the two together.
 RADII_LAT = RADII[:-1] + ((8, 10, 0.05), (10, 9, 0.05))
+
+
+def _moving(radii):
+    """`radii` without the base-column bands — the capsules that MOVE.
+
+    The base is bolted where it is, so every gate about an arm's own mount,
+    the frame steel or a neighbour's column skips it.  A filter on the chain
+    index rather than a slice, because the column is `N_BASE` entries now and
+    "the first one" stopped being a safe way to say it.
+    """
+    return tuple(c for c in radii if c[0] != 0)
+
+
+def _cap_ends(P, radii):
+    """Chain points (...,K,3) -> the capsules' (A, B) endpoints (...,C,3).
+
+    Own derivation, on purpose (see the module docstring): the sub-segment
+    parameters are applied here as an explicit affine step rather than through
+    `coordination.cap_endpoints`.
+    """
+    P = np.asarray(P, float)
+    A = P[..., [c[0] for c in radii], :]
+    D = P[..., [c[1] for c in radii], :] - A
+    t0 = np.array([c[3] if len(c) > 3 else 0.0 for c in radii], float)
+    t1 = np.array([c[4] if len(c) > 4 else 1.0 for c in radii], float)
+    return A + t0[:, None] * D, A + t1[:, None] * D
 
 
 def _radii_for(fleet_dict, arms):
@@ -125,17 +166,22 @@ FRAME_STEP = 0.005                   # ...and the same for the frame gate, which
 # module (`d1` and the radii are restated from `frames.DH[0][2]` and
 # `coordination.LINK_R`; a test pins them).
 #
-# THE COLUMN IS NOT 0.09 AND DOES NOT STOP AT THE SHOULDER (2026-08-26).  The
-# mesh audit measured link0 + link1's q1 sweep: the body is 0.155 m at its
-# widest, its connector and cable stub reach 0.177 m over the first 67 mm
-# below the plate, and the whole assembly runs 0.3875 m from the flange —
-# 54.5 mm PAST the `d1` this segment used to stop at.  `d1` is still the DH
-# constant it always was; the column's far end is a separate, measured number.
-COLUMN_D1 = 0.333                    # m, base flange -> shoulder (DH)
-COLUMN_Z1 = 0.3875                   # m, MEASURED far end of the body column
-# (z0, z1, r) in base z, flange downwards — the measured envelope, no margin.
-COLUMN_BANDS = ((0.0, 0.0667, 0.177), (0.0667, COLUMN_Z1, 0.155))
-COLUMN_R = COLUMN_BANDS[-1][2]       # the column proper, connector excluded
+# THE COLUMN IS NOT 0.09, DOES NOT STOP AT THE SHOULDER, AND IS NOT A POLE
+# (2026-08-26).  The mesh audit measured link0 + link1's q1 sweep: the body is
+# 0.155 m at its widest, its connector and cable stub reach 0.177 m over the
+# first 67 mm below the plate, the whole assembly runs 0.3875 m from the
+# flange — 54.5 mm PAST the `d1` this segment used to stop at — and through
+# the middle third it WAISTS to 0.057.  `d1` is still the DH constant it
+# always was; the column's shape is a separate, measured thing, and it is
+# `COLUMN_BANDS` at the top of this module, where the capsule table that needs
+# it is built.  Nothing here reads `mounts`: the planner's boxes are each
+# `calib` = 0.03 wider than these bands because a box gate is compared against
+# STATIC_MARGIN = 0.05 and this one against the inter-arm 0.08.  Two
+# derivations, one geometric statement.
+COLUMN_Z1 = COLUMN_BANDS[-1][1]      # m, MEASURED far end of the body column
+COLUMN_R = 0.155                     # m, the widest the casting proper gets —
+#   the radius a SINGLE-capsule column wore, kept as the default for the
+#   legacy flat `(p0, p1)` form `_as_bands` still understands
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -198,11 +244,11 @@ def pair_clearance(Pi, Pj, radii=RADII):
 
     Broadcasts over any leading axis, so a whole timeline costs one call.
     """
-    ia = np.array([c[0] for c in radii])
-    ib = np.array([c[1] for c in radii])
     rr = np.array([c[2] for c in radii])
-    a0, a1 = Pi[..., ia, :][..., :, None, :], Pi[..., ib, :][..., :, None, :]
-    b0, b1 = Pj[..., ia, :][..., None, :, :], Pj[..., ib, :][..., None, :, :]
+    Ai, Bi = _cap_ends(Pi, radii)
+    Aj, Bj = _cap_ends(Pj, radii)
+    a0, a1 = Ai[..., :, None, :], Bi[..., :, None, :]
+    b0, b1 = Aj[..., None, :, :], Bj[..., None, :, :]
     d = segment_distance(a0, a1, b0, b1) - rr[:, None] - rr[None, :]
     return d.reshape(d.shape[:-2] + (-1,)).min(-1)
 
@@ -227,7 +273,7 @@ def static_clearance_lb(P, boxes, step=0.02):
     P = np.asarray(P, float)
     out = np.full(P.shape[:-2], np.inf)
     radii = RADII_LAT if P.shape[-2] >= 11 else RADII_FINAL
-    for (i, j, r) in radii[1:]:                    # skip the base column
+    for (i, j, r) in _moving(radii):               # skip the base column bands
         a, b = P[..., i, :], P[..., j, :]
         L = float(np.max(np.linalg.norm(b - a, axis=-1)))
         K = max(2, int(np.ceil(L / step)) + 1)
@@ -291,7 +337,7 @@ def column_clearance(P, columns, radii):
         return np.full(np.asarray(P).shape[:-2], np.inf)
     P = np.asarray(P, float)
     out = np.full(P.shape[:-2], np.inf)
-    for (i, j, r) in radii[1:]:
+    for (i, j, r) in _moving(radii):
         a, b = P[..., i, :], P[..., j, :]
         for p0, p1, cr in bands:
             c0 = np.broadcast_to(np.asarray(p0, float), a.shape)

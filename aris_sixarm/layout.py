@@ -446,14 +446,26 @@ def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
     puts the pen tip 61.6 mm BELOW the paper and its joint margin at 0.184,
     under the 0.30 gate — SIX arms parked inside the table.
 
-    BEARING, AND WHY IT IS OUTWARD.  `certified_ready_pose` aims each arm at
+    BEARING, AND WHY IT WAS OUTWARD.  `certified_ready_pose` aims each arm at
     the canvas centre, which is right for one arm and catastrophic for six
     hung over the same canvas: on this layout it parks the fleet in a huddle
-    and the closest pair (13, 17) INTERPENETRATES by 95.6 mm.  So each arm is
+    and the closest pair (13, 17) INTERPENETRATES by 95.6 mm.  So each arm was
     sent along its own base's bearing AWAY from the fleet centroid — the one
     direction that is different for every arm and that no two of them share.
-    For `paired_grid` the centroid is the canvas centre, so this is exactly
+    For `paired_grid` the centroid is the canvas centre, so that is exactly
     "each arm stands off towards its own nearest rim".
+
+    ...AND WHY IT IS SEARCHED NOW.  Outward is a rule that keeps the fleet off
+    ITSELF, and the criterion that decides whether a phase can be conducted is
+    a different one: how far the parked chain stands from every OTHER arm's
+    certified INK.  On the proposed rig the outward rule saturates against it —
+    the middle row's outward ray runs off the short edge of a 1.80 m canvas, so
+    every radius past ~0.55 m lands on the same clipped point and the best that
+    set can do is 75 mm against the 80 mm the conductor asks.  A bearing is a
+    free variable, so `grid` may now name one: `(radius, hover, bearing_deg)`,
+    an ABSOLUTE direction in the canvas frame.  Given three numbers the arm is
+    sent that way; given two it still goes outward, and `grid=None` is the old
+    recipe exactly.
 
     HOW FAR OUT, AND HOW HIGH, IS MEASURED — because a DEPOT IS NOT A READY
     POSE.  `certified_ready_pose` ranks on min(margin, 2.5 sigma), which is
@@ -489,11 +501,14 @@ def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
     cent = np.mean([np.asarray(s.xy, float) for s in fleet.values()], axis=0)
     out = {}
     for aid, spec in sorted(fleet.items()):
-        r, hv = grid.get(aid, (None, hover))
+        got = tuple(grid.get(aid, (None, hover)))
+        r, hv = got[0], got[1]
+        bear = (np.asarray(spec.xy, float) - cent if len(got) < 3 else
+                np.array([np.cos(np.deg2rad(got[2])),
+                          np.sin(np.deg2rad(got[2]))]))
         out[aid] = certified_ready_pose(
             spec, hover=hv, sheet=sheet, pen_lat=pen_lat,
-            radii=None if r is None else (float(r),),
-            bearing=np.asarray(spec.xy, float) - cent)[0]
+            radii=None if r is None else (float(r),), bearing=bear)[0]
     paths = {aid: ArmPath(aid, q[None, :], 0.05, spec=fleet[aid])
              for aid, q in out.items()}
     ids = sorted(out)
@@ -580,28 +595,54 @@ LAYOUT_V1 = dict(
 # somebody's ink.  See README for what would actually move it.
 LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 
-# RE-SEARCHED AT THE SHIPPED HEIGHT (2026-08-26), AND ON THE OTHER
-# CRITERION.  The table below ranks a depot on its own arm's flyability, which
-# is what the 0.850 rig was tuned for.  Under the audited capsules the
-# criterion that decides whether a phase can be CONDUCTED at all is the other
-# one — how far the parked chain stands from every OTHER arm's certified ink —
-# and the grid in force is the one that maximises it, searched over 7 radii x
-# 10 hovers per arm against the shipped atlas.  The winners and what they
-# clear:
+# RE-SEARCHED AT THE SHIPPED HEIGHT, ON THE OTHER CRITERION, AND OVER THE
+# BEARING TOO (2026-08-26, after the base column became four measured bands).
+# A depot's own flyability is what the 0.850 rig tuned for; under the audited
+# capsules the criterion that decides whether a phase can be CONDUCTED at all
+# is the other one — how far the parked chain stands from every OTHER arm's
+# certified ink, at the conductor's own 0.08 m.  The grid in force maximises
+# that, searched over 7 radii x 10 hovers x 12 bearings per arm against the
+# banded-column atlas, with the neighbours' steel and body columns as a hard
+# gate (`rig_final.chain_static_clearance >= STATIC_MARGIN`) and the pose's
+# own min(margin, 2.5 sigma) breaking ties inside each 5 mm bucket:
 #
-#      arm   (r, hover)     clears of everyone's ink
-#       13   (0.70, 0.50)      124 mm
-#       17   (0.70, 0.50)      127 mm
-#       31   (0.55, 0.40)       85 mm
-#       71   (0.55, 0.30)       72 mm   <- the fleet's binding depot
-#        2   (0.70, 0.50)      124 mm
-#       97   (0.70, 0.50)      127 mm
+#      arm   (r, hover, bearing)     ink    entry   home   was (0.940 ship)
+#        2   (0.55, 0.35, +134.1)   97.3 mm  20/24  20/24   19/24  97.3 mm
+#       13   (0.62, 0.20, -134.1)   98.4 mm  18/24  18/24   17/24  98.4 mm
+#       17   (0.62, 0.20,  -45.9)   97.6 mm  14/24  14/24   13/24  97.6 mm
+#       31   (0.62, 0.30, +150.0)   98.0 mm  18/24  18/24   18/24  80.9 mm
+#       71   (0.30, 0.55,  -60.0)   97.7 mm  18/24  18/24   10/24  61.3 mm
+#       97   (0.62, 0.20,  +45.9)   97.7 mm  16/24  16/24    9/24  97.7 mm
 #
-# 72 mm against the 80 mm the conductor asks, and that 8 mm is the whole
-# story of this rig: RADIUS SATURATES (`certified_ready_pose` clips the hover
-# point into the sheet, so past ~0.55 m every candidate lands on the same
-# clamped xy) and HOVER SATURATES (the middle row certifies nothing above
-# 0.40-0.50 m).  The two middle-row arms are boxed in by a 1.80 m canvas.
+# 97.3 mm against the 80 mm the conductor asks, park-vs-park at the clearance
+# matrix's 250 mm clip, and 277 mm to the nearest neighbour's steel or body
+# column on every one of them.  The set DOMINATES the one it replaces on both
+# criteria at once, arm for arm.
+#
+# TWO CRITERIA, AND THE SECOND ONE IS THE TIE-BREAK BECAUSE THE FIRST IS A
+# PLATEAU.  Every candidate in the top ink bucket clears by 97-98 mm — a parked
+# arm's own base column is pose-invariant, so the layout, not the pose, is what
+# sets that ceiling.  On a plateau the depot's own job decides: `entry` and
+# `home` above are how many of 24 farthest-point-sampled certified cells the
+# arm can `writing.enter_beats` its way into and `exit_beats` its way out of.
+# The 0.940 ship set was chosen before the bearing was a variable and pays for
+# it twice — arm 71 could reach 10 of its 24 cells and stood 61 mm from arm
+# 31's ink.  THE BEARING IS WHAT BOUGHT IT.  Held to the
+# outward ray the same search tops out at 75 mm — 3 mm better than the 72 mm
+# the flat column gave and still under the gate — because the middle row's
+# outward ray runs off the short edge of a 1.80 m canvas: `certified_ready_pose`
+# clips the hover point into the sheet, so past ~0.55 m every candidate lands
+# on the same clamped xy and the radius saturates.  A bearing does not
+# saturate.  Arms 31 and 71 now stand at (0.06, 2.13) and (1.74, 1.51),
+# diagonally off their own bases instead of straight out into the rim.
+#
+# AND THERE IS A CEILING, WHICH THIS IS AT.  Every winner clears by 97-98 mm
+# and so do the five candidates behind it: a parked arm's own BASE COLUMN is
+# pose-invariant, so no park pose can put it further from a neighbour's ink
+# than the layout already does.  The atlas gates every cell against those
+# column boxes at `STATIC_MARGIN`, which by the gate-consistency identity is
+# exactly the conductor's 80 mm — and the measured slack on top of it is
+# 17-18 mm.  Park-vs-ink has stopped being the binding constraint on this rig.
 #
 # The historical sweep, kept because its numbers are still the reason the
 # GRID has the shape it has:
@@ -624,32 +665,23 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 #
 # 92 % of entries flyable against the ladder's 62 %.  The two arms it rescues
 # are the two the first CSAIL run could not get home: every execution profile
-# refused at "go-home at segment N cannot clear the paper plane".
+# refused at "go-home at segment N cannot clear the paper plane".  The shipped
+# grid sits in the same radius band (0.55-0.62) and the same hover band
+# (0.20-0.30) as those winners, which is not a coincidence — it is why the
+# conditioning tie-break was worth applying.
 #
-# ...AND A DEPOT MUST ALSO NOT STAND ON SOMEBODY ELSE'S INK (2026-08-26).  The
-# table above ranks a park pose on the job it does FOR ITS OWN ARM.  It is
-# held for the whole of every phase that arm is not drawing in, so it is also
-# an OBSTACLE for the whole of that phase, and on a rig whose transverse pairs
-# are 0.61 m apart that is the tighter of the two constraints.  Measured on
-# the first occupancy-aware CSAIL allocation — every parked arm's chain
-# against every other arm's certified drawing poses, the conductor's own
-# capsules and its 80 mm margin:
-#
-#      arm   worst clearance to another arm's ink, at (r, hover)
-#       13   771 mm    17   717 mm    31   119 mm    71   139 mm
-#        2   173 mm    97    20 mm   <- the whole fleet's refusal
-#
-# Arm 97 at r = 0.48 lies across the north half of the canvas with its own
-# partner's ink under it, 20 mm from arm 2's chain against the 80 mm the
-# conductor asks: not a schedule the conductor could fix by waiting, because
-# a parked arm's schedule is a constant.  Pulled IN to r = 0.30 / hover 0.10 —
-# a compact park, not a further one — it clears every arm's ink by 128 mm and
-# the fleet's worst park-vs-ink clearance becomes 119 mm.  The cost is 97's
-# own flyability, which the sweep above put at 20/24 entries at 0.48; the
-# 0.30 park is measured in the same units below, and a depot nobody can draw
-# next to is worth less than one entry.
-PARK_GRID_PROPOSED = {13: (0.70, 0.50), 17: (0.70, 0.50), 31: (0.55, 0.40),
-                      71: (0.55, 0.30), 2: (0.70, 0.50), 97: (0.70, 0.50)}
+# ...AND A DEPOT MUST ALSO NOT STAND ON SOMEBODY ELSE'S INK (2026-08-26).  A
+# park pose is held for the whole of every phase its arm is not drawing in, so
+# it is also an OBSTACLE for the whole of that phase, and on a rig whose
+# transverse pairs are 0.61 m apart that is the tighter of the two
+# constraints.  On the flat-column model the fleet's worst was 20 mm (arm 97
+# lying across the north half with arm 2's ink under it) and then 72 mm after
+# the height went up; the whole fleet refused to conduct on it.  It is 97.3 mm
+# now, and `allocate.ParkProbe` prunes against these poses at allocation time
+# so a span inside one of them never reaches the conductor at all.
+PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
+                      17: (0.62, 0.20, -45.9), 31: (0.62, 0.30, 150.0),
+                      71: (0.30, 0.55, -60.0), 97: (0.62, 0.20, 45.9)}
 
 # THE PARKED FLEET: `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
 # PARK_GRID_PROPOSED)`, baked the way `frames.Q_READY_*` are baked and for the
@@ -657,28 +689,31 @@ PARK_GRID_PROPOSED = {13: (0.70, 0.50), 17: (0.70, 0.50), 31: (0.55, 0.40),
 # should not re-solve six IK searches.  `tests/test_layout.py` re-derives them
 # and compares, so the literals cannot drift from the recipe that made them.
 #
-# RE-DERIVED 2026-08-26 at h = 0.940 from the grid above.  Every one of them
-# passes `validate.check_pose` with the corrected capsules and the measured
-# column; the fleet's own worst numbers are in the re-certification record
-# (out/rig_report_h0940.json).  They hover 0.30-0.50 m over the paper, which
-# is much higher than the 0.10-0.20 m the 0.850 rig parked at — that is the
-# park search buying clearance the only way it still can.
+# RE-DERIVED 2026-08-26 at h = 0.940 from the grid above, against the
+# BANDED-column atlas.  Every one of them passes `validate.check_pose` with the
+# corrected capsules and the measured column, clears the neighbours' steel and
+# body columns by 277 mm, and stands 97-98 mm off every other arm's certified
+# ink.  They hover 0.20-0.30 m over the paper — back down where the 0.850 rig
+# parked, because the bearing search no longer has to buy clearance with
+# height.
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 Q_PARK_PROPOSED = {
-    13: (-0.5087, 1.4337, -0.8944, -1.3963, -1.8746, 0.9435, -1.3841),
-    17: (0.0544, -1.3033, -2.2137, -2.1501, 1.4479, 0.8911, 0.1977),
-    31: (-0.9198, 1.2296, 1.1284, -2.0301, 1.7120, 1.0356, -1.7795),
-    71: (0.9018, -1.0637, 2.0190, -1.7151, -2.0667, 1.1099, -1.7795),
-    2:  (0.0544, 1.3033, 0.9279, -2.1501, 1.4479, 0.8911, 0.1977),
-    97: (-0.5087, -1.4337, 2.2472, -1.3963, -1.8746, 0.9435, -1.3841),
+    2:  (-0.1933, 1.2642, 1.2767, -2.0492, 1.7237, 1.1764, -1.7795),
+    13: (0.6776, 1.0744, -1.5633, -2.1141, -2.0017, 1.3162, 0.5932),
+    17: (-0.6777, -1.0400, -1.5916, -2.1168, 2.0272, 1.2889, 0.9886),
+    31: (-0.5776, 1.1469, 1.2019, -1.7054, 1.9749, 1.1800, 2.1750),
+    71: (-0.1637, -1.4052, -2.4461, -2.5861, 0.8489, 1.0011, -1.7795),
+    97: (0.6776, -1.0744, 1.5783, -2.1141, -2.0017, 1.3162, 0.5932),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
-    13: (0.426, 0.050), 17: (1.378, 0.050),
-    31: (0.050, 1.815), 71: (1.753, 1.815),
-    2:  (0.426, 3.581), 97: (1.378, 3.581),
+    13: (0.165, 0.160), 17: (1.638, 0.160),     # hover 0.20 m
+    97: (1.638, 3.471),                         # hover 0.20 m
+    31: (0.060, 2.125),                         # hover 0.30 m
+    2:  (0.214, 3.421),                         # hover 0.35 m
+    71: (1.357, 1.556),                         # hover 0.55 m
 }
 
 

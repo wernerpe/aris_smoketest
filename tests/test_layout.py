@@ -392,6 +392,81 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
         layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT, clear=0.60)
 
 
+def test_no_shipped_park_pose_stands_in_another_arms_certified_ink():
+    """THE NUMBER THAT DECIDES WHETHER A PHASE CAN BE CONDUCTED.
+
+    A park pose is held for the whole of every phase its arm is not drawing
+    in, so a parked arm is an obstacle whose schedule is a CONSTANT: a mover
+    whose certified ink runs through it has no monotone schedule and no
+    ordering fixes it (`coordination.hard_blocks`).  This walks every
+    certified pose of every arm in the shipped atlas against every OTHER
+    arm's parked chain, with the conductor's own capsules and margin.
+
+    Skipped without an atlas: `out/` is gitignored, so this is a check the
+    rig's own re-certification runs, not something a clean checkout can do.
+    """
+    from pathlib import Path
+    from aris_sixarm import atlas as atlas_mod, coordination
+    fl = layout.FLEET_PROPOSED
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    out = Path(__file__).resolve().parents[1] / "out"
+    d = None
+    for cand in sorted(out.glob("atlas_proposed*")):
+        f = cand / "atlas_arm31.npz"
+        if not f.is_file():
+            continue
+        meta = np.load(f)
+        if atlas_mod.is_current(meta)[0] \
+                and abs(float(meta["base"][2, 3]) - h) <= 1e-9:
+            d = cand
+            break
+    if d is None:
+        pytest.skip(f"no current proposed atlas at h = {h:.3f} in out/ — "
+                    "run scripts/run_atlas6.py --rig proposed")
+    margin = coordination.SAFETY_M + coordination.CALIB_M
+
+    def chain(Q, spec):
+        """World chain with the LATERAL tool, whatever the process global is
+        (`frames.PEN_LAT` is not set in a bare test run)."""
+        T, P = frames.fk_many(np.asarray(Q, float).reshape(-1, 7))
+        tl = frames.tool_points_many(T, frames.PEN_EXT, LAT)
+        P = np.concatenate([P] + [t[:, None, :] for t in tl], axis=1)
+        Twb = np.asarray(spec.T_world_base(), float)
+        return P @ Twb[:3, :3].T + Twb[:3, 3]
+
+    parks = {a: chain(np.asarray(layout.Q_PARK_PROPOSED[a], float)[None, :],
+                      fl[a]) for a in fl}
+    tab = coordination.CAPSULES_LAT
+    rr = np.array([c[2] for c in tab], float)
+    worst, who, n = np.inf, None, 0
+    for aid, spec in sorted(fl.items()):
+        arr, _ = atlas_mod.load(d, aid)
+        Q = arr[atlas_mod.strict_go(arr)][:,
+                                          atlas_mod.QCOL:atlas_mod.QCOL + 7]
+        if not len(Q):
+            continue
+        P = chain(Q, spec)
+        A, B = coordination.cap_endpoints(P, tab)
+        for other in sorted(fl):
+            if other == aid:
+                continue
+            Ab, Bb = coordination.cap_endpoints(parks[other], tab)
+            for s in range(0, len(A), 512):
+                d2 = coordination.seg_seg_dist(
+                    A[s:s + 512, :, None, :], B[s:s + 512, :, None, :],
+                    Ab[:, None, :, :], Bb[:, None, :, :])
+                g = float((d2 - rr[None, :, None] - rr[None, None, :]).min())
+                if g < worst:
+                    worst, who = g, (aid, other)
+            n += len(A)
+    assert n > 1000, "the atlas must actually carry certified poses"
+    assert worst >= margin, (
+        f"arm {who[1]}'s park pose is {1000 * worst:.1f} mm from arm "
+        f"{who[0]}'s certified ink, under the {1000 * margin:.0f} mm the "
+        "conductor holds every pair to — the fleet cannot conduct a phase "
+        "in which it is parked")
+
+
 def test_baked_park_poses_are_that_functions_own_output():
     """The literals in `layout.py` are `certified_park_poses`' output on
     `LAYOUT_PROPOSED` at `PARK_GRID_PROPOSED`, so they cannot drift from the
@@ -414,11 +489,14 @@ def test_baked_park_poses_are_that_functions_own_output():
     for aid, q in made.items():
         assert np.allclose(q, layout.Q_PARK_PROPOSED[aid], atol=5e-5), aid
 
-    # each arm stands off along its OWN outward bearing at its own radius, and
-    # holds the pen at its own hover — the three numbers the grid records
+    # each arm stands off along its own SEARCHED bearing at its own radius,
+    # and holds the pen at its own hover — the three numbers the grid records.
+    # The bearing is a grid entry now, not the outward ray: held outward the
+    # middle row's ray runs off the short edge of the canvas and the park set
+    # saturates 5 mm under the conductor's margin (see `layout`'s note).
     cent = np.mean([s.xy for s in bare.values()], axis=0)
     for aid, q in layout.Q_PARK_PROPOSED.items():
-        r, hv = layout.PARK_GRID_PROPOSED[aid]
+        r, hv, bdeg = layout.PARK_GRID_PROPOSED[aid]
         T = frames.fk(np.asarray(q, float))[0]
         tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(pen_lat=LAT)
         Twb = layout.FLEET_PROPOSED[aid].T_world_base()
@@ -426,8 +504,19 @@ def test_baked_park_poses_are_that_functions_own_output():
         assert np.allclose(w[:2], layout.PARK_HOVER_PROPOSED[aid], atol=1e-3)
         assert abs(w[2] - hv) < 1e-4, aid      # the literals are 4 decimals
         b = np.asarray(bare[aid].xy, float)
-        u = (b - cent) / np.linalg.norm(b - cent)
+        u = np.array([np.cos(np.deg2rad(bdeg)), np.sin(np.deg2rad(bdeg))])
         # on the bearing, at the radius (or clipped to the sheet edge, which
         # is why this is a bound and not an equality)
         assert float(np.dot(w[:2] - b, u)) > 0.5 * r, aid
         assert float(np.linalg.norm(w[:2] - b)) <= r + 1e-4, aid
+        # ...and STILL outward: every shipped bearing points away from the
+        # fleet centroid, which is the property that keeps the six apart
+        out = (b - cent) / np.linalg.norm(b - cent)
+        assert float(np.dot(u, out)) > 0.0, aid
+    # a two-number grid entry is still the old outward recipe, unchanged
+    two = layout.certified_park_poses(
+        bare, {a: v[:2] for a, v in layout.PARK_GRID_PROPOSED.items()},
+        pen_lat=LAT)
+    assert sorted(two) == sorted(made)
+    assert any(not np.allclose(two[a], made[a], atol=1e-6) for a in made), \
+        "the bearing must actually be doing something"
