@@ -749,6 +749,152 @@ def prune_unflyable(spec, segs, mat, exact_max_n=sequence.EXACT_MAX_N,
     return idx, sorted(drop)
 
 
+# ==========================================================================
+# A PARKED PARTNER IS A WALL, AND THE ALLOCATOR IS WHERE THAT BELONGS
+# ==========================================================================
+# The atlas certifies a cell against the POSE-INVARIANT part of a neighbour —
+# its base column, `mounts.arm_column_boxes`.  That is everything an arm is in
+# every configuration, and it is not everything an arm is in the configuration
+# it is actually holding.  A phase conducted by one arm has five others
+# STANDING somewhere, and where they stand is known: it is `spec.q_seed`, the
+# certified park pose baked in `layout.Q_PARK_PROPOSED`.
+#
+# Until this commit nothing between the atlas and the conductor knew that.  The
+# allocator would hand an arm a span whose certified corridor runs through a
+# parked partner's forearm; the sequencer would order it; `idle` would program
+# it; and the CONDUCTOR would discover it three stages later as a hard block —
+# "the impossible indices are INK: arm 13 segment(s) [11] — no order fixes
+# that, only a different allocation".  That refusal is correct and it is also
+# a whole pipeline's work thrown away for something knowable at the cover.
+#
+# So it is knowable at the cover now.  The rule follows the one this module
+# already has for a bag with no paper-legal tour (`prune_unflyable`): the span
+# is BANNED for that arm and the cover is run again, so the ink goes to a
+# different arm — or, if no arm can have it while those partners are parked, to
+# a different phase — instead of to a refusal.  ESTIMATES PRUNE, CONDUCTION
+# DECIDES: this never certifies anything, it only takes candidates away, and
+# the conductor still owns the last word on every one that survives.
+#
+# WHO IS PARKED depends on who is drawing, which is a property of the PHASE and
+# not of the allocation — `--arm-phases solo` parks five arms behind every
+# mover, `disjoint` parks the other column, `off` parks nobody.  The caller
+# passes the same grouping it will later split the phases by (`park_groups`),
+# and an arm's parked partners are the arms outside its own group.  Without a
+# grouping every other arm counts as parked, which is the solo reading; without
+# `parks` at all the probe is absent and this module behaves exactly as it did.
+class ParkProbe:
+    """The parked fleet as capsules, and a path's clearance against it.
+
+    Cheap on purpose, because it is charged against the allocator's latency
+    budget (docs/FAST_PLANNING.md): each parked arm is ONE pose, so its
+    capsules are built once at construction; a candidate span's certified
+    joint path is already in hand (`entry["plan"]["qs"]`), so the verdict is
+    one batched FK and one broadcast segment distance; and the verdict is
+    memoised on the span key, because the balancer prices the same span many
+    times over.
+
+    The margin is the conductor's own `SAFETY_M + CALIB_M`, and the residual
+    between path samples is covered the way the conductor covers it — the
+    clearance is 1-Lipschitz in point displacement, so half the per-step chain
+    motion is subtracted and a conflict cannot hide between two samples.
+    """
+
+    def __init__(self, parks, specs, pens, groups=None, h_inv=None,
+                 margin=None):
+        from . import coordination
+        self.margin = float(coordination.SAFETY_M + coordination.CALIB_M
+                            if margin is None else margin)
+        self.h_inv = H_INV_DEFAULT if h_inv is None else float(h_inv)
+        self.specs, self.pens = specs, pens
+        self.groups = [list(g) for g in groups] if groups else None
+        self.stats = dict(probes=0, blocked=0, cached=0, seconds=0.0)
+        self._memo = {}
+        self.caps = {}
+        for a, q in (parks or {}).items():
+            if a not in specs:
+                continue
+            P = coordination.chain_world(np.asarray(q, float).reshape(1, 7),
+                                         specs[a], self.h_inv,
+                                         float(pens.get(a, 0.110)))
+            tab = (coordination.CAPSULES_LAT if P.shape[1] >= 11
+                   else coordination.CAPSULES)
+            A, B = coordination.cap_endpoints(P, tab)
+            self.caps[int(a)] = (A[0], B[0],
+                                 np.array([c[2] for c in tab], float))
+
+    def __bool__(self):
+        return bool(self.caps)
+
+    def partners(self, arm):
+        """The arms standing still while `arm` draws. -> [arm ids]."""
+        co = {int(arm)}
+        for g in (self.groups or []):
+            if arm in g:
+                co |= {int(x) for x in g}
+        return [b for b in sorted(self.caps) if b not in co]
+
+    def clearance(self, arm, qs):
+        """Worst clearance of this joint path against the parked partners.
+
+        -> metres, `inf` when nobody is parked behind this arm.  Negative
+        means the path is inside a parked chain.
+        """
+        from . import coordination
+        others = self.partners(arm)
+        if not others:
+            return float("inf")
+        qs = np.asarray(qs, float).reshape(-1, 7)
+        if len(qs) == 0:
+            return float("inf")
+        P = coordination.chain_world(qs, self.specs[arm], self.h_inv,
+                                     float(self.pens.get(arm, 0.110)))
+        tab = (coordination.CAPSULES_LAT if P.shape[1] >= 11
+               else coordination.CAPSULES)
+        A, B = coordination.cap_endpoints(P, tab)
+        rr = np.array([c[2] for c in tab], float)
+        # half the worst per-step motion of anything the capsules are drawn
+        # through, which is what a 1-Lipschitz clearance can lose between two
+        # samples of the path
+        step = np.zeros(0)
+        if len(P) > 1:
+            step = 0.5 * np.max([np.linalg.norm(np.diff(X, axis=0),
+                                                axis=2).max(1)
+                                 for X in (P, A, B)], axis=0)
+        worst = float("inf")
+        for b in others:
+            Ab, Bb, rb = self.caps[b]
+            d = coordination.seg_seg_dist(A[:, :, None, :], B[:, :, None, :],
+                                          Ab[None, None, :, :],
+                                          Bb[None, None, :, :])
+            d = (d - rr[None, :, None] - rb[None, None, :]).min(axis=(1, 2))
+            if len(step):
+                d = np.minimum(d[:-1], d[1:]) - step
+            worst = min(worst, float(d.min()))
+        return worst
+
+    def blocked(self, arm, entry, key=None):
+        """Does this entry's certified ink stand inside a parked arm? -> bool."""
+        if not self.caps:
+            return False
+        k = key if key is not None else (
+            int(arm), int(entry["stroke_id"]),
+            round(float(entry["s_range"][0]), 9),
+            round(float(entry["s_range"][1]), 9))
+        hit = self._memo.get(k)
+        if hit is not None:
+            self.stats["cached"] += 1
+            return hit
+        t0 = time.time()
+        qs = (entry.get("plan") or {}).get("qs")
+        gap = float("inf") if qs is None else self.clearance(arm, qs)
+        bad = bool(gap < self.margin)
+        self._memo[k] = bad
+        self.stats["probes"] += 1
+        self.stats["blocked"] += int(bad)
+        self.stats["seconds"] += time.time() - t0
+        return bad
+
+
 def replan_same_span(st, sp, spec, opts=None, min_seg=MIN_SEG_M, tol=1e-12):
     """Re-plan EXACTLY this span for another arm. -> (entry, n_plan_calls).
 
@@ -3035,6 +3181,13 @@ def split_by_arms(res, groups):
         r["name"] = (f"{res.get('name', 'pass')} — arms "
                      + ",".join(str(a) for a in sub))
         r["arm_group"] = [int(a) for a in sub]
+        # the park probe ran ONCE for the whole allocation, so its counters
+        # ride on the first group only; the ink it refused is reported where
+        # the arm that lost it is
+        r["park"] = dict(res.get("park") or {}) if first else {}
+        r["park_arms"] = list(res.get("park_arms") or ()) if first else []
+        r["park_blocked"] = [x for x in (res.get("park_blocked") or ())
+                             if x["arm"] in set(sub)]
         out.append(r)
     if not out:                      # nothing was drawn at all: one empty pass
         r = dict(res, arms=[], arm_group=[])
@@ -3234,7 +3387,7 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
              split_rounds=SPLIT_ROUNDS, split_budget=SPLIT_BUDGET,
              draw_speed=DRAW_SPEED, q_start=None, return_home=True,
              cluster=CLUSTER, menu_opts=None, fleet=None, merge=True,
-             fast_balance=True, share=None):
+             fast_balance=True, share=None, parks=None, park_groups=None):
     """Strokes -> per-arm certified programs + the dropped list.  See module docs.
 
     `arms` names the arms outright; `active_override` (see `active_arms`) says
@@ -3377,6 +3530,15 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         table = []
 
     pen_m = {a: pen_of(pens, a) for a in arms}
+    # THE PARKED FLEET, IF THE CALLER SAYS WHO IS PARKED.  See `ParkProbe`.
+    # `parks=True` is the shorthand for "every arm at its own `q_seed`", which
+    # is where `layout.certified_park_poses` bakes them.
+    if parks is True:
+        parks = {a: np.asarray(fl[a].q_seed, float) for a in fl}
+    park = ParkProbe(parks or {}, {a: fl[a] for a in (parks or {})},
+                     {a: pen_of(pens, a) for a in (parks or {})},
+                     groups=park_groups,
+                     h_inv=(seq_opts or {}).get("h_inv"))
 
     def _mat(a):
         """`sequence.cost_matrix` kwargs for arm `a`, as this run will call it."""
@@ -3455,7 +3617,16 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                                    entry=_entry(st, sp, plan)))
         t_replan += time.time() - t2
 
-        fresh = set()
+        fresh, why = set(), {}
+        # A SPAN INSIDE A PARKED PARTNER IS NOT THIS ARM'S SPAN EITHER, and it
+        # is banned in the same place and for the same reason: so the cover can
+        # hand the paper to somebody the parked fleet is not standing on.  This
+        # is a pure PRUNE — the conductor still decides what actually runs.
+        for it in placed:
+            if park.blocked(it["arm"], it["entry"]):
+                k = (it["arm"], int(it["stroke"]["id"]))
+                fresh.add(k)
+                why[k] = "is standing in a parked partner"
         for a in arms:
             mine = [i for i, it in enumerate(placed) if it["arm"] == a]
             if not mine:
@@ -3464,11 +3635,13 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                                      _mat(a))
             for k in bad:
                 it = placed[mine[k]]
-                fresh.add((a, int(it["stroke"]["id"])))
+                key = (a, int(it["stroke"]["id"]))
+                fresh.add(key)
+                why.setdefault(key, "cannot fly to it")
         if not fresh or fresh <= banned:
             break
         print("  !! " + ", ".join(f"arm {a} certifies the ink of stroke {s} "
-                                  "and cannot fly to it" for a, s in sorted(fresh))
+                                  f"and {why[(a, s)]}" for a, s in sorted(fresh))
               + "; re-covering without it")
         banned |= fresh
 
@@ -3486,13 +3659,21 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         # alternatives come out of `ivmap`, so handed the raw one it would
         # happily relocate stroke 26 to the arm that cannot fly to it and undo
         # the retry above one move later.
+        # ...AND NOR MAY IT OFFER BACK WHAT A PARKED PARTNER IS STANDING ON.
+        # `reach` is the balancer's coarse "is this pair worth a probe" gate
+        # (`_Pricer.reaches`), so the park bans go in there too — a missing key
+        # still means yes, which is what makes this a filter and not a table.
+        reach = pre
+        if banned:
+            reach = dict(pre or {})
+            reach.update({(sid, a): False for a, sid in banned})
         placed, bal = rebalance(placed, arms, colors, _flyable_ivmap(), specs, aopts,
                                 pen_m, draw_speed, seq_opts, min_seg,
                                 verbose=verbose, q_start=q_start,
                                 return_home=return_home, split=split,
                                 min_split=min_split, splice=splice,
                                 split_rounds=split_rounds,
-                                split_budget=split_budget, reach=pre,
+                                split_budget=split_budget, reach=reach,
                                 cost=cost, fast=fast_balance,
                                 entries=entry_memo)
         n_replan += bal["n_replans"]
@@ -3513,6 +3694,24 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     # fly, whatever the balancer's relocations, swaps and splits did to it.  A
     # span released here is not re-offered — the cover is behind us — so it
     # falls to `leftover` and is reported as dropped like any other hole.
+    # THE SAME GUARANTEE FOR THE PARKED FLEET, and first, because a span
+    # released here must not then be judged as part of somebody's tour.
+    park_blocked = []
+    for a in arms:
+        keep = []
+        for e in programs[a]:
+            if park.blocked(a, e):
+                park_blocked.append(
+                    dict(arm=int(a), stroke_id=int(e["stroke_id"]),
+                         s_range=[float(x) for x in e["s_range"]],
+                         length_m=float(e["length"])))
+                print(f"  !! arm {a}'s stroke {e['stroke_id']} span "
+                      f"{np.round(e['s_range'], 4).tolist()} "
+                      f"({e['length']:.4f} m) stands in a parked partner; "
+                      "giving it back")
+            else:
+                keep.append(e)
+        programs[a] = keep
     unflyable = []
     for a in arms:
         segs = programs[a]
@@ -3536,11 +3735,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out = dict(colors=colors, arms=arms, table=table, ivmap=ivmap,
                probe_stats=probe_stats, programs={}, dropped=dropped,
                unflyable=unflyable, banned=sorted(banned),
+               park_blocked=park_blocked, park=dict(park.stats),
+               park_arms=sorted(park.caps), park_groups=park.groups,
                merges=merges, n_merged=int(n_merged),
                sequencer=sequencer, pens=pen_m, balance=bal,
                draw_speed=float(draw_speed),
                timing=dict(prefilter=t_pre, probe=t_probe, repair=t_repair,
-                           replan=t_replan, balance=t_balance))
+                           replan=t_replan, balance=t_balance,
+                           park=float(park.stats["seconds"])))
     t3 = time.time()
     out["sequence"], out["transit"], out["transit_time"] = {}, {}, {}
     # the unsequenced bag and the per-arm planner options, kept so the pass can
@@ -3713,11 +3915,26 @@ def report(res, strokes):
         lines.append("      per-arm nominal s  " + "  ".join(
             f"{a}:{b['loads_before'].get(a, 0.0):.1f}->"
             f"{b['loads_after'].get(a, 0.0):.1f}" for a in res["arms"]))
+    p = res.get("park") or {}
+    if res.get("park_arms"):
+        lines.append(
+            f"parks: {len(res['park_arms'])} arm(s) at their depots "
+            + ("in groups " + "  ".join("{" + ",".join(str(x) for x in g) + "}"
+                                        for g in res["park_groups"])
+               if res.get("park_groups") else "(every other arm parked)")
+            + f"; {p.get('probes', 0)} probe(s) + {p.get('cached', 0)} cached "
+              f"in {p.get('seconds', 0.0):.1f} s, "
+              f"{p.get('blocked', 0)} span(s) refused")
+        if res.get("park_blocked"):
+            lines.append("      given back after balancing: " + ", ".join(
+                f"arm {x['arm']} stroke {x['stroke_id']} ({x['length_m']:.3f} m)"
+                for x in res["park_blocked"]))
     t = res["timing"]
     lines.append(f"time  prefilter {t['prefilter']:.1f} s  probe {t['probe']:.1f} s"
                  f"  repair {t.get('repair', 0.0):.1f} s"
                  f"  replan {t['replan']:.1f} s"
                  f"  balance {t.get('balance', 0.0):.1f} s"
+                 f"  park {t.get('park', 0.0):.1f} s"
                  f"  sequence {t['sequence']:.1f} s"
                  f"  total {t['total']:.1f} s")
     return lines

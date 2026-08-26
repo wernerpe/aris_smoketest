@@ -57,7 +57,8 @@ from aris_sixarm import (allocate, artwork, coordination, idle, pwl,  # noqa: E4
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
-                            program_json, totals)
+                            program_json, totals, _override,
+                            _park_groups)
 
 INK = {"grey": "#%02x%02x%02x" % trace.GREY_RGB,
        "orange": "#%02x%02x%02x" % trace.ORANGE_RGB}
@@ -850,9 +851,12 @@ def allocate_all(a, verbose=False, share=None):
     # schedule: phasing by arm changes when an arm draws and nothing about
     # what is drawn, so the coverage this run refuses on is the same number
     # either way and both allocations split the same way.
-    groups = arm_groups(getattr(a, "arm_phases", "off"),
-                        [x for p in phases for x in p["arms"]],
-                        float(getattr(a, "arm_phase_near", 0.70)))
+    # THE SAME GROUPING THE ALLOCATION WAS PRUNED AGAINST.  `csail_allocate`
+    # asks who will be parked before it allocates (`_parks`), and a colouring
+    # taken over a DIFFERENT arm set can come out differently — an arm that
+    # drew nothing changes the greedy order.  So the grouping is computed once,
+    # over the arms this run may use, and both stages read that one.
+    groups = _park_groups(a, allocate.active_arms(_override(a.arms)))
     if groups:
         phases, alt = phase_by_arms(phases, alt, groups)
         print(f"\nconducting in {len(phases)} phase(s), "
@@ -1274,13 +1278,6 @@ def schedule_args(ap):
     ap.add_argument("--pause", type=float, default=2.0,
                     help="seconds of every-arm-parked between two passes, "
                          "while a human swaps the pens")
-    ap.add_argument("--arm-phases", default="off",
-                    help="conduct each pass as SEVERAL phases, one per group "
-                         "of arms, with everybody else at the depot: 'off' "
-                         "(all arms at once), 'solo' (one arm at a time — the "
-                         "guaranteed floor), 'disjoint' (the coarsest grouping "
-                         "with no two arms whose bases are within "
-                         f"--arm-phase-near), or an explicit '13,31,2/17,71,97'")
     ap.add_argument("--skip-unconductable", action="store_true",
                     help="ship the phases that DO conduct instead of refusing "
                          "the whole run, and count the rest as ink nobody "
@@ -1288,11 +1285,6 @@ def schedule_args(ap):
                          "phase is one group of arms: the programme that comes "
                          "out is certified for what it draws and its coverage "
                          "says what that cost")
-    ap.add_argument("--arm-phase-near", type=float, default=0.70,
-                    help="metres between two bases that makes them each "
-                         "other's near neighbour for --arm-phases disjoint "
-                         "(the proposed rig's transverse pairs are 0.61 m "
-                         "apart and its next-nearest bases 1.21 m)")
     # ---- the idle policy (aris_sixarm/idle.py); --idle-policy is in
     # csail_allocate.add_args, because the sequencer prices it too ---------
     ap.add_argument("--no-jit", action="store_true",

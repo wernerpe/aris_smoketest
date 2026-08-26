@@ -268,6 +268,87 @@ def test_a_parked_arm_is_an_obstacle_for_everyone():
     assert np.all(res["progress"][97] == 0)
 
 
+def _probe(parks, groups=None, arms=(2, 13, 17, 31, 71, 97)):
+    from aris_sixarm import layout
+    fl = layout.FLEET_PROPOSED
+    return allocate.ParkProbe(
+        {a: np.asarray(fl[a].q_seed, float) for a in parks},
+        {a: fl[a] for a in fl}, {a: 0.110 for a in fl}, groups=groups)
+
+
+def test_the_park_probe_finds_an_arm_standing_in_its_own_depot():
+    """The probe's own calibration: a path that IS a parked arm's pose is
+    inside it, and one held by the arm itself is not (nobody is parked behind
+    themselves)."""
+    from aris_sixarm import layout
+    fl = layout.FLEET_PROPOSED
+    p = _probe([13, 17, 31, 71, 2, 97])
+    margin = coordination.SAFETY_M + coordination.CALIB_M
+    assert p and p.partners(31) == [2, 13, 17, 71, 97]
+    # arm 71's own park pose, offered to arm 71: its own depot is not an
+    # obstacle to itself, so the only partners are the other five
+    q71 = np.asarray(fl[71].q_seed, float)[None, :]
+    assert p.clearance(71, q71) >= margin
+    # ...and the SAME pose flown by its transverse partner 31 is refused:
+    # 31 reaching into 71's depot comes within the conductor's margin of the
+    # arm that is standing there
+    assert p.clearance(31, q71) < margin
+    assert p.blocked(31, dict(stroke_id=0, s_range=(0.0, 1.0),
+                              plan=dict(qs=q71))) is True
+
+
+def test_the_park_probe_respects_who_is_drawing_at_the_same_time():
+    """An arm in the mover's own group is NOT parked: it has a programme, and
+    the conductor is the thing that keeps two movers apart."""
+    from aris_sixarm import layout
+    q71 = np.asarray(layout.FLEET_PROPOSED[71].q_seed, float)[None, :]
+    margin = coordination.SAFETY_M + coordination.CALIB_M
+    solo = _probe([2, 13, 17, 31, 71, 97], groups=[[a] for a in
+                                                   (2, 13, 17, 31, 71, 97)])
+    together = _probe([2, 13, 17, 31, 71, 97], groups=[[31, 71], [2, 13, 17, 97]])
+    assert solo.clearance(31, q71) < margin
+    assert 71 not in together.partners(31)
+    assert together.clearance(31, q71) >= margin, \
+        "a co-active partner must not be treated as a wall"
+    # ...and with nobody parked at all the probe is silent and free
+    assert not allocate.ParkProbe({}, {}, {})
+    assert not allocate.ParkProbe({}, {}, {}).blocked(31, dict(plan=None))
+
+
+def test_the_park_probe_memoises_and_is_cheap():
+    """It is charged against the allocator's latency budget, so a span priced
+    twice is probed once."""
+    from aris_sixarm import layout
+    q = np.asarray(layout.FLEET_PROPOSED[71].q_seed, float)
+    p = _probe([2, 13, 17, 71, 97])
+    e = dict(stroke_id=7, s_range=(0.0, 1.0),
+             plan=dict(qs=np.repeat(q[None, :], 40, axis=0)))
+    t0 = time.time()
+    assert p.blocked(31, e) is True
+    once = time.time() - t0
+    assert p.blocked(31, e) is True
+    assert p.stats["probes"] == 1 and p.stats["cached"] == 1
+    assert p.stats["blocked"] == 1
+    assert once < 1.0, f"one 40-sample probe took {once:.2f} s"
+
+
+def test_the_park_probe_covers_the_gap_between_path_samples():
+    """Clearance is 1-Lipschitz in point displacement, so a coarse path is
+    judged on the bound and not on the samples — otherwise a span could dive
+    through a parked arm between two of them."""
+    from aris_sixarm import layout
+    fl = layout.FLEET_PROPOSED
+    q31 = np.asarray(fl[31].q_seed, float)
+    q71 = np.asarray(fl[71].q_seed, float)
+    p = _probe([71])
+    fine = p.clearance(31, np.linspace(q31, q71, 200))
+    coarse = p.clearance(31, np.linspace(q31, q71, 3))
+    margin = coordination.SAFETY_M + coordination.CALIB_M
+    assert fine < margin, "the path ends inside arm 71's depot"
+    assert coarse <= fine + 1e-9, \
+        "a coarser sampling must not report MORE clearance than a fine one"
+
+
 def test_capsule_length_follows_the_pen():
     """The conductor's last capsule IS the pen, so its length has to be the
     arm's real one.

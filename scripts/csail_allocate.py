@@ -453,6 +453,32 @@ def add_args(ap):
                          "ratio never moves).  Default: whatever --placement "
                          "chose, else 0")
     ap.add_argument("--no-prefilter", action="store_true")
+    # WHO IS PARKED IS AN ALLOCATION INPUT NOW, not only a conducting one:
+    # `run_allocation` prunes a span whose certified ink stands inside an arm
+    # that will be at its depot for the whole phase (`allocate.ParkProbe`), and
+    # it has to prune against the SAME grouping the conductor will use.  So
+    # these two live here with the allocator's arguments rather than with the
+    # conductor's, and `csail_schedule.schedule_args` no longer defines them.
+    ap.add_argument("--arm-phases", default="off",
+                    help="conduct each pass as SEVERAL phases, one per group "
+                         "of arms, with everybody else at the depot: 'off' "
+                         "(all arms at once), 'solo' (one arm at a time — the "
+                         "guaranteed floor), 'disjoint' (the coarsest grouping "
+                         "with no two arms whose bases are within "
+                         "--arm-phase-near), or an explicit '13,31,2/17,71,97'")
+    ap.add_argument("--arm-phase-near", type=float, default=0.70,
+                    help="metres between two bases that makes them each "
+                         "other's near neighbour for --arm-phases disjoint "
+                         "(the proposed rig's transverse pairs are 0.61 m "
+                         "apart and its next-nearest bases 1.21 m)")
+    ap.add_argument("--no-park-aware", dest="park_aware", action="store_false",
+                    help="allocate as if the arms that are NOT drawing in a "
+                         "phase were out of the building.  They are not: they "
+                         "stand at their depots for the whole phase and the "
+                         "conductor cannot schedule around a constant.  Only "
+                         "meaningful with --arm-phases; off, everybody draws "
+                         "at once and nobody is parked either way")
+    ap.set_defaults(park_aware=True)
     ap.add_argument("--atlas", default=None,
                     help="directory holding atlas_arm<id>.npz for the PREFILTER "
                          "(default: --out).  It must be a sweep of the ACTIVE "
@@ -566,6 +592,31 @@ def parse_pens(s):
     return out
 
 
+def _park_groups(a, arms):
+    """The arm grouping this run's phases will be conducted in. -> [[ids]]|None.
+
+    Imported from the scheduler rather than restated, because "who is parked
+    while I draw" has to be the SAME answer at allocation and at conduct or the
+    prune is about a rig nobody runs.  A run that does not phase by arm has no
+    parked arms and gets None.
+    """
+    mode = getattr(a, "arm_phases", "off")
+    if mode in (None, "", "off", "none"):
+        return None
+    import csail_schedule                   # deferred: it imports this module
+    return csail_schedule.arm_groups(mode, arms,
+                                     float(getattr(a, "arm_phase_near", 0.70)))
+
+
+def _parks(a, arms):
+    """{arm: q} of the depots that will be standing there. -> dict|None."""
+    if not getattr(a, "park_aware", True):
+        return None
+    if not _park_groups(a, arms):
+        return None                    # everybody draws at once: nobody parks
+    return {x: np.asarray(FLEET[x].q_seed, float) for x in FLEET}
+
+
 def run_allocation(a, verbose=False, split=None, px=None, share=None):
     """Trace -> place -> allocate. -> (phases, strokes, info).
 
@@ -653,6 +704,14 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
               atlas_dir=None if a.no_prefilter
               else str(Path(getattr(a, "atlas", None) or a.out)))
     arms = allocate.active_arms(_override(a.arms))
+    # PARK-AWARE ALLOCATION (`--park-aware`, default on).  Every arm outside
+    # the group that is drawing stands at its own certified depot for the whole
+    # of that phase, and a span whose certified ink is INSIDE one of them is
+    # not that arm's span — see `allocate.ParkProbe`.  The grouping handed in
+    # here is the same one `csail_schedule.allocate_all` will later split the
+    # phases by, so allocation and conduct agree about who is parked; with
+    # `--arm-phases off` nobody is, and the probe is silent.
+    kw.update(parks=_parks(a, arms), park_groups=_park_groups(a, arms))
     inks = artwork.inks_of(strokes)
     if not getattr(a, "two_pass", False):
         one = inks[0] if len(inks) == 1 else None
