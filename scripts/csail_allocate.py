@@ -576,6 +576,13 @@ def add_args(ap):
                     help="what an arm does when it finishes: 'freeze' (default) "
                          "lifts the pen and stops where it is; 'home' is "
                          "conductor v1's transit back to the ready pose")
+    ap.add_argument("--depot-hover", action="store_true",
+                    help="replace a hover the arm cannot fly home from with one "
+                         "on the same fiber that it can.  It recovers 10 of the "
+                         "14 pockets arms 31 and 71 hold at the shipped "
+                         "placement and it moves every other hover it touches, "
+                         "which on the logo is +57 mm of grey and -81 mm of "
+                         "orange — a wash, measured (writing.HOVER_DEPOT_AWARE)")
     ap.add_argument("--no-multi-tour", action="store_true",
                     help="require an arm's whole bag to thread into ONE tour "
                          "per phase.  On by default since 2026-08-26 a bag may "
@@ -734,6 +741,14 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
     # balancer's price and the sequencer all have to agree about whether a bag
     # may be flown as several tours, and they reach `allocate` by three
     # different routes (see allocate.MULTI_TOUR).
+    want_h = bool(getattr(a, "depot_hover", False))
+    if want_h != writing.HOVER_DEPOT_AWARE:
+        writing.HOVER_DEPOT_AWARE = want_h
+        paper.clear_cache()          # the hover memo is keyed on it, but the
+                                     # routes bought under the old answer are not
+    if writing.HOVER_DEPOT_AWARE:
+        print("  !! a hover the arm cannot fly home from is replaced by one on "
+              "the same fiber (--depot-hover)")
     allocate.MULTI_TOUR = not bool(getattr(a, "no_multi_tour", False))
     print("  a bag may be flown as SEVERAL depot-returning tours in one phase "
           "(allocate.MULTI_TOUR)" if allocate.MULTI_TOUR

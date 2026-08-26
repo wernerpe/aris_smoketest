@@ -979,6 +979,51 @@ def test_prune_keeps_the_span_a_trip_home_can_reach():
     assert drop == [2], f"kept {keep}; segment 2 is unreachable from anywhere"
 
 
+def test_a_hover_in_a_pocket_is_replaced_by_one_on_the_same_fiber():
+    """The depot-aware tier only ever runs where the plain choice is stuck.
+
+    Two claims.  The cheap one: `hover_fiber` ranks the whole fiber the way
+    `hover_solve` ranks it, so the pose this tier settles on is the NEAREST
+    acceptable one and the lift stays as short as the pocket allows.  The one
+    that matters: where the plain hover already joins the depot — which is most
+    of a canvas — the answer is bit-for-bit the answer it always was, so
+    turning the tier on cannot move a published number that was not stuck.
+    """
+    from aris_sixarm import paper, writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    s0 = _short_segment(31, bx + 0.30, by - 0.30)
+    qs = np.asarray(s0["plan"]["qs"], float)
+    pts = np.asarray(s0["plan"]["pts"], float)
+
+    old = writing.HOVER_DEPOT_AWARE
+    try:
+        writing.HOVER_DEPOT_AWARE = False
+        writing._clear_hovers()
+        plain, z0 = writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        writing.HOVER_DEPOT_AWARE = True
+        writing._clear_hovers()
+        aware, z1 = writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        joins = writing.hover_joins_depot(spec, qs[0], plain, pen_ext=0.110)
+        fib = writing.hover_fiber(spec, qs[0], pts[0], z0,
+                                  writing.static_gate(spec, 0.110), pen_ext=0.110)
+    finally:
+        writing.HOVER_DEPOT_AWARE = old
+        writing._clear_hovers()
+
+    if joins:
+        assert np.array_equal(plain, aware) and z0 == z1, \
+            "the tier moved a hover that was never stuck"
+    else:
+        assert writing.hover_joins_depot(spec, qs[0], aware, pen_ext=0.110), \
+            "the tier settled on a hover that still does not join the depot"
+    # the fiber is ranked nearest-first and every pose on it is a legal hover
+    if len(fib):
+        d = np.max(np.abs(fib - qs[0]), axis=1)
+        assert (np.diff(d) >= -1e-9).all(), "the fiber is not nearest-first"
+        assert np.isfinite(writing.static_gate(spec, 0.110)(fib)).all()
+
+
 def test_the_dead_end_is_named_and_it_is_the_one_given_back():
     """`depot_round_trip` reads the two hovers out of the four depot legs.
 

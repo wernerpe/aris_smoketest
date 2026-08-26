@@ -933,6 +933,107 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     return q if s[0] >= s[1] else w
 
 
+# ==========================================================================
+# A HOVER IS A PLACE THE ARM HAS TO BE ABLE TO GET TO, AND FROM
+# ==========================================================================
+# `hover_solve` picks the hover for STATIC CLEARANCE and for nothing else, and
+# on the proposed rig that leaves some of them in pockets: the pose is fine,
+# and `paper.route` will not fly `q_seed -> hover` or `hover -> q_seed` at any
+# shape on its ladder.  A span with an end like that can be drawn and cannot be
+# left, so it can only ever be the last thing an arm does in a pass — which is
+# what `allocate.fly_shrink` gives ink back to avoid.
+#
+# MEASURED, BECAUSE IT DECIDES WHETHER THIS TIER IS WORTH ITS COST.  Over the
+# 128 certified span ends arms 31 and 71 hold at the shipped placement, 114
+# join the depot both ways and 14 do not; of those 14, TEN have a pose on the
+# same fiber — same tip, same height, a different tool yaw and q7 and IK branch
+# — that does, found in 2 to 8 candidates.  The other four are at the edge of
+# reach, where the ladder had already given up height (z = 0.03 or none), and
+# nothing on the fiber helps them.
+#
+# So the fiber can be searched again, ONLY where the chosen hover is in a
+# pocket, and the acceptance test is the whole approach and not half of it: the
+# arm has to be able to LIFT onto the pose from the ink it just drew as well as
+# fly home from it, or this would trade a dead depot leg for a dead lift.
+# Where the plain choice is fine — which is most of a canvas — it costs one
+# direct `paper.route` each way and changes nothing at all.
+#
+# ...AND IT IS OFF BY DEFAULT, BECAUSE THE COVERAGE IT BUYS IS NOT COVERAGE.
+# Measured end to end at the shipped placement, primary allocation, against the
+# same run with it off:
+#
+#     grey    4.7929 -> 4.8504 m drawn     (+57.5 mm)
+#     orange  9.4349 -> 9.3534 m drawn     (-81.5 mm)
+#     ALLOCATED  96.50 % -> 96.34 %
+#
+# It recovers the ends it was built for and it MOVES EVERY OTHER HOVER IT
+# TOUCHES, and a hover 3.1 rad from the pose the arm just drew in is a
+# different transit for the whole rest of the bag — the grey gain and the
+# orange loss are the same mechanism twice.  So the machinery stays, measured,
+# behind `--depot-hover`, and the fleet keeps the hover it had: `fly_shrink`
+# already answers the pocket by giving the far end back, for a few centimetres
+# of ink that the residual pass then offers to somebody else.
+HOVER_DEPOT_AWARE = False
+HOVER_DEPOT_TRIES = 24      # fiber poses routed before the pocket is accepted
+
+
+def hover_fiber(spec, q_ref, xy, z, ok, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+                tilt=None, margin_min=HOVER_MARGIN):
+    """Every gated pose on the hover fiber over (xy, z), nearest first. -> (K,7).
+
+    `hover_solve` keeps one; this keeps them all, in the order `hover_solve`
+    would have preferred them, so a caller with a SECOND question to ask (can
+    the arm get home from it?) can walk the same ranking instead of inventing
+    another one.
+    """
+    Twb_inv = np.linalg.inv(spec.T_world_base(h_inv))
+    R_w = rotx(np.pi)
+    if tilt is not None:
+        from .tilt import pen_rot
+        R_w = pen_rot(np.asarray(tilt, float).reshape(1, 2))[0]
+    from .frames import tool_offset
+    off = tool_offset(pen_ext)
+    q7s = np.clip(np.asarray(ik.Q7_GRID, float).reshape(-1),
+                  FR3_MIN[6] + 1e-3, FR3_MAX[6] - 1e-3)
+    cand = []
+    for phi in HOVER_YAWS:
+        R = rotz(float(phi)) @ R_w
+        T_w = np.eye(4)
+        T_w[:3, :3] = R
+        T_w[:3, 3] = np.array([xy[0], xy[1], z]) - R @ off
+        T_b = Twb_inv @ T_w
+        for q7 in q7s:
+            for q in ik.solve(T_b, q7, q_ref):
+                if joint_margin(q) < margin_min:
+                    continue
+                cand.append((float(np.max(np.abs(q - q_ref))), q))
+    if not cand:
+        return np.zeros((0, 7))
+    cand.sort(key=lambda t: t[0])
+    Q = np.array([q for _, q in cand])
+    if ok is None:
+        return Q
+    return Q[np.isfinite(np.asarray(ok(Q), float).reshape(-1))]
+
+
+def hover_joins_depot(spec, q_ref, h, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+    """Can the arm lift onto this hover, fly home from it, and fly back? -> bool.
+
+    The three legs `writing` will actually lay down and `sequence.depot_legs`
+    will actually price — the lift at the contact floor, and the two halves of
+    a trip home at the flying floor — asked of one candidate pose.
+    """
+    if paper.route(spec, q_ref, h, pen_ext=pen_ext, h_inv=h_inv,
+                   tip_floor=paper.CONTACT_FLOOR) is None:
+        return False
+    q0 = np.asarray(spec.q_seed, float).reshape(7)
+    fl = paper.travel_floor(LIFT_Z, LIFT_Z)
+    return (paper.route(spec, q0, h, pen_ext=pen_ext, h_inv=h_inv,
+                        tip_floor=fl) is not None
+            and paper.route(spec, h, q0, pen_ext=pen_ext, h_inv=h_inv,
+                            tip_floor=fl) is not None)
+
+
 def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
                     pen_ext=PEN_EXT, tilt=None):
     """A CERTIFIED hover over `xy`, as high as the arm can hold one.
@@ -954,7 +1055,8 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            np.round(np.asarray(xy, float), 9).tobytes(),
            None if tilt is None else np.round(np.asarray(tilt, float),
                                               9).tobytes(),
-           tuple(float(z) for z in heights), bool(paper.STATIC_SAFE))
+           tuple(float(z) for z in heights), bool(paper.STATIC_SAFE),
+           bool(HOVER_DEPOT_AWARE))
     hit = _HOVERS.get(key)
     if hit is not None:
         return hit
@@ -983,6 +1085,25 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
             out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl))
     if out is None:
         out = (np.asarray(q_ref, float), 0.0)
+    elif HOVER_DEPOT_AWARE and gate is not None and out[1] > 0 \
+            and not hover_joins_depot(spec, q_ref, out[0], h_inv, pen_ext):
+        # ...AND THE POSE HAS TO BE SOMEWHERE THE ARM CAN GET TO AND FROM.
+        # Only ever reached where the chosen hover is in a pocket; the ranking
+        # is `hover_solve`'s own, so the NEAREST acceptable pose still wins and
+        # the lift stays as short as the pocket allows.
+        n = 0
+        for z in heights:
+            for cand in hover_fiber(spec, q_ref, xy, z, gate, h_inv, pen_ext,
+                                    tilt):
+                if n >= HOVER_DEPOT_TRIES:
+                    break
+                n += 1
+                if hover_joins_depot(spec, q_ref, cand, h_inv, pen_ext):
+                    out = (np.asarray(cand, float), float(z))
+                    n = -1
+                    break
+            if n < 0 or n >= HOVER_DEPOT_TRIES:
+                break
     _HOVERS[key] = out
     return out
 
