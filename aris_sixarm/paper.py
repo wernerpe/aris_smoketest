@@ -240,6 +240,9 @@ def route_key(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     """
     tf, cf = effective_floors(spec, q0, q1, pen_ext, h_inv, tip_floor,
                               chain_floor)
+    # the depot flag defaults to True for the same reason `key_maker` bakes it:
+    # every caller of the public form is the sequencer's parallel screen, and
+    # `sequence._screen_task` routes with `spec.q_seed`
     return _key(spec, q0, q1, pen_ext, h_inv, tf, cf)
 
 
@@ -260,15 +263,23 @@ def _pose_bytes(q):
     return np.round(np.asarray(q, float), 9).tobytes()
 
 
-def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor):
+def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True):
     # STATIC_SAFE is part of the question, so it is part of the key: the same
     # pair has a different answer with the steel gated in, and a memo that
     # forgot that would hand a run the other run's route.  So is the ACTIVE
     # TOOL (frames.PEN_LAT): the lateral holder sweeps a different envelope.
+    # ...and SO IS WHETHER THE DEPOT WAS OFFERED.  `q_home` adds three shapes
+    # to the ladder, the last of them the routed fold that is the difference
+    # between an arm reaching a span and not, so the same pair genuinely has
+    # two answers.  Caching them under one key means whichever caller asked
+    # FIRST decides what every later one is told — and the dangerous order is
+    # the common one, a q_home-less call filing `None` that a q_home call then
+    # reads instead of trying the fold.  A bool is enough: `q_home` is always
+    # the arm's own `q_seed` and `id(spec)` already says which arm that is.
     return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
-            bool(STATIC_SAFE))
+            bool(STATIC_SAFE), bool(q_home))
 
 
 def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
@@ -284,8 +295,11 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     base = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv))
 
     def key(a, b, tip_floor, chain_floor):
+        # `True` for the depot, because every caller of the BLOCK form is the
+        # sequencer's crossing screen and `sequence._screen_task` routes with
+        # `spec.q_seed` — see `_key`, whose tuple this has to reproduce exactly.
         return base + (rb[a], cb[b], round(float(tip_floor), 9),
-                       round(float(chain_floor), 9), bool(STATIC_SAFE))
+                       round(float(chain_floor), 9), bool(STATIC_SAFE), True)
     return key
 
 
@@ -960,7 +974,8 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     static_floor = (effective_static_floor(spec, q0, q1, pen_ext, h_inv,
                                            boxes=boxes)
                     if boxes and STATIC_SAFE else -np.inf)
-    ck = _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor) if cache \
+    ck = _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor,
+              q_home is not None) if cache \
         else None
     if ck is not None and ck in _CACHE:
         return _CACHE[ck]
@@ -1094,6 +1109,55 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         got, tried = skirts(tried)
         if got is not None:
             return got
+    # THE FOLD THROUGH THE DEPOT, ROUTED RATHER THAN FLOWN STRAIGHT.
+    #
+    # `q_home` has been offered twice already — as the bare via `[qh]` and as
+    # `[a0, qh, a1]` — and both ask `legs_ok` to fly a STRAIGHT joint-space line
+    # into the depot and another one out of it.  That is a far stronger demand
+    # than "the arm can get home and set off again", and the difference is the
+    # whole of this rig's coverage: `out/residual_anatomy.py` routes every one
+    # of the logo's 38 strokes from every arm's own depot, and arm 31 reaches
+    # all of them — yet 29 % of its span-to-span crossings have no route, so
+    # `prune_unflyable` finds no Hamiltonian path through its bag and gives the
+    # ink back.  Both halves of the journey exist.  Only the straight line
+    # between them does not.
+    #
+    # So the last shape on the ladder is the composite: route q0 -> depot and
+    # depot -> q1 with this same function, and hand the concatenation to the
+    # same `legs_ok` every other shape is certified by.  Three things make it
+    # honest rather than a special case:
+    #
+    #   * it is CERTIFIED, not assumed.  The sub-routes are certified against
+    #     their own endpoints; the composite is then re-checked end to end at
+    #     THIS call's floors, which are the ones the caller asked about.
+    #   * it is EXECUTED, not merely priced.  Every consumer — the sequencer's
+    #     matrix, `prune_unflyable`, and `writing.arm_program`'s transit — is
+    #     the same `route` call, so the vias the tour was costed on are the
+    #     vias the timeline lays down.  That equality is what the pipeline's
+    #     "sequencer priced transits the timeline does not pay" cross-check
+    #     exists to catch, and it is preserved by construction here.
+    #   * it is LAST, because it is dear.  A trip to the depot and back is the
+    #     most expensive escape on the ladder, the sequencer pays for it in
+    #     real seconds, and so a tour takes it only where nothing cheaper
+    #     certified.
+    #
+    # `q_home=None` in the two sub-calls is what stops the recursion at one
+    # level: a fold through the depot on the way to the depot is not a shape.
+    if q_home is not None:
+        qh = np.asarray(q_home, float).reshape(7)
+        if not (np.allclose(qh, q0) or np.allclose(qh, q1)):
+            sub = dict(pen_ext=pen_ext, h_inv=h_inv, tip_floor=tip_floor,
+                       chain_floor=chain_floor, heights=heights, n=n,
+                       margin_min=margin_min, cache=cache, steps=steps,
+                       q_home=None)
+            r0 = route(spec, q0, qh, **sub)
+            r1 = route(spec, qh, q1, **sub)
+            if r0 is not None and r1 is not None:
+                seq = list(r0["vias"]) + [qh] + list(r1["vias"])
+                tried += 1
+                ok, cz, tz = legs_ok(seq)
+                if ok:
+                    return done(seq, "fold_home", cz, tz, tried)
     if ck is not None:
         _CACHE[ck] = None
     return None
