@@ -56,6 +56,7 @@ from aris_sixarm import (allocate, artwork, coordination, idle, pwl,  # noqa: E4
                          scene_check, sequence, trace, writing)
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
+from aris_sixarm.stroke_api import truncate_polyline                # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
                             program_json, totals, _override,
                             _park_groups, alloc_kwargs)
@@ -817,7 +818,49 @@ def arm_groups(mode, arms, near=0.70, fleet=None):
 # ESTIMATES PRUNE, CONDUCTION DECIDES, as always: a residual pass is an
 # ALLOCATION and the conductor still rules on it like any other phase.  A pass
 # that certifies no new ink is dropped before it costs a conduct.
-def residual_strokes(results, min_len=None):
+def grow_hole(d, src, min_len):
+    """A hole too short to be a segment, extended into the ink beside it.
+
+    -> points, or None when the parent stroke is itself too short to give any.
+
+    THE MINIMUM SEGMENT LENGTH IS A RULE ABOUT PEN-UPS, NOT ABOUT INK — the
+    argument `allocate.merge_remainders` already makes.  A 9 mm hole is not
+    worth a hover and a seam OF ITS OWN, and that is why every stage refuses to
+    place one; it is not a reason to leave 9 mm of the logo blank.
+    `merge_remainders` answers it inside ONE allocation by growing the segment
+    whose endpoint touches the hole, and it cannot answer it here, because in a
+    residual pass the hole IS the picture and there is no neighbouring segment
+    in the same allocation to grow.
+
+    So the hole is grown instead of the segment: it is re-cut out of its PARENT
+    stroke with enough ink either side to make a segment somebody will take.
+    That ink has already been drawn, and drawing it twice is the convention
+    this repository already runs on at every split seam (`SPLIT_OVERLAP_M`) and
+    every handoff — the two pens meet rather than leaving a hairline.  The
+    price of closing a 9 mm hole is therefore a few centimetres of ink laid
+    down a second time, which is the cheapest currency on the table.
+    """
+    pts = src.get(d["stroke_id"])
+    if pts is None:
+        return None
+    L = allocate.polyline_length(pts)
+    if L < min_len:                     # nothing to grow into
+        return None
+    s0, s1 = (float(x) for x in d["s_range"])
+    need = min(1.0, 1.25 * min_len / max(L, 1e-9))    # a quarter of slack, so
+    if s1 - s0 >= need:                               # the re-plan can back off
+        return truncate_polyline(pts, s0, s1)
+    pad = 0.5 * (need - (s1 - s0))
+    a, b = s0 - pad, s1 + pad
+    if a < 0.0:
+        a, b = 0.0, min(1.0, b - a)
+    if b > 1.0:
+        a, b = max(0.0, a - (b - 1.0)), 1.0
+    p = truncate_polyline(pts, a, b)
+    return p if len(p) >= 2 and allocate.polyline_length(p) >= min_len else None
+
+
+def residual_strokes(results, src=None, min_len=None):
     """The ink a round left empty, as a stroke set. -> (strokes, refused).
 
     `results` is EVERY pass of the round, not the last one: a two-pass round
@@ -832,24 +875,34 @@ def residual_strokes(results, min_len=None):
     fresh and dense because `allocate.allocate` keys its interval map on them
     and the next pass is a self-contained problem.
 
-    `refused` is every hole too short to be worth a segment of its own, handed
-    BACK rather than dropped on the floor: it is still empty paper and the
-    composed programme's coverage has to keep saying so.
+    `src` is {stroke_id: points} for the strokes THIS round was given, so a
+    hole shorter than `min_len` can be re-cut out of its parent with ink either
+    side of it rather than abandoned (`grow_hole`).  Chaining works because
+    every piece this function emits is itself at least `min_len` long, so a
+    hole inside one can always be grown back to the minimum WITHIN it — at
+    worst by taking the whole piece.  Without `src` — and for a hole whose
+    parent is somehow under the minimum — the hole goes to `refused`, which is
+    empty paper the composed programme's coverage keeps counting.
     """
     min_len = allocate.MIN_SEG_M if min_len is None else float(min_len)
+    src = src or {}
     out, refused = [], []
     for res in results:
         for d in res.get("dropped") or ():
             pts = np.asarray(d["pts"], float)
             if len(pts) < 2 or allocate.polyline_length(pts) < min_len:
-                refused.append(d)
-                continue
+                pts = grow_hole(d, src, min_len)
+                if pts is None:
+                    refused.append(d)
+                    continue
             out.append(dict(id=len(out), color=d["color"],
-                            kind=d.get("kind", ""), pts=pts))
+                            kind=d.get("kind", ""),
+                            pts=np.asarray(pts, float)))
     return out, refused
 
 
-def residual_passes(a, phases, share=None, rounds=0, min_gain=None):
+def residual_passes(a, phases, strokes=None, share=None, rounds=0,
+                    min_gain=None):
     """Re-allocate what the last pass left empty. -> ([phase], refused holes).
 
     Each round is a full `allocate.allocate` on the previous round's holes,
@@ -883,11 +936,13 @@ def residual_passes(a, phases, share=None, rounds=0, min_gain=None):
         return [d for res in results for d in (res.get("dropped") or [])]
 
     out, refused, prev = [], [], list(phases)
+    src = {int(s["id"]): np.asarray(s["pts"], float) for s in (strokes or ())}
     for r in range(rounds):
-        st, tiny = residual_strokes(prev)
+        st, tiny = residual_strokes(prev, src)
         if not st:
             print(f"\nresidual pass {r + 1}: nothing left to allocate")
             break
+        src = {int(s["id"]): np.asarray(s["pts"], float) for s in st}
         left = trace.total_length(st)
         print(f"\n=== residual pass {r + 1}: the {left:.4f} m in {len(st)} "
               f"span(s) the last round left empty, allocated again over all "
@@ -925,7 +980,10 @@ def residual_passes(a, phases, share=None, rounds=0, min_gain=None):
         # chain.
         kept = [x for x in made if x["drawn_len"] > 1e-9]
         out += kept
-        print(f"\n  residual pass {r + 1} gives back {gain:.4f} m of the "
+        still = float(sum(d["length"] for d in holes(made)))
+        print(f"\n  ...{still:.4f} m of the picture is still empty after "
+              f"round {r + 1}")
+        print(f"  residual pass {r + 1} gives back {gain:.4f} m of the "
               f"{left:.4f} m it was handed, in {len(kept)} phase(s)")
         # THE CONFETTI IS ABANDONED ONLY NOW.  `tiny` is the part of this
         # round's input too short to re-offer; it is permanently empty paper
@@ -1011,8 +1069,10 @@ def allocate_all(a, verbose=False, share=None):
             print(line)
     n_primary = len(phases)
     # ...and then the same allocator, again, on the holes (see `residual_passes`)
-    extra, empty = residual_passes(a, phases, share=share,
-                                   rounds=getattr(a, "residual_passes", 0))
+    extra, empty = residual_passes(a, phases, strokes=strokes, share=share,
+                                   rounds=getattr(a, "residual_passes", 0),
+                                   min_gain=getattr(a, "residual_min_gain",
+                                                    None))
     if extra:
         # THE HOLE THE COMPOSED PROGRAMME LEAVES IS THE LAST ONE, NOT THE FIRST.
         # Every pass after the first was handed the pass before it as its
@@ -1584,6 +1644,14 @@ def schedule_args(ap):
                          "add certified ink, at a go-home and a --pause per "
                          "group.  Pass this to reproduce a pre-2026-08-26 "
                          "number")
+    ap.add_argument("--residual-min-gain", type=float, default=None,
+                    metavar="M",
+                    help="metres of NEW certified ink a residual pass must "
+                         "buy to be worth its go-home and its --pause "
+                         "(default: allocate.MIN_SEG_M, 25 mm).  Lower it when "
+                         "the target is the whole picture rather than a good "
+                         "one: closing the last 8 mm of the logo is worth a "
+                         "phase if and only if 8 mm of bare paper is not")
     ap.add_argument("--residual-passes", type=int, default=0,
                     metavar="N",
                     help="after the last pass, allocate WHAT IT LEFT EMPTY as "

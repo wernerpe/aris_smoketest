@@ -261,10 +261,11 @@ arm for the WHOLE piece, which is what lets an arm draw ink no arm of that
 colour could reach.  Pen LENGTHS never change &mdash; they are fixtures
 (%(pens)s).<br>"""
 
-SAME_INK_LINE = """The passes after the first re-draw nothing: they are the ink no
-arm could thread into ONE tour of its own bag, handed back to the same fleet as
-a second tour from the depot.  Nobody touches the pens between them
-(%(pens)s).<br>"""
+SAME_INK_LINE = """No pen changes hands at any of these boundaries and nobody has
+to walk in: the phases are the same ink drawn by FEWER ARMS AT A TIME where the
+conductor would not put them all on the paper together, and second tours from
+the depot at ink one tour could not thread into an arm's own bag.  The pens are
+fixtures throughout (%(pens)s).<br>"""
 
 
 # MeshcatVisualizer builds a geometry's path from its SCOPED name with `::`
