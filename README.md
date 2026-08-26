@@ -913,6 +913,15 @@ essentially nothing on top — 0 to 4 cells per arm out of ~4200 are blocked by 
 park and not already by a column — and no park pose can fix it: a search over
 593 candidates for arm 2 that scores **both** layers tops out at −3.9 mm.
 
+**Pitch 0.65 does not answer it either**, and it was measured rather than
+assumed: re-basing the same hover configurations on a 0.65 m pitch cuts the
+blocked fraction (15.2 → 11.4 % for arm 2, 4.4 → 2.0 % for arm 17) and leaves
+the worst case exactly where it was, at −131.0 mm.  That number is saturated —
+`chain_static_clearance` returns 0 minus the capsule radius when a segment is
+*inside* a box, and 0.131 is the forearm — so the deepest hovers have the
+forearm fully through a neighbour's column and 4 cm of pitch is not the scale
+of that problem.  The full 0.65 run was not spent on that evidence.
+
 **What would actually move it now**, in the order the measurements rank them:
 1. **Certify the lift layer.**  Gate the hover pose in `atlas.solve_cell`, or
    make `writing.lifted_or_lower` search for a hover that clears the neighbours'
