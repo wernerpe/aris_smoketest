@@ -84,6 +84,19 @@ The certified programme is arms 2 and 31 drawing alone, 83.7 s, **55.25 %** of
 the mark, `scene_check` PASS on both phases, **0 s of conductor pauses** —
 because there is never a second arm to wait for.
 
+> **CERTIFIED UNDER PRE-AUDIT CAPSULES — A SOFTWARE BASELINE, NOT A RUNNABLE
+> PROGRAMME.**  The mesh-level collision audit (commit 5c8d803) has since
+> shown `coordination`'s capsule radii to be OPTIMISTIC: several links escape
+> the capsule union by 13-78 mm (link 5 the worst of the moving parts), so a
+> pose pair signed off here at the 80 mm margin can hold as little as ~14 mm
+> of real mesh clearance at h = 0.85.  Every number in this section — the
+> 96.69 % atlas, the 0.12 m column radius, the park clearances, this
+> programme — is measured against those radii and must be re-derived once the
+> corrections land.  Do not run it on the arms.  (The TOOL is not part of
+> that: the audit confirms the L-capsules fully contain the holder at the
+> as-built 45-degree placement; the old 5 mm exceedance was the 23-degree
+> cradle variant.)
+
 **Why, and it is the pair spacing.**  0.61 m between transverse partners is
 what makes the pair cover each other's under-base hole (§0), and it is also
 what makes them unable to be in the room together.  Measured on the certified
