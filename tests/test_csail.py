@@ -468,6 +468,34 @@ def test_priority_search_returns_the_minimum_makespan_order():
                                    retry_orders=True, verbose=False)["attempts"] >= 1
 
 
+def test_a_refused_priority_search_reports_what_it_searched():
+    """The refusal may not say "0 priority orders were tried" after trying all.
+
+    `attempts` is `stats["n_orders"]` — COMPLETE orders costed — and a search
+    that fails completes none of them, so the refusal reported zero for a walk
+    that had just been through every permutation.  It read as "the DFS cut
+    every prefix", which sent a whole investigation of the all-ceiling rig
+    looking for a pruning bug that was not there.  The bound only ever prunes
+    against a complete order already in hand, so a FAILED search has pruned
+    nothing and `n_dp` is exactly how many prefixes it paid for.
+    """
+    q0 = np.asarray(FLEET[31].q_seed, float)
+    paths = {31: ArmPath6(31, np.linspace(q0, q0 + 0.25, 40), 0.02),
+             71: ArmPath6(71, np.linspace(q0, q0 + 0.10, 20), 0.02)}
+    stats = dict(n_dp=57, n_orders=0, n_pruned=0, fail_depth=0, failed=71)
+    old = coordination._search_priority
+    coordination._search_priority = lambda *a, **k: (None, stats)
+    try:
+        with pytest.raises(RuntimeError) as got:
+            coordination.coordinate(paths, verbose=False)
+    finally:
+        coordination._search_priority = old
+    msg = str(got.value)
+    assert "all 2 priority orders of the 2 moving arms were searched" in msg, msg
+    assert "57 prefix DP solves" in msg, msg
+    assert "0 priority order" not in msg, msg
+
+
 def _busy_scene(n=130):
     """Three moving arms and one parked, close enough to interfere."""
     out = {}
@@ -1386,6 +1414,83 @@ def test_a_refusal_during_the_entry_taxi_reports_instead_of_raising():
     # ink is still ink: a block inside a stroke is not a tour edge
     tr2, dr2 = idle.unrunnable(progs, {(7, 3): [35]}, dt, orders)
     assert tr2 == {} and dr2 == {7: [1]}
+
+
+def test_a_refusal_that_is_both_ink_and_a_tour_edge_reports_both():
+    """`_refusal` may not drop the INK because a transit was blocked too.
+
+    The note used to be `if tr: ... elif dr: ...`, so an arm that could neither
+    fly its tour NOR draw its ink was reported as a tour problem and nothing
+    else — and the caller ACTS on that: `csail_schedule.build_phase` blacklists
+    the named edges and re-sequences, up to `--reseq-tries` times, chasing an
+    ordering that cannot exist because the ALLOCATION is what is impossible.
+    Measured on the all-ceiling rig's three-arm CSAIL run, where the three arms
+    that draw nothing are still parked in the scene: 9 blocked tour edges
+    reported, and arm 71 segments 10/13/18/19 plus arm 2 segments 7/8/9 —
+    1598 of the 1910 blocked indices — silently dropped.
+    """
+    from aris_sixarm import idle
+
+    class _Body:                      # all `hard_blocks` reads off a path
+        def __init__(self, moves):
+            self.moves = moves
+
+    dt = 0.1
+    progs = {7: dict(phases=[
+        dict(kind="stroke", seg=0, t0=0.0, t1=2.0),
+        dict(kind="transit", seg=0, t0=2.0, t1=3.0),
+        dict(kind="stroke", seg=1, t0=3.0, t1=4.0)], duration=4.0)}
+    F = np.ones((40, 4), bool)
+    F[5] = False                      # t = 0.5 s: inside stroke 0  -> INK
+    F[25] = False                     # t = 2.5 s: the transit out of segment 0
+    exc = RuntimeError("arm 7 has no monotone pause schedule inside 4 s")
+    exc.paths = {7: _Body(True), 3: _Body(False)}
+    exc.free = {(7, 3): F}
+    exc.margin, exc.sweep = 0.08, 0.55
+    out = idle._refusal(exc, progs, dt, {7: [5, 2]}, None)
+    assert isinstance(out, idle.Unconductable)
+    assert out.draws == {7: [0]} and out.transits == {7: [(5, 2)]}
+    msg = str(out)
+    assert "INK: arm 7 segment(s) [0]" in msg, msg
+    assert "only a different allocation" in msg, msg
+    assert "pen-up transits: arm 7 5->2" in msg, msg
+
+
+def test_a_retreat_that_cannot_be_flown_costs_the_retreat_and_not_the_run():
+    """`_programs_per_arm` drops the arm, never the schedule.
+
+    `plan_retreat` certifies a POSE; the move that reaches it is a separate
+    question and `writing.arm_program` answers it with `PaperRefused` — which
+    the docstring of that exception says in as many words about the entry, the
+    go-home and the retreat.  Raised out of the whole-fleet `_programs` call it
+    killed the conduct, and it killed it in passes that are only ever OPTIONAL:
+    JIT and retreat are both kept only if they beat the baseline.  Measured on
+    the all-ceiling rig: a fleet with a conducted 172.7 s schedule in hand lost
+    it to arm 2's un-flyable retreat.
+    """
+    from aris_sixarm import idle, writing
+    seen = []
+
+    def fake(spec, segs, **kw):
+        seen.append((spec, kw.get("retreat") is not None))
+        if kw.get("retreat") is not None and spec == 2:
+            raise writing.PaperRefused("arm 2: retreat at segment 10 cannot "
+                                       "clear the paper plane")
+        return dict(tag="new", arm=spec)
+
+    old, writing.arm_program = writing.arm_program, fake
+    try:
+        prev = {2: dict(tag="old", arm=2), 71: dict(tag="old", arm=71)}
+        progs, refused = idle._programs_per_arm(
+            {2: 2, 71: 71}, {2: [], 71: []}, {}, None,
+            {2: idle.POLICY_FREEZE, 71: idle.POLICY_FREEZE}, None,
+            {2: np.zeros(7), 71: np.zeros(7)}, {2, 71}, prev,
+            draw_speed=0.15, transit_speed=0.30, qd_frac=0.6, h_inv=0.85)
+    finally:
+        writing.arm_program = old
+    assert refused == [2]                      # named, so the caller can say so
+    assert progs[2] is prev[2]                 # and it KEPT the one it had
+    assert progs[71]["tag"] == "new"           # while 71 got its retreat
 
 
 def test_rotating_the_logo_is_a_placement_and_not_a_distortion():

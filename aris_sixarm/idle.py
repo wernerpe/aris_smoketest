@@ -257,6 +257,37 @@ def _programs(specs, segs_by_arm, pens, q_start, parks, stretch, retreats,
     return out
 
 
+def _programs_per_arm(specs, segs_by_arm, pens, q_start, parks, stretch,
+                      retreats, only, prev, **prog_kw):
+    """`_programs` for a pass whose refusal must not cost a schedule.
+
+    -> (progs, refused), where `refused` names the arms whose new programme
+    `writing.arm_program` would not write and which therefore KEPT THE ONE THEY
+    HAD.
+
+    THE ENTRY, THE GO-HOME AND THE RETREAT ARE BEATS THE TOUR DID NOT CHOOSE,
+    so `writing.PaperRefused` says in as many words that they can still fail the
+    paper gate — and on the all-ceiling rig they do: arm 2 cannot fly from its
+    last stroke to the retreat pose `plan_retreat` certified for it, because
+    certifying a POSE is not certifying the move that reaches it.  Raised out of
+    `_programs` that killed the whole conduct, and killed it in the two passes
+    that are only ever OPTIONAL improvements — JIT and retreat are each kept
+    only if they beat the baseline, so a pass that cannot even be written down
+    is a pass that did not beat it, and a fleet with a conducted schedule in
+    hand was losing it to a policy that was allowed to decline.  Programming arm
+    by arm is what makes the answer per-arm, which is the promise the rest of
+    this module already makes.
+    """
+    progs, refused = dict(prev), []
+    for a in sorted(only):
+        try:
+            progs = _programs(specs, segs_by_arm, pens, q_start, parks, stretch,
+                              retreats, only={a}, prev=progs, **prog_kw)
+        except writing.PaperRefused:
+            refused.append(int(a))
+    return progs, refused
+
+
 def _better(new, old, eps=1e-9):
     """Is `new` a schedule worth keeping over `old`? -> bool.
 
@@ -381,16 +412,28 @@ def _refusal(exc, progs, dt, orders, specs=None):
                                       free)
     tr, dr = unrunnable(progs, blocks, dt, orders)
     note = ""
-    if tr:
-        note = ("; the impossible indices are pen-up transits: "
-                + ", ".join(f"arm {a} " + " ".join(
-                    f"{'start' if i is None else i}->{j}" for i, j in v)
-                            for a, v in tr.items())
+    if tr or dr:
+        # BOTH, WHEN IT IS BOTH, AND THE INK FIRST.  This used to be
+        # `if tr: ... elif dr: ...`, so an arm that could neither fly its tour
+        # NOR draw its ink was reported as a tour problem and nothing else —
+        # and the caller acts on that: `csail_schedule.build_phase` blacklists
+        # the named edges and re-sequences, up to `--reseq-tries` times, chasing
+        # an ordering that cannot exist because the ALLOCATION is what is
+        # impossible.  Measured on the all-ceiling rig's 3-arm CSAIL run: 9
+        # blocked tour edges reported, and arm 71 segments 10/13/18/19 and arm 2
+        # segments 7/8/9 — 1598 of the 1910 blocked indices — silently dropped.
+        bits = []
+        if dr:
+            bits.append("INK: " + ", ".join(f"arm {a} segment(s) {v}"
+                                            for a, v in sorted(dr.items()))
+                        + " — no order fixes that, only a different allocation")
+        if tr:
+            bits.append("pen-up transits: " + ", ".join(
+                f"arm {a} " + " ".join(f"{'start' if i is None else i}->{j}"
+                                       for i, j in v)
+                for a, v in sorted(tr.items()))
                 + " — re-sequencing without those edges may run")
-    elif dr:
-        note = ("; the impossible indices are INK: "
-                + ", ".join(f"arm {a} segment(s) {v}" for a, v in dr.items())
-                + " — no order fixes that, only a different allocation")
+        note = "; the impossible indices are " + "; and ".join(bits)
     else:
         # No index is impossible on its own, so the refusal is about the pose
         # the arm STOPS in or about the ordering.  Say which, rather than
@@ -509,9 +552,20 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                 parks[a], _ = POLICY_HOME, sent_home.append(a)
         if not want and not sent_home:
             raise _refusal(exc, progs, dt, orders, specs)
-        progs = _programs(specs, segs_by_arm, pens, q_start, parks, None,
-                          {a: g["q"] for a, g in want.items()},
-                          only=set(want) | set(sent_home), prev=progs, **prog_kw)
+        progs, no_beat = _programs_per_arm(
+            specs, segs_by_arm, pens, q_start, parks, None,
+            {a: g["q"] for a, g in want.items()},
+            set(want) | set(sent_home), progs, **prog_kw)
+        for a in no_beat:                  # the move to the new pose is refused
+            parks[a] = str(policy)         # so this arm is still frozen, not home
+            want.pop(a, None)
+            if a in sent_home:
+                sent_home.remove(a)
+        if no_beat and verbose:
+            print(f"  rescue: arm(s) {no_beat} cannot fly to the pose offered "
+                  "them without entering the paper — they stay where they froze")
+        if not want and not sent_home:     # nothing was actually re-programmed
+            raise _refusal(exc, progs, dt, orders, specs)
         try:
             sch, paths, samp = _conduct(progs, pens, dt, safety, calib, sweep,
                                         verbose, specs, search_max_n)
@@ -542,9 +596,16 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                 for a in progs if progs[a]["duration"] > 0.0}
         want = {a: s for a, s in want.items() if s > dt}
         if want:
-            pj = _programs(specs, segs_by_arm, pens, q_start, parks, want,
-                           {a: g["q"] for a, g in retreats.items()} or None,
-                           only=set(want), prev=progs, **prog_kw)
+            pj, no_beat = _programs_per_arm(
+                specs, segs_by_arm, pens, q_start, parks, want,
+                {a: g["q"] for a, g in retreats.items()} or None,
+                set(want), progs, **prog_kw)
+            for a in no_beat:
+                want.pop(a, None)
+            if no_beat and verbose:
+                print(f"  JIT taxi: arm(s) {no_beat} cannot be stretched "
+                      "without entering the paper — they keep their pace")
+        if want:
             try:
                 sj, paj, saj = _conduct(pj, pens, dt, safety, calib, sweep,
                                         verbose, specs, search_max_n)
@@ -587,9 +648,18 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
         if want:
             merged = dict(retreats)
             merged.update(want)
-            pr = _programs(specs, segs_by_arm, pens, q_start, parks, taxi or None,
-                           {a: g["q"] for a, g in merged.items()},
-                           only=set(want), prev=progs, **prog_kw)
+            pr, no_beat = _programs_per_arm(
+                specs, segs_by_arm, pens, q_start, parks, taxi or None,
+                {a: g["q"] for a, g in merged.items()}, set(want), progs,
+                **prog_kw)
+            for a in no_beat:
+                want.pop(a, None)
+                merged.pop(a, None)
+            if no_beat and verbose:
+                print(f"  retreat: arm(s) {no_beat} cannot fly from their last "
+                      "stroke to the pose offered them without entering the "
+                      "paper — they stay where they froze")
+        if want:
             try:
                 sr, par, sar = _conduct(pr, pens, dt, safety, calib, sweep,
                                         verbose, specs, search_max_n)

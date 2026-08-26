@@ -837,13 +837,27 @@ def coordinate(paths, safety=SAFETY_M, calib=CALIB_M, sweep=SWEEP_K,
     if res is None:
         a = failed
         blocked = [b for b in static + moving if b != a and not cells(a, b).any()]
+        # WHAT THE SEARCH DID, NOT WHAT IT FINISHED.  `n_attempts` is
+        # `stats["n_orders"]` — COMPLETE orders costed — which is zero by
+        # construction whenever the search fails, so this used to report "0
+        # priority orders were tried" for a search that had just walked every
+        # one of them.  It read as "the DFS cut every prefix", and a refusal
+        # whose evidence points at the wrong suspect is worse than one with no
+        # evidence at all.  The bound only ever prunes against a complete order
+        # already found, so a failed search has pruned NOTHING: every
+        # permutation really was explored, and `n_dp` is how many prefixes that
+        # took.
+        tried = (f"; all {math.factorial(len(moving))} priority orders of the "
+                 f"{len(moving)} moving arms were searched "
+                 f"({search['n_dp']} prefix DP solves) and none completed"
+                 if search is not None else
+                 f"; {n_attempts} priority order"
+                 f"{'' if n_attempts == 1 else 's'} were tried")
         err = RuntimeError(
             f"arm {a} has no monotone pause schedule inside {M * dt:.0f} s"
             + (f"; its path is never clear of arm{'s' if len(blocked) > 1 else ''} "
                f"{', '.join(str(b) for b in blocked)}, which no amount of "
-               "waiting can fix" if blocked else
-               f"; {n_attempts} priority order"
-               f"{'' if n_attempts == 1 else 's'} were tried")
+               "waiting can fix" if blocked else tried)
             + "; v1 does not re-route — try a placement that keeps the arms "
             "further apart")
         # THE REFUSAL IS EVIDENCE, NOT JUST A VERDICT.  The caller can often act
