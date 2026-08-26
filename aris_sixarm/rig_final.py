@@ -241,12 +241,17 @@ STATIC_MARGIN = Z_STATIC + CALIB_STATIC
 # them against coordination.CAPSULES) MINUS the base column (0,1) — the base
 # is bolted to its mount by construction, and its capsule radius would
 # false-positive against the very plate it is bolted to.  Radii mirror
-# coordination.LINK_R / WRIST_R / PEN_R.
+# coordination.UPPER_R / ELBOW_R / FORE_R / WRIST_R / HAND_R, which since
+# 2026-08-26 are MEASURED against the manufacturer's meshes rather than the
+# three round numbers this table used to restate — see the long note by
+# `coordination.LINK_R` for what moved and by how much.  Restated as literals
+# here on purpose: if someone widens a capsule there and forgets this table,
+# the pinning test is supposed to notice.
 PEN_R_FINAL = 0.05    # pen capsule radius, FINAL rig: the UNION envelope of
                       # both holder builds (10-deg: tip 8 mm off axis; 23-deg
                       # clutch at 0.209 flange->tip: 45 mm off axis + pencil)
-STATIC_CAPSULES = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
-                   (5, 7, 0.07), (7, 8, 0.07), (8, 9, PEN_R_FINAL))
+STATIC_CAPSULES = ((1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
+                   (5, 7, 0.091), (7, 8, 0.104), (8, 9, PEN_R_FINAL))
 
 # LATERAL HOLDER (2026-08-25): the tool is an L — an 11 cm bracket along hand
 # x, then the pen down to the tip.  A single TCP->tip capsule would need
@@ -258,10 +263,15 @@ STATIC_CAPSULES = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
 # frames.fk's 9 points + tip (index 9) + bracket corner (index 10) — see
 # frames.tool_points_many.  `chain_static_clearance` selects the table by the
 # chain's own width, so a caller cannot pair the wrong tool with its points.
-BRACKET_R_LAT = 0.05  # bracket capsule radius (no CAD; conservative)
+# AUDITED AND KEPT (2026-08-26).  The 22-deg CAD landed after these two were
+# chosen, and `scripts/collision_audit.py` measured the assembled holder
+# (housing + cap + clutch, placed by `penholder22_T_hand`) against them: both
+# capsules CONTAIN it, so unlike every arm capsule they did not have to move.
+# The inference in that placement is the residual risk, not the radius.
+BRACKET_R_LAT = 0.05  # bracket capsule radius (CAD-validated envelope)
 PEN_R_LAT = 0.05      # pen capsule radius on the lateral holder
-STATIC_CAPSULES_LAT = ((1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
-                       (5, 7, 0.07), (7, 8, 0.07),
+STATIC_CAPSULES_LAT = ((1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
+                       (5, 7, 0.091), (7, 8, 0.104),
                        (8, 10, BRACKET_R_LAT), (10, 9, PEN_R_LAT))
 
 # the holder as URDF tool geometry (visual mesh extracted from the SolidWorks

@@ -20,7 +20,7 @@ Two stages, because the two questions cost three orders of magnitude apart:
           in empty air, the atlas says the proposed rig covers 99.98 % of the
           canvas and every placement scores ~1.00, so the search ranks on
           nothing; swept with the neighbours' base columns in the obstacle set
-          (`mounts.arm_column_box`) it says 96.69 %, the dead cells cluster
+          (`mounts.arm_column_boxes`) it says 96.69 %, the dead cells cluster
           under the six bases, and "where the picture goes" becomes a real
           question with a real answer.  A placement whose ink avoids those
           blobs is what `probe_place` measured by hand and what this scores

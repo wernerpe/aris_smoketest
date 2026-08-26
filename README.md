@@ -680,6 +680,71 @@ post and measures 23.00°**, where the planning transform implies a 45° lean,
 and reaching 155.6 mm from a grip 55.1 mm behind the nose needs **100.5 mm of
 graphite** protruding.  §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
 
+## The capsules were wrong, and the package now says so (2026-08-26)
+
+`scripts/collision_audit.py` (commit 5c8d803) put every schematic collision
+model in this repo on an instrument — exact triangle-mesh distance (FCL BVH)
+between franka's own collision shells UNION the full-resolution visual shells,
+posed by `frames.fk`, and the capsules that claim to contain them — and found
+that **none of the arm capsules did**.  This commit applies the corrections.
+
+**The seven capsules are measured now, not assumed.**
+`coordination.CAPSULES` was three round numbers (0.09 below the wrist, 0.07 at
+the wrist and hand, 0.05 for the tool).  Each arm radius is now the old one
+plus the inflation the audit measured, rounded UP to the millimetre:
+
+| capsule | was | is | what it is |
+|---|---|---|---|
+| base column (0,1) | 0.090 | **0.155** | link0's casting |
+| shoulder→elbow (1,3) | 0.090 | **0.130** | link1 + link2 |
+| elbow offset (3,4) | 0.090 | **0.117** | link3 — the only one nearly right |
+| forearm (4,5) | 0.090 | **0.131** | link4 |
+| wrist (5,7) | 0.070 | **0.091** | link5 |
+| hand (7,8) | 0.070 | **0.104** | flange, gripper body, fingers |
+| tool (8,10),(10,9) | 0.050 | **0.050** | validated against the 22° CAD, kept |
+
+The same numbers are restated, on purpose and pinned by tests, in
+`rig_final.STATIC_CAPSULES(_LAT)` and `scene_check.RADII(_LAT)`.
+
+**The neighbour base column is two boxes, and neither of them is 0.12.**  The
+audit re-derived it as a 12-band cylinder stack: 0.171 m at the plate, waisted
+to 0.057 in the middle, 0.129 at the end, running to base z **0.3875** — 54.5
+mm past the `d1` the model stopped at — with a **connector and cable stub**
+reaching 0.177 m radially and 0.2325 m back UP the base, outside the plate box,
+the boom box and every model this package had.  `mounts.column_bands` ships two
+bands, and the reason it is two and not twelve is the gate-consistency identity
+this obstacle exists for: the conductor's own base capsule is ONE capsule at
+`link_r` over the whole span, so a box thinner than `link_r + calib` anywhere
+inside that span certifies cells the conductor then refuses.  `column_r` is
+still `link_r + calib`; both sides of that identity moved and it still holds.
+
+The boxes stop at the metal, not at the far spherical cap of that capsule.
+Containing the cap would mean running them to base z 0.518, and on the real
+2 cm sweep of all six arms that costs **7.6 points of union coverage and 12
+points of ≥2-arm concurrency at h = 0.940** to model a shape that is not there.
+The residual is discharged by measurement instead:
+`tests/test_mounts.py::test_no_certified_pose_sits_in_a_neighbours_shoulder_ball`
+walks every certified pose in the shipped atlas and checks the conductor's own
+criterion directly.
+
+**An atlas is now stamped with the model it was swept under.**
+`atlas.model_signature()` goes into every `atlas_arm*.npz`, and
+`atlas.is_current()` tells a caller whether the certifications it is holding
+were made against the geometry it is running.  Nothing recorded that before,
+which is exactly how a directory of pre-audit `.npz` files stayed in `out/`
+looking authoritative.  Tests skip a stale atlas loudly rather than asserting
+against it.
+
+**What the corrections cost at the adopted h = 0.850**: union strict-GO
+**96.69 % → 87.00 %**, ≥2-arm 50.33 → 37.14 %, dead 3.31 → 13.00 %
+(`out/atlas_proposed_occ/`).  Arm 17's park pose had to move — at the true
+widths the one the old model certified stands 15 mm inside arm 13's corrected
+column box — and the **inward** ready pose stopped existing for the middle row
+at any radius or hover, which is the "why the bearing is outward" finding
+arrived at a second time and much harder.  The URDF's own arm collision
+spheres are a third, still-unaudited schematic; `gen_proposed_rig_urdf.py`
+now says so at the top of the file.
+
 ## Results snapshot (2026-08-17, h_inv = 1.00)
 
 75.9 % of the 3.6×2.0 m sheet is strict-GO; ≥2-arm overlap only 10.2 %, no 3-arm

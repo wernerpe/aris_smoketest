@@ -19,9 +19,27 @@ from aris_sixarm import fleet as fleet_mod
 from aris_sixarm import paper, scene_check, sequence, writing
 from aris_sixarm.fleet import FLEET
 
+
 ROOT = Path(__file__).parents[1]
 PREFIX = ROOT / "tests/data/csail_final6_prefix_timeline.npz"
 ATLAS6 = ROOT / "out/atlas_final6_opt"
+
+
+def _require_current_atlas(d, aid):
+    """Skip unless the atlas in `d` was swept under THIS build's collision
+    model.  Since the 2026-08-26 mesh audit an atlas is a certification
+    against a specific set of capsules and a specific neighbour column, and
+    `out/` is gitignored — so a directory left over from before the audit is
+    stale data, not a failing assertion.  `atlas.is_current` says which."""
+    import numpy as np
+    from aris_sixarm import atlas as _atlas
+    f = Path(d) / f"atlas_arm{aid}.npz"
+    if not f.exists():
+        pytest.skip(f"no atlas in {Path(d).name} — run the sweep")
+    ok, why = _atlas.is_current(np.load(f))
+    if not ok:
+        pytest.skip(f"stale atlas in {Path(d).name}: {why} "
+                    "— re-run the sweep")
 
 # the two arms whose transits dive, and how far down they go (metres)
 OFFENDERS = [2, 97]
@@ -279,6 +297,7 @@ def test_cost_matrix_prices_an_unroutable_crossing_as_infinite(six,
 def tiers(six):
     if not (ATLAS6 / "atlas_arm2.npz").exists():
         pytest.skip("out/atlas_final6_opt not swept in this checkout")
+    _require_current_atlas(ATLAS6, 2)
     return dead_mod.tiers(ATLAS6, sorted(FLEET), fleet_mod.SHEET, 0.02)
 
 

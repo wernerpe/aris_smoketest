@@ -395,7 +395,7 @@ def _build_fleet6(dz_cm=0.0, boxes_w=None):
             out[aid] = _spec(key, unit, aid, names[aid], cols[aid],
                              dz_cm=dz_cm, boxes_w=boxes_w)
     # six arms in one room: each one's static obstacles include the other
-    # five's pose-invariant base columns (mounts.arm_column_box)
+    # five's pose-invariant base columns (mounts.arm_column_boxes)
     return mounts.attach_body_columns(out)
 
 

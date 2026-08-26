@@ -41,11 +41,29 @@ from aris_sixarm.fleet import FLEET_FINAL, FLEET_SIXARM, SHEET_FINAL  # noqa: E4
 from aris_sixarm.frames import (FR3_MAX, FR3_MIN, PEN_EXT,    # noqa: E402
                                 fk, fk_many, joint_margin, tip_pos)
 from aris_sixarm.metrics import (f_max, sigma_min,            # noqa: E402
+
                                  tip_jacobian)
 
 ROOT = Path(__file__).parents[1]
 ATLAS = ROOT / "out/atlas_final"
 ATLAS6 = ROOT / "out/atlas_final6_opt"
+
+
+def _require_current_atlas(d, aid):
+    """Skip unless the atlas in `d` was swept under THIS build's collision
+    model.  Since the 2026-08-26 mesh audit an atlas is a certification
+    against a specific set of capsules and a specific neighbour column, and
+    `out/` is gitignored — so a directory left over from before the audit is
+    stale data, not a failing assertion.  `atlas.is_current` says which."""
+    import numpy as np
+    from aris_sixarm import atlas as _atlas
+    f = Path(d) / f"atlas_arm{aid}.npz"
+    if not f.exists():
+        pytest.skip(f"no atlas in {Path(d).name} — run the sweep")
+    ok, why = _atlas.is_current(np.load(f))
+    if not ok:
+        pytest.skip(f"stale atlas in {Path(d).name}: {why} "
+                    "— re-run the sweep")
 
 
 @pytest.fixture
@@ -221,6 +239,7 @@ def test_the_mirrored_atlas_is_exact():
 
     if not (ATLAS / "atlas_arm13.npz").exists():
         pytest.skip("no atlas in out/atlas_final (run scripts/run_atlas.py)")
+    _require_current_atlas(ATLAS, 13)
 
     # on the REAL atlas: mirror every strict-GO pose onto unit B and require
     # the pen to land on web B, with the SAME clearance against BOTH frames
@@ -267,6 +286,7 @@ def test_the_preview_map_is_symmetric():
     overlap (the two webs are disjoint in y)."""
     if not (ATLAS / "coverage.npz").exists():
         pytest.skip("no coverage.npz (run the atlas first)")
+    _require_current_atlas(ATLAS, 13)
     d = np.load(ATLAS / "coverage.npz")
     per, xs, ys = d["per_arm_go"], d["xs"], d["ys"]
     cntA = per.sum(axis=0)
@@ -456,6 +476,7 @@ def test_the_seam_strip_is_scored_and_bridged(active6):
     """The payoff, read off the real sweep: the strip that used to be a gap is
     now the best-covered band on the canvas, and it is covered from BOTH sides.
     """
+    _require_current_atlas(ATLAS6, 2)
     if not (ATLAS6 / "coverage.npz").exists():
         pytest.skip("no six-arm atlas (run scripts/run_atlas6.py)")
     d = np.load(ATLAS6 / "coverage.npz")

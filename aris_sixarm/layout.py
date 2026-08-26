@@ -117,7 +117,7 @@ class StudySpec(ArmSpec):
     `validate` and `atlas` keep gating it at the more conservative r = 0.12).
 
     Since 2026-08-25 `mount_boxes` also carries the neighbours' BASE COLUMNS
-    (`mounts.arm_column_box`) — the arms themselves, in the only 0.333 m of
+    (`mounts.arm_column_boxes`) — the arms themselves, in the only 0.333 m of
     them that is the same in every pose.  On this rig that is not a detail:
     a transverse pair sits 0.61 m apart, so each arm's partner stands inside
     the ink the empty-air atlas was handing it.
@@ -584,19 +584,26 @@ PARK_GRID_PROPOSED = {13: (0.40, 0.10), 17: (0.30, 0.10), 31: (0.30, 0.20),
 # should not re-solve six IK searches.  `tests/test_layout.py` re-derives them
 # and compares, so the literals cannot drift from the recipe that made them.
 #
-# Every one of them: pen tip 0.10 or 0.20 m over the paper, min chain z
-# 0.210 m, >= 0.436 m from the nearest neighbour's steel, joint margin >=
-# 0.314 (gate 0.30), sigma >= 0.235 (gate 0.14).  The tightest pair of parked
-# arms (13, 17) holds 181 mm — against the 80 mm the conductor asks of every
-# pair while they move.  The nearest thing to a parked arm is not steel and
-# not a pose: it is the neighbouring ARM's base column, 122 mm from arm 17's
-# chain to arm 13's column BOX (152 mm to the robot inside it).
+# Every one of them: pen tip 0.10 or 0.20 m over the paper, >= 0.466 m from
+# the nearest neighbour's steel, joint margin >= 0.314 (gate 0.30).  The
+# tightest pair of parked arms (13, 17) holds 195 mm — against the 80 mm the
+# conductor asks of every pair while they move.  The nearest thing to a parked
+# arm is not steel and not a pose: it is the neighbouring ARM's base column,
+# 97 mm from arm 17's chain to arm 13's column BOXES (169 mm to the robot
+# inside them).
+#
+# RE-DERIVED 2026-08-26 under the audited capsules and the measured column.
+# Only arm 17 moved, and it had to: at the true widths the pose the old model
+# certified stands 15 mm inside arm 13's corrected column box.  Nothing else
+# in the table changed, which is the reassuring half of the answer — a park
+# pose that was clear of a 0.12 m column is mostly still clear of a 0.185 m
+# one, because a depot's whole job is to be somewhere nobody is.
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 Q_PARK_PROPOSED = {
     13: (0.0726, 1.1524, -1.6667, -2.2359, -1.9606, 1.3879, -1.7795),
-    17: (0.0132, 1.0882, -1.8163, -2.5609, -2.0390, 1.2974, -1.3841),
+    17: (0.0252, 0.6787, -1.9553, -2.6330, -2.3586, 0.9701, -2.1750),
     31: (-1.5008, 0.7729, 1.5216, -2.6713, 1.9695, 0.8583, -2.5704),
     71: (-1.5063, 1.1031, -1.4213, -2.3151, -1.8379, 1.1558, -0.1977),
     2:  (0.1476, 0.9605, 1.5459, -2.1233, 2.0982, 1.2470, -2.1750),

@@ -9,9 +9,12 @@ per-segment planner earned (`stroke_api`'s certificate is about a path, not a
 schedule) and makes the coordination problem small enough to solve exactly.
 
   MODEL     Each arm is 7 capsules built from `frames.fk`'s own chain points:
-            base column, upper arm, elbow offset, forearm (r = LINK_R), wrist
-            and hand (r = WRIST_R), and the pen (r = PEN_R).  These are
-            CONSERVATIVE envelopes of the real links, not CAD.  Two arms are
+            base column (LINK_R), upper arm (UPPER_R), elbow offset (ELBOW_R),
+            forearm (FORE_R), wrist (WRIST_R), hand (HAND_R) and the tool.
+            Since 2026-08-26 every one of those radii is MEASURED — the
+            smallest that contains the manufacturer's mesh over the sampled
+            poses (`scripts/collision_audit.py`; see the note by LINK_R) — and
+            not the round number it used to be.  Two arms are
             "clear" when every capsule pair is at least
             `safety + calib` apart:
               safety (default 0.05 m) is the operating margin;
@@ -86,9 +89,54 @@ from .frames import PEN_EXT, fk_many
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import PEN_R_FINAL
 
-LINK_R = 0.09        # m, capsule radius for base/upper arm/forearm
-WRIST_R = 0.07       # m, wrist + hand
-PEN_R = 0.03         # m, the pen itself
+# ==========================================================================
+# THE CAPSULE RADII ARE MEASURED NOW, NOT ASSUMED (mesh audit, 2026-08-26)
+# ==========================================================================
+# Until this commit the seven capsules wore three round numbers — 0.09 for
+# everything below the wrist, 0.07 for the wrist and hand, 0.05 for the tool —
+# described in the docstring above as "CONSERVATIVE envelopes of the real
+# links".  `scripts/collision_audit.py` put that claim on the instrument:
+# exact triangle-mesh distance (FCL BVH) between the manufacturer's collision
+# meshes and the full-resolution visual meshes, posed by this repo's own FK,
+# against the capsules that claim to contain them.  They do not.  Over 4 639
+# certified-pose pairs at h = 0.85 the capsule model was OPTIMISTIC on 15.6 %
+# of them by as much as +78 mm, and 38 pairs it signed off at the 0.08 m margin
+# were closer than that in the metal — one of them (13-71) held 13.6 mm.
+#
+# So each radius below is now the smallest one that CONTAINS its link: the
+# per-capsule inflation the audit measured (max over the sampled poses of
+# mesh-point-to-capsule-axis distance, minus the old radius), added to the old
+# radius and rounded UP to the millimetre.  `out/collision_audit.json`
+# ["fidelity"]["capsule_inflation_m"] is the measurement;
+# tests/data/collision_audit_geometry.json carries the numbers a test can pin.
+# UP, not to nearest: the audit's own report table reads 0.1302 and 0.0904 for
+# the forearm and the wrist, which round DOWN to 0.130 and 0.090 and would
+# leave the model 0.2 and 0.4 mm optimistic about the very links it exists to
+# contain.  Those two ship at 0.131 and 0.091.  (The audit's height study used
+# the unrounded inflation, so rounding up is also the side that agrees with
+# it; a millimetre is well inside its own 0.5 mm Panda-vs-FR3 error budget.)
+#
+# WHAT MOVED, AND WHY THAT MUCH.  The base column doubles in the worst place
+# (0.155): link0 is not a 0.09 pole, it is a 0.155 casting at the flange whose
+# connector and cable stub reach 0.177 — see `mounts.column_bands`, which
+# models the same body as an obstacle.  The elbow (0.117) is the thinnest
+# segment and the only one that was nearly right.  The hand grows most in
+# relative terms (0.07 -> 0.104): the fingers and the flange stand well proud
+# of the wrist axis the old capsule was drawn about.
+#
+# THE TOOL CAPSULES DID NOT MOVE.  The lateral holder's two 0.05 capsules were
+# audited against the 22-deg CAD (housing + cap + clutch, placed by
+# `rig_final.penholder22_T_hand`) and CONTAIN it with room to spare, so they
+# are carried unchanged — see `rig_final.BRACKET_R_LAT` / `PEN_R_LAT`.  The
+# inline pen's 0.03 (`PEN_R`, legacy three-arm rig) was NOT audited: that tool
+# is not built, and no rig this repo ships still flies it.
+LINK_R = 0.155       # m, base column: link0's casting + its connector
+UPPER_R = 0.130      # m, shoulder -> elbow (link1 + link2)
+ELBOW_R = 0.117      # m, the elbow offset segment (link3)
+FORE_R = 0.131       # m, forearm (link4)
+WRIST_R = 0.091      # m, wrist (link5)
+HAND_R = 0.104       # m, hand: flange, gripper body and fingers (link6..hand)
+PEN_R = 0.03         # m, the inline pen itself — UNAUDITED, legacy tool only
 SAFETY_M = 0.05      # m, operating clearance between two arms
 CALIB_M = 0.03       # m, unsurveyed base positions (see module docstring)
 SWEEP_K = 0.55       # sweep slack factor: 0.5 for the chord, +10 % for the arc
@@ -119,8 +167,8 @@ _IMAGE_STATS = dict(built=0, cached=0, transposed=0, cells=0, wall=0.0, jobs=0)
 # (chain point i, chain point j, radius); indices into the 10-point chain
 # (frames.fk's 9 points + the pen tip).  Points 1/2 and 5/6 coincide by
 # construction (zero DH offset), so they are not given their own capsule.
-CAPSULES = ((0, 1, LINK_R), (1, 3, LINK_R), (3, 4, LINK_R), (4, 5, LINK_R),
-            (5, 7, WRIST_R), (7, 8, WRIST_R), (8, 9, PEN_R))
+CAPSULES = ((0, 1, LINK_R), (1, 3, UPPER_R), (3, 4, ELBOW_R), (4, 5, FORE_R),
+            (5, 7, WRIST_R), (7, 8, HAND_R), (8, 9, PEN_R))
 # LATERAL HOLDER: an 11-point chain (bracket corner at index 10) and a
 # TWO-capsule tool, bracket TCP->corner + pen corner->tip, both at the
 # holder envelope radius.  Mirrors rig_final.STATIC_CAPSULES_LAT and

@@ -47,8 +47,8 @@ from .validate import check_pose as validate_pose, validate_plan
 
 # same envelope as the conductor, restated here on purpose: if someone widens
 # a capsule there and the two disagree, this check is supposed to notice.
-RADII = ((0, 1, 0.09), (1, 3, 0.09), (3, 4, 0.09), (4, 5, 0.09),
-         (5, 7, 0.07), (7, 8, 0.07), (8, 9, 0.03))
+RADII = ((0, 1, 0.155), (1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
+         (5, 7, 0.091), (7, 8, 0.104), (8, 9, 0.03))
 # FINAL-RIG pen capsule: the holder envelope union (r 0.05), restated from
 # rig_final.PEN_R_FINAL on purpose — a test pins the two together.
 RADII_FINAL = RADII[:-1] + ((8, 9, 0.05),)
@@ -115,17 +115,27 @@ FRAME_STEP = 0.005                   # ...and the same for the frame gate, which
 # carried out of the building.
 #
 # So this gate re-derives that column HERE, from the fleet's own base
-# transform and this module's own capsule radius, and holds every arm's chain
-# to the same `margin` the inter-arm gate uses.  It shares no code with
-# `mounts.arm_column_box` (which inflates the same cylinder into an AABB for
-# the planner to consume) and no number with it either: the planner's box is
-# 0.09 + 0.03 wide because a box gate is compared against STATIC_MARGIN, this
-# one is 0.09 wide because it is compared against the inter-arm margin.  Two
+# transform and this module's own radii, and holds every arm's chain to the
+# same `margin` the inter-arm gate uses.  It shares no code with
+# `mounts.column_bands` (which inflates the same body into AABBs for the
+# planner to consume) and no number with it either: the planner's boxes are
+# each 0.03 wider than these because a box gate is compared against
+# STATIC_MARGIN = 0.05 and this one against the inter-arm 0.08.  Two
 # derivations, one geometric statement — which is the whole point of the
-# module (`d1` and the radius are restated from `frames.DH[0][2]` and
+# module (`d1` and the radii are restated from `frames.DH[0][2]` and
 # `coordination.LINK_R`; a test pins them).
-COLUMN_D1 = 0.333                    # m, base flange -> shoulder
-COLUMN_R = 0.09                      # m, capsule radius of that segment
+#
+# THE COLUMN IS NOT 0.09 AND DOES NOT STOP AT THE SHOULDER (2026-08-26).  The
+# mesh audit measured link0 + link1's q1 sweep: the body is 0.155 m at its
+# widest, its connector and cable stub reach 0.177 m over the first 67 mm
+# below the plate, and the whole assembly runs 0.3875 m from the flange —
+# 54.5 mm PAST the `d1` this segment used to stop at.  `d1` is still the DH
+# constant it always was; the column's far end is a separate, measured number.
+COLUMN_D1 = 0.333                    # m, base flange -> shoulder (DH)
+COLUMN_Z1 = 0.3875                   # m, MEASURED far end of the body column
+# (z0, z1, r) in base z, flange downwards — the measured envelope, no margin.
+COLUMN_BANDS = ((0.0, 0.0667, 0.177), (0.0667, COLUMN_Z1, 0.155))
+COLUMN_R = COLUMN_BANDS[-1][2]       # the column proper, connector excluded
 
 
 def _chain(q, spec, h_inv, pen_ext):
@@ -232,34 +242,61 @@ def static_clearance_lb(P, boxes, step=0.02):
 
 
 def base_column(spec):
-    """The pose-invariant base column of one arm -> (p0 (3,), p1 (3,)).
+    """The pose-invariant base column of one arm -> [(p0 (3,), p1 (3,), r)].
 
-    `spec.T_world_base()` is the only thing read: the segment runs COLUMN_D1
-    along the base z axis, which is the axis joint 1 rotates about, so no
-    joint value can move it.
+    `spec.T_world_base()` is the only thing read: each band runs along the
+    base z axis, which is the axis joint 1 rotates about, so no joint value
+    can move it.  One entry per band of COLUMN_BANDS — the measured profile,
+    fat at the plate where the connector is, 0.155 the rest of the way down.
     """
     T = np.asarray(spec.T_world_base(), float)
-    p0 = T[:3, 3]
-    return p0, p0 + COLUMN_D1 * T[:3, 2]
+    p0, zc = T[:3, 3], T[:3, 2]
+    return [(p0 + z0 * zc, p0 + z1 * zc, r) for z0, z1, r in COLUMN_BANDS]
+
+
+def _as_bands(c):
+    """One arm's column entry -> [(p0, p1, r)].
+
+    Accepts the banded form `base_column` returns and the legacy single
+    segment `(p0, p1)` / `(p0, p1, r)` a caller may still be holding.  The
+    discriminator is whether the first element IS a 3-vector.
+    """
+    try:
+        a0 = np.asarray(c[0], float)
+    except (TypeError, ValueError):
+        a0 = None
+    if a0 is not None and a0.shape == (3,):
+        return [(c[0], c[1], float(c[2]) if len(c) > 2 else COLUMN_R)]
+    return [(b[0], b[1], float(b[2])) for b in c]
 
 
 def column_clearance(P, columns, radii):
-    """Chain points (...,10|11,3) vs a list of (p0, p1) base columns.
+    """Chain points (...,10|11,3) vs base columns: [[(p0, p1, r)]] per arm,
+    or the legacy flat [(p0, p1)] at COLUMN_R.
 
     -> (...,) worst capsule-to-column clearance.  The mover's OWN base column
     (capsule 0) is skipped — it is the one segment that is bolted where it is —
     exactly as `static_clearance_lb` and the planner's table skip it.
+
+    A BAND IS A CAPSULE HERE, NOT A CYLINDER, and that is deliberate: capsule
+    caps make the union of the stack more conservative than the body it stands
+    for, which is the direction this gate is allowed to be wrong in.  The
+    planner's boxes (`mounts.column_bands`) contain these bands grown by
+    `calib`, so anything the planner certifies passes here.
     """
-    if not columns:
+    bands = []
+    for c in (columns or ()):
+        bands.extend(_as_bands(c))
+    if not bands:
         return np.full(np.asarray(P).shape[:-2], np.inf)
     P = np.asarray(P, float)
     out = np.full(P.shape[:-2], np.inf)
     for (i, j, r) in radii[1:]:
         a, b = P[..., i, :], P[..., j, :]
-        for p0, p1 in columns:
+        for p0, p1, cr in bands:
             c0 = np.broadcast_to(np.asarray(p0, float), a.shape)
             c1 = np.broadcast_to(np.asarray(p1, float), a.shape)
-            out = np.minimum(out, segment_distance(a, b, c0, c1) - r - COLUMN_R)
+            out = np.minimum(out, segment_distance(a, b, c0, c1) - r - cr)
     return out
 
 

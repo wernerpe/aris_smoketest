@@ -34,6 +34,49 @@ from .metrics import tip_jacobian, sigma_min, f_max, GATE_MARGIN, GATE_SIGMA
 COLUMNS = ["x", "y", "margin", "sigma_min", "f_max", "n_sol", "valid_frac",
            "q7_window", "tilt_deg", "q1", "q2", "q3", "q4", "q5", "q6", "q7"]
 QCOL = 9                      # index of q1 in COLUMNS
+
+
+# ---------------------------------------------------------------------------
+# AN ATLAS IS ONLY VALID FOR THE COLLISION MODEL IT WAS SWEPT UNDER
+# ---------------------------------------------------------------------------
+# Nothing recorded that until 2026-08-26, and then the mesh audit widened
+# every capsule and re-derived the neighbour column, and a directory full of
+# .npz files that had been true the day before became a directory full of
+# poses this package would now refuse — with no way to tell, because an atlas
+# carries its grid, its height and its pen length but never carried the
+# geometry it was gated against.  It does now.  `model_signature` is the
+# whole collision model as one flat array; `is_current` compares a loaded
+# atlas's stored copy against the running one, and a caller that gets False
+# is holding stale certifications, not a difference of opinion.
+def model_signature():
+    """The static collision model this process would sweep with. -> (N,)."""
+    from . import mounts
+    caps = rig_final.STATIC_CAPSULES_LAT + rig_final.STATIC_CAPSULES
+    flat = [v for c in caps for v in c]
+    flat += [v for band in mounts.MOUNTS.column_bands for v in band]
+    flat += [rig_final.STATIC_MARGIN, GATE_MARGIN, GATE_SIGMA]
+    return np.asarray(flat, float)
+
+
+def is_current(meta):
+    """Was this loaded atlas swept under the model this process is running?
+
+    -> (bool, reason).  An atlas with no signature at all predates the mesh
+    audit and is reported as such rather than trusted.
+    """
+    if "model" not in getattr(meta, "files", ()):
+        return False, ("swept before 2026-08-26: no collision-model signature "
+                       "(pre-mesh-audit capsules)")
+    got = np.asarray(meta["model"], float)
+    want = model_signature()
+    if got.shape != want.shape:
+        return False, (f"model signature is {got.shape}, this build "
+                       f"wants {want.shape}")
+    if not np.allclose(got, want, atol=1e-12):
+        bad = int(np.argmax(np.abs(got - want)))
+        return False, (f"collision model differs at entry {bad}: atlas has "
+                       f"{got[bad]:.4f}, this build has {want[bad]:.4f}")
+    return True, "current"
 PERMISSIVE_MARGIN = 0.15      # option counted as "comfortable enough"
 
 _YAWS = np.linspace(0, 2 * np.pi, 8, endpoint=False)
@@ -156,7 +199,7 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
     np.savez_compressed(out, data=arr, columns=np.array(COLUMNS), arm_id=arm_id,
                         mount=spec.mount, base=Twb, grid=grid, h_inv=h_inv,
                         tilt_max_deg=tilt_max_deg, pen_ext=pen_ext,
-                        pen_lat=pen_lat)
+                        pen_lat=pen_lat, model=model_signature())
     go = strict_go(arr)
     print(f"arm {arm_id} ({spec.name}): {len(arr)} reachable, "
           f"{int(go.sum())} strict-GO, tilt<={tilt_max_deg:.0f}deg, "

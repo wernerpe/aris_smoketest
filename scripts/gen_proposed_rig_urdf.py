@@ -103,6 +103,28 @@ from aris_sixarm.rig_final6 import SHEET_FINAL6  # noqa: E402
 # is the whole fix, and it must happen before anything is serialised.
 ET.register_namespace("drake", "http://drake.mit.edu")
 
+# WARNING — THE ARM COLLISION SPHERES IN HERE ARE A THIRD SCHEMATIC, AND THEY
+# ARE UNAUDITED.  The vendored panda carries its arm collision geometry as 402
+# spheres (14 on link0, r = 0.06, and so on down the chain), and everything
+# this repo certifies is measured against a COMPLETELY DIFFERENT model: the
+# capsules of `coordination.CAPSULES` and the boxes of `mounts`.  On
+# 2026-08-26 `scripts/collision_audit.py` put the capsules on the instrument
+# against the manufacturer's collision MESHES and found them optimistic by up
+# to 78 mm; the capsules were corrected, the spheres were not, and nobody has
+# ever checked the two against each other.
+#
+# What that means in practice: drake's own collision queries on this file —
+# `scripts/check_proposed_rig_urdf.py`, the meshcat playback, anything that
+# asks the plant for a distance — are answering with the SPHERES, not with the
+# model the programme was certified under.  Read a drake clearance from this
+# URDF as an independent opinion, never as a confirmation.
+#
+# The fix, when it is worth doing, is to replace the sphere sets with the
+# manufacturer's collision meshes (`vamp/resources/panda/meshes/collision/
+# link{0..7}.obj` + hand/fingers — the same geometry the audit used as ground
+# truth, and already proven to reproduce the FR3 collision boxes to 0.5 mm).
+# That is a nice-to-have, not a blocker: nothing in the certification path
+# reads this file.
 SRC_URDF = ROOT / "assets/franka_description/urdf/panda_arm_hand.urdf"
 OUT_DIR = ROOT / "assets/proposed_rig"
 MESH_REL = "../franka_description/meshes/visual"   # relative to OUT_DIR

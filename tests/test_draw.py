@@ -313,10 +313,18 @@ def test_phasing_by_arm_conducts_the_same_ink_one_group_at_a_time(tmp_path):
     cs.schedule_args(ca.add_args(ap))
     # placed so that BOTH arms draw some of it — a solo-phase test needs at
     # least two solos, and where the picture sits is what decides that
+    # --frame-safe SINCE 2026-08-26.  Pen-up transits are not certified
+    # against the STEEL by default, and once the mesh audit widened the
+    # capsules arm 31's go-home on this placement clips the final rig's frame
+    # by 20 mm — scene_check catches it and refuses the phase, which is the
+    # router gate being LOOSER than the checker's and is the one relationship
+    # this repo does not allow.  Certifying the transits against the frame
+    # restores it (65.5 mm clear against the 50 mm gate) and the phase runs.
     a = ap.parse_args(["--arms", "13,31", "--no-prefilter", "--no-balance",
                        "--no-verify", "--target-width", "0.50",
                        "--offset", "-0.30", "0.0", "--fps", "8",
-                       "--substeps", "2", "--max-probes", "2"])
+                       "--substeps", "2", "--max-probes", "2",
+                       "--frame-safe"])
     a.out, a.image, a.name = str(tmp_path), src, "phased"
     a.palette = artwork.palette_of(dbg)
 

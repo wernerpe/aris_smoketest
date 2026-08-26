@@ -27,7 +27,7 @@ conductor holds every pair to.  Coverage says whether the canvas can be drawn;
 concurrency says how much of it can be drawn AT THE SAME TIME.
 
 and a third scenario, `box`, which is not a model of the physics but a model of
-the PACKAGE: commit 14b01cd put the same column into `mounts.arm_column_box` as
+the PACKAGE: commit 14b01cd put the same column into `mounts.arm_column_boxes`
 an axis-aligned box at `column_r` = 0.12 judged against `STATIC_MARGIN` = 0.05.
 That box is a conservative envelope of the capsule (square where the capsule is
 round, and its caps stand 0.12 m proud of both ends), so it refuses strictly
@@ -261,24 +261,30 @@ def _column(xy, h):
 
 
 def _column_box(xy, h, aid=0):
-    """The same column as the BOX the package now gates on -> a box dict.
+    """The same column as the BOXES the package now gates on -> box dicts.
 
-    Built here rather than taken from `mounts.arm_column_box` so this study
+    Built here rather than taken from `mounts.arm_column_boxes` so this study
     keeps measuring the same thing while the package's obstacle policy moves
-    under it (commit 14b01cd added exactly this box to `StudySpec`).  It is
-    the capsule's AABB at `column_r` = link_r + calib = 0.12, compared against
-    `rig_final.STATIC_MARGIN` = 0.05 — the two gates are the same statement,
-    but the box is square where the capsule is round (up to 41 % conservative
-    on the diagonals) and its caps stand `column_r` proud of both ends, so it
-    refuses strictly more than the capsule does.
+    under it (commit 14b01cd added exactly this box to `StudySpec`).  Each
+    band's AABB at its own radius, compared against `rig_final.STATIC_MARGIN`
+    = 0.05 — the same statement as the capsule at `MARGIN`, but square where
+    the capsule is round (up to 41 % conservative on the diagonals).
+
+    TWO BOXES SINCE THE MESH AUDIT (2026-08-26): the connector band above the
+    plate and the column proper down to the measured end of the metal.  The
+    numbers come from `mounts.MOUNTS.column_bands` because they are
+    MEASUREMENTS now, not a policy this study should be free to disagree with.
     """
-    p0 = np.array([xy[0], xy[1], h])
-    p1 = np.array([xy[0], xy[1], h - D1])
-    return dict(name=f"body:{aid}_column", tag=f"body:{aid}",
-                lo=np.minimum(p0, p1) - COLUMN_R,
-                hi=np.maximum(p0, p1) + COLUMN_R,
-                source="neighbour base column, capsule AABB at "
-                       f"column_r = {COLUMN_R}")
+    out = []
+    for k, (z0, z1, r) in enumerate(mounts.MOUNTS.column_bands):
+        p0 = np.array([xy[0], xy[1], h - z0])
+        p1 = np.array([xy[0], xy[1], h - z1])
+        out.append(dict(name=f"body:{aid}_column{k}", tag=f"body:{aid}",
+                        lo=np.minimum(p0, p1) - r,
+                        hi=np.maximum(p0, p1) + r,
+                        source=f"neighbour base column band {k}, AABB at "
+                               f"r = {r}"))
+    return out
 
 
 def _steel(fleet, aid, h):
@@ -334,7 +340,8 @@ def score_arm(job):
     Twb = spec.T_world_base(h)
     Twb_inv = np.linalg.inv(Twb)
     steel = _steel(fleet, aid, h)
-    body_boxes = [_column_box(fleet[b].xy, h, b) for b in fleet if b != aid]
+    body_boxes = [x for b in fleet if b != aid
+                  for x in _column_box(fleet[b].xy, h, b)]
     off = tool_offset(PEN, PEN_LAT_HOLDER)
 
     # scenarios: `caps` are capsule obstacles judged at MARGIN, `bxs` are box

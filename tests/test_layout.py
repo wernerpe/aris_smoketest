@@ -131,17 +131,41 @@ def test_proposed_inverted_arm_plans_lateral_stroke():
     assert bad["status"] != "ok", bad["status"]
 
 
-def test_every_proposed_ready_pose_clears_every_other_mount():
+def test_the_inward_ready_pose_is_gone_for_the_middle_row():
+    """WHAT THE CORRECTED CAPSULES TOOK AWAY (2026-08-26).
+
+    `certified_ready_pose` aims at the canvas CENTRE, and on this grid that
+    walks arm 31 straight at arm 71's base column.  Under the old 0.09 m
+    capsules it still certified — at the margin itself, 0.0500 m, which the
+    docstring of this test used to call "float noise on a gate the pose now
+    sits exactly on".  It was not noise.  The mesh audit says that column is
+    0.155 m and the arm reaching at it is 0.130 m, and with the true widths
+    there is NO radius on the ladder and no hover between 0.10 and 0.25 m at
+    which either middle-row arm can stand facing the middle.
+
+    That is the same finding `certified_park_poses` exists for, arrived at
+    twice: a pose aimed at the middle of a canvas with six arms over it is a
+    pose aimed at somebody.  The outward bearing is not a preference any more,
+    it is the only thing that certifies.
+    """
+    assert frames.ACTIVE_TOOL == "inline", "the global tool must be untouched"
+    fl, _ = fleet.rig("proposed")
+    for aid in (31, 71):
+        with pytest.raises(RuntimeError, match="no certified ready pose"):
+            layout.certified_ready_pose(fl[aid], pen_lat=LAT)
+    for aid in (13, 17, 2, 97):                 # the outer rows still can
+        layout.certified_ready_pose(fl[aid], pen_lat=LAT)
+    assert frames.ACTIVE_TOOL == "inline" and frames.PEN_LAT == 0.0
+
+
+def test_every_proposed_park_pose_clears_every_other_mount():
     """The v1 study could not make this check — there was no hardware to
     check against.  The pose is the one the scene draws.
 
-    The tolerance is float noise on a gate the pose now sits exactly on:
-    `certified_ready_pose` aims at the canvas CENTRE, and on this grid that
-    walks arm 31 straight at arm 71's base column, so the first radius of the
-    ladder that certifies at all certifies at the margin itself (0.0500 m).
-    That is the same finding `certified_park_poses` exists for — a pose aimed
-    at the middle of a canvas with six arms over it is a pose aimed at
-    somebody — and it is why the PARK bearing is outward.
+    It is the PARK pose now, not the inward ready pose: since the capsules
+    were corrected the inward one does not exist for the middle row at all
+    (see the test above), and the park poses are what every arm actually
+    holds — `spec.q_seed` is `Q_PARK_PROPOSED`.
     """
     # NOTE: no `activate_tool` here.  `certified_ready_pose` takes the tool
     # explicitly, so this test cannot leak `frames.PEN_LAT` into every module
@@ -150,7 +174,8 @@ def test_every_proposed_ready_pose_clears_every_other_mount():
     fl, _ = fleet.rig("proposed")
     h = layout.LAYOUT_PROPOSED["h"]
     for aid, spec in sorted(fl.items()):
-        q, xy, rep = layout.certified_ready_pose(spec, h)
+        q = np.asarray(layout.Q_PARK_PROPOSED[aid], float)
+        rep = validate.check_pose(q, spec, pen_lat=LAT)
         assert rep["ok"] and rep["worst"]["tip_z"] > 0.0
         T, pts = frames.fk(q)
         tool = frames.tool_points_many(T[None], pen_lat=frames.PEN_LAT_HOLDER)
@@ -307,11 +332,13 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
         assert rep["ok"], (aid, rep)
         assert rep["worst"]["tip_z"] >= 0.09, aid          # hovering, not down
         assert frames.joint_margin(q) >= 0.30, aid
-        # STEEL is far away (>= 0.436 m); the nearest obstacle a parked arm
-        # has is now a NEIGHBOUR — arm 17 holds 0.122 m to arm 13's base
-        # column box, which is 0.152 m to the arm inside it, against the
-        # 0.080 m the conductor asks of every moving pair.
-        assert rep["worst"]["min_frame_clearance"] >= 0.12, aid
+        # STEEL is far away (>= 0.466 m); the nearest obstacle a parked arm
+        # has is now a NEIGHBOUR — arm 17 holds 0.097 m to arm 13's base
+        # column boxes, which is 0.169 m to the arm inside them, against the
+        # 0.080 m the conductor asks of every moving pair.  Both numbers
+        # shrank when the mesh audit widened the column from 0.12 to 0.185
+        # and the mover's own capsules with it.
+        assert rep["worst"]["min_frame_clearance"] >= 0.09, aid
         steel = [b for b in spec.static_obstacles()
                  if b["tag"].startswith("mount")]
         T, pts = frames.fk(np.asarray(q, float))
@@ -319,28 +346,43 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
                                                            pen_lat=LAT)))
         Twb = spec.T_world_base()
         Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
-        assert rig_final.chain_static_clearance(Pw, steel)[0] >= 0.43, aid
+        assert rig_final.chain_static_clearance(Pw, steel)[0] >= 0.46, aid
 
 
 def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     """WHY THE BEARING IS OUTWARD.  Aimed at the canvas centre — which is what
-    one arm alone wants — the six park in a huddle and the closest pair
-    overlaps by 95.6 mm.  Away from the fleet centroid they stand off towards
-    their own rims and hold 181 mm, against the 80 mm the conductor asks of
-    every pair while they MOVE."""
+    one arm alone wants — the middle row cannot certify a pose at all and the
+    four that can stand too close.  Away from the fleet centroid they stand
+    off towards their own rims and hold 195 mm, against the 80 mm the
+    conductor asks of every pair while they MOVE.  (181 mm before the mesh
+    audit; the number moved because BOTH the poses and the capsules did.)"""
     fl = layout.FLEET_PROPOSED
     from aris_sixarm.coordination import SAFETY_M, CALIB_M
     assert _park_clearance(layout.Q_PARK_PROPOSED, fl) >= SAFETY_M + CALIB_M
 
-    inward = {aid: layout.certified_ready_pose(s, pen_lat=LAT)[0]
-              for aid, s in sorted(fl.items())}
-    assert _park_clearance(inward, fl) < 0.0       # INTERPENETRATING
+    # THE INWARD CONTROL IS NOW EVEN STARKER.  Before the capsules were
+    # corrected, aiming every arm at the canvas centre certified six poses
+    # that then overlapped by 95.6 mm.  At the true widths the middle row
+    # cannot certify an inward pose AT ALL, so the control is a refusal
+    # rather than an interpenetration.
+    with pytest.raises(RuntimeError, match="no certified ready pose"):
+        {aid: layout.certified_ready_pose(s, pen_lat=LAT)[0]
+         for aid, s in sorted(fl.items())}
+    outer = [13, 17, 2, 97]
+    inward = {aid: layout.certified_ready_pose(fl[aid], pen_lat=LAT)[0]
+              for aid in outer}
+    assert _park_clearance(inward, {a: fl[a] for a in outer}) \
+        < SAFETY_M + CALIB_M                       # still too close
 
-    # and the function will not hand back a fleet that does that.  0.20 m of
-    # hover is the near miss it was written for: six gated poses, 4 mm apart.
+    # ...and the function still refuses a fleet that parks inside itself.
+    # The 0.20 m hover that used to be the near miss (six gated poses, 4 mm
+    # apart) no longer is: with the corrected capsules the SEARCH lands
+    # elsewhere and that fleet clears.  So the refusal is pinned on a
+    # constructed one instead — the gate, not one historical instance of it.
     bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
+    layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT)   # no longer
     with pytest.raises(RuntimeError, match="park .* mm apart"):
-        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT)
+        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT, clear=0.60)
 
 
 def test_baked_park_poses_are_that_functions_own_output():
