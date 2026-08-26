@@ -1474,14 +1474,29 @@ def build_phases(a, phases, dt, pens, alt=None):
             # if any schedule is.  It buys back ink at the price of a go-home
             # and a pause per group, in the same currency as everything else
             # here: coverage is the constraint, the clock is what pays.
-            rescue = rescue_groups(a, ph) if not getattr(
-                a, "no_rescue_grouping", False) else []
+            rescue = []
+            if not getattr(a, "no_rescue_grouping", False):
+                # A RESCUE THAT RAISES IS WORSE THAN NO RESCUE.  This runs on
+                # the failure path of a run that has already spent an hour, so
+                # anything it does wrong has to cost the phase and not the
+                # programme — the same rule `prepare` and `conduct` follow one
+                # screen up.
+                try:
+                    rescue = rescue_groups(a, ph)
+                except (ValueError, KeyError, RuntimeError) as exc:
+                    print(f"  !! {ph['name']} could not be re-offered as "
+                          f"smaller phases: {type(exc).__name__}: {exc}")
             if rescue:
-                print(f"  !! {ph['name']} was refused with {len(ph['arms'])} "
-                      f"arms on the paper; re-offering it as {len(rescue)} "
-                      "phase(s) of fewer arms: "
-                      + "  ".join("{" + ",".join(str(x) for x in r["arm_group"])
-                                  + "}" for r in rescue))
+                movers = len([x for x in ph["arms"] if ph["programs"].get(x)])
+                how = ("fewer arms on the paper: "
+                       + "  ".join("{" + ",".join(str(x) for x in r["arm_group"])
+                                   + "}" for r in rescue)
+                       if movers > 1 else
+                       f"arm {rescue[0]['arm_group'][0]}'s tour cut in "
+                       f"{len(rescue)}, with a trip home between the halves")
+                print(f"  !! {ph['name']} was refused with {movers} arm(s) "
+                      f"drawing; re-offering it as {len(rescue)} phase(s), "
+                      + how)
                 for r in rescue:
                     r["rescue_of"] = ph
                 # the parent's ink is the children's responsibility now; what
