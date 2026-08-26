@@ -91,6 +91,13 @@ EPS = 1e-9
 # itself is held to (`validate.TIP_TOL`).
 TIP_SWEEP_PAD = 0.003      # m, scene_check's worst refined sweep residual
 CONTACT_FLOOR = -(TIP_TOL - TIP_SWEEP_PAD)   # -0.007 m, lift/lower tip floor
+# ...and the same argument, one obstacle over: `scene_check`'s FRAME gate
+# subtracts the same kind of residual from the same STATIC_MARGIN this module
+# compares its samples against (`FRAME_STEP` there).  A route that clears the
+# steel by exactly the margin is a route the checker refuses — arm 31 read
+# 48.8 mm against 50 mm on the run that found this — so a route must clear it
+# by the margin plus the residual.
+FRAME_FLOOR = rig_final.STATIC_MARGIN + TIP_SWEEP_PAD    # 0.053 m
 
 # THE SAME HOLE, ONE OBSTACLE OVER.  This module made the paper a thing a pen-up
 # is certified against, and left the STEEL exactly where it found it: `route`
@@ -293,7 +300,7 @@ def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     ok = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
     if ok and FRAME_SAFE:
         ok = bool(frame_clearance(line_samples(q0, q1, n), spec, pen_ext, h_inv)
-                  >= rig_final.STATIC_MARGIN - EPS)
+                  >= FRAME_FLOOR - EPS)
     return ok, cz, tz
 
 
@@ -479,7 +486,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         # costed, chosen and frozen before anybody looked.
         if ok and frame and (seq or FRAME_SAFE):
             ok = path_frame_clearance(spec, qs, pen_ext, h_inv, n) \
-                >= rig_final.STATIC_MARGIN - EPS
+                >= FRAME_FLOOR - EPS
         return ok, cz, tz
 
     def done(seq, name, cz, tz, tried):
