@@ -132,3 +132,41 @@ that certifies flat is planned by byte-identical code.
 The 109.9 mm span of the v8 logo that nobody drew — the one the dead-disc
 decomposition called a base column's shadow — certifies whole for arm 71 at a
 7.5-degree lean, validator clean.
+
+### ...and what it costs the logo: the A/B, on the same placement
+
+The v8 placement (1.4309 x 1.8736 m), 16.7370 m of traced ink, four runs that
+differ in one thing each. Allocation coverage, `--skip-unconductable`:
+
+| run | atlas | pen lean | self-collision guard | empty | coverage |
+|---|---|---|---|---|---|
+| v8 | best-margin | none | none | 0.1229 m | 99.2660 % |
+| v9flat | gated | 0 deg | on | 0.5451 m | 96.7431 % |
+| v9b, v9d | gated | 15 deg | on | 0.4352 m | 97.3996 % |
+| v9ng | gated | 15 deg | **off** | **0.0131 m** | **99.9220 %** |
+
+Three things fall straight out of it.
+
+**The capability works.** Gated atlas plus a leaning pen draws 99.9220 % of the
+logo at full size — 13.1 mm of ink short of complete, and 0.66 points better
+than the best this project had. The 109.9 mm span the dead-disc decomposition
+called a base column's shadow certifies whole for arm 71 at a 7.5-degree lean,
+validator clean (margin 0.164, sigma 0.241).
+
+**The lean is worth 0.66 points on its own** (96.7431 -> 97.3996 with the guard
+on), which is what a rescue that only ever adds should look like.
+
+**And the self-collision guard costs 2.52 points** (99.9220 -> 97.3996), 0.42 m
+of ink, every metre of it in "certifies the ink and cannot fly to it" — the
+guard removing hover and transit poses, not drawing poses. It removes 3.4 % of
+the hover fiber over arm 31's certified cells and no cell loses every hover, but
+at the ends where only one hover was flyable, 3.4 % is the whole answer.
+
+THE GUARD STAYS ON. Those flight paths were never checked by anything —
+`writing.py` says its joint interpolation "makes no collision or self-collision
+guarantee" in as many words — and a pen-up that folds an arm through itself is
+exactly the failure this gate was built for. The shipped number is 97.3996 %
+and the reason is written down. What would buy it back is not a weaker guard
+but a router that knows about it: the ends being refused are ones where the
+hover ladder had one flyable answer and now has none, and `paper.route` has
+seven more shapes it has not been asked to try under this constraint.
