@@ -1536,3 +1536,83 @@ def test_rotating_the_logo_is_a_placement_and_not_a_distortion():
     assert i360["logo_w"] == pytest.approx(i0["logo_w"])
     assert trace.plen(turned[0]["pts"]) == pytest.approx(
         2.0 * trace.plen(up[0]["pts"]))
+
+
+# ==========================================================================
+# PHASING BY ARM: the fleet's concurrency dial
+# ==========================================================================
+def _fake_pass():
+    """A minimal allocation result: three arms, one segment each."""
+    def seg(sid, length):
+        return dict(stroke_id=sid, length=length, s_range=(0.0, 1.0),
+                    pts=np.zeros((2, 2)), plan={}, direction=1)
+    arms = [13, 31, 2]
+    programs = {13: [seg(1, 1.0), seg(2, 0.5)], 31: [seg(3, 0.75)],
+                2: [seg(4, 0.25)]}
+    return dict(name="single pass", ink=None, arms=arms, programs=programs,
+                bag={a: list(v) for a, v in programs.items()},
+                pens={a: 0.110 for a in arms},
+                colors={a: "grey" for a in arms},
+                sequence={a: dict(cost=1.0, order=[0]) for a in arms},
+                transit={a: 0.1 for a in arms},
+                transit_time={a: 1.0 for a in arms},
+                menus={}, menu_stats={}, aopts={a: {} for a in arms},
+                q_start={}, dropped=[dict(length=0.4)], dropped_len=0.4,
+                total_len=2.9, strokes=[])
+
+
+def test_splitting_a_pass_by_arm_moves_no_ink_and_loses_no_bookkeeping():
+    res = _fake_pass()
+    parts = allocate.split_by_arms(res, [[13, 2], [31]])
+    assert [p["arms"] for p in parts] == [[13, 2], [31]]
+    # every segment survives, with the arm that certified it
+    got = {a: p["programs"][a] for p in parts for a in p["arms"]}
+    assert set(got) == set(res["arms"])
+    for a in res["arms"]:
+        assert got[a] == res["programs"][a]
+    # the traced/dropped metres are counted ONCE, on the first phase, so a
+    # coverage report over the phases reproduces the un-phased numbers
+    assert sum(p["drawn_len"] for p in parts) == pytest.approx(2.5)
+    assert sum(p["total_len"] for p in parts) == pytest.approx(res["total_len"])
+    assert sum(p["dropped_len"] for p in parts) == pytest.approx(0.4)
+    assert sum(len(p["dropped"]) for p in parts) == 1
+    # per-arm state is restricted with the arms, and the original is untouched
+    for p in parts:
+        assert set(p["pens"]) == set(p["arms"])
+        assert set(p["sequence"]) == set(p["arms"])
+    assert res["arms"] == [13, 31, 2] and len(res["programs"]) == 3
+
+
+def test_a_drawing_arm_may_not_be_left_out_of_every_group():
+    res = _fake_pass()
+    with pytest.raises(ValueError):
+        allocate.split_by_arms(res, [[13, 2]])          # 31 draws and is homeless
+    with pytest.raises(ValueError):
+        allocate.split_by_arms(res, [[13, 2], [31, 13]])    # 13 in two groups
+    # an arm that draws nothing is not a group of its own
+    parts = allocate.split_by_arms(res, [[13, 2], [31], [97]])
+    assert len(parts) == 2
+
+
+def test_the_disjoint_grouping_separates_the_transverse_pairs():
+    """The proposed rig's 2 x 3 grid: the only bases within 0.70 m of each
+    other are the three transverse pairs, so the colouring is the two columns
+    — and on a rig whose arms are far apart it is one group, i.e. 'off'."""
+    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+    from csail_schedule import arm_groups
+    from aris_sixarm import fleet as fleet_mod, layout
+    fl = layout.FLEET_PROPOSED
+    groups = arm_groups("disjoint", list(fl), 0.70, fleet=fl)
+    assert len(groups) == 2
+    xy = {a: np.asarray(fl[a].xy, float) for a in fl}
+    for g in groups:
+        for i, x in enumerate(g):
+            for y in g[i + 1:]:
+                assert np.linalg.norm(xy[x] - xy[y]) >= 0.70, (x, y)
+    assert sorted(a for g in groups for a in g) == sorted(fl)
+    # the three-arm final rig has no pair that close: one group
+    assert len(arm_groups("disjoint", [13, 31, 2], 0.70,
+                          fleet=fleet_mod.FLEET_FINAL)) == 1
+    assert arm_groups("off", list(fl)) is None
+    assert arm_groups("solo", list(fl), fleet=fl) == [[a] for a in sorted(fl)]
+    assert arm_groups("13,2/31", [13, 31, 2]) == [[13, 2], [31]]

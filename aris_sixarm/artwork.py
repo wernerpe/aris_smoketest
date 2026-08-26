@@ -14,6 +14,18 @@ Two stages, because the two questions cost three orders of magnitude apart:
           rotation x scale x translation grid is affordable.  It is an UPPER
           BOUND on coverage (a reachable cell is not a plannable stroke) and is
           used only to RANK.
+
+          THE PROXY IS EXACTLY AS HONEST AS THE ATLAS IT READS, and on a rig
+          whose arms stand OVER the paper that is the whole question.  Swept
+          in empty air, the atlas says the proposed rig covers 99.98 % of the
+          canvas and every placement scores ~1.00, so the search ranks on
+          nothing; swept with the neighbours' base columns in the obstacle set
+          (`mounts.arm_column_box`) it says 96.69 %, the dead cells cluster
+          under the six bases, and "where the picture goes" becomes a real
+          question with a real answer.  A placement whose ink avoids those
+          blobs is what `probe_place` measured by hand and what this scores
+          for free — the two are the same rasterisation, and the atlas is the
+          only thing that had to change.
   REAL    the top `top` translations of every (rotation, scale) are allocated
           for real — probe, colour partition, cover, clean re-plan — which is
           the only number that means anything and the one the choice is made on.
@@ -209,6 +221,14 @@ def search_placement(px, arms, atlas_dir, margin=0.06, radius=0.03,
     else:
         real = [_real_one(j) for j in jobs_list]
 
+    def proxy_of(r):
+        """The LIVE-INK fraction of one placement: how much of the path lands
+        on a cell some arm can actually stand a pen on."""
+        for g in grid:
+            if all(abs(g[k] - r[k]) < 1e-9 for k in ("rot", "f", "dx", "dy")):
+                return float(g["proxy"])
+        return float("nan")
+
     per_cell = {}
     for r in real:
         k = (round(r["rot"], 6), round(r["f"], 6))
@@ -234,13 +254,14 @@ def search_placement(px, arms, atlas_dir, margin=0.06, radius=0.03,
               f"{pick['logo_h']:.3f} m ({pick['logo_w'] * pick['logo_h']:.3f} m2, "
               f"rotation {pick['rot']:.0f} deg, scale {pick['f']:.3f}) at offset "
               f"({pick['dx']:+.2f}, {pick['dy']:+.2f}) m, "
-              f"{100 * pick['cov']:.1f} % drawn")
+              f"{100 * pick['cov']:.1f} % drawn, "
+              f"{100 * proxy_of(pick):.2f} % of its ink on LIVE cells")
 
     return dict(chosen=dict(scale=pick["f"], target_width=pick["target_width"],
                             rotate_deg=pick["rot"],
                             offset=[pick["dx"], pick["dy"]], margin=margin,
                             logo_w=pick["logo_w"], logo_h=pick["logo_h"],
-                            coverage=pick["cov"]),
+                            coverage=pick["cov"], live=proxy_of(pick)),
                 arms=[int(x) for x in arms], base_width=bases,
                 sheet=[float(sh[0]), float(sh[1])], rotations=rots,
                 atlas=atlas_dir, proxy_radius=radius,

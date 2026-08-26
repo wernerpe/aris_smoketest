@@ -750,6 +750,52 @@ def profile_json(sel):
                 grid=[row(r) for r in sel["grid"]])
 
 
+def arm_groups(mode, arms, near=0.70, fleet=None):
+    """--arm-phases -> [[arm ids]] (or None for 'off').
+
+    'disjoint' is a graph colouring, not a table: two arms are adjacent when
+    their BASES are within `near` metres, and the groups are the colour
+    classes of a greedy colouring in registry order.  On the proposed rig's
+    2 x 3 grid that is exactly the two columns — the three transverse pairs
+    are the only edges — and on a rig whose arms are all far apart it is one
+    group, i.e. 'off', which is the right answer there.
+    """
+    if mode in (None, "", "off", "none"):
+        return None
+    ids = sorted(arms)
+    if mode == "solo":
+        return [[a] for a in ids]
+    if mode != "disjoint":
+        groups = [[int(x) for x in g.split(",") if x.strip()]
+                  for g in str(mode).split("/") if g.strip()]
+        if not groups:
+            raise SystemExit(f"--arm-phases {mode!r}: no groups")
+        return groups
+    fl = FLEET if fleet is None else fleet
+    xy = {a: np.asarray(fl[a].xy, float) for a in ids}
+    colour = {}
+    for a in ids:
+        taken = {colour[b] for b in colour
+                 if float(np.linalg.norm(xy[a] - xy[b])) < near}
+        colour[a] = next(c for c in range(len(ids)) if c not in taken)
+    return [[a for a in ids if colour[a] == c]
+            for c in sorted(set(colour.values()))]
+
+
+def phase_by_arms(phases, alt, groups):
+    """Split every phase by arm group. -> (phases, alt), indices re-mapped."""
+    out, new_alt = [], {}
+    for k, ph in enumerate(phases):
+        parts = allocate.split_by_arms(ph, groups)
+        other = (alt or {}).get(k)
+        alt_parts = allocate.split_by_arms(other, groups) if other else None
+        for j, p in enumerate(parts):
+            if alt_parts is not None and j < len(alt_parts):
+                new_alt[len(out)] = alt_parts[j]
+            out.append(p)
+    return out, new_alt
+
+
 def allocate_all(a, verbose=False, share=None):
     """Trace, allocate, and build the unsplit fallback. -> (phases, alt, pens).
 
@@ -798,6 +844,22 @@ def allocate_all(a, verbose=False, share=None):
                 base[k].update(name=phases[k]["name"] + " [unsplit]",
                                ink=phases[k]["ink"], strokes=phases[k]["strokes"])
                 alt[k] = base[k]
+
+    # ...and THEN, if asked, the same ink drawn by fewer arms at a time.  After
+    # the coverage gate and after the A/B, because neither is about the
+    # schedule: phasing by arm changes when an arm draws and nothing about
+    # what is drawn, so the coverage this run refuses on is the same number
+    # either way and both allocations split the same way.
+    groups = arm_groups(getattr(a, "arm_phases", "off"),
+                        [x for p in phases for x in p["arms"]],
+                        float(getattr(a, "arm_phase_near", 0.70)))
+    if groups:
+        phases, alt = phase_by_arms(phases, alt, groups)
+        print(f"\nconducting in {len(phases)} phase(s), "
+              f"{len(groups)} arm group(s) per pass: "
+              + "  ".join("{" + ",".join(str(x) for x in g) + "}"
+                          for g in groups)
+              + "  (everybody outside the drawing group waits at the depot)")
     return phases, alt, pens, strokes, info
 
 
@@ -1172,6 +1234,18 @@ def schedule_args(ap):
     ap.add_argument("--pause", type=float, default=2.0,
                     help="seconds of every-arm-parked between two passes, "
                          "while a human swaps the pens")
+    ap.add_argument("--arm-phases", default="off",
+                    help="conduct each pass as SEVERAL phases, one per group "
+                         "of arms, with everybody else at the depot: 'off' "
+                         "(all arms at once), 'solo' (one arm at a time — the "
+                         "guaranteed floor), 'disjoint' (the coarsest grouping "
+                         "with no two arms whose bases are within "
+                         f"--arm-phase-near), or an explicit '13,31,2/17,71,97'")
+    ap.add_argument("--arm-phase-near", type=float, default=0.70,
+                    help="metres between two bases that makes them each "
+                         "other's near neighbour for --arm-phases disjoint "
+                         "(the proposed rig's transverse pairs are 0.61 m "
+                         "apart and its next-nearest bases 1.21 m)")
     # ---- the idle policy (aris_sixarm/idle.py); --idle-policy is in
     # csail_allocate.add_args, because the sequencer prices it too ---------
     ap.add_argument("--no-jit", action="store_true",

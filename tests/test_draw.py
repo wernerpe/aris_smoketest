@@ -281,3 +281,62 @@ def test_allocating_the_profiles_in_parallel_changes_only_the_clock(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_phasing_by_arm_conducts_the_same_ink_one_group_at_a_time(tmp_path):
+    """`--arm-phases solo` is the concurrency floor, and it must be a floor and
+    not a different drawing.
+
+    The dial exists because on a rig whose arms share their workspace the
+    conductor can refuse a schedule that no amount of waiting fixes — a mover
+    and a PARKED neighbour in each other's way at a progress index the mover
+    must pass through.  Phasing turns that geometric deadlock into a makespan
+    cost.  What it must NOT turn into is a different allocation: the same arm
+    draws the same segments, and only the clock changes.
+    """
+    import argparse
+    from csail_allocate import run_allocation, totals
+    from csail_schedule import build_phases, arm_groups, phase_by_arms
+    from aris_sixarm import allocate, fleet as fleet_mod
+
+    def draw(a):
+        for y in (60, 110, 160):
+            a[y:y + 5, 60:180] = 0
+        a[60:165, 115:120] = 0
+
+    src = _img(tmp_path, "phased.png", draw, size=(240, 240))
+    px, dbg = trace.trace_art(src, n_inks=1, work_px=240)
+
+    ap = argparse.ArgumentParser()
+    import csail_allocate as ca
+    import csail_schedule as cs
+    cs.schedule_args(ca.add_args(ap))
+    # placed so that BOTH arms draw some of it — a solo-phase test needs at
+    # least two solos, and where the picture sits is what decides that
+    a = ap.parse_args(["--arms", "13,31", "--no-prefilter", "--no-balance",
+                       "--no-verify", "--target-width", "0.50",
+                       "--offset", "-0.30", "0.0", "--fps", "8",
+                       "--substeps", "2", "--max-probes", "2"])
+    a.out, a.image, a.name = str(tmp_path), src, "phased"
+    a.palette = artwork.palette_of(dbg)
+
+    phases, strokes, info = run_allocation(a, verbose=False, px=px)
+    one = totals(phases)
+    groups = arm_groups("solo", [x for p in phases for x in p["arms"]])
+    split, _ = phase_by_arms(phases, {}, groups)
+    drawing = [x for x in phases[0]["arms"] if phases[0]["programs"][x]]
+    assert len(drawing) > 1, "the smoke picture must be shared to be a test"
+    # ...and a group whose arms drew nothing is not a phase
+    assert len(split) == len(drawing) < len(groups) + 1
+    # the picture is the same picture
+    assert totals(split)["covered"] == pytest.approx(one["covered"])
+    assert totals(split)["n_segments"] == one["n_segments"]
+
+    dt = 1.0 / (a.fps * a.substeps)
+    pens = {aid: 0.110 for aid in fleet_mod.FLEET}
+    built = build_phases(a, split, dt, pens)
+    assert len(built) == len(split)
+    for b, ph in zip(built, split):
+        assert b["rep"]["ok"], f"scene_check refused {ph['name']}: {b['rep']}"
+        moving = [x for x, p in b["paths"].items() if p.moves]
+        assert moving == ph["arms"], (ph["name"], moving)

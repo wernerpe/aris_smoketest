@@ -306,7 +306,11 @@ def figure(png, xs, ys, per_go, arms, S, S_):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rig", default=_RIG, choices=("final6", "final6_opt"))
+    # `proposed` is a six-arm rig on the same canvas, so every number this
+    # script computes is defined for it — the seam bands simply describe a
+    # seam its one continuous web does not have.
+    ap.add_argument("--rig", default=_RIG,
+                    choices=("final6", "final6_opt", "proposed"))
     ap.add_argument("--grid", type=float, default=0.02)
     ap.add_argument("--tilt", type=float, default=15.0)
     ap.add_argument("--pen", type=float, default=0.110)

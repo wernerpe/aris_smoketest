@@ -2978,6 +2978,73 @@ def resequence(res, q_start=None, return_home=None, specs=None, forbid=None):
     return res
 
 
+def split_by_arms(res, groups):
+    """One allocation -> one allocation PER GROUP OF ARMS, same ink, same tours.
+
+    WHO DRAWS WHAT DOES NOT CHANGE and neither does any tour: an arm's
+    programme is already a self-contained sequence of certified segments that
+    was ordered without reference to any other arm, so restricting a result to
+    a subset of arms is a bookkeeping operation, not a re-allocation.  What
+    changes is WHEN each arm draws, because `csail_schedule.build_phases`
+    conducts one phase at a time with everybody else parked at the depot.
+
+    That is the fleet's concurrency dial, and it exists because on a rig whose
+    arms share their workspace the conductor can refuse a schedule that no
+    amount of waiting fixes: a mover and a PARKED neighbour are in each other's
+    way at a progress index the mover has to pass through, and a parked arm's
+    schedule is a constant (`coordination`'s hard block).  Phasing by arm turns
+    that geometric deadlock into a makespan cost — the groups that are not
+    drawing are at the depot, where their partners' ink is, instead of standing
+    over it.  Six singleton groups is the floor: one arm on the paper at a
+    time, which is always conductable if any allocation is.
+
+    `groups` is a list of arm-id iterables.  An arm that draws and is in no
+    group RAISES rather than having its ink quietly disappear; empty groups
+    are skipped.  The picture's bookkeeping (total_len, dropped) rides on the
+    first phase, so `totals()` over the returned list reproduces the original
+    numbers exactly instead of counting the traced metres once per group.
+    """
+    arms = list(res["arms"])
+    seen = [a for g in groups for a in g]
+    if sorted(seen) != sorted(set(seen)):
+        raise ValueError(f"an arm appears in two groups: {seen}")
+    missing = [a for a in arms if a not in seen]
+    if missing:
+        raise ValueError(f"arms {missing} draw in this allocation but are in "
+                         "no group; every drawing arm must be phased")
+    per_arm = ("programs", "bag", "menus", "menu_stats", "sequence",
+               "transit", "transit_time", "pens", "aopts", "q_start")
+    out = []
+    for g in groups:
+        sub = [a for a in arms if a in set(g)]
+        # a group whose arms drew nothing is not a phase: conducting it would
+        # buy a go-home and a pen-swap pause and no ink
+        if not sub or not any(res["programs"].get(a) for a in sub):
+            continue
+        r = dict(res)
+        r["arms"] = sub
+        for k in per_arm:
+            if isinstance(res.get(k), dict):
+                r[k] = {a: v for a, v in res[k].items() if a in set(sub)}
+        r["drawn_len"] = float(sum(s["length"] for a in sub
+                                   for s in r["programs"][a]))
+        first = not out
+        r["total_len"] = float(res["total_len"]) if first else 0.0
+        r["dropped"] = list(res["dropped"]) if first else []
+        r["dropped_len"] = float(res["dropped_len"]) if first else 0.0
+        r["name"] = (f"{res.get('name', 'pass')} — arms "
+                     + ",".join(str(a) for a in sub))
+        r["arm_group"] = [int(a) for a in sub]
+        out.append(r)
+    if not out:                      # nothing was drawn at all: one empty pass
+        r = dict(res, arms=[], arm_group=[])
+        for k in per_arm:
+            if isinstance(res.get(k), dict):
+                r[k] = {}
+        out = [dict(r, drawn_len=0.0)]
+    return out
+
+
 def reverse_segment(seg, spec, opts=None):
     """A programme entry drawn the other way round, or None if it will not certify.
 
