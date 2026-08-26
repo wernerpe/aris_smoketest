@@ -1069,7 +1069,22 @@ def build_phases(a, phases, dt, pens, alt=None):
                     B, ph = C, other
                     phases[k] = other
         if B is None:
+            # A PHASE IS NOT A RUN.  With `--arm-phases` a phase is one group
+            # of arms drawing part of the same picture, and a group the
+            # conductor cannot schedule does not make the groups that CONDUCT
+            # unsafe — it makes their ink the only ink there is.  Shipping them
+            # is the honest floor (the programme is certified for what it
+            # draws, and the coverage says what the refusal cost); refusing the
+            # whole run is the honest default, because a picture missing a
+            # quarter of itself is usually not the picture that was asked for.
+            if getattr(a, "skip_unconductable", False):
+                ph["conducted"] = False
+                print(f"  !! SKIPPING {ph['name']}: "
+                      f"{ph['drawn_len']:.4f} m of ink nobody will draw "
+                      "(--skip-unconductable)")
+                continue
             raise SystemExit(f"{ph['name']} could not be conducted")
+        ph["conducted"] = True
         B["split_kept"] = B["res"] is not other
         built.append(B)
         q_start = built[-1]["idle"]["q_end"]
@@ -1093,6 +1108,8 @@ def build_phases(a, phases, dt, pens, alt=None):
                                 for x, v in rep["poses"].items() if not v["ok"])
                 raise SystemExit("the pen-swap hold pose is not safe"
                                  + (f" ({bad})" if bad else ""))
+    if not built:
+        raise SystemExit("no phase could be conducted")
     return built
 
 
@@ -1241,6 +1258,13 @@ def schedule_args(ap):
                          "guaranteed floor), 'disjoint' (the coarsest grouping "
                          "with no two arms whose bases are within "
                          f"--arm-phase-near), or an explicit '13,31,2/17,71,97'")
+    ap.add_argument("--skip-unconductable", action="store_true",
+                    help="ship the phases that DO conduct instead of refusing "
+                         "the whole run, and count the rest as ink nobody "
+                         "drew.  Only meaningful with --arm-phases, where a "
+                         "phase is one group of arms: the programme that comes "
+                         "out is certified for what it draws and its coverage "
+                         "says what that cost")
     ap.add_argument("--arm-phase-near", type=float, default=0.70,
                     help="metres between two bases that makes them each "
                          "other's near neighbour for --arm-phases disjoint "
@@ -1376,8 +1400,20 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
     schema to keep in step.
     """
     T = totals(phases)
+    # ...and what was actually CONDUCTED, which is the same thing unless a
+    # phase was skipped (`--skip-unconductable`): the ink of a phase nobody
+    # could schedule is ink nobody draws, and the coverage this run reports
+    # has to say so rather than counting the allocation's intention.
+    drawn = float(sum(B["res"]["drawn_len"] for B in built))
+    skipped = [p for p in phases if p.get("conducted") is False]
+    T = dict(T, drawn=drawn, dropped=T["traced"] - drawn,
+             covered=drawn / max(T["traced"], 1e-9),
+             n_segments=int(sum(len(B["res"]["programs"][x])
+                                for B in built for x in B["res"]["arms"])))
     summary = dict(
         profile=prof, qd_frac=float(a.qd_frac),
+        skipped_phases=[p["name"] for p in skipped],
+        skipped_m=float(sum(p["drawn_len"] for p in skipped)),
         name=getattr(a, "name", None), source=getattr(a, "image", None),
         inks=artwork.inks_of(strokes),
         palette={k: artwork.hex_of(k, getattr(a, "palette", None) or INK)
