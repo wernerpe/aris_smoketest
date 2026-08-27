@@ -104,7 +104,7 @@ _W = {}
 SHIPPED_PITCH = 0.61
 
 
-def rig(pitch=None, h=None):
+def rig(pitch=None, h=None, calib=None):
     """The fleet and its parks. -> (fleet, parks, h, pitch).
 
     At the SHIPPED pitch this is the committed pair — `layout.FLEET_PROPOSED`
@@ -117,15 +117,37 @@ def rig(pitch=None, h=None):
     (radius, hover, bearing) recipe.  That recipe was searched at 0.61 and is
     not re-optimised here, so a comparison run answers "the shipped park recipe
     at a wider pitch", not "the best rig at a wider pitch".
+
+    `calib` REPLACES the unsurveyed-base allowance in the OBSTACLE BOXES, and
+    it is here so the commissioning survey can be priced without editing a
+    constant.  `mounts.MOUNTS.calib` = 0.03 m is the allowance for base
+    positions nobody has measured yet; every neighbour's body column is carried
+    as boxes one `calib` fatter than the metal (`mounts.MountModel.column_bands`
+    and `column_r`).  A run with `calib=0.0` is asking "what would the canvas be
+    if the six bases were surveyed?" — and it is a PROJECTION, built here on a
+    local model, never written back into the package and never the shipped
+    number.  The park poses are the shipped literals either way: a survey moves
+    what the arms may fly through, not where they were told to wait.
     """
     h = layout.LAYOUT_PROPOSED["h"] if h is None else float(h)
     pitch = SHIPPED_PITCH if pitch is None else float(pitch)
-    if abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9:
-        return layout.FLEET_PROPOSED, layout.Q_PARK_PROPOSED, h, pitch
-    lay = layout.paired_grid(spacing=pitch, rows=3, h=h)
-    fl = layout.build_fleet(lay)
-    parks = layout.certified_park_poses(fl, layout.PARK_GRID_PROPOSED)
-    return layout.build_fleet(lay, q_park=parks), parks, h, pitch
+    shipped = abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9
+    if calib is None:
+        if shipped:
+            return layout.FLEET_PROPOSED, layout.Q_PARK_PROPOSED, h, pitch
+        lay = layout.paired_grid(spacing=pitch, rows=3, h=h)
+        fl = layout.build_fleet(lay)
+        parks = layout.certified_park_poses(fl, layout.PARK_GRID_PROPOSED)
+        return layout.build_fleet(lay, q_park=parks), parks, h, pitch
+    from aris_sixarm import mounts
+    model = mounts.MOUNTS.scaled(calib=float(calib))
+    lay = (layout.LAYOUT_PROPOSED if shipped
+           else layout.paired_grid(spacing=pitch, rows=3, h=h))
+    parks = (layout.Q_PARK_PROPOSED if shipped else
+             layout.certified_park_poses(layout.build_fleet(lay),
+                                         layout.PARK_GRID_PROPOSED))
+    return (layout.build_fleet(lay, mount_model=model, q_park=parks),
+            parks, h, pitch)
 
 
 def park_hovers(fleet, parks, h):
@@ -142,19 +164,36 @@ def park_hovers(fleet, parks, h):
 
 
 def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
-          tries=12, rrt=0.0, rrt_nodes=600):
+          tries=12, rrt=0.0, rrt_nodes=600, attempts=1, plans=None,
+          shortcut=None, calib=None):
     """Per-worker state: the fleet, the parks, the probe.  Built once."""
     writing.HOVER_LEAN_MAX_DEG = float(lean)
-    fl, parks, h, _ = rig(pitch, h)
+    fl, parks, h, _ = rig(pitch, h, calib)
     pens = {a: fl[a].pen for a in fl}
     _W["fleet"] = fl
     _W["parks"] = parks
+    _W["pens"] = pens
     _W["h"] = h
-    _W["probe"] = allocate.ParkProbe(parks, fl, pens, h_inv=h)
+    _W["calib"] = calib
+    # THE INTER-ARM SHARE OF THE SAME ALLOWANCE.  `SAFETY_M + CALIB_M` is the
+    # 0.08 m the conductor holds every pair to, and 0.03 of it is the same
+    # unsurveyed-base term the boxes carry.  A projection that took it out of
+    # the metal and left it in the pair margin would only have done half the
+    # sum, so this does both — and, being an argument, neither is a package
+    # constant that some other run could inherit.
+    if calib is None:
+        _W["margin"] = None
+    else:
+        from aris_sixarm import coordination
+        _W["margin"] = float(coordination.SAFETY_M + float(calib))
+    _W["probe"] = allocate.ParkProbe(parks, fl, pens, h_inv=h,
+                                     margin=_W["margin"])
+    _W["probes"] = {}
     _W["atlas_dir"] = atlas_dir
     _W["redundant"] = bool(redundant)
     _W["fiber"] = bool(fiber)
     _W["tries"] = int(tries)
+    _W["plans"] = RRT_CELL_PLANS if plans is None else int(plans)
     # THE C-SPACE TIER, WITH A BUDGET THAT IS A POLICY AND NOT A DEFAULT.
     #
     # This map routes every one of 23 376 certified cells and retries each
@@ -171,21 +210,52 @@ def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
     # before it and still not a proof of impossibility — which is exactly the
     # claim the layer above it (the hover ladder, the fiber retry) already
     # makes about itself.
+    # ...AND THE BUDGET IS NOW REAL.  Until 2026-08-27 `transit.plan` bound
+    # these three in its SIGNATURE, so every one of these assignments was
+    # inert and the v11 map ran the module defaults (2.5 s x 2 attempts x 900
+    # nodes) while its log said 0.80 s x 1 x 500.  `transit.plan` resolves them
+    # at call time now, which is what makes the escalation ladder below an
+    # escalation and not a wish.
     _W["rrt"] = float(rrt)
     paper.RRT_SAFE = float(rrt) > 0.0
     if paper.RRT_SAFE:
         transit.TIME_BUDGET = float(rrt)
-        transit.ATTEMPTS = 1
+        transit.ATTEMPTS = int(attempts)
         transit.MAX_NODES = int(rrt_nodes)
         # Smoothing is what a TOUR pays for and this map does not buy tours: it
         # asks whether a cell can be flown to at all.  Two rounds of shortcut
         # keep the path from being absurd and cost a tenth of what the default
         # spends making it short.
-        transit.SHORTCUT_TIME = min(0.20, 0.25 * float(rrt))
+        transit.SHORTCUT_TIME = (min(0.20, 0.25 * float(rrt))
+                                 if shortcut is None else float(shortcut))
         transit.SHORTCUT_ROUNDS = 24
 
 
-def _park_probe_hook(arm):
+def _park_sig(parks):
+    """A hashable identity for one parked SET. -> tuple.
+
+    IT GOES IN `paper`'s MEMO KEY, and that is not decoration.  `paper.route`
+    files its answer under a key that carries `RRT_PROBE[2]`, so two questions
+    that differ only in WHERE THE OTHER FIVE ARMS ARE STANDING would otherwise
+    collide — the region-aware rung would ask about a fleet that had moved and
+    be handed the answer for the fleet that had not.
+    """
+    return tuple((int(a), np.round(np.asarray(q, float), 6).tobytes())
+                 for a, q in sorted(parks.items()))
+
+
+def _probe_for(parks):
+    """The `ParkProbe` for one parked set, built once per worker. -> probe."""
+    sig = _park_sig(parks)
+    got = _W["probes"].get(sig)
+    if got is None:
+        got = (allocate.ParkProbe(parks, _W["fleet"], _W["pens"],
+                                  h_inv=_W["h"], margin=_W.get("margin")), sig)
+        _W["probes"][sig] = got
+    return got
+
+
+def _park_probe_hook(arm, probe=None, sig=None):
     """Point `paper.RRT_PROBE` at the five arms standing behind THIS one.
 
     The ladder does not know about parked partners — `allocate.ParkProbe`
@@ -194,15 +264,16 @@ def _park_probe_hook(arm):
     budget finding.  The planner can be told, so it is.
 
     The key is what goes into `paper`'s memo: the arm decides which five
-    partners are in the room, and the parks themselves are fixed for a run.
+    partners are in the room, and `sig` says WHICH five poses they are in — the
+    parks are no longer fixed for a run (see `_park_sig`).
     """
-    probe = _W["probe"]
+    probe = _W["probe"] if probe is None else probe
     if not probe or not probe.partners(int(arm)):
         paper.RRT_PROBE = None
         return
     paper.RRT_PROBE = (lambda qs, sweep: probe.clearance(int(arm), qs, sweep),
                        probe.margin, ("park", int(arm),
-                                      round(float(probe.margin), 9)))
+                                      round(float(probe.margin), 9), sig))
 
 
 def _dense(steps, q0, n=None):
@@ -345,8 +416,9 @@ def _cell(arm, row, qcol, redundant=True):
 
 
 def _cell_hovers(arm, spec, h, probe, q_park, q_draw, x, y, hovers,
-                 budget0, rrt_on):
+                 budget0, rrt_on, plans=None):
     """`_cell`'s search over the hover ladder and then the fiber."""
+    plans = _W.get("plans", RRT_CELL_PLANS) if plans is None else int(plans)
     best = float("-inf")
     z0 = float(hovers[0][1])
     seen = set()
@@ -358,7 +430,7 @@ def _cell_hovers(arm, spec, h, probe, q_park, q_draw, x, y, hovers,
                 continue
             seen.add(k)
             if rrt_on and paper.RRT_SAFE \
-                    and transit.stats()["calls"] - budget0 >= RRT_CELL_PLANS:
+                    and transit.stats()["calls"] - budget0 >= plans:
                 paper.RRT_SAFE = False
             beats = writing.enter_beats(spec, q_park, q_hov, q_draw,
                                         pen_ext=spec.pen, h_inv=h)
@@ -373,6 +445,250 @@ def _cell_hovers(arm, spec, h, probe, q_park, q_draw, x, y, hovers,
         tier = 1
         hovers = _fiber_hovers(spec, q_draw, (x, y), h, _W.get("tries", 12))
     return NO_ROUTE, z0, (float("nan") if best == float("-inf") else best)
+
+
+# ---------------------------------------------------------------------------
+# THE ESCALATION LADDER
+# ---------------------------------------------------------------------------
+# THE SWEEP ABOVE IS A BUDGET APPLIED UNIFORMLY, AND THE DEAD SET IS 4.66 % OF
+# THE CANVAS.  Spending the same seconds on the cell an arm inks on its first
+# try as on the cell it cannot reach is what makes the budget a compromise; so
+# once the map exists, the cells it refused get the budget they were never
+# offered, and only they.
+#
+# EVERY RUNG IS A COUNT, NOT A CLOCK.  A cell's answer is the FIRST RUNG THAT
+# CERTIFIES, and that has to be reproducible on a loaded box: the tree bound is
+# `max_nodes`, the restart bound is `attempts` (whose seeds are derived from the
+# scene and the endpoints, so they replay), the per-cell bound is a PLAN COUNT,
+# and the shortcutter is bounded by rounds.  `transit.TIME_BUDGET` is set well
+# above what any rung can spend, so the clock never decides an answer — and
+# `transit.stats()["deadline"]` is reported so the claim is checked rather than
+# asserted.  A run that reports `deadline 0` gave the only answer it could give.
+#
+# What each rung buys is measured, not assumed: `--rescue` prints per-rung hit
+# rates and per-rung seconds, and the map's JSON carries them.
+#
+# THE RUNGS ARE SIZED ON A MEASURED PRICE.  A SOLVED tree costs 39 nodes and is
+# free; a REFUSED one spends its whole node budget, measured at 11.7 ms a node
+# on this rig — so a plan that is going to fail costs 3.5 s at 300 nodes x 1
+# seed, 21 s at 900 x 2, 63 s at 1800 x 3.  The ladder climbs the two that
+# matter (how many hovers, how many plans) before it climbs the one that is
+# mostly a tax (how big a tree), because the measurement says the tree finds
+# its answer early or not at all.
+# ...AND THE ASIDE RUNG COMES SECOND, NOT THIRD, because it is cheap where it
+# fires and free where it does not.  A cell whose DESCENT the ladder cannot do
+# is behind a wall no park can move (see `_cell_escalated`), so an aside rung
+# skips it outright rather than re-proving it one park set at a time; measured
+# on the v11 dead set that is 73 % of the arm-cells, which is what makes the
+# rung affordable at all.
+RESCUE_RUNGS = (
+    # name      tries  plans  nodes  attempts  aside
+    ("fiber",      48,     8,   300,        1,     0),
+    ("aside",      96,     8,   300,        1,     3),
+    ("seeds",      96,    16,   900,        2,     0),
+    ("deep",      192,    24,  1800,        2,     3),
+)
+RESCUE_TIME = 120.0     # s per plan: a ceiling that must never bind (see above)
+
+
+def rung_settings(rung):
+    """-> dict for one rung of `RESCUE_RUNGS`."""
+    name, tries, plans, nodes, attempts, aside = RESCUE_RUNGS[int(rung)]
+    return dict(name=name, tries=int(tries), plans=int(plans),
+                nodes=int(nodes), attempts=int(attempts), aside=int(aside))
+
+
+def _apply_rung(r):
+    """Put one rung's budget in force in this worker."""
+    _W["tries"] = int(r["tries"])
+    _W["plans"] = int(r["plans"])
+    transit.MAX_NODES = int(r["nodes"])
+    transit.ATTEMPTS = int(r["attempts"])
+    transit.TIME_BUDGET = RESCUE_TIME
+    transit.SHORTCUT_TIME = 5.0      # never binds; SHORTCUT_ROUNDS does
+    transit.SHORTCUT_ROUNDS = 24
+
+
+def _park_sets(arm, xy, n_aside):
+    """The parked fleets this rung may try, best first. -> [(parks, sig)].
+
+    The first is always the SHIPPED set, so a rung that gains nothing from
+    moving anybody gives the shipped answer and the ladder cannot regress.
+    """
+    base = _W["parks"]
+    out = [(base, None)]
+    if n_aside <= 0:
+        return out
+    fl = _W["fleet"]
+    tx = np.asarray(xy, float).reshape(2)
+    fired = [a for a, s in sorted(fl.items())
+             if a != arm
+             and float(np.linalg.norm(np.asarray(s.xy, float) - tx))
+             <= layout.ASIDE_DISC_R]
+    if not fired:
+        return out
+    seen = {_park_sig(base)}
+    # `max_moved` walks 1 then 2: one arm aside is the cheap answer and the one
+    # a phase can actually fly, and the second only ever runs when the first
+    # bought nothing.
+    for moved in (1, 2):
+        for k in range(1, int(n_aside) + 1):
+            parks, info = layout.region_aware_parks(
+                fl, base, tx, drawing=arm, h_inv=_W["h"], grid=None,
+                max_moved=moved, rank=k)
+            if not info or not any(v["moved"] for v in info.values()):
+                continue
+            sig = _park_sig(parks)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append((parks, sig))
+    return out
+
+
+def _descent_ok(spec, q_hov, q_draw, h):
+    """Can the pen get from this hover down onto the ink, ON THE LADDER?
+
+    The second of `writing.enter_beats`' two legs, asked on its own and with
+    the planner OFF, so the answer costs a ladder walk and not a tree search.
+    """
+    return writing._route(spec, q_hov, q_draw, spec.pen, h,
+                          paper.CONTACT_FLOOR, writing.QD_FRAC,
+                          writing.T_LOWER_F, writing.PAPER_SAFE) is not None
+
+
+def _enter_clear(arm, spec, h, probe, q_park, q_hov, q_draw):
+    """`enter_beats` + the parked-fleet verdict for one hover. -> clearance."""
+    beats = writing.enter_beats(spec, q_park, q_hov, q_draw,
+                                pen_ext=spec.pen, h_inv=h)
+    if beats is None:
+        return float("-inf")
+    return float(probe.clearance(arm, _dense(beats["steps"], q_park)))
+
+
+def _cell_escalated(arm, row, qcol, rung):
+    """One (arm, cell) at one rung. -> (code, z_hover, park_clear).
+
+    The rung's budget is already in force; what this adds over `_cell` is three
+    things the sweep's evaluator cannot do.
+
+    THE FIBER, EVEN WITH AN EMPTY LADDER.  `_cell` returns NO_HOVER the moment
+    `_certified_hovers` is empty, so those cells never reach `_fiber_hovers`
+    and never see a LEAN.  107 canvas cells died in that gap and it is a search
+    that stopped, not a canvas that ended.
+
+    THE DESCENT IS SCREENED BEFORE THE CORRIDOR IS PLANNED.  `enter_beats` is
+    two routes — a metre of corridor from the park to the hover, and 6 cm of
+    descent from the hover onto the ink — and it walks them in that order, so a
+    hover whose DESCENT is impossible still costs a full corridor plan.  It is
+    not a corner case: measured over 30 route-dead cells at 48 fiber tries, 22
+    of them have no hover at all whose descent the ladder can do, and the
+    planner was being spent proving corridors to hovers that were never going
+    to be usable.  Screening every hover's descent on the ladder costs 2.4 s
+    for all 48 of them and says which of the two walls this cell is behind.
+
+    THE PARKED FLEET IS A VARIABLE, and it is one for exactly the cells it can
+    help.  A parked arm is in the corridor, never in the 6 cm of descent — the
+    descent's ladder is park-blind, and the only way a park reaches it at all
+    is by RESTRICTING the C-space tier.  So a cell walled at the descent is
+    offered no aside park: moving somebody could not have helped it, and the
+    rung would spend four searches to prove that one at a time.
+    """
+    fl, h = _W["fleet"], _W["h"]
+    spec = fl[arm]
+    x, y = float(row[0]), float(row[1])
+    q_draw = np.asarray(row[qcol:qcol + 7], float)
+
+    hovers = _certified_hovers(spec, q_draw, (x, y), h)
+    hovers = hovers + list(_fiber_hovers(spec, q_draw, (x, y), h, _W["tries"]))
+    if not hovers:
+        return NO_HOVER, 0.0, float("nan")
+    seen, uniq = set(), []
+    for q_hov, z in hovers:
+        k = np.round(q_hov, 9).tobytes()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append((q_hov, float(z)))
+    hovers = uniq
+    z0 = float(hovers[0][1])
+
+    rrt_on = paper.RRT_SAFE
+    best = float("-inf")
+    try:
+        # ---- the descent screen, ladder only ---------------------------
+        paper.RRT_SAFE = False
+        landable = [hv for hv in hovers if _descent_ok(spec, hv[0], q_draw, h)]
+        paper.RRT_SAFE = rrt_on
+        if rung["aside"] and not landable:
+            # AN ASIDE RUNG HAS NOTHING FOR THIS CELL.  The wall is the 6 cm
+            # between the hover and the ink, and no park pose is in there — the
+            # rung below already spent its budget on that descent with the same
+            # parks this one would use.  Charging the cell four park sets to
+            # re-prove it is how an escalation ladder stops being affordable.
+            return NO_ROUTE, z0, float("nan")
+        sets = _park_sets(arm, (x, y), rung["aside"])
+        if rung["aside"] and len(sets) < 2:
+            # nobody is standing over this cell, so this rung has no question
+            # to ask about it that the rung below did not already ask
+            return NO_ROUTE, z0, float("nan")
+        for parks, sig in sets:
+            probe, _psig = _probe_for(parks)
+            if _W.get("rrt", 0.0) > 0.0:
+                _park_probe_hook(arm, probe, sig)
+            q_park = np.asarray(parks[arm], float)
+            # ---- the corridor, for hovers that can land -----------------
+            paper.RRT_SAFE = rrt_on
+            budget0 = transit.stats()["calls"]
+            for q_hov, z in landable:
+                if rrt_on and paper.RRT_SAFE and \
+                        transit.stats()["calls"] - budget0 >= rung["plans"]:
+                    paper.RRT_SAFE = False
+                c = _enter_clear(arm, spec, h, probe, q_park, q_hov, q_draw)
+                best = max(best, c)
+                if c >= probe.margin:
+                    return FEASIBLE, float(z), float(c)
+            # ---- and then the descent itself, in the C-space ------------
+            # Only where the ladder found NO landable hover: that cell is
+            # behind the descent, and the seven-dimensional tier is the only
+            # thing left that has not been asked about it.
+            if landable:
+                continue
+            paper.RRT_SAFE = rrt_on
+            budget0 = transit.stats()["calls"]
+            for q_hov, z in hovers:
+                if rrt_on and paper.RRT_SAFE and \
+                        transit.stats()["calls"] - budget0 >= rung["plans"]:
+                    break
+                c = _enter_clear(arm, spec, h, probe, q_park, q_hov, q_draw)
+                best = max(best, c)
+                if c >= probe.margin:
+                    return FEASIBLE, float(z), float(c)
+    finally:
+        paper.RRT_SAFE = rrt_on
+    return NO_ROUTE, z0, (float("nan") if best == float("-inf") else best)
+
+
+def _rescue_chunk(job):
+    """(rung index, [(arm, row index)]) -> per-cell results, in a worker."""
+    ri, items = job
+    r = rung_settings(ri)
+    _apply_rung(r)
+    qcol = atlas.QCOL
+    s0 = dict(transit.stats())
+    out = []
+    for arm, i in items:
+        rows = _go_rows(arm)
+        row = rows[i]
+        t0 = time.time()
+        code, z, clear = _cell_escalated(arm, row, qcol, r)
+        out.append((int(arm), float(row[0]), float(row[1]), int(code),
+                    float(z), float(clear), int(i), float(time.time() - t0)))
+    s1 = transit.stats()
+    # THE CLOCK MUST NOT HAVE DECIDED ANYTHING (see `RESCUE_RUNGS`), so the
+    # count of searches that stopped on it comes back with the answers.
+    return ri, out, {k: s1[k] - s0.get(k, 0) for k in
+                     ("calls", "solved", "failed", "deadline", "nodes")}
 
 
 _ROWS = {}
@@ -459,6 +775,125 @@ def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
                     ckpt, **{f"arm{k}": (np.array(v) if v else np.zeros((0, 6)))
                              for k, v in res.items()})
     return {a: (np.array(v) if v else np.zeros((0, 6))) for a, v in res.items()}
+
+
+def rescue(per_arm, arms, atlas_dir, h, workers, rungs=None, chunk=6,
+           ckpt=None, pitch=None, log=print, lean=0.0, rrt=1.0, calib=None):
+    """Escalate the DEAD cells of a finished map. -> (per_arm, ladder).
+
+    Only cells the map REFUSED are touched, and a cell stops being touched the
+    moment any arm carries it: the ladder's answer for a cell is the first rung
+    that certifies it, and the rungs above that one are never charged for it.
+
+    `per_arm` is updated in place and returned; `ladder` is the per-rung
+    accounting the JSON carries — how many arm-cells the rung was offered, how
+    many it turned, what it cost, and whether the CLOCK ever decided an answer.
+    """
+    import multiprocessing as mp
+
+    rungs = list(range(len(RESCUE_RUNGS))) if rungs is None else list(rungs)
+    idx = {a: {int(r[5]): i for i, r in enumerate(per_arm[a])} for a in arms}
+    ladder = []
+    for ri in rungs:
+        r = rung_settings(ri)
+        comp = compose(per_arm, arms)
+        dead = comp["cause"] != FEASIBLE
+        # every (arm, cell) that is still refused ON A DEAD CELL
+        items = []
+        for a in arms:
+            d = per_arm[a]
+            if not len(d):
+                continue
+            code = d[:, 2].astype(int)
+            ii = np.round(d[:, 1] / GRID).astype(int)
+            jj = np.round(d[:, 0] / GRID).astype(int)
+            sel = (code != FEASIBLE) & dead[ii, jj]
+            items += [(int(a), int(v)) for v in d[sel][:, 5].astype(int)]
+        if not items:
+            log(f"rung {ri} {r['name']}: nothing left to escalate")
+            break
+        # STRIDED, for the same reason `sweep` strides: a rung's cost is wildly
+        # uneven per cell and a contiguous block leaves one worker holding it.
+        nchunk = max(1, int(np.ceil(len(items) / chunk)))
+        jobs = [(ri, items[k::nchunk]) for k in range(nchunk)]
+        jobs = [j for j in jobs if j[1]]
+        log(f"rung {ri} {r['name']}: {len(items)} arm-cells on "
+            f"{int(dead.sum())} dead cells, {len(jobs)} chunks "
+            f"(tries {r['tries']}, plans {r['plans']}, nodes {r['nodes']}, "
+            f"attempts {r['attempts']}, aside {r['aside']})", flush=True)
+        if r["aside"]:
+            # BUILT IN THE PARENT, ON PURPOSE.  Certifying one arm's 61 aside
+            # candidates is 9 s of IK, the pool is forked, and a table built
+            # here is inherited by every worker instead of being rebuilt in
+            # each of them.
+            ta = time.time()
+            fl = rig(pitch, h, calib)[0]
+            for a in sorted(fl):
+                layout.aside_candidates(
+                    fl[a], pen_lat=frames.PEN_LAT_HOLDER,
+                    extra=(layout.PARK_GRID_PROPOSED[a],)
+                    if a in layout.PARK_GRID_PROPOSED else ())
+            log(f"  aside park candidates for {len(fl)} arms in "
+                f"{time.time() - ta:.0f}s", flush=True)
+        t0 = time.time()
+        got = []
+        done = 0
+        tstat = dict(calls=0, solved=0, failed=0, deadline=0, nodes=0)
+        ctx = mp.get_context("fork")
+        with ctx.Pool(workers, initializer=_init,
+                      initargs=(str(atlas_dir), h, True, pitch, True, lean,
+                                r["tries"], rrt, r["nodes"], r["attempts"],
+                                r["plans"], 5.0, calib)) as pool:
+            for _ri, out, st in pool.imap_unordered(_rescue_chunk, jobs,
+                                                    chunksize=1):
+                got += out
+                for k in tstat:
+                    tstat[k] += int(st.get(k, 0))
+                done += 1
+                el = time.time() - t0
+                log(f"  rung {ri} {done}/{len(jobs)} chunks  {len(got)} cells  "
+                    f"{el:.0f}s  eta {el / done * (len(jobs) - done):.0f}s",
+                    flush=True)
+        turned = 0
+        secs = 0.0
+        for arm, x, y, code, z, clear, i, dt in got:
+            secs += dt
+            k = idx[arm].get(int(i))
+            if k is None:
+                continue
+            was = int(per_arm[arm][k, 2])
+            if code == FEASIBLE or (was == NO_HOVER and code == NO_ROUTE):
+                per_arm[arm][k, 2] = code
+                per_arm[arm][k, 3] = z
+                per_arm[arm][k, 4] = clear
+                turned += code == FEASIBLE
+            elif np.isfinite(clear):
+                # a better witness for the SAME refusal: the map reports the
+                # closest anyone got, and a deeper search got closer
+                old = per_arm[arm][k, 4]
+                if not np.isfinite(old) or clear > old:
+                    per_arm[arm][k, 4] = clear
+        after = compose(per_arm, arms)
+        row = dict(rung=int(ri), name=r["name"], offered=len(items),
+                   turned=int(turned),
+                   dead_before=int(dead.sum()),
+                   dead_after=int((after["cause"] != FEASIBLE).sum()),
+                   wall_s=round(time.time() - t0, 1),
+                   cell_s=round(secs / max(1, len(got)), 3),
+                   rrt=dict(tstat),
+                   **{k: int(v) for k, v in
+                      dict(tries=r["tries"], plans=r["plans"], nodes=r["nodes"],
+                           attempts=r["attempts"], aside=r["aside"]).items()})
+        ladder.append(row)
+        log(f"  rung {ri} {r['name']}: {turned} arm-cells turned, dead "
+            f"{row['dead_before']} -> {row['dead_after']} "
+            f"({row['wall_s']:.0f}s, {row['cell_s']:.2f}s/arm-cell); "
+            f"RRT {tstat['calls']} plans {tstat['solved']} solved, "
+            f"{tstat['deadline']} stopped on the CLOCK", flush=True)
+        if ckpt:
+            np.savez_compressed(ckpt, **{f"arm{k}": v
+                                         for k, v in per_arm.items()})
+    return per_arm, ladder
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +1033,7 @@ def blobs(mask):
 
 
 def numbers(comp, per_arm, arms, sheet=SHEET, grid=GRID, fleet=None,
-            park_hover=None, pitch=SHIPPED_PITCH, h=0.940):
+            park_hover=None, pitch=SHIPPED_PITCH, h=0.940, lean=None):
     cell_a = grid * grid
     n_arms, cause = comp["n_arms"], comp["cause"]
     H, W = cause.shape
@@ -634,6 +1069,38 @@ def numbers(comp, per_arm, arms, sheet=SHEET, grid=GRID, fleet=None,
                             pct=pct(int((cause == c).sum())),
                             m2=round(int((cause == c).sum()) * cell_a, 4))
         for c in (NO_DRAW, NO_HOVER, NO_ROUTE)}
+
+    if lean:
+        # THE CELLS THAT ARE WAITING ON A DECISION, KEPT SEPARATE FROM THE ONES
+        # THAT ARE WAITING ON A SEARCH.  `scripts/lean_study.py` asks the atlas
+        # the same question at a wider cone; a cell that certifies at 17.5 or
+        # 20 degrees is not a hole in the canvas, it is a hole in what the pen
+        # is allowed to do, and the two must not be added up.
+        per = lean.get("per_cell", [])
+        by = {}
+        for r in per:
+            by.setdefault(f"{float(r['min_lean_deg']):g}", 0)
+            by[f"{float(r['min_lean_deg']):g}"] += 1
+        out["lean_pending"] = dict(
+            shipped_cone_deg=float(lean.get("shipped_cone_deg", 15.0)),
+            cells=len(per), pct=pct(len(per)),
+            m2=round(len(per) * cell_a, 4),
+            min_lean_histogram=dict(sorted(by.items(),
+                                           key=lambda kv: float(kv[0]))),
+            cumulative_by_cone=lean.get("cumulative_by_cone", {}),
+            # A WIDER CONE BUYS A POSE, NOT A CELL.  Granting it puts these
+            # cells on layer 1 and they still have to earn layers 2 and 3 like
+            # everybody else, so the honest headline is what it does to the
+            # DRAW-POSE layer.  Quoting it against `feasible` would be claiming
+            # a hover and a route nobody has planned.
+            draw_pose_pct_if_granted=round(
+                100.0 * (int(comp["draw_any"].sum()) + len(per)) / tot, 2),
+            note="cells with NO certified drawing pose inside the shipped "
+                 "15-degree cone that have one inside a wider one.  Not "
+                 "counted as feasible anywhere in this file; the pen's cone is "
+                 "a hardware decision and this is what it is worth.  Granting "
+                 "it would put them on layer 1; the hover and the route are "
+                 "still theirs to earn.")
 
     out["histogram"] = {str(k): int((n_arms == k).sum())
                         for k in range(0, len(arms) + 1)}
@@ -788,7 +1255,7 @@ def _bar_panel(ax, labels, vals, cols, title, note=None, xmax=100.0,
 
 
 def figure(comp, nums, arms, path, sheet=SHEET, grid=GRID, fleet=None,
-           park_hover=None):
+           park_hover=None, lean=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -852,6 +1319,16 @@ def figure(comp, nums, arms, path, sheet=SHEET, grid=GRID, fleet=None,
             ax.plot([ph[0]], [ph[1]], marker="P", ms=11, color="#8a1c1c",
                     mec="white", mew=1.4, zorder=9)
 
+    # THE LEAN-PENDING SET, MARKED AND NOT COLOURED.  These cells are dead in
+    # the raster like any other and they are dead for a different reason —
+    # a decision nobody has taken, not a geometry nobody can fly.  A ring over
+    # the cell says so without pretending the cell is drawable.
+    lp = nums.get("lean_pending")
+    if lp and lean and lean.get("per_cell"):
+        P = np.array([[r["x"], r["y"]] for r in lean["per_cell"]], float)
+        ax.plot(P[:, 0], P[:, 1], linestyle="none", marker="o", ms=3.4,
+                mfc="none", mec="#0b6e4f", mew=1.1, zorder=8)
+
     # THE SIZES LIVE IN THE LEGEND, not on top of the map: the two rectangles
     # overlap wherever the feasible region is one blob, and two label boxes in
     # the same 40 cm of canvas hide the cells they are describing.
@@ -914,6 +1391,14 @@ def figure(comp, nums, arms, path, sheet=SHEET, grid=GRID, fleet=None,
            f"no certified DRAWING pose, any arm   "
            f"({d['no draw pose']['pct']:.2f}%,  "
            f"{d['no draw pose']['m2']:.2f} m2)"]
+    if lp:
+        hs.append(Line2D([], [], color="#0b6e4f", marker="o", ls="none",
+                         ms=6, mfc="none", mew=1.4))
+        ls_.append(f"...of which THE PEN'S CONE, not the canvas\n"
+                   f"({lp['cells']} cells, {lp['m2']:.3f} m2:  certified at "
+                   f"{min(float(k) for k in lp['min_lean_histogram']):g}"
+                   f"-{max(float(k) for k in lp['min_lean_histogram']):g} deg, "
+                   f"not at {lp['shipped_cone_deg']:g})")
     lg1 = fig.legend(hs, ls_, loc="upper left", bbox_to_anchor=(0.055, 0.090),
                      ncol=1, fontsize=8.8, frameon=False, handlelength=1.5,
                      handleheight=1.0, labelspacing=0.4, borderpad=0.0,
@@ -1056,9 +1541,35 @@ def main():
                     help="skip the sweep and rebuild the map, the numbers and "
                          "the figure from an existing _raw.npz (or a _ckpt.npz "
                          "of a run still going)")
+    ap.add_argument("--rescue", default="", metavar="RUNGS",
+                    help="after loading/sweeping, walk the ESCALATION LADDER "
+                         "over the cells the map refused and only those: a "
+                         "comma-separated list of rung indices into "
+                         "RESCUE_RUNGS (\"all\" for every rung).  A cell's "
+                         "answer is the FIRST rung that certifies it; the "
+                         "rungs above never see it.")
+    ap.add_argument("--rescue-chunk", type=int, default=6)
+    ap.add_argument("--lean-study", default=str(OUT / "lean_study.json"),
+                    metavar="JSON",
+                    help="scripts/lean_study.py's output.  The cells it names "
+                         "are marked DISTINCTLY on the map and counted in "
+                         "their own JSON block: they have no certified drawing "
+                         "pose inside the shipped cone and do have one inside "
+                         "a wider one, which is a decision pending and not a "
+                         "canvas that ended.  They are never added to the "
+                         "feasible number.")
+    ap.add_argument("--calib", type=float, default=None, metavar="M",
+                    help="REPORT-ONLY PROJECTION.  Replace the 0.03 m "
+                         "unsurveyed-base allowance in the obstacle boxes "
+                         "(mounts.MountModel.calib) and in the pair margin "
+                         "(SAFETY_M + this) with another value; 0 asks what a "
+                         "commissioning survey would buy.  The model is built "
+                         "LOCALLY and no package constant is touched, so this "
+                         "cannot leak into a shipped number — write it to its "
+                         "own --out and quote it as a projection.")
     a = ap.parse_args()
 
-    fl, parks, h, pitch = rig(a.pitch)
+    fl, parks, h, pitch = rig(a.pitch, None, a.calib)
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
     ph = (layout.PARK_HOVER_PROPOSED if abs(pitch - SHIPPED_PITCH) < 1e-9
           else park_hovers(fl, parks, h))
@@ -1072,6 +1583,14 @@ def main():
                           f"{a.rrt_nodes} nodes/tree, "
                           f"{RRT_CELL_PLANS} plans/cell, park-probed"
                           if a.rrt > 0 else "OFF"))
+    if a.rescue:
+        print("ESCALATION LADDER: " + " | ".join(
+            f"{i}:{r[0]}(tries {r[1]}, plans {r[2]}, nodes {r[3]}, "
+            f"seeds {r[4]}, aside {r[5]})"
+            for i, r in enumerate(RESCUE_RUNGS)))
+        print(f"  running rungs {a.rescue}; "
+              f"transit.TIME_BUDGET is pinned at {RESCUE_TIME:.0f} s so the "
+              "CLOCK never decides an answer (the deadline count is reported)")
 
     if a.sweep_atlas:
         # ONE ATLAS PER COLLISION MODEL, and the model is this build's.
@@ -1105,6 +1624,20 @@ def main():
         np.savez_compressed(a.out + "_raw.npz",
                             **{f"arm{k}": v for k, v in per_arm.items()})
 
+    ladder = []
+    if a.rescue and a.every <= 1:
+        rungs = (list(range(len(RESCUE_RUNGS))) if a.rescue.strip() == "all"
+                 else [int(v) for v in a.rescue.split(",") if v.strip() != ""])
+        tr = time.time()
+        per_arm, ladder = rescue(per_arm, arms, Path(a.atlas), h, a.workers,
+                                 rungs=rungs, chunk=a.rescue_chunk,
+                                 ckpt=a.out + "_ckpt.npz", pitch=pitch,
+                                 lean=a.hover_lean_deg,
+                                 rrt=max(a.rrt, 1e-9), calib=a.calib)
+        print(f"rescue {time.time() - tr:.0f}s", flush=True)
+        np.savez_compressed(a.out + "_raw.npz",
+                            **{f"arm{k}": v for k, v in per_arm.items()})
+
     if a.every > 1:
         # A PILOT IS NOT A MAP.  Every Nth certified cell says what fraction of
         # the CERTIFIED cells survive the two layers above the atlas; it cannot
@@ -1127,10 +1660,46 @@ def main():
               f"no-route {100.0 * (c == NO_ROUTE).mean():.2f}%")
         return
 
+    lean = None
+    if a.lean_study:
+        p = Path(a.lean_study)
+        if p.exists():
+            with open(p) as f:
+                lean = json.load(f)
+            print(f"lean study: {lean['cells_no_pose_at_15']} cells with no "
+                  f"pose at {lean['shipped_cone_deg']:g} deg, "
+                  f"{lean['cells_with_a_pose_in_the_wider_cone']} of them "
+                  f"certified inside {max(lean['cone']):g} deg")
+        else:
+            print(f"lean study: {p} not found; the >cone set is not marked")
+
     comp = compose(per_arm, arms)
     nums = numbers(comp, per_arm, arms, fleet=fl, park_hover=ph, pitch=pitch,
-                   h=h)
+                   h=h, lean=lean)
     nums["sweep_seconds"] = round(time.time() - t0, 1)
+    if ladder:
+        nums["escalation_ladder"] = ladder
+        nums["escalation_rungs"] = [dict(zip(
+            ("name", "tries", "plans", "nodes", "attempts", "aside"), r))
+            for r in RESCUE_RUNGS]
+    if a.calib is not None:
+        from aris_sixarm import mounts, coordination
+        nums["calibration_projection"] = dict(
+            calib_m=float(a.calib), shipped_calib_m=float(mounts.MOUNTS.calib),
+            pair_margin_m=float(coordination.SAFETY_M + a.calib),
+            shipped_pair_margin_m=float(coordination.SAFETY_M
+                                        + coordination.CALIB_M),
+            what_moved=("the obstacle boxes every neighbour's body column is "
+                        "carried as, and the pair margin the parked fleet is "
+                        "held to"),
+            what_did_not=("rig_final.STATIC_MARGIN, and therefore the atlas "
+                          "gate every DRAWING pose was certified at: this "
+                          "projection moves the hover and the route, not the "
+                          "ink"),
+            note="REPORT-ONLY.  Not a shipped number and not a margin anyone "
+                 "has bought; it is what a commissioning survey of the six "
+                 "base positions would be worth if it removed the allowance "
+                 "entirely.")
     nums["caveats"] = [
         "Ceiling cross-members are NOT modelled: the steel that carries the six "
         "booms has no design yet, so only the booms themselves (r = 0.10 m, "
@@ -1154,7 +1723,8 @@ def main():
                         hover_any=comp["hover_any"], xs=comp["xs"],
                         ys=comp["ys"],
                         **{f"mask{k}": v for k, v in comp["per_arm"].items()})
-    figure(comp, nums, arms, a.out + ".png", fleet=fl, park_hover=ph)
+    figure(comp, nums, arms, a.out + ".png", fleet=fl, park_hover=ph,
+           lean=lean)
 
     print(f"\nFEASIBLE {nums['feasible_pct']:.2f}%  "
           f"({nums['feasible_m2']:.3f} / {nums['canvas_area_m2']:.3f} m2)")
