@@ -1705,6 +1705,16 @@ def schedule_args(ap):
     """
     ap.add_argument("--tag", default="_6arm")
     ap.add_argument("--fps", type=float, default=24.0)
+    ap.add_argument("--max-dq-frame", type=float, default=None,
+                    metavar="RAD",
+                    help="joint motion per sub-step of the DENSIFIED stroke "
+                         "(default writing.MAX_DQ_FRAME = 0.04).  This is the "
+                         "knob on animation fidelity: the demo's 0.5 mm "
+                         "per-frame gate is a chord across one sub-step, so "
+                         "what it reads falls with the SQUARE of this.  The "
+                         "v10 timeline read 0.744 mm at 0.04 and 0.001 mm at "
+                         "the sub-step ends.  It costs IK calls at freeze "
+                         "time and nothing at run time")
     ap.add_argument("--substeps", type=int, default=2,
                     help="coordination clock steps per animation frame")
     ap.add_argument("--subcheck", type=int, default=2,
@@ -1856,6 +1866,14 @@ def main(argv=None):
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    # SET BEFORE ANYTHING PLANS.  `writing.segment_draw_time` densifies too —
+    # that is how the sequencer's price and the timeline's duration stay equal
+    # to the float — so a run that densified differently at freeze time than at
+    # pricing time would break the equality `cross_check` exists to guard.
+    if getattr(a, "max_dq_frame", None):
+        writing.MAX_DQ_FRAME = float(a.max_dq_frame)
+        print(f"the densified stroke carries at most "
+              f"{writing.MAX_DQ_FRAME:.3f} rad per sub-step (--max-dq-frame)")
 
     t0 = time.time()
     phases, strokes, info, built, dt, pens, sel = build(a)

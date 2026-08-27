@@ -121,6 +121,16 @@ STEP = 0.30             # seconds of `_dq_time` per tree extension
 MAX_NODES = 900         # nodes per tree, per attempt
 TIME_BUDGET = 2.5       # seconds per attempt
 ATTEMPTS = 2            # restarts, each with its own derived seed
+#   TWO BUDGETS, AND ONLY ONE OF THEM IS REPRODUCIBLE.  `MAX_NODES` is a
+#   property of the search and gives the same answer on a loaded box as on an
+#   idle one; `TIME_BUDGET` does not, and it is here anyway because a tier that
+#   can hang is worse than a tier that can be non-deterministic on the clock.
+#   The honest statement is the ordering: a plan that finishes inside its time
+#   is reproducible, and a plan that runs out of clock is reported as
+#   "the budget was spent", which is not a claim about the geometry.  Size
+#   `MAX_NODES` so the node bound is the one that usually bites — measured on
+#   the proposed rig, a solved transit uses 39 nodes and 598 certified edges,
+#   two orders of magnitude inside it.
 GOAL_BIAS = 0.10        # probability a sample is the other tree's root
 BATCH = 96              # candidate configurations validated in one FK pass
 
@@ -563,8 +573,7 @@ def _dedupe(path):
     return out
 
 
-def _shortcut(gate, path, rng, step=STEP, rounds=SHORTCUT_ROUNDS,
-              seconds=SHORTCUT_TIME):
+def _shortcut(gate, path, rng, step=STEP, rounds=None, seconds=None):
     """Random shortcutting, and then a greedy pass. -> [q] (endpoints kept).
 
     THE TOUR PAYS FOR EVERY VIA IN SECONDS.  `writing._beat` prices a routed
@@ -580,6 +589,13 @@ def _shortcut(gate, path, rng, step=STEP, rounds=SHORTCUT_ROUNDS,
     refused.
     """
     import time
+    # RESOLVED HERE, NOT IN THE SIGNATURE.  A default argument is bound at
+    # `def` time and no rebinding of the module constant reaches it — the
+    # lesson `fleet._SHEET_BINDERS` already carries — and a caller with a
+    # budget (`scripts/feasible_workspace.py`) has to be able to turn these
+    # down.
+    rounds = SHORTCUT_ROUNDS if rounds is None else int(rounds)
+    seconds = SHORTCUT_TIME if seconds is None else float(seconds)
     t0 = time.perf_counter()
     P = [np.asarray(q, float).reshape(7) for q in path]
     for _ in range(int(rounds)):

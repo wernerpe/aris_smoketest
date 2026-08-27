@@ -234,7 +234,7 @@ MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 
 
 def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-            max_dq=MAX_DQ_FRAME, tilt=None, phi=0.0):
+            max_dq=None, tilt=None, phi=0.0):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
     The DP's continuity window allows up to JUMP_THRESH rad between two
@@ -267,6 +267,17 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     spin the pen on the paper while the lean passed through nothing.
     """
     from .frames import rotz, tool_offset
+    # RESOLVED HERE, NOT IN THE SIGNATURE, so that a run can turn it down.  A
+    # default argument is bound at `def` time and rebinding `MAX_DQ_FRAME`
+    # never reaches it (`fleet._SHEET_BINDERS` carries the same lesson), and
+    # this is the one knob that moves the ANIMATION's fidelity: the demo's
+    # 0.5 mm per-frame gate is a chord across one of these sub-steps, so the
+    # error it reads falls with the SQUARE of this number.  Measured on the
+    # v10 timeline: 0.744 mm at 0.04 rad, on arm 71's second grey stroke, with
+    # the error at the sub-step ENDS reading 0.001 mm — the path is on the
+    # curve where it is commanded and off it in between, which is exactly what
+    # a chord is.
+    max_dq = MAX_DQ_FRAME if max_dq is None else float(max_dq)
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     off = tool_offset(pen_ext)              # ACTIVE tool

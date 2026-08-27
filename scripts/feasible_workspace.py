@@ -83,6 +83,8 @@ NO_ROUTE = 3       # some arm can draw and lift, none can fly here
 CAUSE_NAME = {FEASIBLE: "feasible", NO_DRAW: "no draw pose",
               NO_HOVER: "draw ok, no hover", NO_ROUTE: "hover ok, unreachable"}
 
+RRT_CELL_PLANS = 3      # C-space plans one (arm, cell) may spend (see `_cell`)
+
 
 def axes(sheet=SHEET, grid=GRID):
     """The atlas's own cell centres, so a row of it indexes straight in."""
@@ -175,6 +177,12 @@ def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
         transit.TIME_BUDGET = float(rrt)
         transit.ATTEMPTS = 1
         transit.MAX_NODES = int(rrt_nodes)
+        # Smoothing is what a TOUR pays for and this map does not buy tours: it
+        # asks whether a cell can be flown to at all.  Two rounds of shortcut
+        # keep the path from being absurd and cost a tenth of what the default
+        # spends making it short.
+        transit.SHORTCUT_TIME = min(0.20, 0.25 * float(rrt))
+        transit.SHORTCUT_ROUNDS = 24
 
 
 def _park_probe_hook(arm):
@@ -307,6 +315,38 @@ def _cell(arm, row, qcol, redundant=True):
     if not hovers:
         return NO_HOVER, 0.0, float("nan")
 
+    # THE PER-CELL BUDGET, COUNTED IN PLANS AND NOT IN SECONDS.
+    #
+    # A cell that cannot be flown to walks its whole hover ladder and then a
+    # dozen more poses off the fiber, and each of those is two `paper.route`
+    # calls that can reach the planner — so an unbounded tier would spend half
+    # a minute on one refused cell and days on the map.  The cap is a COUNT
+    # because the map has to reproduce: `scripts/feasible_workspace_validate.py`
+    # re-derives a stratified sample in a cold process and compares cell for
+    # cell, and a budget measured in seconds would give a different answer on a
+    # loaded box than on an idle one.  A count gives the same answer on both.
+    #
+    # What the number means, said plainly: a cell this reports as unreachable
+    # is a cell that no ladder shape could fly to and that the planner could
+    # not fly to on the FIRST `RRT_CELL_PLANS` hovers it was offered.  That is
+    # a lower bound on feasibility — the same kind of claim the hover ladder
+    # and the fiber retry above it already make about themselves.
+    budget0 = transit.stats()["calls"]
+    rrt_on = paper.RRT_SAFE
+    try:
+        return _cell_hovers(arm, spec, h, probe, q_park, q_draw, x, y, hovers,
+                            budget0, rrt_on)
+    finally:
+        # THE FLAG IS A MODULE GLOBAL AND THE WORKER OUTLIVES THE CELL.  A cell
+        # that raised on its way out would leave the tier off for every cell
+        # after it in this worker, and the map would silently become a
+        # different measurement halfway through a chunk.
+        paper.RRT_SAFE = rrt_on
+
+
+def _cell_hovers(arm, spec, h, probe, q_park, q_draw, x, y, hovers,
+                 budget0, rrt_on):
+    """`_cell`'s search over the hover ladder and then the fiber."""
     best = float("-inf")
     z0 = float(hovers[0][1])
     seen = set()
@@ -317,6 +357,9 @@ def _cell(arm, row, qcol, redundant=True):
             if k in seen:
                 continue
             seen.add(k)
+            if rrt_on and paper.RRT_SAFE \
+                    and transit.stats()["calls"] - budget0 >= RRT_CELL_PLANS:
+                paper.RRT_SAFE = False
             beats = writing.enter_beats(spec, q_park, q_hov, q_draw,
                                         pen_ext=spec.pen, h_inv=h)
             if beats is None:
@@ -1025,9 +1068,10 @@ def main():
              else "  (re-derived layout AND parks)"))
     print(f"STATIC_SAFE={paper.STATIC_SAFE} PAPER_SAFE={writing.PAPER_SAFE} "
           f"FRAME_FLOOR={paper.FRAME_FLOOR} SELF_SAFE={paper.SELF_SAFE}")
-    print(f"RRT tier: " + (f"ON, {a.rrt:.2f} s x 1 attempt, "
-                           f"{a.rrt_nodes} nodes/tree, park-probed"
-                           if a.rrt > 0 else "OFF"))
+    print("RRT tier: " + (f"ON, {a.rrt:.2f} s x 1 attempt, "
+                          f"{a.rrt_nodes} nodes/tree, "
+                          f"{RRT_CELL_PLANS} plans/cell, park-probed"
+                          if a.rrt > 0 else "OFF"))
 
     if a.sweep_atlas:
         # ONE ATLAS PER COLLISION MODEL, and the model is this build's.
