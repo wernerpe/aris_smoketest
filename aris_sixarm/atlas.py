@@ -207,6 +207,12 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
     independent lower bound carries), and "an atlas is now an OPTIMISTIC
     prefilter by up to 13 mm".
 
+    AND THE BAND IS THE DEAD SET, EXACTLY.  Over the v11 map's whole raw:
+    772 of the 1 112 refused arm-cells on dead canvas cells have a drawing pose
+    in [50, 63), and ZERO of the 22 437 FEASIBLE arm-cells do — not a sample,
+    all of them.  Every cell the map could fly to already had a pose clear of
+    the router's floor, so re-gating there cannot cost a cell.
+
     A POSE IN THAT BAND IS NOT REFUSED — `paper.effective_static_floor` clamps
     a leg's floor down to what its own ENDPOINTS hold, and exists to stop
     exactly that contradiction.  What it is, is a pose with NOTHING LEFT OVER.

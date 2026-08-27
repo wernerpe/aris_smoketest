@@ -10,8 +10,9 @@ by up to 13 mm".
 
 MEASURED, IT IS NOT A ROUNDING ERROR — IT IS THE DEAD SET.  On the v11 map, of
 the 1 112 refused arm-cells that sit on a dead canvas cell, 772 have a drawing
-pose whose own clearance to the boxes lies in [50, 63) mm; not one of 2 451
-sampled FEASIBLE arm-cells does (min 64.6 mm).
+pose whose own clearance to the boxes lies in [50, 63) mm — and ZERO of the
+22 437 FEASIBLE arm-cells do.  Not a sample: all of them.  The band and the
+refused set coincide, which is also why re-gating there cannot cost a cell.
 
 THAT IS NOT A PROOF OF INFEASIBILITY AND MUST NOT BE READ AS ONE.
 `paper.effective_static_floor` clamps a leg's static floor down to what its own
