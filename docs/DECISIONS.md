@@ -409,3 +409,51 @@ path like any other, and the swept-cell no-tunneling bound is subtracted rather
 than assumed, so it holds at any density.  Measured, it did not even get looser:
 per-arm max sweep step 20.5-26.0 mm on v11 against 16.4-26.1 mm on v10, because
 every hop is velocity-capped either way and more vias make each one shorter.
+
+### the withheld animation, and why it is not the planner's fault
+
+`scripts/csail_drawing_demo.py` asserts the pen tip is within **0.5 mm** of the
+commanded curve on every rendered drawing frame.  v10 read 0.744 mm, v11 reads
+**0.762 mm**, and both were withheld on it.  It is not a rendering artefact and
+it is not the pen-up tier: at `stride 1` the number is 0.744 and at `stride 2`
+it is 0.743, so doubling the frames does not move it.
+
+**What it actually is.**  `writing.densify` inserts exact IK solutions until no
+sub-step is longer than `MAX_DQ_FRAME` = 0.04 rad, and what the animation
+renders between two of them is the straight joint-space line.  On arm 71's
+second grey stroke the path is 0.001 mm from the curve at the nodes and 0.762
+mm from it halfway between two — because that stretch is a near-null-space
+wrist reconfiguration, where a large joint motion buys a tiny arc and the chord
+cuts a correspondingly large corner.
+
+**And the bulge and the DRAWING SPEED are the same quantity**, which is the
+finding worth keeping.  Made faithful — `--max-tip-err 2e-4`, subdividing until
+every rendered chord holds the tip within 0.2 mm (v11b) — the same stroke has
+to be paced at the joint-velocity cap through the reconfiguration the chord was
+skipping:
+
+| arm 71, phase 1 | steps | nominal |
+|---|---|---|
+| v11 (`MAX_DQ_FRAME` 0.04, 0.762 mm off) | 3 212 | 66.9 s |
+| v11b (`MAX_TIP_ERR` 0.2 mm) | **26 495** | **552.0 s** |
+
+An 8x slowdown on one stroke.  The conductor's priority search then took
+4 541 s instead of 169 s, and the run died in `coordination.build_images` with
+a `KeyError` at coordination.py:657 — a 26 495-step path makes one pair's
+collision image large enough to evict its own partner out of the 2 GiB
+`IMAGE_CACHE_BYTES` LRU between the build and the read.  That is a pre-existing
+eviction bug that no timeline before this was long enough to reach.
+
+**So the honest end state of the render.**  The timeline that draws inside
+0.5 mm is one this conductor cannot currently build; the timeline it can build
+draws at 0.762 mm.  Three things would each close it, and none of them is the
+pen-up planner:
+
+  1. fix the image-cache eviction in `coordination.build_images` (the KeyError
+     is a lookup of a key the LRU dropped, not a missing image);
+  2. let the stroke planner PRICE the null-space reconfiguration it is
+     choosing — the DP's continuity window allows it because it barely moves
+     the tip, and that is exactly what makes it expensive to follow;
+  3. or accept 0.8 mm, which is 0.05 % of the 1.43 x 1.87 m logo and four
+     times finer than the 3.3 mm resampling residual `paper.py` already
+     charges itself.
