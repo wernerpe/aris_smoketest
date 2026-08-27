@@ -232,9 +232,35 @@ def _plan_strokes(strokes, spec, ds=DS, h_inv=H_INV_DEFAULT, verbose=True):
 
 MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 
+# ...AND WHAT THAT NUMBER WAS ONLY EVER A PROXY FOR.
+#
+# `densify` exists because a straight line in joint space between two of the
+# DP's samples leaves the null-space manifold and swings the pen off the
+# paper.  It fixes that by inserting exact IK solutions until no sub-step is
+# longer than `MAX_DQ_FRAME` — and a joint step is not the quantity anybody
+# cares about.  What the animation renders, and what
+# `scripts/csail_drawing_demo.py` asserts on at 0.5 mm a frame, is the tip
+# BETWEEN two inserted nodes, and how far that bulges off the curve depends on
+# how much of the motion is null-space, which 0.04 rad does not measure.
+#
+# Measured on out/csail_schedule_h094_v10.npz: 0.001 mm at the nodes and
+# 0.744 mm halfway between two of them, on arm 71's second grey stroke — which
+# is why that render was withheld.  And halving `MAX_DQ_FRAME` is a BET, not a
+# fix: it quartered the bulge on four of six arms and, because it also moves
+# `segment_draw_time` and therefore the allocation, handed the other two a
+# different set of strokes that read worse.
+#
+# `MAX_TIP_ERR` measures the thing instead.  With it set, an interval is
+# subdivided until the tip at the midpoint of every chord in it is within the
+# tolerance of the commanded curve — the renderer's own gate, applied where
+# the path is built.  `None` reproduces every number earned before
+# 2026-08-27 exactly.
+MAX_TIP_ERR = None        # m, or None for the step-size proxy alone
+MAX_TIP_STEPS = 4         # doublings one interval may spend reaching it
+
 
 def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-            max_dq=None, tilt=None, phi=0.0):
+            max_dq=None, tilt=None, phi=0.0, max_tip=None):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
     The DP's continuity window allows up to JUMP_THRESH rad between two
@@ -266,7 +292,7 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     the angles through a zero crossing would swing the azimuth half a turn and
     spin the pen on the paper while the lean passed through nothing.
     """
-    from .frames import rotz, tool_offset
+    from .frames import rotz, tip_pos_many, tool_offset
     # RESOLVED HERE, NOT IN THE SIGNATURE, so that a run can turn it down.  A
     # default argument is bound at `def` time and rebinding `MAX_DQ_FRAME`
     # never reaches it (`fleet._SHEET_BINDERS` carries the same lesson), and
@@ -298,29 +324,76 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     if tl is not None and len(tl) != len(qs):
         raise ValueError(f"tilt has {len(tl)} rows for {len(qs)} samples")
     n = len(qs) - 1
-    out_q, out_u, fallbacks = [qs[0]], [0.0], 0
-    for i in range(n):
-        dq = float(np.max(np.abs(qs[i + 1] - qs[i])))
-        k = max(1, int(np.ceil(dq / max_dq)))
+    tip_tol = MAX_TIP_ERR if max_tip is None else float(max_tip)
+    Rwb, twb = Twb[:3, :3], Twb[:3, 3]
+
+    def fill(i, k):
+        """The k-1 configurations inserted inside interval `i`. -> ([q], nfb)."""
+        seed = out_q[-1]
+        got, nfb = [], 0
         for m in range(1, k):
             f = m / k
             p = pts[i] + f * (pts[i + 1] - pts[i])
             if tl is not None:
                 from .tilt import pen_rot
-                R_w = pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
-                T_w[:3, :3] = R_w
+                R = pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
             elif ph_arr is not None:
-                R_w = rotz(ph_arr[i] + f * (ph_arr[i + 1] - ph_arr[i])) \
+                R = rotz(ph_arr[i] + f * (ph_arr[i + 1] - ph_arr[i])) \
                     @ rotx(np.pi)
-                T_w[:3, :3] = R_w
-            T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - R_w @ off
+            else:
+                R = R_w
+            T_w[:3, :3] = R
+            T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - R @ off
             q7 = qs[i, 6] + f * (qs[i + 1, 6] - qs[i, 6])
-            q = ik.solve_cc(Twb_inv @ T_w, q7, out_q[-1])
+            q = ik.solve_cc(Twb_inv @ T_w, q7, seed)
             if q is None:                       # no case-consistent solution
                 q = qs[i] + f * (qs[i + 1] - qs[i])
-                fallbacks += 1
+                nfb += 1
+            got.append(q)
+            seed = q
+        return got, nfb
+
+    def chord_err(i, nodes):
+        """Worst tip error at the MIDPOINT of every chord in this interval.
+
+        THE THING THE STEP SIZE WAS ONLY A PROXY FOR.  Every node here is an
+        exact IK solution and sits on the curve to 1e-12; what the animation
+        renders between two of them is the straight joint-space line, and its
+        tip bulges off the curve by an amount `max_dq` does not measure and
+        cannot bound — it depends on how much of the joint motion is
+        null-space.  Measured on the v10 timeline: 0.001 mm at the nodes and
+        0.744 mm halfway between two of them, on the one arm whose wrist was
+        reconfiguring while the pen crawled.  So this measures the bulge.
+        """
+        chain = [qs[i]] + list(nodes) + [qs[i + 1]]
+        mid = 0.5 * (np.asarray(chain[:-1], float)
+                     + np.asarray(chain[1:], float))
+        tip = tip_pos_many(mid, pen_ext) @ Rwb.T + twb
+        f = (np.arange(len(mid)) + 0.5) / len(mid)
+        ref = pts[i][None] + f[:, None] * (pts[i + 1] - pts[i])[None]
+        return float(np.max(np.hypot(
+            np.linalg.norm(tip[:, :2] - ref, axis=1), tip[:, 2])))
+
+    out_q, out_u, fallbacks = [qs[0]], [0.0], 0
+    for i in range(n):
+        dq = float(np.max(np.abs(qs[i + 1] - qs[i])))
+        k = max(1, int(np.ceil(dq / max_dq)))
+        got, nfb = fill(i, k)
+        # ...AND THEN REFINE UNTIL THE BULGE IS UNDER THE TOLERANCE, when one
+        # is asked for.  Bisection: each doubling quarters a chord's sag, so
+        # this converges in two or three steps where it converges at all, and
+        # `MAX_TIP_STEPS` stops it from grinding on an interval whose IK has no
+        # case-consistent solution (a fallback chord does not shrink).
+        if tip_tol:
+            for _ in range(MAX_TIP_STEPS):
+                if chord_err(i, got) <= tip_tol:
+                    break
+                k *= 2
+                got, nfb = fill(i, k)
+        fallbacks += nfb
+        for m, q in enumerate(got, start=1):
             out_q.append(q)
-            out_u.append((i + f) / n)
+            out_u.append((i + m / k) / n)
         out_q.append(qs[i + 1])
         out_u.append((i + 1) / n)
     return np.array(out_q), np.array(out_u), fallbacks

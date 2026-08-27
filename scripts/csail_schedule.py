@@ -1705,6 +1705,14 @@ def schedule_args(ap):
     """
     ap.add_argument("--tag", default="_6arm")
     ap.add_argument("--fps", type=float, default=24.0)
+    ap.add_argument("--max-tip-err", type=float, default=None, metavar="M",
+                    help="subdivide the frozen stroke until the pen tip at the "
+                         "MIDPOINT of every rendered chord is this close to "
+                         "the commanded curve (writing.MAX_TIP_ERR).  This is "
+                         "the quantity --max-dq-frame was only a proxy for, "
+                         "and it is what csail_drawing_demo.py asserts on at "
+                         "5e-4 m a frame.  Off by default: every number earned "
+                         "before 2026-08-27 was earned without it")
     ap.add_argument("--max-dq-frame", type=float, default=None,
                     metavar="RAD",
                     help="joint motion per sub-step of the DENSIFIED stroke "
@@ -1874,6 +1882,11 @@ def main(argv=None):
         writing.MAX_DQ_FRAME = float(a.max_dq_frame)
         print(f"the densified stroke carries at most "
               f"{writing.MAX_DQ_FRAME:.3f} rad per sub-step (--max-dq-frame)")
+    if getattr(a, "max_tip_err", None):
+        writing.MAX_TIP_ERR = float(a.max_tip_err)
+        print(f"the frozen stroke is subdivided until its rendered chords hold "
+              f"the pen within {1000 * writing.MAX_TIP_ERR:.2f} mm of the "
+              f"curve (--max-tip-err)")
 
     t0 = time.time()
     phases, strokes, info, built, dt, pens, sel = build(a)
