@@ -773,6 +773,101 @@ def test_the_image_bag_is_keyed_on_what_the_image_is_made_of():
     coordination.clear_images()
 
 
+def test_a_batch_that_evicts_itself_still_returns_every_image_it_built():
+    """The bag a call returns must not depend on the memo's BUDGET.
+
+    `_IMAGES` is a bounded LRU and a conduct asks for all of its pairs in ONE
+    batch, so a batch too big for the budget evicts itself: the pair filed
+    first goes out before the pair filed last is in, and reading the batch back
+    out of the memo afterwards raises `KeyError` on an image that was built
+    perfectly well.  The 26,495-step densification found it — at that length a
+    single image is over a gigabyte, so two of them cannot both be resident —
+    and nothing shorter ever could.
+
+    Squeezed here to a budget that fits ONE image, which is the same geometry a
+    monster timeline reaches at 2 GiB.  Both orders are pinned: a build that
+    evicts an earlier build, and a HIT read at the top of a call that the build
+    after it evicts.  Either way the call has to hand back exactly the arrays
+    it hands back when there is room to spare.
+    """
+    coordination.clear_images()
+    paths = _busy_scene(80)
+    moving = (31, 71, 2)
+    pairs = [(a, b) for a in moving for b in moving if a != b]
+    want = coordination.build_images(paths, pairs, 0.08, coordination.SWEEP_K,
+                                     jobs=1)
+    sizes = {F.nbytes for F in coordination._IMAGES.values()}
+    assert len(coordination._IMAGES) == 3 and 0 not in sizes, \
+        "three moving arms should leave three images of non-zero size"
+
+    keep = coordination.IMAGE_CACHE_BYTES
+    try:
+        coordination.IMAGE_CACHE_BYTES = max(sizes)   # room for one, not two
+        coordination.clear_images()
+        got = coordination.build_images(paths, pairs, 0.08,
+                                        coordination.SWEEP_K, jobs=1)
+        assert len(coordination._IMAGES) == 1, \
+            "three images and room for one: the batch did not evict itself"
+        assert set(got) == set(want)
+        for k in want:
+            assert np.array_equal(got[k], want[k]), \
+                f"image {k} changed when the memo was squeezed"
+            assert np.array_equal(got[k], coordination.free_cells(
+                paths[k[0]], paths[k[1]], 0.08)), f"image {k} is not the image"
+
+        # THE OTHER ORDER: the memo is holding exactly one of the three, so
+        # this call reads that one out as a hit and then builds two more on
+        # top of it — evicting the hit before the call returns it.
+        n0, c0 = (coordination._IMAGE_STATS["built"],
+                  coordination._IMAGE_STATS["cached"])
+        again = coordination.build_images(paths, pairs, 0.08,
+                                          coordination.SWEEP_K, jobs=1)
+        assert (coordination._IMAGE_STATS["built"] - n0,
+                coordination._IMAGE_STATS["cached"] - c0) == (2, 1), \
+            "want one pair read from the memo and the other two rebuilt"
+        for k in want:
+            assert np.array_equal(again[k], want[k]), \
+                f"image {k} was lost between the memo read and the return"
+    finally:
+        coordination.IMAGE_CACHE_BYTES = keep
+        coordination.clear_images()
+
+
+def test_the_schedule_a_conduct_ships_does_not_depend_on_the_cache_budget():
+    """Same inputs, same arrays — however little the memo was allowed to keep.
+
+    The eviction fix is only worth anything if it is invisible: a conduct run
+    with a memo big enough for everything and the same conduct run with a memo
+    that can hold one image have to agree on the order, the makespan, the
+    pauses and every free-cell image, to the bit.
+    """
+    def conduct():
+        return coordination.coordinate(_busy_scene(), jobs=1, verbose=False)
+
+    def fingerprint(r):
+        return (round(float(r["duration"]), 12), tuple(r["order"]),
+                round(float(r["pause_total"]), 12),
+                tuple(r["search"]["order"]), r["search"]["n_dp"],
+                {k: v.tobytes() for k, v in sorted(r["free"].items())})
+
+    coordination.clear_images()
+    roomy = fingerprint(conduct())
+    one = max(F.nbytes for F in coordination._IMAGES.values())
+    n_roomy = len(coordination._IMAGES)
+
+    keep = coordination.IMAGE_CACHE_BYTES
+    try:
+        coordination.IMAGE_CACHE_BYTES = one
+        coordination.clear_images()
+        assert fingerprint(conduct()) == roomy, \
+            "a squeezed image memo changed the schedule that ships"
+        assert len(coordination._IMAGES) < n_roomy, \
+            "the budget was not tight enough to evict anything"
+    finally:
+        coordination.IMAGE_CACHE_BYTES = keep
+        coordination.clear_images()
+
+
 def test_conducting_on_a_pool_picks_the_same_order_as_conducting_serially():
     """The priority search must not depend on how many cores built its images.
 

@@ -562,7 +562,12 @@ def _image_rows(task):
 
 
 def _build(paths, todo, key_of, margin, sweep, jobs):
-    """Build the images `todo` names, in row blocks over a fork pool. -> None.
+    """Build the images `todo` names, in row blocks over a fork pool.
+
+    -> {pair: image}, THE ARRAYS THEMSELVES and not just a promise that the
+    memo holds them.  Filing an image can evict one filed a moment earlier in
+    the same batch (see `build_images`), so the batch is handed back to its
+    caller rather than looked up again.
 
     ONE POOL FOR THE WHOLE BATCH, AND THE BATCH IS ROW BLOCKS AND NOT IMAGES.
     A conduct wants three big images at once and they are not the same size —
@@ -609,6 +614,7 @@ def _build(paths, todo, key_of, margin, sweep, jobs):
                         cells=_IMAGE_STATS["cells"] + cells,
                         wall=_IMAGE_STATS["wall"] + (time.time() - t0),
                         jobs=njobs)
+    return part
 
 
 def build_images(paths, pairs, margin, sweep, jobs=None):
@@ -647,15 +653,36 @@ def build_images(paths, pairs, margin, sweep, jobs=None):
         canon[(a, b)] = c
         key_of[c] = (paths[c[0]].key, paths[c[1]].key,
                      float(margin), float(sweep))
-    todo = [c for c in dict.fromkeys(canon.values()) if key_of[c] not in _IMAGES]
+    # THE MEMO IS ASKED ONCE PER IMAGE, AND THE ANSWER IS HELD.  `_IMAGES` is
+    # a bounded LRU, so filing this batch can evict this batch: a single arm
+    # path long enough that its pairs do not all fit in `IMAGE_CACHE_BYTES`
+    # pushes the pair built first back out before the pair built last is in,
+    # and a second `_IMAGES[key]` after the build then raises `KeyError` for an
+    # image that was correctly built (first reached by a 26,495-step
+    # densification, where one image is over a gigabyte on its own).
+    #
+    # Looking it up twice was the bug, not the size of the cache.  The lookup
+    # now happens exactly once per unordered pair, at the only moment the entry
+    # is known to be there — a hit is read out BEFORE anything is built, and a
+    # miss comes back from `_build` — and `have` owns a reference from then on,
+    # so what the cache does with its own budget afterwards cannot reach it.
+    # The budget goes on meaning what it says (what is KEPT between conducts);
+    # the working set of one call is held live by the call that needs it.
+    have, todo = {}, []
+    for c in dict.fromkeys(canon.values()):
+        F = _IMAGES.get(key_of[c])
+        if F is None:
+            todo.append(c)
+        else:
+            _IMAGES.move_to_end(key_of[c])
+            have[c] = F
     hit = len(key_of) - len(todo)
     if todo:
-        _build(paths, todo, key_of, margin, sweep, jobs)
+        have.update(_build(paths, todo, key_of, margin, sweep, jobs))
     _IMAGE_STATS["cached"] += hit
     out = {}
     for ab, c in canon.items():
-        F = _IMAGES[key_of[c]]
-        _IMAGES.move_to_end(key_of[c])
+        F = have[c]
         if ab == c:
             out[ab] = F
         else:
