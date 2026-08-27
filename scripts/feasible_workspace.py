@@ -1579,6 +1579,25 @@ def main():
              else "  (re-derived layout AND parks)"))
     print(f"STATIC_SAFE={paper.STATIC_SAFE} PAPER_SAFE={writing.PAPER_SAFE} "
           f"FRAME_FLOOR={paper.FRAME_FLOOR} SELF_SAFE={paper.SELF_SAFE}")
+    # WHICH FLOOR THE INK WAS CERTIFIED AT, said out loud.  An atlas swept at
+    # `rig_final.STATIC_MARGIN` offers cells the ROUTER may not be able to fly
+    # to (`scripts/regate_atlas.py`); one swept at `paper.FRAME_FLOOR` does not.
+    # A map that does not say which it read is a map nobody can reproduce.
+    atlas_floor = None
+    try:
+        _m = atlas.load(Path(a.atlas), sorted(fl)[0])[1]
+        atlas_floor = (float(_m["static_margin"])
+                       if "static_margin" in _m.files
+                       else float(__import__("aris_sixarm").rig_final
+                                  .STATIC_MARGIN))
+    except Exception:
+        pass
+    print(f"atlas {a.atlas}: drawing poses gated at "
+          + (f"{1000 * atlas_floor:.0f} mm" if atlas_floor else "unknown")
+          + (f"  (the router's own floor)" if atlas_floor
+             and abs(atlas_floor - paper.FRAME_FLOOR) < 1e-9
+             else "  (the CHECKER's floor: an optimistic prefilter, see "
+                  "scripts/regate_atlas.py)"))
     print("RRT tier: " + (f"ON, {a.rrt:.2f} s x 1 attempt, "
                           f"{a.rrt_nodes} nodes/tree, "
                           f"{RRT_CELL_PLANS} plans/cell, park-probed"
@@ -1677,6 +1696,15 @@ def main():
     nums = numbers(comp, per_arm, arms, fleet=fl, park_hover=ph, pitch=pitch,
                    h=h, lean=lean)
     nums["sweep_seconds"] = round(time.time() - t0, 1)
+    nums["atlas"] = dict(
+        dir=str(a.atlas),
+        pose_static_floor_m=atlas_floor,
+        route_static_floor_m=float(paper.FRAME_FLOOR),
+        note=("the floor a DRAWING pose was gated at, and the one every pen-up "
+              "LEG is held to.  They were 50 and 63 mm for every map before "
+              "v12, and `paper.effective_static_floor` clamps the difference "
+              "away rather than contradicting it — which leaves a pose on the "
+              "atlas gate with nothing for its own descent to spend."))
     if ladder:
         nums["escalation_ladder"] = ladder
         nums["escalation_rungs"] = [dict(zip(
