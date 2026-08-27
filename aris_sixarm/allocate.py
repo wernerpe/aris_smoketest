@@ -957,7 +957,15 @@ class ParkProbe:
         k = key if key is not None else (
             int(arm), int(entry["stroke_id"]),
             round(float(entry["s_range"][0]), 9),
-            round(float(entry["s_range"][1]), 9))
+            round(float(entry["s_range"][1]), 9),
+            # ...AND WHETHER THE HOVER-RESCUE TIER HAS FIRED AT EITHER END OF
+            # IT, because half of what this verdict is about IS the hovers and
+            # `allocate._rescue_pocket` moves them in the middle of a run.  The
+            # span's identity does not change when its hover does, so without
+            # this the second ban-loop pass reads a verdict about a pose the
+            # arm is no longer going to hold — the q_home-flag lesson, in the
+            # one memo here that is keyed on a span rather than on a pose.
+            self._sel(arm, entry))
         hit = self._memo.get(k)
         if hit is not None:
             self.stats["cached"] += 1
@@ -975,6 +983,22 @@ class ParkProbe:
         self.stats["blocked"] += int(bad)
         self.stats["seconds"] += time.time() - t0
         return bad
+
+    def _sel(self, arm, entry):
+        """Has the depot-hover tier been admitted at either end? -> (bool, bool).
+
+        Part of `blocked`'s memo key; `False, False` on a run where the tier is
+        off, which is every run this class was measured on.
+        """
+        from . import writing
+        plan = entry.get("plan") or {}
+        qs = plan.get("qs")
+        if qs is None or writing.HOVER_DEPOT_SITES is None:
+            return (False, False)
+        qs = np.asarray(qs, float)
+        pts = np.asarray(plan["pts"], float)
+        return tuple(writing.depot_hover_selected(self.specs[arm], qs[k],
+                                                  pts[k]) for k in (0, -1))
 
     def _hovers(self, arm, plan):
         """The two pen-up poses this span is entered and left through. -> (2,7)."""

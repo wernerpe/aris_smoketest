@@ -138,8 +138,10 @@ def park_hovers(fleet, parks, h):
     return out
 
 
-def _init(atlas_dir, h, redundant=True, pitch=None):
+def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
+          tries=12):
     """Per-worker state: the fleet, the parks, the probe.  Built once."""
+    writing.HOVER_LEAN_MAX_DEG = float(lean)
     fl, parks, h, _ = rig(pitch, h)
     pens = {a: fl[a].pen for a in fl}
     _W["fleet"] = fl
@@ -148,6 +150,8 @@ def _init(atlas_dir, h, redundant=True, pitch=None):
     _W["probe"] = allocate.ParkProbe(parks, fl, pens, h_inv=h)
     _W["atlas_dir"] = atlas_dir
     _W["redundant"] = bool(redundant)
+    _W["fiber"] = bool(fiber)
+    _W["tries"] = int(tries)
 
 
 def _dense(steps, q0, n=None):
@@ -204,13 +208,43 @@ def _certified_hovers(spec, q_draw, xy, h, heights=None):
     return out
 
 
+def _fiber_hovers(spec, q_draw, xy, h, tries=None):
+    """The rest of the fiber, ladder order, nearest first. -> [(q, z)].
+
+    `_certified_hovers` walks the HEIGHTS; this walks the whole fiber at each
+    of them — 8 tool yaws x the entire q7 grid x every branch, and then the
+    leans the run's cone allows — which is what `writing.lifted_or_lower`'s
+    depot-aware tier does when a span end is about to cost ink.
+
+    IT IS THE SAME QUESTION THE MAP IS ASKING.  A cell whose derived hover
+    cannot be flown to is not a cell the arm cannot reach; it is a cell whose
+    FIRST hover cannot be flown to, and the pipeline does not accept that answer
+    either.  Measured over 1 127 certified cells (`out/guard_pocket.py`), 51.7 %
+    of the span ends the router calls unreachable hold a pose on their own fiber
+    that it can fly to — so a map that did not look here would blame the canvas
+    for a search that stopped early.
+    """
+    tries = writing.HOVER_DEPOT_TRIES if tries is None else int(tries)
+    gate = writing.static_gate(spec, spec.pen, h)
+    out = []
+    for lean in [None] + writing._lean_rungs():
+        for z in writing.HOVER_LADDER:
+            for q in writing.hover_fiber(spec, q_draw, xy, z, gate, h,
+                                         spec.pen, lean):
+                out.append((np.asarray(q, float), float(z)))
+                if len(out) >= tries:
+                    return out
+    return out
+
+
 def _cell(arm, row, qcol, redundant=True):
     """The three layers for one (arm, cell). -> (code, z_hover, park_clear).
 
     `code` is the FIRST layer that refused, as a cause code; FEASIBLE when all
     three hold.  The draw pose is layer 1 by construction — this is only ever
     called on a strict-GO row.  A cell passes if ANY certified hover on the
-    ladder can be flown to, which is the redundancy the brief asks for.
+    ladder — and then anywhere on the FIBER — can be flown to, which is the
+    redundancy the brief asks for and the search the pipeline itself makes.
     """
     fl, parks, h = _W["fleet"], _W["parks"], _W["h"]
     probe = _W["probe"]
@@ -229,17 +263,28 @@ def _cell(arm, row, qcol, redundant=True):
         return NO_HOVER, 0.0, float("nan")
 
     best = float("-inf")
-    for q_hov, z in hovers:
-        beats = writing.enter_beats(spec, q_park, q_hov, q_draw,
-                                    pen_ext=spec.pen, h_inv=h)
-        if beats is None:
-            continue
-        clear = float(probe.clearance(arm, _dense(beats["steps"], q_park)))
-        best = max(best, clear)
-        if clear >= probe.margin:
-            return FEASIBLE, float(z), clear
-    return NO_ROUTE, float(hovers[0][1]), (float("nan") if best == float("-inf")
-                                           else best)
+    z0 = float(hovers[0][1])
+    seen = set()
+    tier = 0
+    while True:
+        for q_hov, z in hovers:
+            k = np.round(q_hov, 9).tobytes()
+            if k in seen:
+                continue
+            seen.add(k)
+            beats = writing.enter_beats(spec, q_park, q_hov, q_draw,
+                                        pen_ext=spec.pen, h_inv=h)
+            if beats is None:
+                continue
+            clear = float(probe.clearance(arm, _dense(beats["steps"], q_park)))
+            best = max(best, clear)
+            if clear >= probe.margin:
+                return FEASIBLE, float(z), clear
+        if tier or not _W.get("fiber", True):
+            break
+        tier = 1
+        hovers = _fiber_hovers(spec, q_draw, (x, y), h, _W.get("tries", 12))
+    return NO_ROUTE, z0, (float("nan") if best == float("-inf") else best)
 
 
 _ROWS = {}
@@ -270,7 +315,7 @@ def _chunk(job):
 # the sweep
 # ---------------------------------------------------------------------------
 def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
-          ckpt=None, pitch=None, log=print):
+          ckpt=None, pitch=None, log=print, fiber=True, lean=0.0, tries=12):
     """-> {arm: (N,6) array of (x, y, code, z_hover, park_clear, atlas_row)}.
 
     Chunks are STRIDED, not contiguous: an atlas row block is one band of y, and
@@ -309,7 +354,8 @@ def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
     done = ncell = 0
     ctx = mp.get_context("fork")
     with ctx.Pool(workers, initializer=_init,
-                  initargs=(str(atlas_dir), h, redundant, pitch)) as pool:
+                  initargs=(str(atlas_dir), h, redundant, pitch, fiber,
+                            lean, tries)) as pool:
         for arm, out in pool.imap_unordered(_chunk, jobs, chunksize=1):
             res[arm].extend(out)
             done += 1
@@ -885,6 +931,19 @@ def main():
     ap.add_argument("--arms", default="")
     ap.add_argument("--no-redundant-hover", action="store_true",
                     help="stop at the first ladder rung, as a timeline would")
+    ap.add_argument("--no-fiber-hover", action="store_true",
+                    help="do not search the rest of the hover fiber when no "
+                         "ladder rung can be flown to (the pre-2026-08-27 map)")
+    ap.add_argument("--fiber-tries", type=int, default=12,
+                    help="hover-fiber candidates a cell may spend on the "
+                         "pen-up layer before it is called unreachable.  "
+                         "Measured (out/guard_pocket.py) 12 finds 82.6 %% of "
+                         "the ends an unbounded search finds and 48 finds "
+                         "98.6 %%, so a budgeted map is a LOWER bound on the "
+                         "drawable canvas and never an overstatement")
+    ap.add_argument("--hover-lean-deg", type=float, default=0.0,
+                    help="pen lean the FIBER search may use as its last rung, "
+                         "matching the run's --tilt-max-deg (0 = vertical only)")
     ap.add_argument("--pitch", type=float, default=None,
                     help="transverse pair spacing; default is the shipped "
                          "0.61 and its baked parks. Any other value re-derives "
@@ -937,7 +996,8 @@ def main():
     else:
         per_arm = sweep(arms, Path(a.atlas), h, a.workers, a.chunk, a.every,
                         not a.no_redundant_hover, ckpt=a.out + "_ckpt.npz",
-                        pitch=pitch)
+                        pitch=pitch, fiber=not a.no_fiber_hover,
+                        lean=a.hover_lean_deg, tries=a.fiber_tries)
         print(f"sweep {time.time() - t0:.0f}s", flush=True)
         np.savez_compressed(a.out + "_raw.npz",
                             **{f"arm{k}": v for k, v in per_arm.items()})

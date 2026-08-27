@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from aris_sixarm import allocate, sequence, writing            # noqa: E402
+from aris_sixarm import allocate, paper, selfcoll, sequence, writing  # noqa: E402
 from aris_sixarm.fleet import FLEET_SIXARM as FLEET            # noqa: E402
 from aris_sixarm.stroke_api import plan_stroke, reverse_plan   # noqa: E402
 from aris_sixarm.validate import validate_plan                 # noqa: E402
@@ -88,11 +88,45 @@ def test_reverse_segment_turns_a_programme_entry_round():
 # 2. the cost matrix IS the timeline's transit
 # ==========================================================================
 def _fake_ends(n, rng):
-    """Endpoint configurations/hovers without going near the IK."""
+    """Endpoint configurations/hovers without going near the IK.
+
+    THE HOVERS HAVE TO BE POSES A TRANSIT COULD ACTUALLY BE FLOWN BETWEEN, and
+    since 2026-08-27 that includes the arm against ITSELF (`paper.SELF_SAFE`):
+    a joint vector drawn uniformly from a box is quite likely to fold the arm
+    through its own shoulder somewhere along the straight line to another one,
+    and then the cell is legitimately `inf` and the identity this file is about
+    — every cell equals `writing`'s own lift + travel + lower — is not what the
+    matrix should be reporting.  So the hovers are drawn until every ORDERED
+    PAIR of them clears the self gate, which is the fixture the test always
+    meant: endpoints that need no routing, so any difference is the sequencer
+    inventing a cost model.
+    """
     lo, hi = -1.5, 1.5
-    return dict(n=n, q=rng.uniform(lo, hi, (n, 2, 7)),
+    fl = selfcoll.SELF_PLAN_MARGIN
+
+    def clears(a, b):
+        return paper.leg_self_lb(None, a, b, floor=fl) >= fl - paper.EPS
+
+    seed = np.asarray(FLOOR.q_seed, float).reshape(7)
+    hov, drw = [], []
+    while len(hov) < 2 * n:
+        h = rng.uniform(lo, hi, 7)
+        if not (clears(h, seed) and clears(seed, h)
+                and all(clears(h, k) and clears(k, h) for k in hov)):
+            continue
+        q = None
+        for _ in range(64):                   # ...and the ink it lifts off
+            c = rng.uniform(lo, hi, 7)
+            if clears(c, h) and clears(h, c):
+                q = c
+                break
+        if q is None:
+            continue
+        hov.append(h)
+        drw.append(q)
+    return dict(n=n, q=np.array(drw).reshape(n, 2, 7),
                 xy=rng.uniform(0.0, 2.0, (n, 2, 2)),
-                hover=rng.uniform(lo, hi, (n, 2, 7)),
+                hover=np.array(hov).reshape(n, 2, 7),
                 z=np.full((n, 2), 0.06))
 
 

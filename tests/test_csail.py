@@ -2010,3 +2010,131 @@ def test_the_disjoint_grouping_separates_the_transverse_pairs():
     assert arm_groups("off", list(fl)) is None
     assert arm_groups("solo", list(fl), fleet=fl) == [[a] for a in sorted(fl)]
     assert arm_groups("13,2/31", [13, 31, 2]) == [[13, 2], [31]]
+
+
+# ==========================================================================
+# HOW DEEP THE POCKET SEARCH GOES, AND WHAT IT MAY DISTURB
+# ==========================================================================
+# The tier above was measured on 14 pockets and given a 24-candidate budget.
+# Re-measured under the self-collision guard over 1 127 certified cells of all
+# six arms (`out/guard_pocket.py`), the fiber holds a depot-joining pose at 138
+# of 267 pockets and 24 candidates finds 129 of them; 48 finds 136, and the
+# LEAN rungs — which only run after the vertical fiber is exhausted — find the
+# last 9.  These pin what that deepening is allowed to disturb, which is
+# nothing at all outside an admitted pocket.
+def test_the_lean_rungs_are_the_runs_cone_and_nothing_more():
+    """A flat run gets a flat fiber; a 15-degree run gets both rungs."""
+    from aris_sixarm import writing
+    old = writing.HOVER_LEAN_MAX_DEG
+    try:
+        for cone, want in ((0.0, 0), (5.0, 0), (7.5, 1), (10.0, 1),
+                           (15.0, 2), (30.0, 2)):
+            writing.HOVER_LEAN_MAX_DEG = cone
+            got = writing._lean_rungs()
+            assert len(got) == want, f"cone {cone} gave {got}"
+            for pitch, roll in got:
+                assert roll == 0.0
+                assert np.degrees(pitch) <= cone + 1e-9
+    finally:
+        writing.HOVER_LEAN_MAX_DEG = old
+
+
+def test_a_flat_run_gets_the_answers_it_had_before_the_lean_rung(): 
+    """THE BIT-IDENTITY CLAIM, and it is a property of two switches.
+
+    `HOVER_LEAN_MAX_DEG` defaults to 0 and `csail_allocate` sets it from
+    `--tilt-max-deg`, so every flat run — and every test in this corpus —
+    reaches exactly the poses it reached before the rung existed, whatever
+    `HOVER_DEPOT_LEANS` is set to.  Asserted at an end the tier is ADMITTED at,
+    because anywhere else the branch does not run and the claim is vacuous.
+    """
+    from aris_sixarm import writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    s0 = _short_segment(31, bx + 0.30, by - 0.30)
+    qs = np.asarray(s0["plan"]["qs"], float)
+    pts = np.asarray(s0["plan"]["pts"], float)
+    old = (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+           writing.HOVER_LEAN_MAX_DEG, writing.HOVER_DEPOT_LEANS)
+    try:
+        writing.HOVER_DEPOT_AWARE = True
+        writing.HOVER_DEPOT_SITES = {writing.hover_site(spec, qs[0], pts[0])}
+        writing.HOVER_LEAN_MAX_DEG = 0.0
+        writing._clear_hovers()
+        flat, zf = writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        for leans in ((), (7.5,), (7.5, 15.0), (2.0, 30.0)):
+            writing.HOVER_DEPOT_LEANS = leans
+            writing._clear_hovers()
+            q, z = writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+            assert np.array_equal(q, flat) and z == zf, \
+                f"the lean rung moved a flat run's hover with leans={leans}"
+    finally:
+        (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+         writing.HOVER_LEAN_MAX_DEG, writing.HOVER_DEPOT_LEANS) = old
+        writing._clear_hovers()
+
+
+def test_the_hover_memo_is_keyed_on_everything_that_moves_the_answer():
+    """The q_home-flag lesson, applied to the two new knobs.
+
+    The depth of the search and the run's lean cone both change which pose
+    comes back, so an answer computed under one may not be read under the
+    other.  Asserted by MAKING the branch fire — every hover a pocket — and
+    checking the memo files two different questions in two different slots.
+    """
+    from aris_sixarm import writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    s0 = _short_segment(31, bx + 0.30, by - 0.30)
+    qs = np.asarray(s0["plan"]["qs"], float)
+    pts = np.asarray(s0["plan"]["pts"], float)
+    site = writing.hover_site(spec, qs[0], pts[0])
+    old = (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+           writing.HOVER_LEAN_MAX_DEG, writing.HOVER_DEPOT_TRIES)
+    try:
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = True, {site}
+        writing._clear_hovers()
+        writing.HOVER_DEPOT_TRIES, writing.HOVER_LEAN_MAX_DEG = 4, 0.0
+        writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        n1 = len(writing._HOVERS)
+        writing.HOVER_DEPOT_TRIES = 48
+        writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        assert len(writing._HOVERS) == n1 + 1, \
+            "a deeper search read the shallow search's answer"
+        writing.HOVER_LEAN_MAX_DEG = 15.0
+        writing.lifted_or_lower(spec, qs[0], pts[0], pen_ext=0.110)
+        assert len(writing._HOVERS) == n1 + 2, \
+            "a leaning run read a flat run's answer"
+    finally:
+        (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES,
+         writing.HOVER_LEAN_MAX_DEG, writing.HOVER_DEPOT_TRIES) = old
+        writing._clear_hovers()
+
+
+def test_the_park_probe_memo_knows_when_a_hover_has_moved():
+    """`ParkProbe.blocked` is keyed on a SPAN and half its answer is a HOVER.
+
+    `_rescue_pocket` moves a span end's hover in the middle of the cover loop
+    without changing the span's identity, so a verdict cached before the
+    admission is a verdict about a pose the arm is no longer going to hold.
+    The key carries the admission for the same reason `writing._HOVERS`' does.
+    """
+    from aris_sixarm import writing
+    spec = FLEET[31]
+    bx, by = spec.xy
+    seg = _short_segment(31, bx + 0.30, by - 0.30)
+    entry = dict(stroke_id=0, s_range=(0.0, 1.0), plan=seg["plan"], length=0.1)
+    probe = allocate.ParkProbe({31: spec.q_seed}, {31: spec}, {31: 0.110},
+                               h_inv=None)
+    old = (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES)
+    try:
+        writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES = True, set()
+        assert probe._sel(31, entry) == (False, False)
+        qs = np.asarray(seg["plan"]["qs"], float)
+        pts = np.asarray(seg["plan"]["pts"], float)
+        writing.HOVER_DEPOT_SITES.add(writing.hover_site(spec, qs[0], pts[0]))
+        assert probe._sel(31, entry) == (True, False), \
+            "the probe cannot see an admission its own hovers depend on"
+    finally:
+        (writing.HOVER_DEPOT_AWARE, writing.HOVER_DEPOT_SITES) = old
+        writing._clear_hovers()

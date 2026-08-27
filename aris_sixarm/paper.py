@@ -194,6 +194,7 @@ _CACHE = {}                # (spec key, pen, h_inv, q0, q1, floors) -> result
 _LIFTS = {}                # (spec key, pen, h_inv, q, z) -> hover pose | None
 _LEGS = {}                 # (spec key, pen, tool, h_inv, q0, q1, floor)
 #                            -> (chain z, tip z, static lower bound)
+_SELF = {}                 # (pen, tool, self floor, n, q0, q1) -> self LB
 #   THE LEGS ARE SHARED, NOT THE ROUTES.  Every shape on the ladder is built
 #   out of the same handful of hover poses, and so is every OTHER crossing
 #   between the same two spans: `[a0]`, `[a0, a1]` and `[a0, m, a1]` all begin
@@ -222,6 +223,7 @@ def clear_cache():
     _CACHE.clear()
     _LIFTS.clear()
     _LEGS.clear()
+    _SELF.clear()
     for fn in _ON_CLEAR:
         fn()
 
@@ -276,10 +278,11 @@ def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True):
     # the common one, a q_home-less call filing `None` that a q_home call then
     # reads instead of trying the fold.  A bool is enough: `q_home` is always
     # the arm's own `q_seed` and `id(spec)` already says which arm that is.
+    # ...AND SO IS THE SELF GATE, for the third time and the same argument.
     return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
-            bool(STATIC_SAFE), bool(q_home))
+            bool(STATIC_SAFE), bool(q_home), bool(SELF_SAFE))
 
 
 def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
@@ -299,7 +302,8 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
         # sequencer's crossing screen and `sequence._screen_task` routes with
         # `spec.q_seed` — see `_key`, whose tuple this has to reproduce exactly.
         return base + (rb[a], cb[b], round(float(tip_floor), 9),
-                       round(float(chain_floor), 9), bool(STATIC_SAFE), True)
+                       round(float(chain_floor), 9), bool(STATIC_SAFE), True,
+                       bool(SELF_SAFE))
     return key
 
 
@@ -442,6 +446,140 @@ def leg_static_lb(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         m, res = float(rig_final.chain_static_clearance(P, boxes).min()), \
             sample_residual(P)
     return m - res
+
+
+# ==========================================================================
+# ...AND THE THIRD OBSTACLE, WHICH IS THE ARM ITSELF
+# ==========================================================================
+# This module's whole subject is a motion nobody planned: a pen-up is a
+# STRAIGHT LINE IN JOINT SPACE between two poses that were each certified on
+# their own, and `writing.py` says outright that its interpolation "makes no
+# collision or self-collision guarantee".  Two of the three things such a line
+# can hit are gated above — the paper it flies over and the neighbours' steel.
+# The third is the arm's own metal, and until now the only thing that looked at
+# it was `writing.static_gate`, which gates the POSES `route` chooses as vias
+# and says nothing about the line between two of them.
+#
+# THE GAP IS REAL AND IT IS LARGE.  Sampled along straight joint-space moves
+# between certified drawing cells of arm 31 — poses the self guard passes at
+# 63.7 mm or better, at both ends — `selfcoll` reads -194.7 mm at the worst
+# sample: the line folds the wrist through the shoulder on its way from one
+# legal pose to another.  Those particular pairs are not transits anybody flew;
+# what they establish is that the gate is not inert on a joint-space line, which
+# is the only claim needed to put it in the stack.
+#
+# THE FLOOR IS THE PRODUCER'S, `selfcoll.SELF_PLAN_MARGIN` (23 mm against the
+# checker's 20), and the residual is charged the way `scene_check` charges its
+# own — `SWEEP_K` times the worst distance any CAPSULE ENDPOINT travels between
+# two samples, refined to `STATIC_STEP` exactly as the static bound is.  So the
+# router's bound is computed at the checker's density and held to a higher
+# number, which is the ordering the static gate already lives under.
+#
+# AND IT IS AFFORDABLE BECAUSE OF THE SPHERE SCREEN (`selfcoll.sphere_bounds`).
+# The exact 165-pair segment arithmetic is 95 us a configuration and would have
+# doubled the clock of every route on the ladder; screened, it is 10 us, because
+# the arm is almost never near itself and a bounding ball settles 99.9 % of the
+# pairs without any segment math.
+SELF_SAFE = True           # route pen-ups clear of the arm's own metal
+
+
+def self_floor(spec, q0, q1, pen_ext=PEN_EXT):
+    """The self-clearance floor a move can actually be held to. -> metres.
+
+    `effective_static_floor`'s argument for the third obstacle, and it is here
+    for the same reason: a pose certified at exactly the producer's margin
+    cannot be asked for more at its own first sample.  Inert on this rig today
+    (the tightest certified pose in the shipped map holds 63.7 mm), and the
+    clamp is what keeps it inert rather than contradictory if that ever stops
+    being true.
+    """
+    if not SELF_SAFE:
+        return -np.inf
+    from . import selfcoll
+    ends = np.stack([np.asarray(q0, float).reshape(7),
+                     np.asarray(q1, float).reshape(7)])
+    A, B, R = selfcoll.capsule_ends(ends, pen_ext)
+    # the screened form, because the answer is a `min` against the margin and
+    # the screen is exact on everything below it — an endpoint that clears the
+    # margin only has to be KNOWN to, not measured
+    lo = selfcoll.min_clearance(A, B, R, selfcoll.SELF_PLAN_MARGIN)
+    return float(min(selfcoll.SELF_PLAN_MARGIN, lo))
+
+
+def leg_self_lb(spec, q0, q1, pen_ext=PEN_EXT, n=SAMPLES, floor=None):
+    """A LOWER BOUND on the arm's self-clearance over the whole straight move.
+
+    -> metres.  Same shape as `leg_static_lb` — sampled, residual-corrected,
+    refined only when the coarse pass cannot decide, and given a `floor` only
+    guaranteed to land on the right side of it.
+    """
+    if not SELF_SAFE:
+        return np.inf
+    from . import selfcoll
+    # ...AND THE REFINEMENT DOUBLES RATHER THAN JUMPING TO THE CAP.  The static
+    # bound can afford `refine_n`'s one big step because its measurement is
+    # cheap per sample; this one is a 165-pair screen, and jumping straight to
+    # 32x costs a thousand configurations to settle a question two doublings
+    # usually settle.  Doubling costs at most twice the step that actually
+    # decides, and every step is a valid bound on its own, so the answer is the
+    # same one the single jump would have reached.
+    cap = (n - 1) * REFINE_CAP + 1
+    k = int(n)
+    while True:
+        m, res = selfcoll.path_clearance_lb(line_samples(q0, q1, k), floor,
+                                            pen_ext, k=SWEEP_K)
+        if floor is not None:
+            if m - res >= float(floor) - EPS:
+                return m - res                  # certified at this density
+            if m < float(floor) - EPS:
+                return m                        # refused at this density
+        if res <= SWEEP_K * STATIC_STEP or k >= cap:
+            return m - res
+        # ...AND THE NEXT DENSITY IS AIMED, NOT GUESSED.  The residual falls
+        # like 1/k and `m` barely moves, so the density that would settle this
+        # is about `k * res / (m - floor)` — one step instead of the three
+        # doublings that estimate reaches by feel.  It is an estimate, so the
+        # loop stays: if `m` drops on the finer grid the next pass aims again,
+        # and the doubling is the floor under it.
+        nxt = (k - 1) * 2 + 1
+        if floor is not None and m - float(floor) > EPS:
+            want = int(np.ceil(1.3 * res / (m - float(floor))))
+            nxt = max(nxt, (k - 1) * max(1, want) + 1)
+        k = min(nxt, cap)
+
+
+def block_self_lb(L, pen_ext=PEN_EXT, floor=None, k=SWEEP_K):
+    """`leg_self_lb`'s coarse half for a whole BLOCK of sampled lines.
+
+    -> (min (R,N), residual (R,N)), and the two come back APART for the reason
+    `block_screen` keeps its static pair apart: `min` is an upper bound on the
+    truth and `min - residual` a lower one, and a cell between them has to be
+    LOOKED AT rather than believed either way.  Handed together they would
+    flag every long move on this rig, because 33 samples of a metre of
+    reconfiguration lose 30-60 mm to the residual and the floor is 23.
+
+    `L` is (R, N, K, 7), the same array `block_screen` takes.
+    """
+    from . import selfcoll
+    L = np.asarray(L, float)
+    R_, N_, K_ = L.shape[:3]
+    if not (R_ and N_):
+        return np.zeros((R_, N_)), np.zeros((R_, N_))
+    A, B, rad = selfcoll.capsule_ends(L.reshape(-1, 7), pen_ext)
+    Ab = A.reshape(R_, N_, K_, -1, 3)
+    Bb = B.reshape(R_, N_, K_, -1, 3)
+    res = k * np.maximum(
+        np.linalg.norm(np.diff(Ab, axis=2), axis=4).max(axis=(2, 3)),
+        np.linalg.norm(np.diff(Bb, axis=2), axis=4).max(axis=(2, 3))) \
+        if K_ > 1 else np.zeros((R_, N_))
+    # THE SCREEN'S FLOOR CARRIES THE WORST RESIDUAL IN THE BLOCK, because the
+    # verdict is `min - res >= floor` and the screen has to be exact wherever
+    # that could go either way.  One number for the block rather than one per
+    # cell: `clearance_screened` takes a scalar, and being exact on a few extra
+    # pairs is cheaper than a per-cell dispatch.
+    fl = None if floor is None else float(floor) + float(np.max(res))
+    d = selfcoll.clearance_screened(A, B, rad, fl).reshape(R_, N_, K_)
+    return d.min(axis=2), res
 
 
 def leg_bounds(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
@@ -611,6 +749,15 @@ def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     ok = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
     if ok and boxes:
         ok = bool(sc >= sf - EPS)
+    # ...AND THE THIRD OBSTACLE, HERE TOO AND FOR THE SAME REASON `STATIC_SAFE`
+    # is answered here: `sequence._leg_surcharge` and `_paper_surcharge` skip
+    # the router entirely when this says yes, so a move that folds the arm
+    # through itself would be priced at zero seconds while `writing._route`
+    # routed it — the exact disagreement `csail_schedule.cross_check` exists to
+    # catch, one obstacle over.
+    if ok and SELF_SAFE:
+        sfl = self_floor(spec, q0, q1, pen_ext)
+        ok = bool(leg_self_lb(spec, q0, q1, pen_ext, n, sfl) >= sfl - EPS)
     return ok, cz, tz
 
 
@@ -983,6 +1130,13 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     gate_floor = static_floor if STATIC_SAFE else FRAME_FLOOR
     lk = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
           round(float(gate_floor), 9), int(n))
+    # THE SELF MEMO IS NOT KEYED ON THE ARM, and that is a property of the
+    # question rather than an optimisation: self-collision is one arm against
+    # its own metal in its own base frame, so two arms holding the same joints
+    # have the same answer and `id(spec)`/`h_inv` have nothing to say about it.
+    self_fl = self_floor(spec, q0, q1, pen_ext)
+    sk = (float(pen_ext), float(_frames.PEN_LAT), round(float(self_fl), 9),
+          int(n))
 
     def leg(a, b):
         """`leg_bounds`, memoised on the pair (see `_LEGS`)."""
@@ -991,6 +1145,13 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             _LEGS[k] = leg_bounds(spec, a, b, pen_ext, h_inv, boxes, n,
                                   gate_floor if boxes else None)
         return _LEGS[k]
+
+    def leg_self(a, b):
+        """`leg_self_lb`, memoised on the pair (see `_SELF`)."""
+        k = sk + (_pose_bytes(a), _pose_bytes(b))
+        if k not in _SELF:
+            _SELF[k] = leg_self_lb(spec, a, b, pen_ext, n, self_fl)
+        return _SELF[k]
 
     def legs_ok(seq, frame=True):
         qs = [q0] + list(seq) + [q1]
@@ -1011,6 +1172,16 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         # against the checker's 50, on a pen-up nobody had priced.
         if ok and frame and boxes and (seq or STATIC_SAFE):
             ok = bool(sc >= gate_floor - EPS)
+        # ...AND THE ARM AGAINST ITSELF, LAST, because it is the only one of
+        # the three that needs its own forward kinematics: a shape refused by
+        # the paper or the metal never pays for it.  Every leg of the assembled
+        # shape, the direct move included — a fold is exactly the thing a
+        # straight joint-space line commits and a via cannot inherit.
+        if ok and SELF_SAFE:
+            for a, b in zip(qs[:-1], qs[1:]):
+                if leg_self(a, b) < self_fl - EPS:
+                    ok = False
+                    break
         return ok, cz, tz
 
     def done(seq, name, cz, tz, tried):

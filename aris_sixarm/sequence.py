@@ -225,12 +225,28 @@ def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
                        paper.CHAIN_CLEAR)
     stat = np.minimum(np.minimum(s_exi[:, None], s_ent[None, :]),
                       paper.FRAME_FLOOR)
+    # ...AND THE THIRD OBSTACLE, CLAMPED THE SAME WAY.  A crossing that folds
+    # the arm through its own shoulder is one `paper.route` will detour or
+    # refuse (`paper.SELF_SAFE`), and a screen that did not ask would leave it
+    # at zero surcharge — the tour would be chosen against a cost nobody pays,
+    # `prune_unflyable` would certify a bag the conductor cannot fly, and
+    # `arm_program` would raise on a transit already frozen into an order.
+    # Same lesson as the metal, one obstacle over.
+    self_on = paper.SELF_SAFE
+    if self_on:
+        from . import selfcoll
+        A, B, rad = selfcoll.capsule_ends(np.vstack([exi_h, ent_h]), pen_ext)
+        cw = selfcoll.clearance_screened(A, B, rad, selfcoll.SELF_PLAN_MARGIN)
+        selfl = np.minimum(np.minimum(cw[:M, None], cw[M:][None, :]),
+                           selfcoll.SELF_PLAN_MARGIN)
     K = paper.SAMPLES
     f = np.linspace(0.0, 1.0, K).reshape(1, 1, K, 1)
     cz = np.empty((M, N))
     tz = np.empty((M, N))
     sz = np.full((M, N), np.inf)
     sr = np.zeros((M, N))
+    fz = np.full((M, N), np.inf)
+    fr = np.zeros((M, N))
     # the block carries the whole 11-point CHAIN when the metal is in play, not
     # two heights per configuration, so the row block shrinks to match
     rows = max(1, int((FK_BLOCK // (33 if boxes else 1)) // max(N * K, 1)))
@@ -239,9 +255,14 @@ def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
         L = exi_h[a0:a1, None, None, :] * (1.0 - f) + ent_h[None, :, None, :] * f
         cz[a0:a1], tz[a0:a1], sz[a0:a1], sr[a0:a1] = paper.block_screen(
             L, spec, pen_ext, h_inv, boxes)
+        if self_on:
+            fz[a0:a1], fr[a0:a1] = paper.block_self_lb(
+                L, pen_ext, float(selfl[a0:a1].max()))
     bad = (~same) & ((cz < paper.CHAIN_CLEAR - paper.EPS)
                      | (tz < tip - paper.EPS)
                      | (sz < stat - paper.EPS))
+    if self_on:
+        bad |= (~same) & (fz < selfl - paper.EPS)
     # ...AND THE CELLS THE COARSE BOUND CANNOT DECIDE ARE MEASURED, NOT ROUTED.
     # `sz` is a minimum over 33 samples of a metre-long move, so `sz - sr` — the
     # honest lower bound at that density — sits 10 to 20 mm under it, and every
@@ -257,6 +278,16 @@ def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
             _, _, s = paper.leg_bounds(spec, exi_h[a], ent_h[b], pen_ext, h_inv,
                                        boxes, K, float(stat[a, b]))
             bad[a, b] = s < stat[a, b] - paper.EPS
+    # ...and the same band for the arm's own metal, and it is the band that
+    # matters MORE here: a metre of reconfiguration moves a capsule end 60 mm
+    # between two of 33 samples, the floor is 23, and handing every such cell
+    # to `route` on the strength of that would route the whole matrix.
+    if self_on:
+        maybe = (~same) & ~bad & (fz - fr < selfl - paper.EPS)
+        for a, b in zip(*np.where(maybe)):
+            v = paper.leg_self_lb(spec, exi_h[a], ent_h[b], pen_ext, K,
+                                  float(selfl[a, b]))
+            bad[a, b] = v < selfl[a, b] - paper.EPS
     return [(int(a), int(b)) for a, b in zip(*np.where(bad))], tip, chain
 
 

@@ -995,8 +995,55 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
 # code and the same key a tier-off run computes, so "every other hover is
 # untouched" is a property of the key and not a measurement.
 HOVER_DEPOT_AWARE = False
-HOVER_DEPOT_TRIES = 24      # fiber poses routed before the pocket is accepted
+# HOW DEEP THE SEARCH GOES, AND WHY IT IS NOT 24 ANY MORE.  The budget was
+# picked when the tier was measured on 14 pockets and the ten it could fix were
+# found "in 2 to 8 candidates".  Re-measured under the self-collision guard over
+# 1 127 certified cells of all six arms (`out/guard_pocket.py`), the fiber holds
+# a depot-joining pose at 267 pockets' worth of span end and finds it at:
+#
+#     <=  4 tries  52.2 %      <= 24 tries  93.5 %
+#     <=  8 tries  71.7 %      <= 48 tries  98.6 %
+#     <= 16 tries  88.4 %      <= 64 tries 100.0 %
+#
+# so 24 leaves 6.5 % of the recoverable ends on the table.  The budget is spent
+# only where a pocket is ABOUT TO COST INK (`allocate._rescue_pocket`'s
+# allow-set), the median success is at 3.5 candidates, and it is the FAILURES
+# that pay it — so 48 doubles the cost of a pocket nothing can fix and buys back
+# most of what 24 was giving away.  64 buys the last 1.4 % for another third
+# again, and is not taken.
+HOVER_DEPOT_TRIES = 48      # fiber poses routed before the pocket is accepted
 HOVER_DEPOT_SITES = None    # None = every pocket; a set = only these ends
+
+# ...AND THE LEAN IS ON THE FIBER TOO, LAST, AND ONLY IF THE RUN ALLOWS ONE.
+# `lifted_config`'s note argues at length that the FLEET should not hover at a
+# lean — the router's vias are vertical, one hover convention is worth more than
+# a locally tidier lift, and a leaning hover once cost a conduct.  Every word of
+# that is about the hover a span gets when a vertical one exists.  It says
+# nothing about the end where NO vertical pose on the whole fiber joins the
+# depot, which is the only place this rung runs: there the alternative is not a
+# tidier lift, it is giving the ink back.
+#
+# Measured over the same 1 127 cells, the lean rungs find 9 of the 138
+# recoverable pockets that no vertical pose could reach (7 at 7.5 deg, 2 at 15).
+# Small, and it is the difference between a span being drawn and not at the ends
+# it fires on.  `HOVER_LEAN_MAX_DEG` is the RUN's cone — `csail_allocate` sets
+# it from `--tilt-max-deg`, so a flat run stays flat and gets exactly the
+# answers it got before this existed.
+HOVER_LEAN_MAX_DEG = 0.0    # deg; the cone the run permits (0 = vertical only)
+HOVER_DEPOT_LEANS = (7.5, 15.0)      # deg, tried in order, after the flat fiber
+HOVER_DEPOT_LEAN_TRIES = 16          # ...each with its own, smaller budget
+
+
+def _lean_rungs(cap=None):
+    """The pen leans a rescue may try, inside the run's cone. -> [(pitch, 0)].
+
+    Degrees to the (pitch, roll) pair `tilt.pen_rot` takes, dropping any rung
+    the run's `--tilt-max-deg` does not permit.  Empty on a flat run, which is
+    what keeps this inert there.
+    """
+    cap = HOVER_LEAN_MAX_DEG if cap is None else float(cap)
+    return [(float(np.deg2rad(d)), 0.0) for d in HOVER_DEPOT_LEANS
+            if d <= cap + 1e-9]
 
 
 def hover_site(spec, q_ref, xy):
@@ -1105,7 +1152,13 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            None if tilt is None else np.round(np.asarray(tilt, float),
                                               9).tobytes(),
            tuple(float(z) for z in heights), bool(paper.STATIC_SAFE),
-           bool(sel))
+           bool(sel),
+           # ...AND EVERYTHING THE ANSWER DEPENDS ON, which is the lesson the
+           # q_home flag cost this module once already: the rescue's depth and
+           # the run's lean cone both change what comes back, so a run that
+           # changes either may not read an answer computed under the other.
+           int(HOVER_DEPOT_TRIES), float(HOVER_LEAN_MAX_DEG),
+           tuple(float(d) for d in HOVER_DEPOT_LEANS))
     hit = _HOVERS.get(key)
     if hit is not None:
         return hit
@@ -1134,7 +1187,7 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
             out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl))
     if out is None:
         out = (np.asarray(q_ref, float), 0.0)
-    elif sel and gate is not None and out[1] > 0 \
+    if sel and gate is not None \
             and not hover_joins_depot(spec, q_ref, out[0], h_inv, pen_ext):
         # ...AND THE POSE HAS TO BE SOMEWHERE THE ARM CAN GET TO AND FROM.
         # Only ever reached where the chosen hover is in a pocket AND this end
@@ -1143,18 +1196,37 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
         # the pocket allows.  `sel`, not `HOVER_DEPOT_AWARE`: the branch and
         # the memo key have to agree about whether the tier fired HERE, or an
         # answer computed under one is filed under the other.
-        n = 0
-        for z in heights:
-            for cand in hover_fiber(spec, q_ref, xy, z, gate, h_inv, pen_ext,
-                                    tilt):
-                if n >= HOVER_DEPOT_TRIES:
+        #
+        # ...AND THE RUNGS ARE IN ASCENDING DISTURBANCE.  The vertical fiber
+        # first — same tip, same height, a different tool yaw and q7 and IK
+        # branch, and the nearest acceptable pose still wins — then the heights
+        # the ladder already had, and only then a LEAN, which is the one rung
+        # that changes what the PEN is doing rather than where the elbow is.
+        # Each rung carries its own budget, so a pocket nothing can fix does
+        # not spend the leaned budget over and over on the way to finding out.
+        #
+        # ...AND IT RUNS AT AN END WITH NO HOVER AT ALL, which the first cut
+        # excluded with `out[1] > 0`.  Such an end is not a comfortable case to
+        # leave alone: it is `(q_ref, 0.0)` — the arm drags the pen across the
+        # paper to the next stroke — and if a leaned pose on the fiber can be
+        # lifted onto and flown home from, it is better by every measure.
+        for lean, budget in ([(tilt, HOVER_DEPOT_TRIES)]
+                             + [(t, HOVER_DEPOT_LEAN_TRIES)
+                                for t in _lean_rungs()]):
+            n, got = 0, None
+            for z in heights:
+                for cand in hover_fiber(spec, q_ref, xy, z, gate, h_inv,
+                                        pen_ext, lean):
+                    if n >= budget:
+                        break
+                    n += 1
+                    if hover_joins_depot(spec, q_ref, cand, h_inv, pen_ext):
+                        got = (np.asarray(cand, float), float(z))
+                        break
+                if got is not None or n >= budget:
                     break
-                n += 1
-                if hover_joins_depot(spec, q_ref, cand, h_inv, pen_ext):
-                    out = (np.asarray(cand, float), float(z))
-                    n = -1
-                    break
-            if n < 0 or n >= HOVER_DEPOT_TRIES:
+            if got is not None:
+                out = got
                 break
     _HOVERS[key] = out
     return out

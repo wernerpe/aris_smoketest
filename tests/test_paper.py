@@ -810,3 +810,129 @@ def test_a_plannable_pose_survives_the_checkers_own_measurement(lateral):
         paper.world_chain(H, spec, 0.110, h), spec.static_obstacles())
     assert lbh.min() >= rig_final.STATIC_MARGIN - 1e-9, (
         f"a certified hover reads {1000 * lbh.min():.1f} mm at the checker")
+
+
+# ==========================================================================
+# ...AND THE THIRD OBSTACLE: THE ARM AGAINST ITSELF, ALONG THE LINE
+# ==========================================================================
+# `selfcoll` gates POSES and `writing.static_gate` gates the poses `route`
+# chooses as vias.  Neither says anything about the straight joint-space line
+# between two of them, which is the motion this whole module exists to certify
+# — and `writing.py` says in as many words that its interpolation "makes no
+# collision or self-collision guarantee".  `paper.SELF_SAFE` closes that, and
+# these are the three things it owes: the bound is a bound, the routes it
+# certifies survive the CHECKER's arithmetic, and it refuses something real.
+def test_the_self_bound_is_a_lower_bound(lateral):
+    """The router's self number must never be above a denser measurement.
+
+    `leg_self_lb` samples at 33, screens with bounding spheres and refines; a
+    513-sample measurement by `validate`'s independent derivation may find a
+    dip between two of those samples, and the bound has to have allowed for it.
+    Same property `test_the_static_bound_is_a_lower_bound` pins one obstacle
+    over, and the same failure it would catch.
+    """
+    from aris_sixarm import validate
+    spec, rows, Q, h = _proposed_cells(31, 10)
+    hov = [writing.lifted_or_lower(spec, q, r[:2], h_inv=h, pen_ext=0.110)[0]
+           for r, q in zip(rows, Q)]
+    n_checked = 0
+    for a in hov[:5]:
+        for b in hov[5:]:
+            lb = paper.leg_self_lb(spec, a, b, 0.110, floor=None)
+            dense = float(validate.self_clearance(
+                paper.line_samples(a, b, 513), pen_ext=0.110).min())
+            assert lb <= dense + 1e-9, (
+                f"router self bound {1000 * lb:.1f} mm is ABOVE a dense "
+                f"measurement of {1000 * dense:.1f} mm")
+            n_checked += 1
+    assert n_checked >= 20
+
+
+def test_the_screened_self_clearance_is_the_exact_one_where_it_matters(lateral):
+    """The sphere screen may only skip pairs that cannot decide the gate.
+
+    `selfcoll.min_clearance(floor=...)` leaves a pair at its bounding-sphere
+    bound whenever that bound already clears the floor.  The contract is the
+    same one `leg_static_lb`'s `floor` carries: the number is a lower bound
+    everywhere and lands on the RIGHT SIDE of the floor always.
+    """
+    from aris_sixarm import selfcoll
+    rng = np.random.default_rng(17)
+    from aris_sixarm.frames import FR3_MAX, FR3_MIN
+    Q = FR3_MIN + rng.random((3000, 7)) * (FR3_MAX - FR3_MIN)
+    A, B, R = selfcoll.capsule_ends(Q, 0.110)
+    truth = selfcoll.self_clearance(Q, 0.110)
+    assert selfcoll.min_clearance(A, B, R) == pytest.approx(float(truth.min()),
+                                                            abs=1e-12)
+    per = selfcoll.clearance_screened(A, B, R, 0.023)
+    assert np.all(per <= truth + 1e-12), "the screen read ABOVE the truth"
+    assert np.array_equal(per >= 0.023, truth >= 0.023)
+    # ...and it is exact on every configuration the gate is about
+    tight = truth < 0.023
+    assert np.allclose(per[tight], truth[tight], atol=1e-12)
+
+
+def test_a_routed_pen_up_never_folds_the_arm_into_itself(lateral):
+    """Every leg `route` certifies, re-measured the CHECKER's way.
+
+    `scene_check` sweeps the conducted timeline at `SELF_MARGIN` = 20 mm and
+    the producer plans to `SELF_PLAN_MARGIN` = 23; this asserts the ordering
+    holds on the routes the router actually returns, at 8x its own sampling and
+    with the checker's own copy of the geometry.
+    """
+    from aris_sixarm import scene_check as sc
+    from aris_sixarm import selfcoll, sequence as seq
+    spec, rows, Q, h = _proposed_cells(31, 8)
+    hov = np.array([writing.lifted_or_lower(spec, q, r[:2], h_inv=h,
+                                            pen_ext=0.110)[0]
+                    for r, q in zip(rows, Q)])
+    same = np.eye(len(hov), dtype=bool)
+    cells, tip, _ = seq.dive_screen(spec, hov, hov, same, h_inv=h, pen_ext=0.110)
+    assert cells, "no crossing of this set needs routing; nothing is proved"
+    n = 0
+    for i, j in cells:
+        r = paper.route(spec, hov[i], hov[j], pen_ext=0.110, h_inv=h,
+                        tip_floor=float(tip[i, j]))
+        if r is None:
+            continue
+        n += 1
+        qs = [hov[i]] + list(r["vias"]) + [hov[j]]
+        floor = min(sc.SELF_MARGIN,
+                    float(selfcoll.self_clearance(np.stack([hov[i], hov[j]]),
+                                                  0.110).min()))
+        for u, v in zip(qs[:-1], qs[1:]):
+            P = paper.line_samples(u, v, 257)
+            got = float(sc.self_clearance(P, 0.110).min()
+                        - paper.SWEEP_K * float(np.max(np.linalg.norm(
+                            np.diff(paper.world_chain(P, spec, 0.110, h),
+                                    axis=0), axis=2))))
+            assert got >= floor - 1e-9, (
+                f"routed leg folds to {1000 * got:.1f} mm against a "
+                f"{1000 * floor:.1f} mm floor — the router is LOOSER than "
+                "the checker")
+    assert n, "every crossing was refused; the router did nothing"
+
+
+def test_the_self_gate_refuses_something_real(lateral):
+    """The gate is not vacuous on a joint-space line.
+
+    Straight moves between certified DRAWING poses of one arm — poses the self
+    guard passes at 63.7 mm or better at both ends — reach deep inside the arm
+    partway along.  If this ever stops finding one, the gate has become
+    decoration and `paper.SELF_SAFE` should be re-argued rather than trusted.
+    """
+    from aris_sixarm import selfcoll
+    spec, rows, Q, h = _proposed_cells(31, 40)
+    assert float(selfcoll.self_clearance(Q, 0.110).min()) >= \
+        selfcoll.SELF_PLAN_MARGIN, "a certified drawing pose fails the guard"
+    worst, bad = np.inf, 0
+    for a in Q[:20]:
+        for b in Q[20:]:
+            v = paper.leg_self_lb(spec, a, b, 0.110,
+                                  floor=selfcoll.SELF_PLAN_MARGIN)
+            worst = min(worst, v)
+            bad += int(v < selfcoll.SELF_PLAN_MARGIN)
+    assert bad, ("no straight line between 400 pairs of certified poses is "
+                 "refused by the self gate — it is doing nothing")
+    assert worst < 0.0, (f"the worst line only reaches {1000 * worst:.1f} mm; "
+                         "the gate refuses margin, not metal")

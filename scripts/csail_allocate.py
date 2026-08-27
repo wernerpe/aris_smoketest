@@ -29,7 +29,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 from aris_sixarm import (allocate, artwork, idle, paper, pwl,   # noqa: E402
-                         rig_final, trace, writing)
+                         rig_final, selfcoll, trace, writing)
 from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
@@ -534,6 +534,15 @@ def add_args(ap):
                          "as far as 41.0 mm against a 50 mm gate.  Pass this "
                          "only to reproduce a pre-2026-08-26 number "
                          "(see aris_sixarm/paper.STATIC_SAFE)")
+    ap.add_argument("--no-self-route", action="store_true",
+                    help="do NOT certify the straight joint-space LINE of each "
+                         "pen-up leg against the arm's own metal.  On by "
+                         "default since 2026-08-27: `selfcoll` gates the POSES "
+                         "a route is built from and nothing gated the line "
+                         "between two of them, which reaches -194.7 mm between "
+                         "certified cells of arm 31.  A DIAGNOSTIC ONLY — it "
+                         "measures what the gate costs, and a run that ships "
+                         "must not use it (see aris_sixarm/paper.SELF_SAFE)")
     ap.add_argument("--two-pass", action="store_true",
                     help="draw grey, stop for a human to swap the pens, then "
                          "draw orange.  Lifts the one-colour-per-arm constraint "
@@ -744,6 +753,16 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
           f"{1000 * paper.TIP_SWEEP_PAD:.0f} mm sweep)" if paper.STATIC_SAFE
           else "  !! pen-ups are NOT certified against the static set "
                "(--no-static-safe)")
+    # ...AND THE THIRD OBSTACLE, SET IN THE SAME PLACE AND FOR THE SAME REASON.
+    want_self = not bool(getattr(a, "no_self_route", False))
+    if want_self != paper.SELF_SAFE:
+        paper.SELF_SAFE = want_self
+        paper.clear_cache()
+    print("  ...and against the arm's OWN metal along every leg "
+          f"(margin {1000 * selfcoll.SELF_PLAN_MARGIN:.0f} mm)"
+          if paper.SELF_SAFE
+          else "  !! pen-up LEGS are NOT certified against the arm itself "
+               "(--no-self-route)")
     # A MODULE FLAG FOR THE SAME REASON, one obstacle over: the pruner, the
     # balancer's price and the sequencer all have to agree about whether a bag
     # may be flown as several tours, and they reach `allocate` by three
@@ -764,6 +783,14 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
         paper.clear_cache()          # the hover memo is keyed on it, but the
                                      # routes bought under the old answer are not
     allocate.DEPOT_HOVER_RESCUE = sel
+    # ...AND THE RESCUE MAY LEAN EXACTLY AS FAR AS THE RUN LETS THE PEN LEAN.
+    # It is the same cone the stroke planner is given, spent on the same kind of
+    # question — a pose that certifies where the perpendicular one does not —
+    # and a flat run gets a flat fiber and the answers it always had.
+    want_lean = float(getattr(a, "tilt_max_deg", 0.0) or 0.0)
+    if want_lean != writing.HOVER_LEAN_MAX_DEG:
+        writing.HOVER_LEAN_MAX_DEG = want_lean
+        paper.clear_cache()
     if writing.HOVER_DEPOT_SITES is not None:
         print("  a hover the arm cannot fly home from is replaced by one on the "
               "same fiber ONLY where the alternative is giving ink back "
