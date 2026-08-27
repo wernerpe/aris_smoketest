@@ -173,7 +173,13 @@ EDGE_N = paper.SAMPLES  # configurations sampled along one candidate edge
 #   cannot.
 
 _STATS = dict(calls=0, solved=0, failed=0, nodes=0, edges=0, seconds=0.0,
-              shortcut_from=0, shortcut_to=0, recert_failed=0)
+              shortcut_from=0, shortcut_to=0, recert_failed=0, deadline=0)
+#   `deadline` counts the searches that stopped on the CLOCK rather than on
+#   `max_nodes`.  It is the only thing between this module and a reproducible
+#   answer, so it is counted rather than assumed away: a run that reports
+#   `deadline == 0` gave the same answer it would give on any other box, and a
+#   run that does not has to say so.  `scripts/feasible_workspace.py` prints it
+#   for exactly that reason.
 
 
 def stats():
@@ -457,8 +463,8 @@ class _Sampler:
 def plan(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
          chain_floor=paper.CHAIN_CLEAR, tip_floor=paper.TIP_CLEAR,
          static_floor=-np.inf, self_floor=-np.inf, probe=None,
-         probe_margin=0.0, step=STEP, max_nodes=MAX_NODES,
-         time_budget=TIME_BUDGET, attempts=ATTEMPTS, seeds=(), gate=None,
+         probe_margin=0.0, step=None, max_nodes=None,
+         time_budget=None, attempts=None, seeds=(), gate=None,
          shortcut=True, extra_roots=()):
     """A certified pen-up path from `q0` to `q1` in the joint space. -> [q]|None.
 
@@ -484,6 +490,18 @@ def plan(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
     root that does not certify against `q0` is simply dropped.
     """
     import time
+    # RESOLVED HERE, NOT IN THE SIGNATURE — the lesson `_shortcut` already
+    # carries, and this function did not.  A default argument is bound at `def`
+    # time, so `transit.MAX_NODES = 500` from a caller never reached the search:
+    # every budget `scripts/feasible_workspace.py` and `scripts/csail_allocate.py
+    # --transit-budget` set was inert, and the runs they logged were the module
+    # defaults wearing the caller's numbers.  An explicit argument still wins;
+    # `None` now means "whatever the module says at the moment of the call",
+    # which is what a knob has to mean for a rebinding to be a knob at all.
+    step = STEP if step is None else float(step)
+    max_nodes = MAX_NODES if max_nodes is None else int(max_nodes)
+    time_budget = TIME_BUDGET if time_budget is None else float(time_budget)
+    attempts = ATTEMPTS if attempts is None else int(attempts)
     t0 = time.perf_counter()
     _STATS["calls"] += 1
     q0 = np.asarray(q0, float).reshape(7)
@@ -535,9 +553,11 @@ def _rrt_connect(gate, q0, q1, rng, lo, hi, step, max_nodes, deadline,
     a, b = ta, tb
     while ta.n + tb.n < 2 * max_nodes:
         if time.perf_counter() >= deadline:
+            _STATS["deadline"] += 1
             break
         q_rand = b.Q[0] if rng.random() < GOAL_BIAS else sample.next(deadline)
         if q_rand is None:
+            _STATS["deadline"] += 1
             break
         i = a.nearest(q_rand)
         q_new, _ = gate.line_prefix(a.Q[i], steer(a.Q[i], q_rand, step), step)

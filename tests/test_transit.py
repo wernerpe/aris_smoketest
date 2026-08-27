@@ -447,3 +447,71 @@ def test_a_route_the_planner_found_is_priced_and_flown_the_same_way(six):
     for (dt, v), u in zip(beat, qs[:-1]):
         assert dt >= writing._dq_time(u, v, writing.QD_FRAC) - 1e-12
     assert np.array_equal(np.asarray(beat[-1][1], float), np.asarray(b, float))
+
+
+def test_the_module_budget_is_a_knob_and_not_a_signature_default(six):
+    """A REBINDING OF `MAX_NODES` HAS TO REACH THE SEARCH.
+
+    Until 2026-08-27 `plan` bound `MAX_NODES`, `TIME_BUDGET` and `ATTEMPTS` in
+    its own signature, so every `transit.MAX_NODES = ...` a caller wrote was
+    inert — `scripts/feasible_workspace.py` logged a 0.80 s x 1 x 500 budget
+    and ran the module's 2.5 s x 2 x 900, and `csail_allocate --transit-budget`
+    did nothing at all.  The escalation ladder in the map is a ladder only if
+    these are live, so this pins that they are.
+
+    `_shortcut` already resolved its two at call time and always had; the
+    lesson is one this function had not learned.
+    """
+    spec = FLEET[2]
+    a = _hover(spec, (0.95, 1.55))
+    b = _hover(spec, (0.95, 1.93))
+    if a is None or b is None:
+        pytest.skip("no hover IK for the probe pair on this rig")
+    if transit.plan(spec, a, b, pen_ext=PEN, gate=_gate(spec),
+                    time_budget=5.0, max_nodes=400) is None:
+        pytest.skip("this pair needs no plan on this rig")
+    keep = (transit.MAX_NODES, transit.TIME_BUDGET, transit.ATTEMPTS)
+    try:
+        # ONE node per tree cannot connect a pair that needs a search, and the
+        # straight line was already refused above the trees — so a budget the
+        # caller rebound to 1 has to come back with nothing.
+        transit.MAX_NODES, transit.TIME_BUDGET, transit.ATTEMPTS = 1, 60.0, 1
+        assert transit.plan(spec, a, b, pen_ext=PEN, gate=_gate(spec)) is None,\
+            "transit.MAX_NODES = 1 did not reach the search"
+        # ...and the same rebinding, opened up, finds the path again
+        transit.MAX_NODES = 400
+        assert transit.plan(spec, a, b, pen_ext=PEN,
+                            gate=_gate(spec)) is not None
+        # an EXPLICIT argument still wins over the module
+        transit.MAX_NODES = 1
+        assert transit.plan(spec, a, b, pen_ext=PEN, gate=_gate(spec),
+                            max_nodes=400, time_budget=5.0,
+                            attempts=1) is not None
+    finally:
+        transit.MAX_NODES, transit.TIME_BUDGET, transit.ATTEMPTS = keep
+
+
+def test_a_search_that_stops_on_the_clock_says_so(six):
+    """THE ONE THING BETWEEN THIS MODULE AND A REPRODUCIBLE ANSWER.
+
+    `MAX_NODES` gives the same answer on a loaded box and `TIME_BUDGET` does
+    not, so a run that wants to claim reproducibility has to be able to check
+    that the clock never decided anything.  `stats()["deadline"]` counts the
+    searches that stopped on it; `scripts/feasible_workspace.py` prints it per
+    escalation rung for exactly that reason.
+    """
+    spec = FLEET[2]
+    a = _hover(spec, (0.95, 1.55))
+    if a is None:
+        pytest.skip("no hover IK for the probe point on this rig")
+    far = np.asarray(a, float).copy()
+    far[0] += 2.2
+    transit.reset_stats()
+    transit.plan(spec, a, far, pen_ext=PEN, gate=_gate(spec),
+                 max_nodes=4000, time_budget=0.05, attempts=1)
+    assert transit.stats()["deadline"] >= 1, "a clock stop went unreported"
+    transit.reset_stats()
+    transit.plan(spec, a, far, pen_ext=PEN, gate=_gate(spec),
+                 max_nodes=30, time_budget=120.0, attempts=1)
+    assert transit.stats()["deadline"] == 0, \
+        "a node-bounded search must not report a clock stop"
