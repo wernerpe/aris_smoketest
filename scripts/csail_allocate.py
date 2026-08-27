@@ -29,7 +29,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 from aris_sixarm import (allocate, artwork, idle, paper, pwl,   # noqa: E402
-                         rig_final, selfcoll, trace, writing)
+                         rig_final, selfcoll, trace, transit, writing)
 from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
 from csail_trace import sheet_axes           # noqa: E402
@@ -544,6 +544,20 @@ def add_args(ap):
                          "the logo allocates 94.6994 %% and every conducted "
                          "phase holds 21-60 mm.  A DIAGNOSTIC ONLY (see "
                          "aris_sixarm/paper.SELF_SAFE)")
+    ap.add_argument("--no-rrt", action="store_true",
+                    help="do NOT offer the CONFIGURATION-SPACE pen-up planner "
+                         "(aris_sixarm/transit.py) when the shape ladder is "
+                         "exhausted.  The planner is the LAST tier: the ladder "
+                         "settles the overwhelming majority of crossings "
+                         "cheaply and runs first, unchanged, and this searches "
+                         "the 7-DOF joint space only where it gave up.  Every "
+                         "edge it proposes is certified by the same gate stack "
+                         "a ladder leg pays and the assembled path by the same "
+                         "legs_ok.  Pass this to reproduce a pre-2026-08-27 "
+                         "number (see aris_sixarm/paper.RRT_SAFE)")
+    ap.add_argument("--rrt-budget", type=float, default=None, metavar="SECONDS",
+                    help="per-plan time budget for that planner "
+                         "(default transit.TIME_BUDGET)")
     ap.add_argument("--two-pass", action="store_true",
                     help="draw grey, stop for a human to swap the pens, then "
                          "draw orange.  Lifts the one-colour-per-arm constraint "
@@ -765,6 +779,25 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
           else "  !! pen-up LEGS are NOT certified against the arm itself "
                "(--no-self-route): scene_check refused the last programme "
                "built this way at -177.8 mm")
+    # ...AND THE TIER BELOW BOTH OF THEM, set in the same place for the third
+    # time.  `paper.RRT_SAFE` decides whether a crossing the shape ladder
+    # cannot settle is offered to the C-space planner, and it is part of
+    # `paper._key`, so a run that flips it must drop the memo or it will read
+    # routes the other setting paid for.
+    want_rrt = not bool(getattr(a, "no_rrt", False))
+    if want_rrt != paper.RRT_SAFE:
+        paper.RRT_SAFE = want_rrt
+        paper.clear_cache()
+    budget = getattr(a, "rrt_budget", None)
+    if budget:
+        transit.TIME_BUDGET = float(budget)
+    print(f"  ...and where the ladder is exhausted, the pen-up is PLANNED in "
+          f"configuration space (transit.py, {transit.TIME_BUDGET:.1f} s x "
+          f"{transit.ATTEMPTS} attempts, edges certified at the ladder's "
+          f"floors + {1000 * transit.PAD:.0f} mm)"
+          if paper.RRT_SAFE
+          else "  !! the C-space pen-up planner is OFF (--no-rrt): a crossing "
+               "the shape ladder cannot settle is refused")
     # A MODULE FLAG FOR THE SAME REASON, one obstacle over: the pruner, the
     # balancer's price and the sequencer all have to agree about whether a bag
     # may be flown as several tours, and they reach `allocate` by three

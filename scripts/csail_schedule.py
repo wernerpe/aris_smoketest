@@ -52,8 +52,8 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, artwork, coordination, idle, pwl,  # noqa: E402
-                         scene_check, sequence, trace, writing)
+from aris_sixarm import (allocate, artwork, coordination, idle, paper,  # noqa: E402
+                         pwl, scene_check, sequence, trace, transit, writing)
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from aris_sixarm.stroke_api import truncate_polyline                # noqa: E402
@@ -1886,6 +1886,22 @@ def main(argv=None):
              if n_pause else "")
           + (f"; {a.final}" if a.final else ""))
     print(f"SCHEDULE WALL CLOCK {time.time() - t0:.1f} s")
+    # WHAT THE LAST TIER COST AND WHAT IT BOUGHT, in one line and never hidden.
+    # These are the PARENT process's numbers: the sequencer screens crossings in
+    # a fork pool and a worker's tally dies with the worker, so the counts here
+    # are the routes this process planned (the timeline's own transits and every
+    # serial screen), not the whole run's.  `--rrt-budget` moves them.
+    ts = transit.stats()
+    if ts["calls"]:
+        print(f"C-SPACE PEN-UP PLANNER  {ts['solved']}/{ts['calls']} crossings "
+              f"recovered, {ts['edges']} certified edges, "
+              f"{ts['nodes']} tree nodes, {ts['seconds']:.1f} s "
+              f"({ts['seconds'] / ts['calls']:.2f} s per attempt); "
+              f"shortcut {ts['shortcut_from']} -> {ts['shortcut_to']} nodes; "
+              f"{ts['recert_failed']} paths refused by legs_ok on re-check")
+    elif paper.RRT_SAFE:
+        print("C-SPACE PEN-UP PLANNER  never asked: the shape ladder settled "
+              "every crossing this process routed")
 
     summary = summary_json(a, phases, strokes, info, built, dt, pens, prof,
                            nF, nInk, n_pause)

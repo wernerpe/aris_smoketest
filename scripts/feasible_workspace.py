@@ -66,6 +66,7 @@ os.environ.setdefault("ARIS_RIG", "proposed")
 os.environ.setdefault("ARIS_TOOL", "lateral")
 
 from aris_sixarm import allocate, atlas, layout, paper, writing   # noqa: E402
+from aris_sixarm import transit                                   # noqa: E402
 from aris_sixarm import frames                                    # noqa: E402
 
 ATLAS_DIR = ROOT / "out" / "atlas_proposed_h0940_gated"
@@ -139,7 +140,7 @@ def park_hovers(fleet, parks, h):
 
 
 def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
-          tries=12):
+          tries=12, rrt=0.0, rrt_nodes=600):
     """Per-worker state: the fleet, the parks, the probe.  Built once."""
     writing.HOVER_LEAN_MAX_DEG = float(lean)
     fl, parks, h, _ = rig(pitch, h)
@@ -152,6 +153,48 @@ def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
     _W["redundant"] = bool(redundant)
     _W["fiber"] = bool(fiber)
     _W["tries"] = int(tries)
+    # THE C-SPACE TIER, WITH A BUDGET THAT IS A POLICY AND NOT A DEFAULT.
+    #
+    # This map routes every one of 23 376 certified cells and retries each
+    # refusal over a dozen more hovers on the fiber, so the number of pen-up
+    # questions asked here is two orders of magnitude above a logo run's.  The
+    # planner's own default (2.5 s x 2 attempts) is sized for a crossing a tour
+    # cannot do without; a CELL is not that, and a budget that big would put
+    # the sweep past a day.
+    #
+    # So the map gets `--rrt SECONDS` per plan, ONE attempt, and a smaller
+    # tree.  What that means for the number has to be said plainly: a cell this
+    # reports as unreachable is a cell no ladder shape and no RRT-within-budget
+    # could fly to.  It is a LOWER bound on feasibility, tighter than the one
+    # before it and still not a proof of impossibility — which is exactly the
+    # claim the layer above it (the hover ladder, the fiber retry) already
+    # makes about itself.
+    _W["rrt"] = float(rrt)
+    paper.RRT_SAFE = float(rrt) > 0.0
+    if paper.RRT_SAFE:
+        transit.TIME_BUDGET = float(rrt)
+        transit.ATTEMPTS = 1
+        transit.MAX_NODES = int(rrt_nodes)
+
+
+def _park_probe_hook(arm):
+    """Point `paper.RRT_PROBE` at the five arms standing behind THIS one.
+
+    The ladder does not know about parked partners — `allocate.ParkProbe`
+    screens a route after the fact, three stages later — and a route that is
+    going to be refused there is a route the search should not have spent its
+    budget finding.  The planner can be told, so it is.
+
+    The key is what goes into `paper`'s memo: the arm decides which five
+    partners are in the room, and the parks themselves are fixed for a run.
+    """
+    probe = _W["probe"]
+    if not probe or not probe.partners(int(arm)):
+        paper.RRT_PROBE = None
+        return
+    paper.RRT_PROBE = (lambda qs, sweep: probe.clearance(int(arm), qs, sweep),
+                       probe.margin, ("park", int(arm),
+                                      round(float(probe.margin), 9)))
 
 
 def _dense(steps, q0, n=None):
@@ -248,6 +291,8 @@ def _cell(arm, row, qcol, redundant=True):
     """
     fl, parks, h = _W["fleet"], _W["parks"], _W["h"]
     probe = _W["probe"]
+    if _W.get("rrt", 0.0) > 0.0:
+        _park_probe_hook(arm)
     spec = fl[arm]
     x, y = float(row[0]), float(row[1])
     q_draw = np.asarray(row[qcol:qcol + 7], float)
@@ -315,7 +360,8 @@ def _chunk(job):
 # the sweep
 # ---------------------------------------------------------------------------
 def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
-          ckpt=None, pitch=None, log=print, fiber=True, lean=0.0, tries=12):
+          ckpt=None, pitch=None, log=print, fiber=True, lean=0.0, tries=12,
+          rrt=0.0, rrt_nodes=600):
     """-> {arm: (N,6) array of (x, y, code, z_hover, park_clear, atlas_row)}.
 
     Chunks are STRIDED, not contiguous: an atlas row block is one band of y, and
@@ -355,7 +401,7 @@ def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
     ctx = mp.get_context("fork")
     with ctx.Pool(workers, initializer=_init,
                   initargs=(str(atlas_dir), h, redundant, pitch, fiber,
-                            lean, tries)) as pool:
+                            lean, tries, rrt, rrt_nodes)) as pool:
         for arm, out in pool.imap_unordered(_chunk, jobs, chunksize=1):
             res[arm].extend(out)
             done += 1
@@ -954,6 +1000,15 @@ def main():
                          "--atlas first (needed for any pitch but the shipped "
                          "one: the committed 0.65 atlas predates the mesh "
                          "audit and its model signature is refused)")
+    ap.add_argument("--rrt", type=float, default=0.0, metavar="SECONDS",
+                    help="per-plan budget for the C-space pen-up planner "
+                         "(aris_sixarm.transit), the tier below the shape "
+                         "ladder.  0 disables it, which reproduces a "
+                         "pre-2026-08-26 map exactly.  A cell refused under a "
+                         "budget is refused UNDER THAT BUDGET and the map says "
+                         "so.")
+    ap.add_argument("--rrt-nodes", type=int, default=600,
+                    help="nodes per tree for --rrt (default 600)")
     ap.add_argument("--from-raw", default=None, metavar="NPZ",
                     help="skip the sweep and rebuild the map, the numbers and "
                          "the figure from an existing _raw.npz (or a _ckpt.npz "
@@ -969,7 +1024,10 @@ def main():
           + ("  (SHIPPED: baked parks)" if abs(pitch - SHIPPED_PITCH) < 1e-9
              else "  (re-derived layout AND parks)"))
     print(f"STATIC_SAFE={paper.STATIC_SAFE} PAPER_SAFE={writing.PAPER_SAFE} "
-          f"FRAME_FLOOR={paper.FRAME_FLOOR}")
+          f"FRAME_FLOOR={paper.FRAME_FLOOR} SELF_SAFE={paper.SELF_SAFE}")
+    print(f"RRT tier: " + (f"ON, {a.rrt:.2f} s x 1 attempt, "
+                           f"{a.rrt_nodes} nodes/tree, park-probed"
+                           if a.rrt > 0 else "OFF"))
 
     if a.sweep_atlas:
         # ONE ATLAS PER COLLISION MODEL, and the model is this build's.
@@ -997,7 +1055,8 @@ def main():
         per_arm = sweep(arms, Path(a.atlas), h, a.workers, a.chunk, a.every,
                         not a.no_redundant_hover, ckpt=a.out + "_ckpt.npz",
                         pitch=pitch, fiber=not a.no_fiber_hover,
-                        lean=a.hover_lean_deg, tries=a.fiber_tries)
+                        lean=a.hover_lean_deg, tries=a.fiber_tries,
+                        rrt=a.rrt, rrt_nodes=a.rrt_nodes)
         print(f"sweep {time.time() - t0:.0f}s", flush=True)
         np.savez_compressed(a.out + "_raw.npz",
                             **{f"arm{k}": v for k, v in per_arm.items()})

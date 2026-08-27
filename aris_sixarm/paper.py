@@ -265,7 +265,20 @@ def _pose_bytes(q):
     return np.round(np.asarray(q, float), 9).tobytes()
 
 
-def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True):
+def _rrt_key(rrt=True):
+    """The RRT tier's contribution to a memo key. -> hashable.
+
+    `False` whenever the tier could not have been used, so that a run with
+    `--no-rrt` and a `fold_home` sub-route (which never offers the tier) share
+    the pre-planner memo instead of splitting it.
+    """
+    if not (RRT_SAFE and rrt):
+        return False
+    return (True, RRT_PROBE[2] if RRT_PROBE is not None else None)
+
+
+def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True,
+         rrt=True):
     # STATIC_SAFE is part of the question, so it is part of the key: the same
     # pair has a different answer with the steel gated in, and a memo that
     # forgot that would hand a run the other run's route.  So is the ACTIVE
@@ -279,10 +292,15 @@ def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True):
     # reads instead of trying the fold.  A bool is enough: `q_home` is always
     # the arm's own `q_seed` and `id(spec)` already says which arm that is.
     # ...AND SO IS THE SELF GATE, for the third time and the same argument.
+    # ...AND SO IS THE C-SPACE TIER, for the fourth time and the same argument.
+    # A pair the ladder cannot route has two answers now — `None` without the
+    # planner, a path with it — and a run that turned it off must not read the
+    # run that left it on.  The probe, when there is one, rides along: it is a
+    # fourth obstacle and a route certified without it is not the same route.
     return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
-            bool(STATIC_SAFE), bool(q_home), bool(SELF_SAFE))
+            bool(STATIC_SAFE), bool(q_home), bool(SELF_SAFE), _rrt_key(rrt))
 
 
 def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
@@ -303,7 +321,7 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
         # `spec.q_seed` — see `_key`, whose tuple this has to reproduce exactly.
         return base + (rb[a], cb[b], round(float(tip_floor), 9),
                        round(float(chain_floor), 9), bool(STATIC_SAFE), True,
-                       bool(SELF_SAFE))
+                       bool(SELF_SAFE), _rrt_key(True))
     return key
 
 
@@ -511,6 +529,53 @@ def leg_static_lb(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
 # planner that searches configuration space, which this package does not have
 # and which is a project rather than a flag.
 SELF_SAFE = True           # certify pen-up LEGS against the arm's own metal
+
+# ==========================================================================
+# ...AND THE PEN-UP PLANNER THAT PARAGRAPH ASKS FOR
+# ==========================================================================
+# "What buys those crossings back is a pen-up planner that searches
+# configuration space, which this package does not have and which is a project
+# rather than a flag."  It has one now: `aris_sixarm.transit`, a bidirectional
+# RRT-Connect in the seven-dimensional joint space whose every edge is
+# certified by the bounds this module already computes.
+#
+# IT IS THE LAST TIER AND IT HAS TO BE.  Measured on the CSAIL logo at the v8
+# placement the shape ladder settles 480 of 520 crossings, most of them on the
+# first or second rung, for a few milliseconds each; the planner costs
+# hundreds of milliseconds to seconds and it is worth every one of them only
+# on the crossings where the ladder is exhausted.  So it runs after
+# `fold_home`, on the way to returning `None`, and it turns some of those
+# `None`s into routes.
+#
+# THE CERTIFICATION IS NOT NEW AND THAT IS THE WHOLE DESIGN.  `transit` hands
+# back a polyline of configurations and `legs_ok` — the same function that
+# grades every shape on the ladder — certifies it, leg by leg, against the
+# same three obstacles at the same floors.  A path the planner finds and
+# `legs_ok` refuses is refused; nothing about this tier can put a motion into
+# a timeline that the ladder's own certifier would not have taken.  What is
+# new is only where the candidate shapes come from.
+#
+# `--no-rrt` reproduces a pre-2026-08-26 number exactly, which is why the flag
+# is part of `_key`: a run with the tier off must not be handed a route that a
+# run with it on paid for.
+RRT_SAFE = True            # offer the C-space planner when the ladder is out
+
+# THE FOURTH OBSTACLE, WHICH ONLY SOME CALLERS HAVE.  The ladder knows about
+# the paper, the neighbours' steel and the arm's own metal; it does not know
+# about the neighbours' PARKED CHAINS, because `allocate.ParkProbe` lives a
+# layer up and screens a route after the fact (`scripts/feasible_workspace.py`
+# is where the pipeline puts one).  A caller that has a probe may hand it to
+# the planner here, and then a route the probe would have refused three stages
+# later is a route the search never proposes.
+#
+#   RRT_PROBE = (fn(qs, sweep) -> clearance, margin, key)
+#
+# `key` is a hashable that goes into the memo, for the reason `q_home` is in
+# there: a memo that forgot which obstacles were in the room when it filed an
+# answer would hand the next caller the other caller's route.  The LADDER is
+# deliberately NOT probed — its answers are pinned numbers and this must not
+# move them; the probe only ever makes the new tier stricter.
+RRT_PROBE = None
 
 
 def self_floor(spec, q0, q1, pen_ext=PEN_EXT):
@@ -1060,7 +1125,7 @@ def _traverse(spec, q_from, xy0, xy1, z, pen_ext, h_inv, mm, step, lift,
 def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
           tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, heights=VIA_HEIGHTS,
           n=SAMPLES, margin_min=None, cache=True, q_home=None,
-          steps=TRAVERSE_STEPS):
+          steps=TRAVERSE_STEPS, rrt=True):
     """A pen-up route from q0 to q1 that clears the paper AND the metal.
     -> dict | None.
 
@@ -1152,7 +1217,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
                                            boxes=boxes)
                     if boxes and STATIC_SAFE else -np.inf)
     ck = _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor,
-              q_home is not None) if cache \
+              q_home is not None, rrt) if cache \
         else None
     if ck is not None and ck in _CACHE:
         return _CACHE[ck]
@@ -1350,7 +1415,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
             sub = dict(pen_ext=pen_ext, h_inv=h_inv, tip_floor=tip_floor,
                        chain_floor=chain_floor, heights=heights, n=n,
                        margin_min=margin_min, cache=cache, steps=steps,
-                       q_home=None)
+                       q_home=None, rrt=False)
             r0 = route(spec, q0, qh, **sub)
             r1 = route(spec, qh, q1, **sub)
             if r0 is not None and r1 is not None:
@@ -1359,6 +1424,46 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
                 ok, cz, tz = legs_ok(seq)
                 if ok:
                     return done(seq, "fold_home", cz, tz, tried)
+    # ==================================================================
+    # THE LADDER IS OUT.  SEARCH THE CONFIGURATION SPACE.
+    # ==================================================================
+    # Everything above walks a two-dimensional surface — a tip position on a
+    # hover plane, with the elbow following whatever the analytic solver hands
+    # back — and the crossings that survive it are the ones whose endpoints
+    # are in different components of THAT surface while being perfectly well
+    # connected in the seven-dimensional space the arm actually moves in.
+    # `transit.plan` searches the seven.
+    #
+    # It is offered the depot as an extra root for the same reason `fold_home`
+    # exists: the park pose is the one configuration on the far side of a
+    # branch change that is certified by construction, and a tree that already
+    # contains it starts halfway across the reconfiguration.  A root the gate
+    # refuses is simply dropped.
+    #
+    # And the result is certified by `legs_ok`, not by the planner.  The
+    # planner holds every edge to these floors plus `transit.PAD`; `legs_ok`
+    # then re-derives the same three bounds over the assembled polyline at
+    # `SAMPLES` per leg with refinement, exactly as it does for a skirt or a
+    # traverse.  The two cannot disagree in the dangerous direction, and if
+    # they disagree at all this refuses.
+    if rrt and RRT_SAFE:
+        from . import transit
+        probe = None if RRT_PROBE is None else RRT_PROBE[0]
+        pmargin = 0.0 if RRT_PROBE is None else float(RRT_PROBE[1])
+        seq = transit.plan(spec, q0, q1, pen_ext=pen_ext, h_inv=h_inv,
+                           boxes=boxes, chain_floor=chain_floor,
+                           tip_floor=tip_floor,
+                           static_floor=static_floor if boxes else -np.inf,
+                           self_floor=self_fl if SELF_SAFE else -np.inf,
+                           probe=probe, probe_margin=pmargin,
+                           extra_roots=() if q_home is None
+                           else (np.asarray(q_home, float).reshape(7),))
+        if seq:
+            tried += 1
+            ok, cz, tz = legs_ok(seq)
+            if ok:
+                return done(seq, f"rrt{len(seq)}", cz, tz, tried)
+            transit._STATS["recert_failed"] += 1
     if ck is not None:
         _CACHE[ck] = None
     return None

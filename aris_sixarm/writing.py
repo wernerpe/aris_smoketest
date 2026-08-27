@@ -1158,7 +1158,13 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            # the run's lean cone both change what comes back, so a run that
            # changes either may not read an answer computed under the other.
            int(HOVER_DEPOT_TRIES), float(HOVER_LEAN_MAX_DEG),
-           tuple(float(d) for d in HOVER_DEPOT_LEANS))
+           tuple(float(d) for d in HOVER_DEPOT_LEANS),
+           # ...and the C-space tier, for the same reason again.  The depot
+           # rescue below asks `hover_joins_depot`, which is three
+           # `paper.route` calls, and those have a different answer with the
+           # planner available.  A memo that did not say so would hand a
+           # `--no-rrt` run the answer the planner bought.
+           paper._rrt_key(True))
     hit = _HOVERS.get(key)
     if hit is not None:
         return hit
