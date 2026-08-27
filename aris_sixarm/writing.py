@@ -1340,7 +1340,8 @@ class PaperRefused(RuntimeError):
 def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
                 h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
                 pen_ext=PEN_EXT, q_start=None, park=PARK_FREEZE, retreat=None,
-                taxi_stretch=0.0, paper_safe=PAPER_SAFE, verbose=False):
+                taxi_stretch=0.0, paper_safe=PAPER_SAFE, verbose=False,
+                aside=None):
     """One arm's frozen nominal timeline from its allocated segments.
 
     `segs` are `allocate.allocate`'s programme entries, already in the order the
@@ -1412,13 +1413,55 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         U.append(float(u))
 
     if not segs:                                  # an arm that reaches nothing
+        # ...AND AN ARM THAT REACHES NOTHING IS STILL SOMEWHERE.  For the whole
+        # of a phase it does not draw in, this pose is what the conductor's
+        # collision images and `scene_check`'s playback contain — it is the
+        # only geometry a parked arm contributes, and until now it was always
+        # the one pose the arm happened to be standing in.
+        #
+        # `aside` is a park chosen for THIS phase (`layout.region_aware_parks`)
+        # because somebody has to draw where this arm is standing.  The arm
+        # does not TELEPORT there: the move is one certified `paper.route` at
+        # the flying floor, laid down as real waypoints on the real clock, so
+        # the conductor schedules it against everybody else and the independent
+        # checker sees the motion rather than a jump between two phases.  It is
+        # priced as `aside_s` and NOT as `transit_s`, for the reason `retreat_s`
+        # is: these are seconds the idle policy adds to a tour the sequencer
+        # priced, not a re-pricing of the tour (`csail_schedule.cross_check`
+        # holds `transit_s` to the sequencer's own number, to the float).
+        steps = None
+        if aside is not None:
+            q_as = np.asarray(aside, float).reshape(7)
+            if float(np.max(np.abs(q_as - q0))) > 1e-9:
+                r = _route(spec, q0, q_as, pen_ext, h_inv,
+                           paper.travel_floor(LIFT_Z, LIFT_Z), qd_frac,
+                           T_HOME_F, paper_safe)
+                if r is None:
+                    raise PaperRefused(
+                        f"arm {getattr(spec, 'arm_id', '?')}: the aside park "
+                        "offered for this phase cannot be flown to")
+                steps = r[0]
         add(0.0, q0)
-        add(1.0, q0)
-        return dict(t=np.array(T), q=np.array(Q), seg=np.array(S), u=np.array(U),
-                    phases=[], ink=[], duration=0.0, lifts=[], dense_tip_err=0.0,
+        aside_s = 0.0
+        if steps:
+            for dt_, q_ in steps:
+                t += dt_
+                add(t, q_)
+            aside_s = float(sum(s[0] for s in steps))
+        else:
+            add(1.0, q0)
+        T = np.maximum.accumulate(np.asarray(T, float)
+                                  + 1e-9 * np.arange(len(T)))
+        return dict(t=T, q=np.array(Q), seg=np.array(S), u=np.array(U),
+                    phases=([dict(kind="aside", seg=-1, t0=0.0, t1=float(T[-1]))]
+                            if steps else []),
+                    ink=[], duration=float(T[-1]) if steps else 0.0, lifts=[],
+                    dense_tip_err=0.0,
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
-                    taxi_s=0.0, retreat_s=0.0, q_end=q0, park=str(park),
-                    pen=float(pen_ext), paper_modes=[], paper_vias=0,
+                    taxi_s=0.0, retreat_s=0.0, aside_s=aside_s,
+                    q_end=np.array(Q[-1], float), park=str(park),
+                    pen=float(pen_ext), paper_modes=[r[1]] if steps else [],
+                    paper_vias=int(len(steps) - 1) if steps else 0,
                     fallbacks=0, n_home=0)
 
     dense = []
@@ -1559,7 +1602,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 ink=ink, duration=float(T[-1]), lifts=lifts, dense_tip_err=worst,
                 draw_len=draw_len, transit_len=transit_len,
                 transit_s=float(transit_s), taxi_s=float(taxi_s),
-                retreat_s=float(retreat_s), q_end=np.array(Q[-1], float),
+                retreat_s=float(retreat_s), aside_s=0.0,
+                q_end=np.array(Q[-1], float),
                 park=str(park), pen=float(pen_ext),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
                 paper_modes=[m for mm in modes for m in mm],

@@ -236,7 +236,7 @@ def plan_retreat(spec, q_frozen, arm, pen, paths, tails, margin,
 # ==========================================================================
 def _programs(specs, segs_by_arm, pens, q_start, parks, stretch, retreats,
               draw_speed, transit_speed, qd_frac, h_inv, only=None, prev=None,
-              verbose=False):
+              verbose=False, aside=None):
     """`writing.arm_program` for every arm, re-using `prev` where nothing moved.
 
     THE POLICY IS PER ARM, and that is not a detail.  One arm whose finishing
@@ -253,6 +253,7 @@ def _programs(specs, segs_by_arm, pens, q_start, parks, stretch, retreats,
             h_inv=h_inv, qd_frac=qd_frac, pen_ext=pens.get(a, PEN_EXT),
             q_start=(q_start or {}).get(a), park=parks[a],
             retreat=(retreats or {}).get(a),
+            aside=(aside or {}).get(a),
             taxi_stretch=float((stretch or {}).get(a, 0.0)), verbose=verbose)
     return out
 
@@ -487,7 +488,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
             h_inv=H_INV_DEFAULT, safety=coordination.SAFETY_M,
             calib=coordination.CALIB_M, sweep=coordination.SWEEP_K,
             search_max_n=coordination.PRIORITY_SEARCH_MAX,
-            on_programs=None, orders=None, verbose=True):
+            on_programs=None, orders=None, verbose=True, aside=None):
     """Freeze the timelines, conduct them, and spend the idle time better.
 
     -> dict(progs, samp, paths, sch, rest, retreats, taxi, passes, q_end, policy)
@@ -508,10 +509,20 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
     `passes` records every one of them — what it was worth and whether it was
     kept — because a policy that cannot be shown to have paid for itself is a
     policy nobody can take back out.
+
+    `aside` is `{arm: q}` of REGION-AWARE PARKS: where an arm that draws
+    nothing in this phase should stand, because somebody else has to draw where
+    it would otherwise have been (`layout.region_aware_parks`).  It reaches
+    `writing.arm_program`, which lays a certified routed move to it rather than
+    putting the arm there by assertion — so the move is conducted against the
+    rest of the fleet like any other, and everything downstream that reads
+    `qtraj` (the conductor's images, `scene_check`'s playback, the animation)
+    sees the pose the arm is ACTUALLY in.  An arm with segments ignores it: it
+    is not parked.
     """
     specs = FLEET if specs is None else specs
     prog_kw = dict(draw_speed=draw_speed, transit_speed=transit_speed,
-                   qd_frac=qd_frac, h_inv=h_inv)
+                   qd_frac=qd_frac, h_inv=h_inv, aside=aside)
     parks = {a: str(policy) for a in segs_by_arm}
     progs = _programs(specs, segs_by_arm, pens, q_start, parks, None, None,
                       only=None, **prog_kw)
@@ -692,6 +703,11 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
                 taxi={int(a): float(s) for a, s in taxi.items()},
                 passes=passes, policy=str(policy),
                 parks={int(a): v for a, v in parks.items()},
+                # WHAT WAS ACTUALLY FLOWN, not what was asked for: an aside
+                # park only counts once `arm_program` has laid a certified move
+                # to it, so this reads the programme rather than the request.
+                aside={int(a): float(p.get("aside_s", 0.0))
+                       for a, p in progs.items() if p.get("aside_s", 0.0) > 0.0},
                 sent_home=sorted(int(a) for a, v in parks.items()
                                  if v == POLICY_HOME and str(policy) != POLICY_HOME),
                 q_end={a: np.asarray(p["q_end"], float) if "q_end" in p
@@ -704,6 +720,8 @@ def report(res):
     out = [f"idle policy: {res['policy']}"
            + (f", {len(res['retreats'])} retreat(s)" if res["retreats"] else "")
            + (f", {len(res['taxi'])} arm(s) taxiing slowly" if res["taxi"] else "")
+           + (f", arm(s) {sorted(res['aside'])} parked ASIDE for this phase"
+              if res.get("aside") else "")
            + (f", arm(s) {res['sent_home']} sent home (nowhere clear to freeze)"
               if res.get("sent_home") else "")]
     for p in res["passes"]:

@@ -52,10 +52,12 @@ import numpy as np
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import (allocate, artwork, coordination, idle, paper,  # noqa: E402
-                         pwl, scene_check, sequence, trace, transit, writing)
+from aris_sixarm import (allocate, artwork, coordination, frames, idle,  # noqa: E402
+                         layout, paper, pwl, scene_check, sequence, trace,
+                         transit, writing)
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
+from aris_sixarm.frames import PEN_EXT                              # noqa: E402
 from aris_sixarm.stroke_api import truncate_polyline                # noqa: E402
 from csail_allocate import (add_args, run_allocation, final_png,    # noqa: E402
                             program_json, totals, _override,
@@ -94,11 +96,77 @@ def _balance_json(b):
                 for k, v in m.items()} for m in b["moves"]])
 
 
+def phase_ink(res):
+    """The canvas points this phase's DRAWING arms will ink. -> {arm: (N,2)}.
+
+    Read off the allocated programmes rather than the tour, because the tour is
+    an order and the ink is the geometry: a segment's certified `plan["pts"]`
+    is the curve the pen is going to be on.
+    """
+    out = {}
+    for aid, segs in (res.get("programs") or {}).items():
+        P = [np.asarray(s["plan"]["pts"], float).reshape(-1, 2)
+             for s in (segs or []) if s.get("plan") is not None]
+        if P:
+            out[int(aid)] = np.vstack(P)
+    return out
+
+
+def aside_parks(a, res, q_start, pens, verbose=True):
+    """Where the arms that draw nothing in this phase should wait.
+    -> ({arm: q} | None, info).
+
+    THE PARKS ARE GLOBAL AND THE WORK IS NOT.  `layout.Q_PARK_PROPOSED` is one
+    pose per arm for the whole run, chosen against every other arm's ink at
+    once; a phase in which somebody has to draw UNDER a parked boom wants that
+    particular arm somewhere else, and only for that phase.
+    `layout.phase_aside_parks` picks it and proves the pose and the fleet;
+    what is proved HERE is the fourth thing — that the arm can fly from where
+    it is standing NOW to where it is being asked to stand, which is a question
+    only the phase can ask because only the phase knows where "now" is.
+    """
+    if not getattr(a, "aside_parks", False):
+        return None, {}
+    ink = phase_ink(res)
+    if not ink:
+        return None, {}
+    parks = {x: np.asarray((q_start or {}).get(x, FLEET[x].q_seed), float)
+             for x in FLEET}
+    got, info = layout.phase_aside_parks(
+        FLEET, parks, ink, h_inv=H_INV_DEFAULT,
+        pen_lat=frames.PEN_LAT if frames.PEN_LAT else None)
+    moved = {x: q for x, q in got.items()
+             if info.get(x, {}).get("moved") and x in FLEET}
+    for x in sorted(moved):
+        r = layout.repark_route(FLEET[x], parks[x], moved[x],
+                                h_inv=H_INV_DEFAULT,
+                                pen_ext=pens.get(x, PEN_EXT))
+        if r is None:
+            info[x]["moved"] = False
+            info[x]["refused"] = "cannot fly from where it is standing"
+            moved.pop(x)
+    if verbose:
+        for x, v in sorted(info.items()):
+            if v["moved"]:
+                print(f"  arm {x} stands ASIDE for this phase: "
+                      f"(r, hover, bearing) = {v['recipe']}, "
+                      f"{1000 * v['base_clear']:.0f} -> {1000 * v['clear']:.0f} "
+                      f"mm off the column over the ink at "
+                      f"({v['ink_xy'][0]:.2f}, {v['ink_xy'][1]:.2f}), fleet "
+                      f"clears {1000 * v['fleet_clear']:.0f} mm")
+            else:
+                print(f"  arm {x} is over ink {1000 * v['ink_dist']:.0f} mm "
+                      f"from its base and keeps its park "
+                      f"({v.get('refused', 'nothing further out certifies')})")
+    return (moved or None), info
+
+
 def build_phase(a, res, dt, pens, q_start=None, policy=None):
     """One drawing phase: freeze, conduct under the idle policy, sign it off."""
     print(f"\nfreezing per-arm timelines for {res['name']} "
           f"(draw {a.draw_speed} m/s, transit {a.transit_speed} m/s, "
           f"clock {dt:.4f} s, idle policy {policy})...")
+    aside, aside_info = aside_parks(a, res, q_start, pens)
 
     def cross_check(progs):
         # THE SEQUENCER'S MODEL IS THE TIMELINE'S CLOCK, or it optimised a
@@ -133,7 +201,7 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
                 jit_frac=a.jit_frac, draw_speed=a.draw_speed,
                 transit_speed=a.transit_speed, qd_frac=a.qd_frac,
                 h_inv=H_INV_DEFAULT, safety=a.safety, calib=a.calib,
-                search_max_n=a.search_max_n,
+                search_max_n=a.search_max_n, aside=aside,
                 orders={x: res["sequence"][x]["order"] for x in res["arms"]},
                 on_programs=cross_check, verbose=True)
             break
@@ -248,7 +316,8 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
                                policy=idle.POLICY_HOME)
         raise SystemExit(f"scene_check REFUSED {res['name']}; nothing rendered")
     return dict(res=res, progs=progs, samp=samp, paths=paths, sch=sch,
-                qtraj=qtraj, rep=rep, M=M, worst_tip=worst_tip, idle=out)
+                qtraj=qtraj, rep=rep, M=M, worst_tip=worst_tip, idle=out,
+                aside=aside_info)
 
 
 def nominal_floor(a, res, pens, q_start=None, policy=idle.POLICY_FREEZE):
@@ -1777,6 +1846,19 @@ def schedule_args(ap):
                          "ink; the frozen pose still has to pass scene_check "
                          "and the inter-phase hold check, and the next pass "
                          "already starts from wherever this one stopped")
+    ap.add_argument("--aside-parks", action="store_true",
+                    help="REGION-AWARE PARKING.  An arm that draws nothing in "
+                         "a phase, and whose own boom has somebody else's ink "
+                         "under it, is re-parked for that phase only — swung "
+                         "along a bearing that clears the column over that ink "
+                         "(`layout.phase_aside_parks`).  The new pose is gated, "
+                         "the whole parked FLEET is re-proved at the "
+                         "conductor's own pair margin, and the arm FLIES there "
+                         "on a certified route that the conductor schedules "
+                         "and scene_check plays back — it is not put there by "
+                         "assertion.  Nothing fires unless an arm is standing "
+                         "over the work, and a phase where none is is "
+                         "bit-identical to one built without this")
     ap.add_argument("--no-verify", action="store_true",
                     help="ship the split allocation without conducting the "
                          "unsplit one as well.  The A/B is the only thing that "
@@ -2016,8 +2098,9 @@ def summary_json(a, phases, strokes, info, built, dt, pens, prof, nF, nInk,
         res, sch, rep, progs = B["res"], B["sch"], B["rep"], B["progs"]
         idl = B["idle"]
         summary["phases"].append(dict(
+            aside_parks=B.get("aside") or {},
             idle=dict(policy=idl["policy"], asked=a.idle_policy,
-                      passes=idl["passes"],
+                      passes=idl["passes"], aside=idl.get("aside", {}),
                       retreats=idl["retreats"], taxi=idl["taxi"],
                       rest_delay_s={str(k): float(v["delay_s"])
                                     for k, v in idl["rest"].items()},

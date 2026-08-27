@@ -520,3 +520,200 @@ def test_baked_park_poses_are_that_functions_own_output():
     assert sorted(two) == sorted(made)
     assert any(not np.allclose(two[a], made[a], atol=1e-6) for a in made), \
         "the bearing must actually be doing something"
+
+
+# ===========================================================================
+# REGION-AWARE PARKING
+# ===========================================================================
+def test_region_aware_parking_is_the_shipped_set_when_nothing_fires(lateral):
+    """A TARGET NOBODY IS STANDING OVER GETS THE BAKED LITERALS, unchanged.
+
+    The whole guarantee of this feature is that it is inert where it does not
+    apply: a map or a phase that never draws under anybody has to be
+    bit-identical to one built before it existed, and "bit-identical" means the
+    same numbers, not a re-derivation that agrees to five decimals.
+    """
+    fl = layout.FLEET_PROPOSED
+    base = layout.Q_PARK_PROPOSED
+    # a corner of the canvas, further than ASIDE_DISC_R from every base
+    far = (0.03, 1.80)
+    assert min(float(np.hypot(*(np.asarray(s.xy, float) - np.array(far))))
+               for s in fl.values()) > layout.ASIDE_DISC_R
+    parks, info = layout.region_aware_parks(fl, base, far, drawing=31)
+    assert info == {}
+    assert sorted(parks) == sorted(base)
+    for a in base:
+        assert parks[a] is base[a], f"arm {a} was re-derived, not reused"
+
+
+def test_region_aware_parking_moves_the_arm_that_is_stood_over(lateral):
+    """A cell under arm 71's boom, drawn by somebody else.
+
+    Arm 71's shipped park holds its pen 0.30 m out on a -60 degree bearing,
+    which puts its own chain 85 mm from the column over its own base — the
+    tightest in the fleet, and 5 mm inside what the conductor asks of a pair
+    that MOVES.  Swung aside it has to do better, and the set it lands in has
+    to survive the same fleet-pairwise proof the shipped literals did.
+    """
+    from aris_sixarm.coordination import SAFETY_M, CALIB_M
+    fl = layout.FLEET_PROPOSED
+    base = layout.Q_PARK_PROPOSED
+    target = tuple(float(v) for v in fl[71].xy)     # dead under arm 71
+    was = layout.corridor_clearance(base[71], fl[71], target)
+
+    parks, info = layout.region_aware_parks(fl, base, target, drawing=17)
+    assert 71 in info, "the arm being drawn under must be considered"
+    assert info[71]["moved"], info
+    assert info[71]["clear"] > was, "an aside park that is not further is not a move"
+    assert not np.allclose(parks[71], base[71], atol=1e-6)
+    # ...and every arm nobody is standing over keeps its literal, by identity
+    for a in base:
+        if a == 71:
+            continue
+        assert parks[a] is base[a], a
+    # the FLEET is proved, not the pose: the same check that made the literals
+    worst, _pair = layout.fleet_park_clearance(parks, fl)
+    assert worst >= SAFETY_M + CALIB_M
+    # and the pose itself is gated exactly as a shipped park is
+    rep = validate.check_pose(parks[71], fl[71], pen_lat=LAT)
+    assert rep["ok"], rep
+    assert rep["worst"]["tip_z"] > 0.0
+
+
+def test_the_drawing_arm_is_never_asked_to_move(lateral):
+    """`drawing` is not parked, so its own park is not a variable."""
+    fl = layout.FLEET_PROPOSED
+    base = layout.Q_PARK_PROPOSED
+    target = tuple(float(v) for v in fl[31].xy)
+    parks, info = layout.region_aware_parks(fl, base, target, drawing=31)
+    assert 31 not in info
+    assert parks[31] is base[31]
+
+
+def test_an_aside_park_is_one_the_arm_can_fly_to(lateral):
+    """A DEPOT AN ARM CANNOT FLY TO IS NOT A DEPOT — the lesson
+    `PARK_GRID_PROPOSED` already carries, applied to the pose that replaces
+    it.  One certified `paper.route` from the park it leaves to the one it
+    takes, at the flying floor."""
+    fl = layout.FLEET_PROPOSED
+    base = layout.Q_PARK_PROPOSED
+    target = tuple(float(v) for v in fl[71].xy)
+    parks, info = layout.region_aware_parks(fl, base, target, drawing=17)
+    assert info[71]["moved"]
+    r = layout.repark_route(fl[71], base[71], parks[71],
+                            h_inv=float(layout.LAYOUT_PROPOSED["h"]))
+    assert r is not None, "arm 71 cannot fly from its park to its aside park"
+
+
+def test_the_aside_ranking_is_a_total_order_and_replays(lateral):
+    """Two runs of the same question give the same poses in the same order.
+
+    The proxy ORDERS and the caller's real check DECIDES, so the order has to
+    be reproducible or the caller's answer is not.  Ties are broken by the
+    order the candidates were generated in, which is fixed by the three tuples.
+    """
+    fl = layout.FLEET_PROPOSED
+    cs = layout.aside_candidates(fl[2], pen_lat=LAT,
+                                 extra=(layout.PARK_GRID_PROPOSED[2],))
+    assert len(cs) > 10
+    assert tuple(cs[0][1]) == tuple(layout.PARK_GRID_PROPOSED[2]), \
+        "the incumbent is first in the candidate list"
+    t = (0.60, 3.00)
+    one = layout.aside_park_ranking(fl[2], t, cs)
+    two = layout.aside_park_ranking(fl[2], t, cs)
+    assert [r[1] for r in one] == [r[1] for r in two]
+    assert all(one[i][0] >= one[i + 1][0] - 1e-12 for i in range(len(one) - 1))
+    # rank walks that same list rather than re-scoring it
+    seen = set()
+    for k in (1, 2, 3):
+        p, i = layout.region_aware_parks(fl, layout.Q_PARK_PROPOSED, t,
+                                         drawing=13, rank=k)
+        if i and any(v["moved"] for v in i.values()):
+            key = tuple(np.round(p[a], 6).tobytes() for a in sorted(p))
+            assert key not in seen, f"rank {k} repeated an earlier set"
+            seen.add(key)
+
+
+def test_fleet_park_clearance_is_the_check_that_made_the_literals(lateral):
+    """One implementation, two callers: `certified_park_poses` and
+    `region_aware_parks` are held to the same number by the same function."""
+    from aris_sixarm.coordination import SAFETY_M, CALIB_M
+    fl = layout.FLEET_PROPOSED
+    worst, pair = layout.fleet_park_clearance(layout.Q_PARK_PROPOSED, fl)
+    assert worst >= SAFETY_M + CALIB_M
+    assert worst == pytest.approx(_park_clearance(layout.Q_PARK_PROPOSED, fl))
+    assert pair[0] in fl and pair[1] in fl and pair[0] != pair[1]
+
+
+def test_a_parked_arm_flies_to_its_aside_park_rather_than_appearing_there(lateral):
+    """THE MOVE IS THE POINT.  A per-phase park that the arm teleports into is
+    a pose nothing checked the way in to; `writing.arm_program` lays a
+    certified `paper.route` and the waypoints go on the timeline, so the
+    conductor schedules the motion and `scene_check` plays it back.
+
+    And it is priced where the idle policy's other additions are priced:
+    `transit_s` is the number `csail_schedule.cross_check` holds to the
+    sequencer's own, to the float, so the repark must not be in it.
+    """
+    from aris_sixarm import writing
+    fl = layout.FLEET_PROPOSED
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    spec, base = fl[71], np.asarray(layout.Q_PARK_PROPOSED[71], float)
+
+    still = writing.arm_program(spec, [], h_inv=h, pen_ext=spec.pen,
+                                q_start=base)
+    assert still["duration"] == 0.0 and still["aside_s"] == 0.0
+    assert np.array_equal(still["q_end"], base)
+
+    parks, info = layout.region_aware_parks(fl, layout.Q_PARK_PROPOSED,
+                                            tuple(fl[71].xy), drawing=17)
+    assert info[71]["moved"]
+    moved = writing.arm_program(spec, [], h_inv=h, pen_ext=spec.pen,
+                                q_start=base, aside=parks[71])
+    assert moved["aside_s"] > 0.0
+    assert moved["transit_s"] == 0.0, "a repark is not a re-pricing of the tour"
+    assert moved["draw_s"] == 0.0 and moved["draw_len"] == 0.0
+    assert np.allclose(moved["q_end"], parks[71])
+    assert len(moved["q"]) >= 2 and moved["duration"] == pytest.approx(
+        moved["t"][-1])
+    assert [p["kind"] for p in moved["phases"]] == ["aside"]
+    # every waypoint is a pose the arm may stand in, and the LAST one is where
+    # the phase's collision images will find it
+    for q in moved["q"]:
+        assert frames.joint_margin(q) >= 0.0
+    assert validate.check_pose(moved["q"][-1], spec, pen_lat=LAT)["ok"]
+
+    # an aside pose the arm cannot fly to is REFUSED, not flown
+    with pytest.raises(writing.PaperRefused):
+        writing.arm_program(spec, [], h_inv=h, pen_ext=spec.pen, q_start=base,
+                            aside=np.zeros(7))
+
+
+def test_conduct_reports_the_parks_it_actually_flew(lateral):
+    """`idle.conduct` is where a phase's geometry is decided, so the aside
+    parks have to reach it and come back out — a caller that asked for one and
+    got a frozen arm must be able to tell."""
+    from aris_sixarm import idle, writing
+    fl = layout.FLEET_PROPOSED
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    parks, info = layout.region_aware_parks(fl, layout.Q_PARK_PROPOSED,
+                                            tuple(fl[71].xy), drawing=17)
+    assert info[71]["moved"]
+    pens = {a: fl[a].pen for a in fl}
+    segs = {a: [] for a in fl}
+    q0 = {a: np.asarray(layout.Q_PARK_PROPOSED[a], float) for a in fl}
+
+    off = idle.conduct(segs, pens, 0.05, q_start=q0, specs=fl, h_inv=h,
+                       jit=False, retreat=False, verbose=False)
+    assert off["aside"] == {}
+    assert all(np.allclose(off["q_end"][a], q0[a]) for a in fl)
+
+    on = idle.conduct(segs, pens, 0.05, q_start=q0, specs=fl, h_inv=h,
+                      jit=False, retreat=False, verbose=False,
+                      aside={71: parks[71]})
+    assert sorted(on["aside"]) == [71] and on["aside"][71] > 0.0
+    assert np.allclose(on["q_end"][71], parks[71])
+    for a in fl:
+        if a != 71:
+            assert np.allclose(on["q_end"][a], q0[a])
+    assert "ASIDE" in "\n".join(idle.report(on))

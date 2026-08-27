@@ -495,7 +495,7 @@ def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
     (default `coordination.SAFETY_M + CALIB_M`, the margin the conductor holds
     every pair to); a fleet under it RAISES rather than being handed back.
     """
-    from .coordination import ArmPath, clearance_matrix, SAFETY_M, CALIB_M
+    from .coordination import SAFETY_M, CALIB_M
     clear = SAFETY_M + CALIB_M if clear is None else float(clear)
     grid = {} if grid is None else dict(grid)
     cent = np.mean([np.asarray(s.xy, float) for s in fleet.values()], axis=0)
@@ -509,19 +509,372 @@ def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
         out[aid] = certified_ready_pose(
             spec, hover=hv, sheet=sheet, pen_lat=pen_lat,
             radii=None if r is None else (float(r),), bearing=bear)[0]
-    paths = {aid: ArmPath(aid, q[None, :], 0.05, spec=fleet[aid])
-             for aid, q in out.items()}
-    ids = sorted(out)
+    worst, pair = fleet_park_clearance(out, fleet)
+    if worst < clear:
+        i, j = pair
+        raise RuntimeError(
+            f"arms {i} and {j} park {1000 * worst:.1f} mm apart, under the "
+            f"{1000 * clear:.0f} mm the conductor holds every pair to: "
+            f"the six poses are individually certified and the FLEET "
+            f"is not (hover {hover})")
+    return out
+
+
+def fleet_park_clearance(parks, fleet):
+    """The worst pair clearance of a parked set. -> (metres, (i, j)).
+
+    Six individually certified poses are not a certified fleet, and the proof
+    is one clearance matrix per pair.  Factored out of `certified_park_poses`
+    because `region_aware_parks` has to run the SAME proof over a set it built
+    a different way — one implementation, two callers, so a park set can never
+    be certified by a weaker check than the one that made the shipped literals.
+    """
+    from .coordination import ArmPath, clearance_matrix
+    paths = {aid: ArmPath(aid, np.asarray(q, float).reshape(1, 7), 0.05,
+                          spec=fleet[aid])
+             for aid, q in parks.items() if aid in fleet}
+    ids = sorted(paths)
+    worst, pair = float("inf"), (None, None)
     for x, i in enumerate(ids):
         for j in ids[x + 1:]:
             d = float(np.min(clearance_matrix(paths[i], paths[j])))
-            if d < clear:
-                raise RuntimeError(
-                    f"arms {i} and {j} park {1000 * d:.1f} mm apart, under the "
-                    f"{1000 * clear:.0f} mm the conductor holds every pair to: "
-                    f"the six poses are individually certified and the FLEET "
-                    f"is not (hover {hover})")
+            if d < worst:
+                worst, pair = d, (i, j)
+    return worst, pair
+
+
+# ===========================================================================
+# REGION-AWARE PARKING: a depot is in the way of whoever draws under it
+# ===========================================================================
+# THE PARKS ABOVE ARE GLOBAL AND THE PROBLEM IS NOT.  `PARK_GRID_PROPOSED` is
+# one pose per arm for the whole run, chosen against every OTHER arm's ink at
+# once — so it is the best COMPROMISE, and a compromise is exactly the wrong
+# thing when one specific cell is being drawn.  Measured on the v11 map: of the
+# 606 canvas cells that had a certified draw pose and a certified hover and
+# still could not be flown to, 60 had a geometric route that the parked fleet
+# then vetoed, and the best of them stood 79.8 mm from a parked chain against
+# the 80.0 mm the conductor asks.  Two tenths of a millimetre of somebody
+# else's elbow.
+#
+# So the depot becomes a function of the work.  When the target cell lies
+# inside arm B's own disc — B is the arm being DRAWN UNDER, and its chain hangs
+# over the very column the drawing arm must descend — B's park is re-chosen for
+# that phase to stand as far as it can from that column, and re-certified
+# through the whole of the machinery above: the per-pose gate
+# (`certified_ready_pose`, which is `validate.check_pose` plus the neighbours'
+# steel plus the self-collision model), the FLEET-pairwise proof
+# (`fleet_park_clearance`), and a certified transit from the park it is leaving
+# to the one it is taking (`paper.route`) — because a depot an arm cannot fly
+# to is not a depot, which is the lesson `PARK_GRID_PROPOSED`'s own note
+# already carries.
+#
+# NOTHING FIRES UNLESS THE REGION FIRES.  A target outside every arm's disc
+# gets `dict(base_parks)` — the baked literals, unchanged, not a re-derivation
+# of them — so a map or a phase that never draws under anybody is bit-identical
+# to one built before this existed.  And a re-chosen park is only ever ACCEPTED
+# when it stands further from the column than the one it replaces, so the
+# region logic cannot make a cell worse than the global set made it.
+ASIDE_DISC_R = 0.30
+#   m from an arm's base within which a target cell counts as UNDER it.  The
+#   dead-set audit's own disc: 559 of the 772 v11 dead cells are inside one.
+
+ASIDE_BEARINGS = tuple(float(d) for d in range(-180, 180, 30))
+#   deg, ABSOLUTE in the canvas frame, the same convention `PARK_GRID_PROPOSED`
+#   uses.  30 degrees is half the angular width of an arm's own parked chain
+#   seen from its base at these radii, so the grid cannot step over a corridor.
+
+ASIDE_RADII = (0.62, 0.55, 0.70)
+ASIDE_HOVERS = (0.20, 0.35)
+#   The bands `PARK_GRID_PROPOSED`'s own search settled in (0.55-0.62 m,
+#   0.20-0.35 m), plus one rung further out.  A park is not re-optimised here —
+#   the shipped recipe stays the default and this is the set it may swing to.
+
+ASIDE_COLUMN = (0.0, 0.25)
+#   m above the paper: the slab of air over the target cell that the drawing
+#   arm's pen, hand and wrist have to occupy to ink it (the lateral holder puts
+#   the TCP 0.11 m up and 0.11 m across from the tip, so the hand is the top of
+#   it).  A PROXY and labelled as one — it ORDERS candidates and the thing that
+#   DECIDES is the real `allocate.ParkProbe` verdict on the real route.
+#
+#   0.25 AND NOT 0.40, and the reason is a fixed point.  An inverted arm's
+#   shoulder sits d1 = 0.333 m below its base plate — 0.607 m over the paper at
+#   h = 0.940 — directly above its own base, and it does not move when the arm
+#   does.  A column tall enough to reach up towards it is scored by the metal
+#   nearest that fixed point for EVERY candidate, and the ranking flattens to a
+#   50-70 mm band that says nothing.  Cut to the slab the tool actually needs,
+#   the same candidates spread over 85-215 mm.  The ORDER is the same either
+#   way (measured, all six arms), which is the property a proxy has to have.
+
+_ASIDE_CANDS = {}
+
+
+def corridor_clearance(q, spec, target_xy, h_inv=None, pen_ext=None,
+                       column=ASIDE_COLUMN, moving_only=True):
+    """How far a parked chain stands off the column over a cell. -> metres.
+
+    The column is the vertical segment over `target_xy` between the two heights
+    of `column`; the chain is the conductor's own capsules.  `moving_only`
+    drops the four BASE-COLUMN bands, which are pose-invariant — they are the
+    same distance from that column at every candidate pose, so including them
+    would flatten the ranking to a constant the moment a target sits under a
+    base, which is the only case this function is ever asked about.
+    """
+    from .coordination import (chain_world, cap_endpoints, seg_seg_dist,
+                               CAPSULES, CAPSULES_LAT, N_BASE)
+    q = np.asarray(q, float).reshape(1, 7)
+    h_inv = float(spec.z) if h_inv is None else float(h_inv)
+    pen_ext = float(getattr(spec, "pen", 0.110)) if pen_ext is None \
+        else float(pen_ext)
+    P = chain_world(q, spec, h_inv, pen_ext)
+    tab = CAPSULES_LAT if P.shape[1] >= 11 else CAPSULES
+    A, B = cap_endpoints(P, tab)
+    rr = np.array([c[2] for c in tab], float)
+    if moving_only:
+        A, B, rr = A[:, N_BASE:], B[:, N_BASE:], rr[N_BASE:]
+    x, y = float(target_xy[0]), float(target_xy[1])
+    c0 = np.array([x, y, float(min(column))])
+    c1 = np.array([x, y, float(max(column))])
+    d = seg_seg_dist(A[0], B[0], c0[None, :], c1[None, :]) - rr
+    return float(np.min(d))
+
+
+def aside_candidates(spec, sheet=SHEET_FINAL6, pen_lat=None,
+                     bearings=ASIDE_BEARINGS, radii=ASIDE_RADII,
+                     hovers=ASIDE_HOVERS, extra=()):
+    """Every certified park pose one arm could swing to. -> [(q, recipe)].
+
+    Built ONCE per arm and cached, because the search inside
+    `certified_ready_pose` is 0.14 s and a map asks this question for tens of
+    thousands of cells.  The recipe `(radius, hover, bearing_deg)` is the same
+    triple `PARK_GRID_PROPOSED` speaks, so an aside park can be written down
+    and re-derived exactly like a shipped one.
+
+    `extra` prepends recipes (the arm's own shipped park, in practice) so the
+    incumbent is always in the running and always first on a tie.
+
+    Deterministic: candidates are enumerated in the fixed order of the three
+    tuples and a pose that does not certify is simply absent.
+    """
+    # RESOLVED BEFORE IT IS KEYED.  `certified_ready_pose` turns `None` into
+    # the lateral holder itself, so `None` and `PEN_LAT_HOLDER` are the same
+    # question — and a cache that keyed them apart would make one caller pay
+    # nine seconds of IK for an answer another caller already had.
+    from .frames import PEN_LAT_HOLDER
+    pen_lat = PEN_LAT_HOLDER if pen_lat is None else float(pen_lat)
+    key = (int(spec.arm_id), round(float(spec.z), 9), tuple(spec.xy),
+           tuple(sheet), round(float(pen_lat), 9),
+           tuple(bearings), tuple(radii), tuple(hovers), tuple(map(tuple, extra)))
+    if key in _ASIDE_CANDS:
+        return _ASIDE_CANDS[key]
+    out, seen = [], set()
+    recipes = [tuple(float(v) for v in e) for e in extra]
+    recipes += [(float(r), float(hv), float(bd))
+                for bd in bearings for r in radii for hv in hovers]
+    for rec in recipes:
+        if rec in seen:
+            continue
+        seen.add(rec)
+        r, hv, bd = rec
+        bear = np.array([np.cos(np.deg2rad(bd)), np.sin(np.deg2rad(bd))])
+        try:
+            q = certified_ready_pose(spec, hover=hv, sheet=sheet,
+                                     pen_lat=pen_lat, radii=(r,),
+                                     bearing=bear)[0]
+        except RuntimeError:
+            continue
+        out.append((np.asarray(q, float), rec))
+    _ASIDE_CANDS[key] = out
     return out
+
+
+def aside_park_ranking(spec, target_xy, cands, h_inv=None, pen_ext=None,
+                       column=ASIDE_COLUMN):
+    """`cands` ordered by how far each stands off the target's column.
+
+    -> [(clearance_m, index, q, recipe)], best first.  The index is the
+    candidate's position in `cands`, and it is the tie-break: two poses that
+    clear the column identically are separated by the order they were
+    generated in, so the ranking is a total order and a rerun reproduces it.
+    """
+    rows = [(corridor_clearance(q, spec, target_xy, h_inv, pen_ext, column),
+             i, q, rec) for i, (q, rec) in enumerate(cands)]
+    rows.sort(key=lambda t: (-t[0], t[1]))
+    return rows
+
+
+def region_aware_parks(fleet, base_parks, target_xy, drawing=None,
+                       disc=ASIDE_DISC_R, sheet=SHEET_FINAL6, pen_lat=None,
+                       clear=None, h_inv=None, column=ASIDE_COLUMN,
+                       bearings=ASIDE_BEARINGS, radii=ASIDE_RADII,
+                       hovers=ASIDE_HOVERS, grid=None, gain=0.0,
+                       max_moved=2, cands=None, rank=1):
+    """The parked fleet, with whoever is standing over `target_xy` swung aside.
+
+    -> ({arm: q}, info).  `info` is `{}` when nothing fired and the returned
+    dict is `dict(base_parks)` — the same poses, not a re-derivation — so a
+    caller that never draws under anybody gets the shipped set exactly.
+
+    Fires for every arm (other than `drawing`) whose base is within `disc` of
+    the target.  At most `max_moved` of them move, worst-standing first: a
+    park set is proved as a SET, and moving two arms is already a 15-pair
+    proof over poses no shipped literal covers.
+
+    A move is only taken when it buys more than `gain` metres of column
+    clearance over the incumbent, and the whole set is then put through
+    `fleet_park_clearance` at the conductor's own floor.  If the set does not
+    certify, the ranking is walked down; if nothing certifies, the arm keeps
+    its shipped park and `info` says so.
+    """
+    from .coordination import SAFETY_M, CALIB_M
+    clear = SAFETY_M + CALIB_M if clear is None else float(clear)
+    grid = PARK_GRID_PROPOSED if grid is None else dict(grid)
+    tx = np.asarray(target_xy, float).reshape(2)
+    fired = [a for a, s in sorted(fleet.items())
+             if a != drawing and a in base_parks
+             and float(np.linalg.norm(np.asarray(s.xy, float) - tx)) <= disc]
+    if not fired:
+        return dict(base_parks), {}
+
+    parks = dict(base_parks)
+    info = {}
+    # WORST FIRST.  The arm whose chain is nearest the column is the one whose
+    # move can buy the most, and `max_moved` is spent on it before anyone else.
+    base_clear = {a: corridor_clearance(parks[a], fleet[a], tx, h_inv,
+                                        column=column) for a in fired}
+    for a in sorted(fired, key=lambda k: (base_clear[k], k))[:int(max_moved)]:
+        spec = fleet[a]
+        cs = (cands or {}).get(a)
+        if cs is None:
+            cs = aside_candidates(spec, sheet=sheet, pen_lat=pen_lat,
+                                  bearings=bearings, radii=radii,
+                                  hovers=hovers,
+                                  extra=(grid[a],) if a in grid else ())
+        took, hit = None, 0
+        for score, _i, q, rec in aside_park_ranking(spec, tx, cs, h_inv,
+                                                    column=column):
+            if score <= base_clear[a] + float(gain):
+                break            # the ranking is descending: nothing below helps
+            trial = dict(parks)
+            trial[a] = q
+            worst, pair = fleet_park_clearance(trial, fleet)
+            if worst < clear:
+                continue
+            # `rank` WALKS THE RANKING RATHER THAN RE-RANKING IT.  The proxy
+            # orders candidates and the caller's real check decides, so a
+            # caller that wants a second opinion asks for the second-best pose
+            # — not for a different score.  Same list, same order, one step
+            # down: the ladder in `scripts/feasible_workspace.py` offers rungs
+            # 1..K to the real `ParkProbe` and takes the first that flies.
+            hit += 1
+            if hit < int(rank):
+                continue
+            parks, took = trial, (rec, float(score), float(worst), pair)
+            break
+        info[a] = dict(base_clear=float(base_clear[a]),
+                       moved=took is not None,
+                       recipe=None if took is None else took[0],
+                       clear=None if took is None else took[1],
+                       fleet_clear=None if took is None else took[2])
+    if not any(v["moved"] for v in info.values()):
+        return dict(base_parks), info
+    return parks, info
+
+
+def phase_aside_parks(fleet, base_parks, ink_by_arm, disc=ASIDE_DISC_R,
+                      sheet=SHEET_FINAL6, pen_lat=None, clear=None, h_inv=None,
+                      column=ASIDE_COLUMN, grid=None, gain=0.0, rank=1):
+    """Where each arm should wait for ONE PHASE. -> ({arm: q}, info).
+
+    `ink_by_arm` is `{arm: (N, 2)}` — the canvas points the arms that DRAW in
+    this phase are going to ink.  Every arm not in it is parked, and a parked
+    arm whose own base has somebody's ink within `disc` of it is standing over
+    the work: it is swung aside from the ink point NEAREST its base, which is
+    the deepest any of them reaches under that boom and therefore the one the
+    corridor is tightest for.
+
+    Same three proofs as `region_aware_parks` — the per-pose gate, the
+    fleet-pairwise clearance over the whole resulting set, and a candidate that
+    must beat the incumbent — and `{}` for `info` (with the base poses returned
+    by identity) when no arm is standing over anything.  `repark_route` is the
+    fourth and is the caller's: a phase has to fly the arm there, and only the
+    phase knows what else is moving while it does.
+    """
+    from .coordination import SAFETY_M, CALIB_M
+    clear = SAFETY_M + CALIB_M if clear is None else float(clear)
+    grid = PARK_GRID_PROPOSED if grid is None else dict(grid)
+    drawing = {int(a) for a, P in (ink_by_arm or {}).items()
+               if P is not None and len(P)}
+    pts = [np.asarray(P, float).reshape(-1, 2)
+           for a, P in (ink_by_arm or {}).items() if int(a) in drawing]
+    if not pts:
+        return dict(base_parks), {}
+    P = np.vstack(pts)
+
+    targets = {}
+    for a, spec in sorted(fleet.items()):
+        if a in drawing or a not in base_parks:
+            continue
+        b = np.asarray(spec.xy, float).reshape(2)
+        d = np.linalg.norm(P - b[None, :], axis=1)
+        i = int(np.argmin(d))
+        if float(d[i]) <= disc:
+            targets[int(a)] = (P[i], float(d[i]))
+    if not targets:
+        return dict(base_parks), {}
+
+    parks, info = dict(base_parks), {}
+    # DEEPEST UNDER THE BOOM FIRST, for the same reason `region_aware_parks`
+    # takes the worst-standing arm first: that arm's move is the one that can
+    # buy the most, and every move after it is proved against a set it changed.
+    for a in sorted(targets, key=lambda k: (targets[k][1], k)):
+        tx, dist = targets[a]
+        spec = fleet[a]
+        was = corridor_clearance(parks[a], spec, tx, h_inv, column=column)
+        cs = aside_candidates(spec, sheet=sheet, pen_lat=pen_lat,
+                              extra=(grid[a],) if a in grid else ())
+        took, hit = None, 0
+        for score, _i, q, rec in aside_park_ranking(spec, tx, cs, h_inv,
+                                                    column=column):
+            if score <= was + float(gain):
+                break
+            trial = dict(parks)
+            trial[a] = q
+            worst, _pair = fleet_park_clearance(trial, fleet)
+            if worst < clear:
+                continue
+            hit += 1
+            if hit < int(rank):
+                continue
+            parks, took = trial, (rec, float(score), float(worst))
+            break
+        info[int(a)] = dict(ink_xy=[float(tx[0]), float(tx[1])],
+                            ink_dist=float(dist), base_clear=float(was),
+                            moved=took is not None,
+                            recipe=None if took is None else took[0],
+                            clear=None if took is None else took[1],
+                            fleet_clear=None if took is None else took[2])
+    if not any(v["moved"] for v in info.values()):
+        return dict(base_parks), info
+    return parks, info
+
+
+def repark_route(spec, q_from, q_to, h_inv=None, pen_ext=None, q_home=None):
+    """A certified pen-up move from one park to another. -> dict | None.
+
+    A DEPOT AN ARM CANNOT FLY TO IS NOT A DEPOT.  `region_aware_parks` gates
+    the pose and the fleet; this is the third thing a park has to be, and it is
+    separate because it is the expensive one and not every caller needs it (a
+    map's solo scene asks whether the DRAWING arm can reach the cell, and the
+    aside arm's own trip is a question for the phase that flies it).
+    """
+    from . import paper
+    h_inv = float(spec.z) if h_inv is None else float(h_inv)
+    pen_ext = float(getattr(spec, "pen", 0.110)) if pen_ext is None \
+        else float(pen_ext)
+    return paper.route(spec, np.asarray(q_from, float).reshape(7),
+                       np.asarray(q_to, float).reshape(7),
+                       pen_ext=pen_ext, h_inv=h_inv,
+                       tip_floor=paper.TIP_CLEAR, q_home=q_home)
 
 
 # ===========================================================================
