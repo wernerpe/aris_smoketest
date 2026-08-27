@@ -954,3 +954,84 @@ def test_the_self_gate_refuses_something_real(lateral, self_gate):
                  "refused by the self gate — it is doing nothing")
     assert worst < 0.0, (f"the worst line only reaches {1000 * worst:.1f} mm; "
                          "the gate refuses margin, not metal")
+
+
+def test_the_atlas_gate_is_a_parameter_and_a_stricter_one_is_reachable(lateral):
+    """WHAT THE 13 mm BETWEEN THE TWO STATIC FLOORS ACTUALLY COSTS.
+
+    `atlas.solve_cell` gates a drawing pose at `rig_final.STATIC_MARGIN` (the
+    CHECKER's number, exact) and `paper.route` holds a leg to
+    `paper.FRAME_FLOOR` = that plus `STATIC_SWEEP_PAD` (the PRODUCER's).
+    `effective_static_floor` clamps the difference away so the two are never in
+    contradiction — the test above pins that — but a pose sitting ON the atlas
+    gate has nothing left over: clamped, the descent out of it must hold the
+    pose's OWN clearance along its whole swing, and a swing dips.
+
+    So the floor is a parameter now, and this pins the two things that makes
+    true.  A pose found at the stricter floor really does clear it (so a
+    re-gated atlas means what it says), and it is still a pose the LOOSER gate
+    would have accepted — the search is a restriction, never a different
+    search.
+    """
+    from aris_sixarm import atlas, frames, layout, rig_final
+    spec, rows, Q, h = _proposed_cells(31, 60)
+    boxes = spec.static_obstacles()
+    Twb = spec.T_world_base(h)
+    Twb_inv = np.linalg.inv(Twb)
+    groups = atlas._gated_groups(15.0)
+    cands = atlas._candidates(15.0)
+    tight = harder = 0
+    ink = paper.chain_static(Q, spec, 0.110, h)
+    for row, ci in zip(rows, ink):
+        assert ci >= rig_final.STATIC_MARGIN - 1e-9
+        if ci >= paper.FRAME_FLOOR:
+            continue
+        tight += 1
+        r = atlas.solve_cell(float(row[0]), float(row[1]), Twb, Twb_inv, spec,
+                             cands, 0.110, boxes,
+                             pen_lat=frames.PEN_LAT_HOLDER,
+                             gate_groups=groups,
+                             static_margin=paper.FRAME_FLOOR)
+        if r is None:
+            continue          # a legitimate answer: this cell has no such pose
+        q = np.asarray(r[7], float)
+        got = float(paper.chain_static(q[None, :], spec, 0.110, h)[0])
+        assert got >= paper.FRAME_FLOOR - 1e-9, (
+            f"a pose found at the stricter floor does not clear it: "
+            f"{1000 * got:.2f} mm")
+        # ...and it would have passed the looser gate too, by construction
+        assert got >= rig_final.STATIC_MARGIN - 1e-9
+        harder += 1
+    assert tight, ("no cell in this sample sits between STATIC_MARGIN and "
+                   "FRAME_FLOOR, so the stricter gate was never exercised")
+    assert harder, ("not one banded cell had a pose at the producer's floor; "
+                    "measured over all 772 of them, 96.6 % do")
+
+
+def test_the_default_atlas_gate_is_bit_identical(lateral):
+    """`static_margin=None` is the gate every shipped atlas was swept at, and
+    a parameter that changed the default would silently re-certify a corpus."""
+    from aris_sixarm import atlas, frames, layout, rig_final
+    spec, rows, Q, h = _proposed_cells(31, 24)
+    boxes = spec.static_obstacles()
+    Twb = spec.T_world_base(h)
+    Twb_inv = np.linalg.inv(Twb)
+    groups = atlas._gated_groups(15.0)
+    cands = atlas._candidates(15.0)
+    for row in rows:
+        a = atlas.solve_cell(float(row[0]), float(row[1]), Twb, Twb_inv, spec,
+                             cands, 0.110, boxes,
+                             pen_lat=frames.PEN_LAT_HOLDER, gate_groups=groups)
+        b = atlas.solve_cell(float(row[0]), float(row[1]), Twb, Twb_inv, spec,
+                             cands, 0.110, boxes,
+                             pen_lat=frames.PEN_LAT_HOLDER, gate_groups=groups,
+                             static_margin=rig_final.STATIC_MARGIN)
+        assert (a is None) == (b is None)
+        if a is None:
+            continue
+        assert np.array_equal(np.asarray(a[7], float),
+                              np.asarray(b[7], float))
+        # ...and it is the pose the shipped atlas actually carries
+        assert np.allclose(np.asarray(a[7], float),
+                           np.asarray(row[atlas.QCOL:atlas.QCOL + 7], float),
+                           atol=1e-9)

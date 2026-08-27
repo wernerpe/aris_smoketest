@@ -195,8 +195,38 @@ def _q7_window(valid_row):
     return best * _DQ7
 
 
-def _clears(q, Twb, legacy_inv, boxes, off, lat):
+def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
     """The per-pose geometric gates: paper, the legacy boom, the frame steel.
+
+    `static` is the floor the pose must keep to the neighbours' boxes;
+    `None` is `rig_final.STATIC_MARGIN`, the gate every shipped atlas was swept
+    at.  IT IS A PARAMETER BECAUSE THE ATLAS AND THE ROUTER DO NOT AGREE ABOUT
+    IT AND THE DISAGREEMENT IS LOAD-BEARING.  `rig_final` says so itself: the
+    checker keeps `STATIC_MARGIN` = 50 mm, the PRODUCER must keep
+    `STATIC_PLAN_MARGIN` = 63 mm (50 + the 13 mm of slack `scene_check`'s own
+    independent lower bound carries), and "an atlas is now an OPTIMISTIC
+    prefilter by up to 13 mm".
+
+    A POSE IN THAT BAND IS NOT REFUSED — `paper.effective_static_floor` clamps
+    a leg's floor down to what its own ENDPOINTS hold, and exists to stop
+    exactly that contradiction.  What it is, is a pose with NOTHING LEFT OVER.
+    Clamped, the leg out of it must hold the pose's own clearance along its
+    whole swing, and a swing dips.  Measured on 36 route-dead cells of the v11
+    map, over all 48 hovers on each one's fiber: 27 are walled at that clamped
+    static floor and nothing else binds on any of them — not the paper, not the
+    tip, not the arm against itself — and the best hover misses by a MEDIAN OF
+    1.4 mm.  Their drawing poses sit at a median 58.5 mm, on the gate.
+
+    AND THE POSE IS NOT THE CELL.  This function returns the FIRST gated pose
+    that clears, in descending joint-margin order, and never asks whether
+    another clears more.  Probed on all 772 banded arm-cells of the v11 dead
+    set, 746 (96.6 %) have a different pose at the same cell — another tool
+    yaw, another q7, another IK branch, or a lean inside the same 15-degree
+    cone — that clears 63 mm, at a median of 120 mm, and 446 of them need no
+    lean at all.  A sweep whose cells are meant to be FLOWN to should be given
+    the producer's floor, and then the descent is not threading a gap.
+
+    THE ARM AGAINST ITSELF IS NOT HERE, and deliberately.  It is the one gate
 
     THE ARM AGAINST ITSELF IS NOT HERE, and deliberately.  It is the one gate
     whose cost is dominated by numpy overhead rather than by the pose (233
@@ -222,8 +252,8 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat):
             tool_pts.append(T[:3, 3] + T[:3, :3] @ np.array([lat, 0.0, 0.0]))
         tool_w = [Twb[:3, :3] @ t + Twb[:3, 3] for t in tool_pts]
         P10 = np.vstack([pts_w] + [t[None] for t in tool_w])
-        if (rig_final.chain_static_clearance(P10, boxes)[0]
-                < rig_final.STATIC_MARGIN):
+        floor = rig_final.STATIC_MARGIN if static is None else float(static)
+        if rig_final.chain_static_clearance(P10, boxes)[0] < floor:
             return None
     return T
 
@@ -239,7 +269,8 @@ def _self_mask(Q, pen_ext, lat):
 
 def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
                boxes=(), pen_lat=None, gate_groups=None,
-               gate_margin=GATE_MARGIN, gate_sigma=GATE_SIGMA):
+               gate_margin=GATE_MARGIN, gate_sigma=GATE_SIGMA,
+               static_margin=None):
     """-> (margin, sigma_min, f_max, n_sol, valid_frac, q7_window, tilt_deg,
     q, min_lean_deg) or None.  `boxes`: the arm's static frame obstacles.
 
@@ -345,7 +376,7 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
         top = sorted(sols, key=lambda t: -t[0])[:6]
         ok = _self_mask(np.array([t[2] for t in top]), pen_ext, lat)
         for n, (m, _, q) in enumerate(top):
-            if ok[n] and _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
+            if ok[n] and _clears(q, Twb, legacy_inv, boxes, off, lat, static_margin) is not None:
                 return float(m)
         return -1.0
 
@@ -381,7 +412,7 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
         idx = idx[_self_mask(Q[idx], pen_ext, lat)]
         for k in idx:
             m, tilt_deg, q = keep[k]
-            if _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
+            if _clears(q, Twb, legacy_inv, boxes, off, lat, static_margin) is not None:
                 out = _pack(m, q, tilt_deg, n_sol, valid, lean)
                 if out is not None:
                     # a cell certified FLAT is flat-reachable by definition
@@ -401,7 +432,7 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
         for n, (m, tilt_deg, q) in enumerate(top):
             if not ok[n]:
                 continue
-            if _clears(q, Twb, legacy_inv, boxes, off, lat) is not None:
+            if _clears(q, Twb, legacy_inv, boxes, off, lat, static_margin) is not None:
                 return _pack(m, q, tilt_deg, n_sol, valid, -1.0) + (
                     float(m) if tilt_deg == 0.0
                     else (_flat_best(*keep0) if keep0 else -1.0),)
