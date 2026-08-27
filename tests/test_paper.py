@@ -822,7 +822,25 @@ def test_a_plannable_pose_survives_the_checkers_own_measurement(lateral):
 # collision or self-collision guarantee".  `paper.SELF_SAFE` closes that, and
 # these are the three things it owes: the bound is a bound, the routes it
 # certifies survive the CHECKER's arithmetic, and it refuses something real.
-def test_the_self_bound_is_a_lower_bound(lateral):
+@pytest.fixture()
+def self_gate():
+    """`paper.SELF_SAFE` on, and the memos it keys, restored afterwards.
+
+    The gate ships OFF — it is right and the router cannot meet it, and
+    `paper`'s note carries the 5.30 points that costs — so every test about it
+    has to turn it on rather than assume it.
+    """
+    was = paper.SELF_SAFE
+    paper.SELF_SAFE = True
+    paper.clear_cache()
+    try:
+        yield
+    finally:
+        paper.SELF_SAFE = was
+        paper.clear_cache()
+
+
+def test_the_self_bound_is_a_lower_bound(lateral, self_gate):
     """The router's self number must never be above a denser measurement.
 
     `leg_self_lb` samples at 33, screens with bounding spheres and refines; a
@@ -872,7 +890,7 @@ def test_the_screened_self_clearance_is_the_exact_one_where_it_matters(lateral):
     assert np.allclose(per[tight], truth[tight], atol=1e-12)
 
 
-def test_a_routed_pen_up_never_folds_the_arm_into_itself(lateral):
+def test_a_routed_pen_up_never_folds_the_arm_into_itself(lateral, self_gate):
     """Every leg `route` certifies, re-measured the CHECKER's way.
 
     `scene_check` sweeps the conducted timeline at `SELF_MARGIN` = 20 mm and
@@ -913,7 +931,7 @@ def test_a_routed_pen_up_never_folds_the_arm_into_itself(lateral):
     assert n, "every crossing was refused; the router did nothing"
 
 
-def test_the_self_gate_refuses_something_real(lateral):
+def test_the_self_gate_refuses_something_real(lateral, self_gate):
     """The gate is not vacuous on a joint-space line.
 
     Straight moves between certified DRAWING poses of one arm — poses the self

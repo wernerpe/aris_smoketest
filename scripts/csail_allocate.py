@@ -536,13 +536,14 @@ def add_args(ap):
                          "(see aris_sixarm/paper.STATIC_SAFE)")
     ap.add_argument("--no-self-route", action="store_true",
                     help="do NOT certify the straight joint-space LINE of each "
-                         "pen-up leg against the arm's own metal.  On by "
-                         "default since 2026-08-27: `selfcoll` gates the POSES "
-                         "a route is built from and nothing gated the line "
-                         "between two of them, which reaches -194.7 mm between "
-                         "certified cells of arm 31.  A DIAGNOSTIC ONLY — it "
-                         "measures what the gate costs, and a run that ships "
-                         "must not use it (see aris_sixarm/paper.SELF_SAFE)")
+                         "pen-up leg against the arm's OWN metal — only the "
+                         "poses at its ends.  ON by default since 2026-08-27, "
+                         "and the A/B says why: without it the logo ALLOCATES "
+                         "100.0000 %% and scene_check refuses phase 1 at "
+                         "-177.8 mm on three arms, so nothing renders; with it "
+                         "the logo allocates 94.6994 %% and every conducted "
+                         "phase holds 21-60 mm.  A DIAGNOSTIC ONLY (see "
+                         "aris_sixarm/paper.SELF_SAFE)")
     ap.add_argument("--two-pass", action="store_true",
                     help="draw grey, stop for a human to swap the pens, then "
                          "draw orange.  Lifts the one-colour-per-arm constraint "
@@ -762,7 +763,8 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
           f"(margin {1000 * selfcoll.SELF_PLAN_MARGIN:.0f} mm)"
           if paper.SELF_SAFE
           else "  !! pen-up LEGS are NOT certified against the arm itself "
-               "(--no-self-route)")
+               "(--no-self-route): scene_check refused the last programme "
+               "built this way at -177.8 mm")
     # A MODULE FLAG FOR THE SAME REASON, one obstacle over: the pruner, the
     # balancer's price and the sequencer all have to agree about whether a bag
     # may be flown as several tours, and they reach `allocate` by three

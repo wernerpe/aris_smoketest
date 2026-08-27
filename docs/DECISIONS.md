@@ -170,3 +170,96 @@ and the reason is written down. What would buy it back is not a weaker guard
 but a router that knows about it: the ends being refused are ones where the
 hover ladder had one flyable answer and now has none, and `paper.route` has
 seven more shapes it has not been asked to try under this constraint.
+
+## 2026-08-27 — the pen-up layer searches under the guard
+
+The guard cost the logo 2.52 points and every metre of it was "certifies the ink
+and cannot fly to it". That is a statement about a SEARCH, not about a rig, and
+it was measured as one (`out/guard_pocket.py`, 1 127 certified cells of all six
+arms, guard on against the same run with `selfcoll.self_ok` stubbed true; the
+unit is a span END and the question is `allocate.depot_round_trip`'s — lift onto
+the hover, fly home from it, fly back):
+
+| | guard on | guard off |
+|---|---|---|
+| cells with a hover at all | 93.4-94.6 % | 93.4-94.6 % |
+| span ends that join the depot | 53.6-82.2 % | 56.7-81.9 % |
+
+**The guard costs almost no hovers.** The two columns agree to within 0.6 points
+on every arm. What it removes is not the hover, it is the ROUTE out of the one
+it leaves — which is what "cannot fly to it" was saying all along.
+
+**And half of every pocket is a search that stopped.** 267 of the sampled ends
+are in a depot pocket and 138 of them — 51.7 % — hold a pose on their own fiber
+that joins the depot. Only 38 of the 267 are the guard's doing, and 25 of those
+38 are recoverable. The rest were being given back before the guard existed.
+
+**How deep the search has to go.** The tier shipped with a 24-candidate budget,
+picked when it was measured on 14 pockets:
+
+| budget | of the 138 recoverable |
+|---|---|
+| 4 | 52.2 % |
+| 8 | 71.7 % |
+| 16 | 88.4 % |
+| 24 | 93.5 % |
+| **48** | **98.6 %** |
+| 64 | 100.0 % |
+
+48 is what ships. The median success is at 3.5 candidates, so it is the pockets
+nothing can fix that pay for the depth, and they only ever run where
+`allocate._rescue_pocket` has admitted an end that is about to cost ink.
+
+**The lean is a rung of that fiber, last.** 9 of the 138 are found only at a
+lean (7 at 7.5 deg, 2 at 15). `writing.HOVER_LEAN_MAX_DEG` is the RUN's cone,
+set from `--tilt-max-deg`, so a flat run reaches exactly the poses it always
+did.
+
+### ...and the third obstacle, which nothing had ever asked about
+
+`selfcoll` gates the POSES a route is built from and said nothing about the
+straight joint-space line BETWEEN two of them — the motion this package's
+pen-up layer exists to certify, and the one `writing.py` says outright "makes no
+collision or self-collision guarantee" about. It is not inert: sampled along
+straight moves between certified drawing cells of arm 31 — poses the guard
+passes at 63.7 mm or better at both ends — the model reads **-194.7 mm** partway
+across.
+
+`paper.SELF_SAFE` closes it in the three places that decide whether a move is
+flown — `route`'s `legs_ok`, `move_ok`, and `sequence.dive_screen` — at the
+producer's `SELF_PLAN_MARGIN`, clamped to the endpoints and residual-corrected
+the way the static bound already is. A bounding-sphere screen settles 99.876 %
+of the 165 watched pairs without any segment arithmetic, which is what makes it
+10 us a configuration instead of 95.
+
+**IT IS NOT OPTIONAL, AND THAT IS THE THING THE A/B SETTLED.** The first
+instinct was that it could ship OFF the way `FRAME_SAFE` did — right,
+unaffordable, written down — because `scene_check` sweeps self-clearance on
+every conducted frame and would refuse anything that folded. Run end to end on
+the same placement, everything else identical, that is exactly backwards:
+
+| run | pen-up LEGS gated | allocated | conducted |
+|---|---|---|---|
+| v10ns | no | **100.0000 %** | scene_check REFUSES phase 1 at **-177.8 mm** on arms 13, 71, 97 — nothing renders |
+| v10 | yes | 94.6994 % | every conducted phase holds **21.0-60.5 mm** against the checker's 20 |
+
+The checker catching it does not make the coverage real; it makes the coverage a
+phase thrown away three stages later. A gate the ROUTER does not know about is a
+gate the allocator spends its whole budget walking into — the inf-pricing lesson
+this module has now learned three times: the paper, the metal, and itself.
+
+**What it costs, and why.** 5.30 points of allocated logo, and it is not the
+gate being wrong — every crossing it refuses is a pen-up whose straight
+joint-space line puts the arm inside itself. It is the ROUTER having nothing to
+offer such a crossing, and that is measured too: adding 8 cm and 5 cm rungs to
+`TRAVERSE_STEPS` — the obvious fix, since a fold is what a LONG interpolation
+commits — recovers **2 of 520** crossings for 1.9x the clock. A fold is not a
+long hop on the hover plane; it is a change of IK branch that no walk through
+hover poses avoids. What buys those crossings back is a pen-up planner that
+searches configuration space, which this package does not have.
+
+**So the honest headline is a pair of numbers, not one.** The hover-fiber
+recovery is worth +2.60 points of allocation (97.3996 -> 100.0000) and closes
+the whole gap the guard opened — the capability is real and it is measured. The
+leg gate then costs 5.30 of them, and it is the price of the programme being
+conductable at all.

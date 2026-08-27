@@ -105,7 +105,12 @@ def _fake_ends(n, rng):
     fl = selfcoll.SELF_PLAN_MARGIN
 
     def clears(a, b):
-        return paper.leg_self_lb(None, a, b, floor=fl) >= fl - paper.EPS
+        # asked of the MODEL, not of the switch: `paper.SELF_SAFE` ships off
+        # (its note carries the 5.30 points that costs), and this fixture has
+        # to be a set of poses a transit could be flown between either way
+        m, res = selfcoll.path_clearance_lb(paper.line_samples(a, b, 33), fl,
+                                            k=paper.SWEEP_K)
+        return m - res >= fl - paper.EPS
 
     seed = np.asarray(FLOOR.q_seed, float).reshape(7)
     hov, drw = [], []

@@ -480,7 +480,37 @@ def leg_static_lb(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
 # doubled the clock of every route on the ladder; screened, it is 10 us, because
 # the arm is almost never near itself and a bounding ball settles 99.9 % of the
 # pairs without any segment math.
-SELF_SAFE = True           # route pen-ups clear of the arm's own metal
+#
+# ...AND IT IS NOT OPTIONAL, WHICH IS THE THING THE MEASUREMENT SETTLED.  The
+# first instinct was that it could ship OFF the way `FRAME_SAFE` did — right,
+# unaffordable, written down — because `scene_check` sweeps self-clearance on
+# every conducted frame and would refuse anything that folded.  Run end to end
+# on the CSAIL logo at the v8 placement, everything else identical, that is
+# exactly backwards:
+#
+#     SELF_SAFE off   ALLOCATES 100.0000 % ... and scene_check REFUSES phase 1
+#                     at -177.8 mm on arms 13, 71 and 97.  Nothing renders.
+#     SELF_SAFE on    ALLOCATES  94.6994 % and every conducted phase reads
+#                     21.0 to 60.5 mm against the checker's 20 mm margin.
+#
+# The checker catching it does not make the coverage real; it makes the coverage
+# a phase that is thrown away three stages later, which is the inf-pricing
+# lesson this module already learned twice (the paper, then the metal).  A gate
+# the ROUTER does not know about is a gate the allocator spends its whole budget
+# walking into.
+#
+# WHAT IT COSTS AND WHY, STATED RATHER THAN HIDDEN.  5.30 points of allocated
+# logo, and it is not the gate being wrong — every crossing it refuses is a
+# pen-up whose straight joint-space line puts the arm inside itself.  It is the
+# ROUTER having nothing to offer such a crossing, and that is measured too: the
+# shape ladder is exhausted, not merely unlucky.  Adding 8 cm and 5 cm rungs to
+# `TRAVERSE_STEPS` — the obvious fix, since a fold is what a LONG interpolation
+# commits — recovers 2 of 520 crossings for 1.9x the clock, because a fold is
+# not a long hop on the hover plane, it is a change of IK branch that no walk
+# through hover poses avoids.  What buys those crossings back is a pen-up
+# planner that searches configuration space, which this package does not have
+# and which is a project rather than a flag.
+SELF_SAFE = True           # certify pen-up LEGS against the arm's own metal
 
 
 def self_floor(spec, q0, q1, pen_ext=PEN_EXT):
