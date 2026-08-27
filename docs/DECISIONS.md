@@ -263,3 +263,29 @@ recovery is worth +2.60 points of allocation (97.3996 -> 100.0000) and closes
 the whole gap the guard opened — the capability is real and it is measured. The
 leg gate then costs 5.30 of them, and it is the price of the programme being
 conductable at all.
+
+### the solo-drawable map, re-issued complete
+
+`scripts/feasible_workspace.py --fiber-tries 12 --hover-lean-deg 15`, all six
+arms, **26 973 certified cells swept** (the 2026-08-26 gated run was interrupted
+with 1 752 of arm 97's 4 299 done, which is most of why its number was a lower
+bound), every pen-up in it certified against the arm's own metal along the whole
+leg:
+
+| | 2026-08-26 (partial) | 2026-08-27 (complete) |
+|---|---|---|
+| a certified DRAWING pose | 94.17 % | **99.64 %** |
+| + a certified HOVER over it | 92.64 % | **99.00 %** |
+| + the arm can FLY there | **>= 82.19 %** | **84.05 %** |
+
+5.568 of 6.625 m2. Largest clean portrait block 0.34 x 2.68 m (0.911 m2), up
+from 0.32 x 2.32. 23.05 % of the canvas is reachable by two arms or more and
+5.10 % by three; the deepest cell is four arms deep.
+
+**And the binding constraint has not moved.** 99.00 % of the canvas has a
+certified hover over it and 84.05 % can be flown to: 14.95 % of the canvas —
+0.990 m2 — is ink an arm can draw and cannot approach. 70.2 % of the dead area
+is the six solid discs under the booms; the other 29.8 % is confetti, and a
+quarter of every dead cell has five or more feasible neighbours. The pen-up
+router is still the whole story, and the fiber budget here is 12 candidates
+(82.6 % of what an unbounded search finds), so 84.05 % remains a LOWER bound.
