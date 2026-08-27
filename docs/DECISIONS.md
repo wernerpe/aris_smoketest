@@ -289,3 +289,123 @@ is the six solid discs under the booms; the other 29.8 % is confetti, and a
 quarter of every dead cell has five or more feasible neighbours. The pen-up
 router is still the whole story, and the fiber budget here is 12 candidates
 (82.6 % of what an unbounded search finds), so 84.05 % remains a LOWER bound.
+
+## THE PEN-UP PLANNER (2026-08-27) — the ladder stopped being the last word
+
+`aris_sixarm/transit.py`, bidirectional RRT-Connect in the 7-DOF joint space,
+wired in as `paper.route`'s LAST tier.  `paper.py` had already written the
+ticket and closed it as out of scope: "what buys those crossings back is a
+pen-up planner that searches configuration space, which this package does not
+have and which is a project rather than a flag."
+
+**Why the ladder could not be finished instead.**  Every one of its forty-odd
+shapes walks a two-dimensional surface — a tip position on a hover plane, with
+the elbow following whatever the analytic solver hands back.  The crossings
+that survive it have endpoints in different components of THAT surface while
+being perfectly well connected in the seven the arm moves in.  Measured:
+adding 8 cm and 5 cm rungs to `TRAVERSE_STEPS` recovers **2 of 520** crossings
+for 1.9x the clock.
+
+**What the planner recovers, measured on the rig rather than argued.**  Arm 31
+of the proposed rig at h = 0.940 with the lateral holder, 650 ordered crossings
+between 26 certified hovers:
+
+| | crossings |
+|---|---|
+| shape ladder settles | 584 |
+| ladder exhausted | 66 |
+| ...of those, the planner flies | **65** |
+| ...refused on the clock | 1 |
+| paths refused by `legs_ok` on re-check | **0** |
+
+1.90 s per plan, 598 certified edges and 39 tree nodes per plan, shortcut
+8.2 -> 4.3 nodes.
+
+**The certification is the ladder's own, and that is the design.**  The planner
+proposes polylines; `paper.route`'s `legs_ok` certifies them, leg by leg,
+against the same three obstacles at the same floors as a skirt.  Every edge the
+search accepts is `paper.leg_bounds` + `paper.leg_self_lb` at `paper.SAMPLES`,
+residual-corrected, **plus `transit.PAD` = 2 mm** — producer strictly tighter
+than the certifier that grades it, which is strictly tighter than
+`scene_check`.  Nothing this tier finds can enter a timeline the ladder's own
+certifier would have refused.
+
+**Determinism is a seed, not a hope.**  `tests/test_balance.py` asserts a cost
+matrix is bit-identical serial and on four workers, and the sequencer screens
+crossings in a fork pool.  The seed is `blake2b` over the scene signature (arm
+id, tool, pen, mount height, every static box, the four floors) and both
+endpoints — never `hash()` (salted per process), never `id(spec)` (different in
+every worker).  `tests/test_transit.py` re-plans in a cold interpreter under a
+different `PYTHONHASHSEED` and compares digests.
+
+**`~/git/cc_experiment` was checked first and is not used.**  It is a genuinely
+certified continuous checker for Drake — a proof over the continuum, 0.251 ms
+for a 7-DOF straight edge, 9x faster than Drake's sampled checker at 0.01 rad,
+which is strictly stronger than the bound shipped here.  It has no Python
+bindings of any kind (a static archive; its own `docs/UPSTREAMING.md` defers
+them to upstreaming because of a pybind11 ABI match against the prebuilt
+install), it links a Drake fork (0.0.20251016, py3.12) that is not the pip
+wheel (1.47.0, py3.10) this repo's demos run, and it ships no licence file.
+Days of ABI work on the far side of a Drake migration, for a checker this repo
+would still have to restate independently — `scene_check` is a separate
+derivation on purpose.  Worth having later as an **A/B oracle** against these
+bounds; the reasoning is in `transit.py`'s docstring rather than half-built.
+
+### what it recovered, end to end (2026-08-27)
+
+Same rig, same placement, same atlas, same flags — `--no-rrt` is the only
+difference between the two columns.
+
+| | v10 (ladder only) | v11 (+ planner) |
+|---|---|---|
+| logo ALLOCATED | 94.6994 % | **100.0000 %** |
+| logo CONDUCTED | 89.7877 % (15.028 m) | **93.8250 % (15.703 m)** |
+| conducted phases | 9 | **12** |
+| ink skipped as unconductable | 0.842 m | 0.132 m in the phase that shipped |
+| `scene_check` | PASS on every rendered phase | PASS on every rendered phase |
+| schedule wall clock | 3 087 s | 7 124 s (2 126 s of it the planner) |
+
+| solo-drawable map | v10 | v11 |
+|---|---|---|
+| a certified DRAWING pose | 99.64 % | 99.64 % |
+| + a certified HOVER over it | 99.00 % | 99.00 % |
+| + the arm can FLY there | **84.05 %** | **95.34 %** |
+| feasible area | 5.568 m2 | **6.316 m2** |
+| reachable by >= 2 arms | 23.05 % | 29.83 % |
+| largest clean rectangle | 0.34 x 2.68 m (0.911 m2) | **0.36 x 3.44 m (1.238 m2)** |
+
+**And the binding constraint finally moved.**  For four generations the answer
+to "why is the canvas smaller than the reach" was the pen-up router, and it is
+no longer: 99.00 % of the canvas has a certified hover over it and 95.34 % can
+be flown to, so the gap is **3.66 % — 0.242 m2**, down from 14.95 % and
+0.990 m2.  Of the 0.309 m2 that is dead for any reason, **0.224 m2 is under the
+six base discs** (r = 0.30 m, the arm's own bolted-down casting) and 0.033 m2
+is in the middle third outside them.  What is left is geometry, not search.
+
+**Per-crossing, across the fleet** (`out/tier_split.py`, 1 142 ordered
+crossings between certified hovers, all six arms):
+
+| tier | crossings | cumulative |
+|---|---|---|
+| shape ladder | 883 | 77.32 % |
+| + C-space planner | 189 | **93.87 %** |
+| settled by neither | 70 | 6.13 % |
+
+0 of the 189 were refused by `legs_ok` on re-check.  The 6.13 % is an upper
+bound on what is genuinely unreachable: that sweep ran at `nice 19` beside two
+full-rig jobs, so the planner's wall-clock budget was the binding constraint on
+some of those, not the geometry.
+
+**What it costs.**  The logo's schedule went from 3 087 s to 7 124 s, and
+2 126 s of that is the planner in the parent process alone (463 of 731
+crossings recovered there, 2.91 s per attempt, 418 k certified edges).  The map
+went from 5 675 s to 7 227 s at a bounded 0.8 s x 1 attempt x 3 plans per cell.
+That is the honest price of the tier and it is charged only where the ladder
+has already failed: a crossing the ladder settles still costs milliseconds and
+returns the same route, bit for bit (`tests/test_transit.py`).
+
+**The conductor was not disturbed.**  A planned transit is a frozen per-arm
+path like any other, and the swept-cell no-tunneling bound is subtracted rather
+than assumed, so it holds at any density.  Measured, it did not even get looser:
+per-arm max sweep step 20.5-26.0 mm on v11 against 16.4-26.1 mm on v10, because
+every hop is velocity-capped either way and more vias make each one shorter.
