@@ -145,6 +145,41 @@ def aside_parks(a, res, q_start, pens, verbose=True):
             info[x]["moved"] = False
             info[x]["refused"] = "cannot fly from where it is standing"
             moved.pop(x)
+    if moved:
+        # THE PROXY ORDERS AND THE REAL CHECK DECIDES, AND AT PHASE LEVEL THE
+        # REAL CHECK IS THE WHOLE PATH.  `corridor_clearance` scores a parked
+        # chain against the column over ONE ink point — the nearest, which is
+        # where the corridor is tightest — and a phase's drawing arms sweep a
+        # great deal more canvas than that.  A park that buys clearance over
+        # the point and spends it somewhere else along the tour would be a
+        # regression dressed as an improvement, so the set that is actually
+        # taken has to be no worse than the one it replaces, measured the way
+        # the allocator measures it: `ParkProbe` over every certified segment.
+        was = dict(parks)
+        now = dict(parks)
+        now.update(moved)
+        pen = {x: pens.get(x, PEN_EXT) for x in FLEET}
+        pa = allocate.ParkProbe(was, FLEET, pen, h_inv=H_INV_DEFAULT)
+        pb = allocate.ParkProbe(now, FLEET, pen, h_inv=H_INV_DEFAULT)
+        worse = []
+        for aid, segs in (res.get("programs") or {}).items():
+            Q = [np.asarray(s["plan"]["qs"], float).reshape(-1, 7)
+                 for s in (segs or []) if s.get("plan") is not None]
+            if not Q:
+                continue
+            Q = np.vstack(Q)
+            ca = float(pa.clearance(int(aid), Q))
+            cb = float(pb.clearance(int(aid), Q))
+            if cb < min(pb.margin, ca) - 1e-9:
+                worse.append((int(aid), ca, cb))
+        if worse:
+            for x in list(moved):
+                info[x]["moved"] = False
+                info[x]["refused"] = (
+                    "it clears the column and costs "
+                    + ", ".join(f"arm {b} {1000 * ca:.0f}->{1000 * cb:.0f} mm"
+                                for b, ca, cb in worse))
+            moved = {}
     if verbose:
         for x, v in sorted(info.items()):
             if v["moved"]:
