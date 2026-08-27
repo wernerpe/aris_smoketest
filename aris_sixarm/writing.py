@@ -239,7 +239,7 @@ MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 # paper.  It fixes that by inserting exact IK solutions until no sub-step is
 # longer than `MAX_DQ_FRAME` — and a joint step is not the quantity anybody
 # cares about.  What the animation renders, and what
-# `scripts/csail_drawing_demo.py` asserts on at 0.5 mm a frame, is the tip
+# `scripts/csail_drawing_demo.py` asserts on at `TIP_TOL` a frame, is the tip
 # BETWEEN two inserted nodes, and how far that bulges off the curve depends on
 # how much of the motion is null-space, which 0.04 rad does not measure.
 #
@@ -297,8 +297,8 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     # default argument is bound at `def` time and rebinding `MAX_DQ_FRAME`
     # never reaches it (`fleet._SHEET_BINDERS` carries the same lesson), and
     # this is the one knob that moves the ANIMATION's fidelity: the demo's
-    # 0.5 mm per-frame gate is a chord across one of these sub-steps, so the
-    # error it reads falls with the SQUARE of this number.  Measured on the
+    # per-frame gate (`TIP_TOL`) is a chord across one of these sub-steps, so
+    # the error it reads falls with the SQUARE of this number.  Measured on the
     # v10 timeline: 0.744 mm at 0.04 rad, on arm 71's second grey stroke, with
     # the error at the sub-step ENDS reading 0.001 mm — the path is on the
     # curve where it is commanded and off it in between, which is exactly what

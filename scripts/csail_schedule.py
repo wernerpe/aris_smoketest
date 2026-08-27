@@ -1710,15 +1710,16 @@ def schedule_args(ap):
                          "MIDPOINT of every rendered chord is this close to "
                          "the commanded curve (writing.MAX_TIP_ERR).  This is "
                          "the quantity --max-dq-frame was only a proxy for, "
-                         "and it is what csail_drawing_demo.py asserts on at "
-                         "5e-4 m a frame.  Off by default: every number earned "
-                         "before 2026-08-27 was earned without it")
+                         "and it is what csail_drawing_demo.py asserts on, at "
+                         "writing.TIP_TOL (2e-3 m) a frame.  Off by default: "
+                         "every number earned before 2026-08-27 was earned "
+                         "without it")
     ap.add_argument("--max-dq-frame", type=float, default=None,
                     metavar="RAD",
                     help="joint motion per sub-step of the DENSIFIED stroke "
                          "(default writing.MAX_DQ_FRAME = 0.04).  This is the "
-                         "knob on animation fidelity: the demo's 0.5 mm "
-                         "per-frame gate is a chord across one sub-step, so "
+                         "knob on animation fidelity: the demo's per-frame "
+                         "gate is a chord across one sub-step, so "
                          "what it reads falls with the SQUARE of this.  The "
                          "v10 timeline read 0.744 mm at 0.04 and 0.001 mm at "
                          "the sub-step ends.  It costs IK calls at freeze "
