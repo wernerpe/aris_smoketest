@@ -410,14 +410,26 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
 
 def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
               tilt_max_deg=15.0, pen_ext=PEN_EXT, fleet=None, sheet=None,
-              pen_lat=None):
+              pen_lat=None, cone=None):
+    """One arm's reachability atlas, swept and stamped. -> (N, len(COLUMNS)).
+
+    `cone` is the LADDER of lean magnitudes the gated search may climb, in
+    ascending degrees; `None` is `GATE_CONE_DEG`, the shipped 2.5 -> 15 grid,
+    and `tilt_max_deg` still caps whatever is offered.  It is a parameter and
+    not a constant because the cone is a PEN-HARDWARE decision — how far the
+    material lets the nib lean before the line stops being a line — and asking
+    "what would 20 degrees buy?" must not mean editing a module to find out.
+    `_gated_groups` has always taken it; only `sweep_arm` did not pass it on.
+    """
     spec = (FLEET if fleet is None else fleet)[arm_id]
     sheet = SHEET if sheet is None else sheet
     boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     cand_sets = _candidates(tilt_max_deg)
-    gate_groups = _gated_groups(tilt_max_deg)
+    gate_groups = _gated_groups(tilt_max_deg,
+                                GATE_CONE_DEG if cone is None
+                                else tuple(float(c) for c in cone))
     pen_lat = lat_of(pen_lat)
     # the lateral tool extends reach by up to pen_lat in every direction
     rmax = rmax + abs(pen_lat)
@@ -438,7 +450,9 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
     np.savez_compressed(out, data=arr, columns=np.array(COLUMNS), arm_id=arm_id,
                         mount=spec.mount, base=Twb, grid=grid, h_inv=h_inv,
                         tilt_max_deg=tilt_max_deg, pen_ext=pen_ext,
-                        pen_lat=pen_lat, model=model_signature())
+                        pen_lat=pen_lat, model=model_signature(),
+                        cone=np.array(GATE_CONE_DEG if cone is None
+                                      else [float(c) for c in cone], float))
     go = strict_go(arr)
     flat = int((go & (arr[:, LEANCOL] == 0.0)).sum()) if len(arr) else 0
     print(f"arm {arm_id} ({spec.name}): {len(arr)} reachable, "
