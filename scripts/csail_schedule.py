@@ -132,9 +132,11 @@ def aside_parks(a, res, q_start, pens, verbose=True):
         return None, {}
     parks = {x: np.asarray((q_start or {}).get(x, FLEET[x].q_seed), float)
              for x in FLEET}
+    disc = getattr(a, "aside_disc", None)
     got, info = layout.phase_aside_parks(
         FLEET, parks, ink, h_inv=H_INV_DEFAULT,
-        pen_lat=frames.PEN_LAT if frames.PEN_LAT else None)
+        pen_lat=frames.PEN_LAT if frames.PEN_LAT else None,
+        **({} if disc is None else dict(disc=float(disc))))
     moved = {x: q for x, q in got.items()
              if info.get(x, {}).get("moved") and x in FLEET}
     for x in sorted(moved):
@@ -1894,6 +1896,18 @@ def schedule_args(ap):
                          "assertion.  Nothing fires unless an arm is standing "
                          "over the work, and a phase where none is is "
                          "bit-identical to one built without this")
+    ap.add_argument("--aside-disc", type=float, default=None, metavar="M",
+                    help="how near this phase's ink has to come to a PARKED "
+                         "arm's base before that arm is considered for an "
+                         "aside park (`layout.ASIDE_DISC_R`, 0.30 m).  A "
+                         "parked arm is a metre of boom and it blocks work "
+                         "well outside its own disc: on the 0.61 m pitch the "
+                         "TRANSVERSE neighbour is never a candidate at the "
+                         "default, and it is the arm the conductor names when "
+                         "it refuses ink under the middle bases.  Widening "
+                         "this only offers more arms to the same three proofs "
+                         "and the same non-regression veto; it cannot move an "
+                         "arm any of them refuses.")
     ap.add_argument("--no-verify", action="store_true",
                     help="ship the split allocation without conducting the "
                          "unsplit one as well.  The A/B is the only thing that "
