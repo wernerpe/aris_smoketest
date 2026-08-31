@@ -1232,10 +1232,20 @@ METAL = "#111827"
 
 
 def _bar_panel(ax, labels, vals, cols, title, note=None, xmax=100.0,
-               fmt="{:.2f}%"):
-    """A thin horizontal bar row with selective direct labels."""
+               fmt="{:.2f}%", hatch=None):
+    """A thin horizontal bar row with selective direct labels.
+
+    `hatch` is per-bar and is how a PROJECTION is drawn beside a measurement:
+    the same axis, so the two are comparable at a glance, and a different
+    surface, so nobody reads a hatched bar as a number this rig has.
+    """
     y = np.arange(len(labels))[::-1]
-    ax.barh(y, vals, height=0.52, color=cols, zorder=3)
+    bars = ax.barh(y, vals, height=0.52, color=cols, zorder=3)
+    for b, h in zip(bars, hatch or [None] * len(labels)):
+        if h:
+            b.set_hatch(h)
+            b.set_edgecolor("white")
+            b.set_linewidth(0.0)
     for yy, v in zip(y, vals):
         ax.text(v + xmax * 0.015, yy, fmt.format(v), va="center", ha="left",
                 fontsize=9, color=INK, fontweight="bold")
@@ -1429,15 +1439,33 @@ def figure(comp, nums, arms, path, sheet=SHEET, grid=GRID, fleet=None,
     # ---- right column ------------------------------------------------------
     L = nums["layers"]
     ax1 = fig.add_subplot(gs[0, 1])
-    _bar_panel(ax1,
-               ["1. a certified DRAWING pose\n     (banded atlas, strict GO)",
-                "2. + a certified HOVER over it\n     (v3 full-fiber lift)",
-                "3. + the arm can FLY there\n     (routed from its park)"],
-               [L["draw_pose_only"]["pct"], L["plus_hover"]["pct"],
-                L["plus_reachability"]["pct"]],
-               ["#9aa5b1", "#5b6b7d", FEAS_COLS[3]],
-               "What each layer costs, as % of canvas",
-               note="each layer is a subset of the one above it")
+    lab = ["1. a certified DRAWING pose\n     (banded atlas, strict GO)",
+           "2. + a certified HOVER over it\n     (v3 full-fiber lift)",
+           "3. + the arm can FLY there\n     (routed from its park)"]
+    val = [L["draw_pose_only"]["pct"], L["plus_hover"]["pct"],
+           L["plus_reachability"]["pct"]]
+    col = ["#9aa5b1", "#5b6b7d", FEAS_COLS[3]]
+    hat = [None, None, None]
+    note = "each layer is a subset of the one above it"
+    # THE PROJECTION IS A SECOND MEASUREMENT AND IT IS DRAWN AS ONE.  Same
+    # axis as layer 3, because it is a layer-3 number and the whole point is
+    # that the two are comparable; hatched, because nobody may read it as a
+    # margin this rig has been granted.
+    pp = nums.get("post_survey_projection")
+    if pp and pp.get("feasible_pct") is not None:
+        lab.append("PROJECTION: the same map with the\n     30 mm "
+                   "unsurveyed-base allowance out")
+        val.append(float(pp["feasible_pct"]))
+        col.append(FEAS_COLS[3])
+        hat.append("////")
+        d = pp.get("dead_by_cause") or {}
+        rest = int(d.get("no draw pose", 0))
+        note = ("each layer is a subset of the one above it;  the hatched bar "
+                "is REPORT-ONLY —\nnobody has bought that survey"
+                + (f", and all {rest} cells it still leaves are the "
+                   "pen-cone cells below" if rest else ""))
+    _bar_panel(ax1, lab, val, col, "What each layer costs, as % of canvas",
+               note=note, hatch=hat)
 
     ax2 = fig.add_subplot(gs[1, 1])
     pa = nums["per_arm"]
