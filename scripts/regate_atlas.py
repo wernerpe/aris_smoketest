@@ -131,8 +131,89 @@ def regate(arm, src, dst, floor, cone, pool, log=print):
     return arr[keep], meta, fixed, dropped
 
 
+def _cells(d, arm):
+    """{(x, y): row index} for one atlas npz."""
+    z = np.load(Path(d) / f"atlas_arm{arm}.npz")
+    C = list(z["columns"])
+    ix, iy = C.index("x"), C.index("y")
+    return {(round(float(r[ix]), 4), round(float(r[iy]), 4)): i
+            for i, r in enumerate(z["data"])}
+
+
+def compare(src, dst, arms, fl, band=None):
+    """What the re-gate took, per arm and as REDUNDANCY. -> None.
+
+    THE MAP CANNOT SEE THIS AND THE CONDUCTOR LIVES ON IT.  The feasibility
+    map is a UNION over arms — a cell is alive if ANY arm can draw it — so a
+    re-gate that takes a cell away from the SECOND arm that could reach it
+    costs the map nothing at all.  The allocator's fallback is exactly that
+    second arm, and when a phase is refused, having another arm that can draw
+    the same ink is the difference between a re-offer and a skip.  So the
+    honest question about a re-gate is not "how many cells died" (none) but
+    "how many cells lost an arm", and this asks it.
+    """
+    print(f"\n=== what {dst} drops against {src} ===")
+    tot = 0
+    per_cell = {}
+    for arm in arms:
+        A, B = _cells(src, arm), _cells(dst, arm)
+        lost = sorted(set(A) - set(B))
+        tot += len(lost)
+        b = fl[arm].T_world_base(1.0)[:2, 3]
+        line = (f"  arm {arm:>3}: {len(A):5d} -> {len(B):5d} rows, "
+                f"dropped {len(lost):4d} ({100.0 * len(lost) / max(len(A), 1):4.1f} %)")
+        if lost:
+            L = np.array(lost, float)
+            c = L.mean(axis=0)
+            line += (f"   band x[{L[:, 0].min():.2f},{L[:, 0].max():.2f}] "
+                     f"y[{L[:, 1].min():.2f},{L[:, 1].max():.2f}], "
+                     f"{np.linalg.norm(c - b):.2f} m from its own base "
+                     f"({b[0]:.2f}, {b[1]:.2f})")
+            if band:
+                inb = int(((L[:, 0] >= band[0]) & (L[:, 0] <= band[1])
+                           & (L[:, 1] >= band[2]) & (L[:, 1] <= band[3])).sum())
+                line += f", {inb} of them inside --band"
+        print(line)
+        for k in A:
+            per_cell.setdefault(k, [0, 0])[0] += 1
+        for k in B:
+            per_cell.setdefault(k, [0, 0])[1] += 1
+    print(f"  {tot} rows dropped in total")
+
+    sel = [v for k, v in per_cell.items()
+           if band is None or (band[0] <= k[0] <= band[1]
+                               and band[2] <= k[1] <= band[3])]
+    if not sel:
+        return
+    n = len(sel)
+    ha, hb = {}, {}
+    for va, vb in sel:
+        ha[va] = ha.get(va, 0) + 1
+        hb[vb] = hb.get(vb, 0) + 1
+    where = "the whole canvas" if band is None else \
+        f"x[{band[0]:.3f},{band[1]:.3f}] y[{band[2]:.3f},{band[3]:.3f}]"
+    print(f"\n  REDUNDANCY over {n} cells of {where} "
+          "(how many arms have a drawing pose there)")
+    for h, tag in ((ha, str(src)), (hb, str(dst))):
+        tot_a = sum(k * v for k, v in h.items())
+        print("    " + "  ".join(f"{k} arm(s): {h.get(k, 0):4d}"
+                                 for k in sorted(set(ha) | set(hb)) if k)
+              + f"   mean {tot_a / n:.3f} arms/cell   {tag}")
+    moved = sum(1 for va, vb in sel if vb < va)
+    print(f"    {moved} cells lost an arm; "
+          f"{sum(1 for va, vb in sel if vb == 0 < va)} lost their last one")
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--compare", action="store_true",
+                    help="do not re-gate: report what --out already drops "
+                         "against --in, per arm and as REDUNDANCY over "
+                         "--band.  This is the A/B a union-valued map cannot "
+                         "show (see `compare`).")
+    ap.add_argument("--band", default="",
+                    help="x0,x1,y0,y1 in canvas metres to report redundancy "
+                         "over; empty is the whole canvas")
     ap.add_argument("--in", dest="src",
                     default=str(ROOT / "out" / "atlas_proposed_h0940_gated"))
     ap.add_argument("--out", dest="dst",
@@ -150,6 +231,11 @@ def main():
 
     fl = layout.FLEET_PROPOSED
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
+    if a.compare:
+        band = tuple(float(v) for v in a.band.split(",")) if a.band else None
+        if band is not None and len(band) != 4:
+            raise SystemExit("--band wants x0,x1,y0,y1")
+        return compare(a.src, a.dst, arms, fl, band)
     dst = Path(a.dst)
     dst.mkdir(parents=True, exist_ok=True)
     print(f"rig=proposed tool=lateral h={layout.LAYOUT_PROPOSED['h']}")
