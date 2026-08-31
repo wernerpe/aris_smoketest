@@ -197,8 +197,18 @@ def ink_curve(speeds):
                 for seg in ph["programs"][aid]:
                     qs = np.asarray(seg["plan"]["qs"], float)
                     pts = np.asarray(seg["plan"]["pts"], float)
+                    # THE PLAN'S OWN PEN ORIENTATION, or this measures the
+                    # cost of a stroke nobody is going to draw: a lateral
+                    # plan's lean lives under `lean_vec` and a `tilt.py`
+                    # plan's under `tilt`, and filling at the perpendicular
+                    # pen puts every inserted sample on another IK branch.
+                    # It is what `writing.arm_program` does, which is the
+                    # point of this script (see aris_sixarm/writing.densify).
                     qd, ud, _ = writing.densify(qs, pts, spec, H_INV_DEFAULT,
-                                                ph["pens"][aid])
+                                                ph["pens"][aid],
+                                                tilt=seg["plan"].get("tilt"),
+                                                lean=seg["plan"].get("lean_vec"),
+                                                phi=seg["plan"].get("phi", 0.0))
                     # dur = 0 -> draw_duration returns need_max alone
                     need = writing._draw_time(qd, ud, 0.0, writing.QD_FRAC)
                     L = float(seg["length"])
