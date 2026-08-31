@@ -1569,6 +1569,16 @@ def main():
                     help="skip the sweep and rebuild the map, the numbers and "
                          "the figure from an existing _raw.npz (or a _ckpt.npz "
                          "of a run still going)")
+    ap.add_argument("--ladder", default="", metavar="JSON[,JSON...]",
+                    help="the runs whose ESCALATION RUNGS produced this "
+                         "--from-raw npz, in the order they were spent.  A "
+                         "rebuild does not re-walk the ladder, so without this "
+                         "the map it writes cannot say what its own cells cost "
+                         "— and a rung that turned 148 cells for 737 s and one "
+                         "that turned none for 150 s are the whole argument "
+                         "for where the ladder ends.  Each entry is stamped "
+                         "with the file it was read from; nothing is "
+                         "recomputed and nothing is summed.")
     ap.add_argument("--rescue", default="", metavar="RUNGS",
                     help="after loading/sweeping, walk the ESCALATION LADDER "
                          "over the cells the map refused and only those: a "
@@ -1740,6 +1750,20 @@ def main():
               "v12, and `paper.effective_static_floor` clamps the difference "
               "away rather than contradicting it — which leaves a pose on the "
               "atlas gate with nothing for its own descent to spend."))
+    if not ladder and a.ladder:
+        # A REBUILD DOES NOT RE-WALK THE LADDER, and the rungs a map's cells
+        # were actually bought with are provenance, not decoration.  Carried
+        # across verbatim, each rung stamped with the run that spent it.
+        for p in [Path(v) for v in a.ladder.split(",") if v.strip()]:
+            if not p.exists():
+                print(f"ladder: {p} not found")
+                continue
+            with open(p) as f:
+                lj = json.load(f)
+            got = lj.get("escalation_ladder") or []
+            ladder += [dict(r, from_run=str(p)) for r in got]
+            print(f"ladder: {len(got)} rung(s) carried from {p}")
+        ladder.sort(key=lambda r: r.get("rung", 0))
     if ladder:
         nums["escalation_ladder"] = ladder
         nums["escalation_rungs"] = [dict(zip(
