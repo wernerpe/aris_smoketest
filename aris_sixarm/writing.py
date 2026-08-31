@@ -335,6 +335,25 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     degrees: `ik.solve_cc` at the perpendicular frame reproduces 0 of 138 plan
     nodes (returning a pose up to 0.203 rad away, or nothing at all); at the
     lean the plan actually commanded it reproduces all 138 to 0.000e+00 rad.
+
+    AND IT WAS THE WHOLE OF THE CSAIL LOGO'S RESIDUAL.  That artwork had sat
+    at 93.83 % conducted for the length of a campaign — 1.0685 m of ink in
+    three chunks that `scene_check` refused and `--skip-unconductable` dropped,
+    every refusal on the static-frame or paper-tip gate, every one of them
+    correct: the executed stroke really did put a link 40 mm inside a 50 mm
+    keep-out and the nib 12.6 mm through the paper, because 8 of the
+    programme's 47 segments (2.518 m) are lean-rescued and all 8 were being
+    drawn upright.  Re-run with the lean passed through and NOTHING ELSE
+    changed — same atlas, same flags, same gates, same margins:
+
+        v11  93.8250 % reported / 93.6159 % union   1.0685 m skipped   356.8 s
+        v14 100.0597 % reported / 100.0000 % union  0.0000 m skipped   196.3 s
+
+    100.00 % of the artwork, no phase split, no phase refused, and 45 % off
+    the makespan because the velocity limit is no longer being spent on a
+    zig-zag that is not in the drawing.  The gates did their job throughout:
+    they refused the ink they could not certify, and what they were refusing
+    was real.
     """
     from .frames import rotz, tip_pos_many, tool_offset
     # RESOLVED HERE, NOT IN THE SIGNATURE, so that a run can turn it down.  A
