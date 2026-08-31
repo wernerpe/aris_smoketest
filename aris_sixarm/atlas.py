@@ -233,8 +233,6 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
     the producer's floor, and then the descent is not threading a gap.
 
     THE ARM AGAINST ITSELF IS NOT HERE, and deliberately.  It is the one gate
-
-    THE ARM AGAINST ITSELF IS NOT HERE, and deliberately.  It is the one gate
     whose cost is dominated by numpy overhead rather than by the pose (233
     capsule pairs, one broadcast), so it is applied to the WHOLE gate-passing
     fiber in one call by `_self_mask` below before this is reached — the same
