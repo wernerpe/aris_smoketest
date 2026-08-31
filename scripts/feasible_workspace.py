@@ -1549,6 +1549,13 @@ def main():
                          "answer is the FIRST rung that certifies it; the "
                          "rungs above never see it.")
     ap.add_argument("--rescue-chunk", type=int, default=6)
+    ap.add_argument("--projection", default="", metavar="JSON",
+                    help="another run of this script — a `--calib` one — whose "
+                         "headline is carried into this map's JSON as a "
+                         "PROJECTION beside the shipped number.  It is never "
+                         "added to anything: the map's own percentage is "
+                         "measured at today's margins and the projection sits "
+                         "next to it saying what a survey would be worth.")
     ap.add_argument("--lean-study", default=str(OUT / "lean_study.json"),
                     metavar="JSON",
                     help="scripts/lean_study.py's output.  The cells it names "
@@ -1710,6 +1717,29 @@ def main():
         nums["escalation_rungs"] = [dict(zip(
             ("name", "tries", "plans", "nodes", "attempts", "aside"), r))
             for r in RESCUE_RUNGS]
+    if a.projection:
+        p = Path(a.projection)
+        if p.exists():
+            with open(p) as f:
+                pj = json.load(f)
+            nums["post_survey_projection"] = dict(
+                source=str(p),
+                feasible_pct=pj.get("feasible_pct"),
+                feasible_cells=pj.get("feasible_cells"),
+                dead_by_cause={k: v["cells"]
+                               for k, v in pj.get("dead_by_cause", {}).items()},
+                calibration=pj.get("calibration_projection"),
+                note="MEASURED, NOT SHIPPED.  The same map with the 30 mm "
+                     "unsurveyed-base allowance out of the obstacle boxes and "
+                     "out of the pair margin.  The number above it is this "
+                     "rig's canvas at today's margins; this is what a "
+                     "commissioning survey of the six base positions would "
+                     "buy, and nobody has bought it.")
+            print(f"post-survey projection ({p}): "
+                  f"{pj.get('feasible_pct')}%  against this map's "
+                  f"{nums['feasible_pct']}%")
+        else:
+            print(f"projection: {p} not found")
     if a.calib is not None:
         from aris_sixarm import mounts, coordination
         nums["calibration_projection"] = dict(
