@@ -341,3 +341,125 @@ def test_the_ladder_climbs_and_stops_at_the_first_lean_that_works():
     if not tried_flat:
         pytest.skip("no stroke on this grid fails flat")
     assert leaned > 0, "the ladder recovered nothing where flat failed"
+
+
+# --------------------------------------------------------------------------
+# the lean has to survive into what is EXECUTED, not only into what is planned
+# --------------------------------------------------------------------------
+def _leaning_plan(deg=10.0):
+    """A certified LATERAL plan that actually leans, or None."""
+    for tilt in lateral.lean_ring(deg):
+        r = stroke_api.plan_stroke(LINE, SPEC, dict(pen_lat=LAT, phi=0.0,
+                                                    tilt=tilt, validate=True))
+        if r["status"] == "ok" and r["lean_deg"] > 1e-9:
+            return r
+    return None
+
+
+def test_densify_fills_a_leaning_stroke_at_the_lean_it_was_planned_at(
+        lateral_active):
+    """Every sample the densifier INSERTS is the plan's own pose, not upright.
+
+    `stroke_api._plan` records a lateral plan's commanded lean under
+    `lean_vec`; `writing.densify` asked for `tilt`, which is `tilt.py`'s key
+    and which a lateral plan does not have.  So the fill was solved at the
+    PERPENDICULAR pen: the plan's own samples survived verbatim and every
+    sample between them came back on a different IK branch, and the executed
+    stroke rocked the pen between the lean and vertical twice per commanded
+    interval.  Measured on the shipped programme before the fix: a 0.497 rad
+    realised step where the plan's own is 0.059, the pen 12.6 mm THROUGH the
+    paper and a link 40 mm inside the 50 mm frame keep-out.
+
+    `max_dq` is pinned small here so that fills actually happen: with the
+    default the plan's own step already divides into one sub-step and there is
+    nothing to get wrong.
+    """
+    from aris_sixarm import writing
+    from aris_sixarm.validate import _pen_lean_deg
+    from aris_sixarm.frames import fk_many
+
+    r = _leaning_plan()
+    if r is None:
+        pytest.skip("no leaned plan certified on this stroke")
+    qs = np.asarray(r["qs"], float)
+    pts = np.asarray(r["pts"], float)
+    kw = dict(h_inv=None, pen_ext=r["pen_ext"] if "pen_ext" in r else 0.11,
+              max_dq=0.005, phi=r.get("phi", 0.0))
+
+    qd, _u, fb = writing.densify(qs, pts, SPEC, lean=r["lean_vec"], **kw)
+    assert len(qd) > len(qs), "max_dq was not small enough to insert anything"
+
+    # 1. NOTHING FELL BACK.  A fill that lands on the plan's own branch is an
+    #    exact IK solution; the interpolation fallback is what a wrong frame
+    #    forces, and it is the fidelity the bug cost even where it was safe.
+    assert fb == 0
+
+    # 2. EVERY PLAN NODE SURVIVES VERBATIM (the densifier's whole contract).
+    for q in qs:
+        assert np.any(np.all(np.abs(qd - q) < 1e-12, axis=1))
+
+    # 3. THE EXECUTED PEN LEANS THE WHOLE WAY.  This is the property the bug
+    #    broke and the one a reader cares about: the lean is not a field on a
+    #    dict, it is where the nib points at every instant.
+    Rwb = SPEC.T_world_base(kw["h_inv"])[:3, :3]
+    T, _ = fk_many(qd)
+    lean = _pen_lean_deg(T, Rwb)
+    assert np.max(np.abs(lean - r["lean_deg"])) < 1e-6
+
+    # 4. AND THE REALISED STEP IS THE ONE `max_dq` ASKED FOR, which is the
+    #    check `MAX_DQ_FRAME` was always meant to be and never was: it was
+    #    computed from the PLAN's step and never compared with the fill's.
+    assert float(np.max(np.abs(np.diff(qd, axis=0)))) <= 2 * kw["max_dq"]
+
+
+def test_densify_refuses_a_fill_that_walks_off_its_seed_branch(lateral_active):
+    """The guard, exercised by handing the densifier the WRONG orientation.
+
+    Dropping `lean=` is exactly what the shipped code did, so this is the bug
+    reproduced on purpose.  `ik.solve_cc` keeps a fill on the branch of its
+    SEED, which is the right invariant while the seed is right; at the wrong
+    orientation the seed itself walks away.  `FILL_DQ_FACTOR` catches that and
+    falls back to the chord between two certified nodes — a shape the plan
+    itself implies, where an off-branch pose is not.
+    """
+    from aris_sixarm import writing
+
+    r = _leaning_plan()
+    if r is None:
+        pytest.skip("no leaned plan certified on this stroke")
+    qs = np.asarray(r["qs"], float)
+    pts = np.asarray(r["pts"], float)
+    kw = dict(h_inv=None, pen_ext=0.11, max_dq=0.005, phi=r.get("phi", 0.0))
+
+    guarded = writing.densify(qs, pts, SPEC, lean=None, **kw)
+    was = writing.FILL_DQ_FACTOR
+    try:
+        writing.FILL_DQ_FACTOR = 1e9        # the guard off: what shipped
+        loose = writing.densify(qs, pts, SPEC, lean=None, **kw)
+    finally:
+        writing.FILL_DQ_FACTOR = was
+
+    step_loose = float(np.max(np.abs(np.diff(loose[0], axis=0))))
+    step_guard = float(np.max(np.abs(np.diff(guarded[0], axis=0))))
+    # ungated, the wrong frame produces a step far beyond what was asked for
+    assert step_loose > 10 * kw["max_dq"]
+    # guarded, it never does — and the fallbacks say so out loud
+    assert step_guard <= 2 * kw["max_dq"]
+    assert guarded[2] > loose[2] or guarded[2] > 0
+
+
+def test_densify_will_not_take_two_lean_conventions_at_once(lateral_active):
+    """`tilt` leans in the WORLD frame and `lean` in the TOOL frame.
+
+    They are different rotations once an 11 cm bracket hangs off the wrist
+    (`planner.tool_lean`'s own note), so a caller that passes both has not
+    said which one the plan was solved at.
+    """
+    from aris_sixarm import writing
+
+    r = _leaning_plan()
+    if r is None:
+        pytest.skip("no leaned plan certified on this stroke")
+    with pytest.raises(ValueError):
+        writing.densify(np.asarray(r["qs"], float), np.asarray(r["pts"], float),
+                        SPEC, tilt=r["lean_vec"], lean=r["lean_vec"])

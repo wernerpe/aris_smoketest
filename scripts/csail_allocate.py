@@ -381,7 +381,14 @@ def _phase_json(res):
             # was written against — `scene_check` re-derives the first and
             # checks it against the second, so a reader can count the tilted
             # spans in a shipped programme without re-planning anything.
-            max_lean_deg=float(s["plan"].get("max_lean_deg", 0.0) or 0.0),
+            # ...AND ONLY `tilt.py` SETS THAT KEY.  A LATERAL plan records its
+            # commanded lean as `lean_deg` (`stroke_api._plan`), so every
+            # lateral segment went into the record as "0.0 degrees of lean"
+            # whatever it leaned: on `out/csail_program_h094_v12a.json`, all 47
+            # read 0.0 and eight of them lean 2.5 to 12.5.  A reader counting
+            # the tilted spans counted none.
+            max_lean_deg=float(s["plan"].get("max_lean_deg")
+                               or s["plan"].get("lean_deg", 0.0) or 0.0),
             tilt_cone_deg=float(s["plan"].get("tilt_max_deg", 0.0) or 0.0),
             draw_time_s=float(s["plan"]["total_time"]),
             pts=np.round(s["pts"], 5).tolist(),

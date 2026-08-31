@@ -258,9 +258,33 @@ MAX_DQ_FRAME = 0.04       # rad, per sub-step of the densified stroke
 MAX_TIP_ERR = None        # m, or None for the step-size proxy alone
 MAX_TIP_STEPS = 4         # doublings one interval may spend reaching it
 
+# ...AND A FILL THAT LANDS ON ANOTHER IK BRANCH IS NOT A FILL.  `fill` seeds
+# `ik.solve_cc` with the previous configuration and takes whatever comes back.
+# Case-consistency keeps it on the same analytic branch as the SEED, which is
+# the right invariant while the seed is right; hand it a pose off the plan's
+# own orientation and the seed itself walks away, and the returned q can be a
+# fifth of a radian from where it started while the plan's own step is 0.06.
+# That is not a small error in a fill, it is a different arm posture: the
+# executed stroke then alternates between the certified nodes and an off-branch
+# one, twice per commanded interval.  `MAX_DQ_FRAME` is computed from the
+# PLAN's step and never re-checked against the realised one, so nothing caught
+# it (measured on the shipped v12a programme: a 0.497 rad zig-zag on a 0.0585
+# rad plan, the pen 12.6 mm through the paper and a link 40 mm inside the
+# frame keep-out; `scene_check` refused the phase, which is the only reason it
+# was ever seen).
+#
+# So the contract this function documents is now enforced: a solution further
+# than `FILL_DQ_FACTOR` times the step budget from its seed is REFUSED, and
+# the interval falls back to the linear interpolation `fill` already uses when
+# the IK has no case-consistent solution at all.  A chord between two
+# certified nodes is a shape the plan itself implies; an off-branch pose is
+# not.  The factor is loose on purpose — this is a branch-flip guard, not a
+# step-size gate, and the step-size gate is `max_dq` two lines down.
+FILL_DQ_FACTOR = 2.0
+
 
 def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
-            max_dq=None, tilt=None, phi=0.0, max_tip=None):
+            max_dq=None, tilt=None, phi=0.0, max_tip=None, lean=None):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
     The DP's continuity window allows up to JUMP_THRESH rad between two
@@ -291,6 +315,26 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     (tx, ty) is regular at the apex and the polar one is not, so interpolating
     the angles through a zero crossing would swing the azimuth half a turn and
     spin the pen on the paper while the lean passed through nothing.
+
+    `lean` IS THE SAME FIELD FOR THE LATERAL TOOL AND IT IS NOT THE SAME
+    ROTATION.  `tilt.py` leans in the WORLD frame (`tilt.pen_rot`, a
+    pre-multiplication that drops the tool yaw); `planner.build_lattice` leans
+    a lateral plan in the TOOL frame (`planner.tool_lean`, a
+    post-multiplication that keeps `phi`), and the two do not span the same
+    poses once an 11 cm bracket hangs off the wrist — `planner`'s own comment
+    says so.  So they are two parameters, not one key: pass `tilt=` for a
+    `tilt.py` plan's `plan["tilt"]` and `lean=` for a lateral plan's
+    `plan["lean_vec"]`, and never both.  Either may be one (2,) vector for the
+    whole stroke (what `lateral.plan_adaptive` pins today) or one per sample.
+
+    THE KEYS DID NOT MATCH AND THE LEAN WAS DROPPED ON THE FLOOR.
+    `stroke_api._plan` has stored a lateral plan's commanded lean under
+    `lean_vec` since the lateral tool shipped; this function's callers asked
+    for `tilt`, got `None`, and filled every inserted sample at the
+    PERPENDICULAR pen.  Measured on four lateral plans that lean 2.5-15
+    degrees: `ik.solve_cc` at the perpendicular frame reproduces 0 of 138 plan
+    nodes (returning a pose up to 0.203 rad away, or nothing at all); at the
+    lean the plan actually commanded it reproduces all 138 to 0.000e+00 rad.
     """
     from .frames import rotz, tip_pos_many, tool_offset
     # RESOLVED HERE, NOT IN THE SIGNATURE, so that a run can turn it down.  A
@@ -320,33 +364,60 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     R_w = rotz(phi0) @ rotx(np.pi) if phi0 else rotx(np.pi)
     T_w = np.eye(4)
     T_w[:3, :3] = R_w
-    tl = None if tilt is None else np.asarray(tilt, float).reshape(-1, 2)
-    if tl is not None and len(tl) != len(qs):
-        raise ValueError(f"tilt has {len(tl)} rows for {len(qs)} samples")
+    def _per_sample(v, name):
+        """(2,) or (N,2) -> (N,2), or None."""
+        if v is None:
+            return None
+        a = np.asarray(v, float).reshape(-1, 2)
+        if len(a) == 1:
+            a = np.repeat(a, len(qs), axis=0)
+        if len(a) != len(qs):
+            raise ValueError(f"{name} has {len(a)} rows for {len(qs)} samples")
+        return a
+
+    if tilt is not None and lean is not None:
+        raise ValueError("densify takes tilt= (world-frame, tilt.py) OR "
+                         "lean= (tool-frame, lateral), never both")
+    tl = _per_sample(tilt, "tilt")
+    lv = _per_sample(lean, "lean")
     n = len(qs) - 1
     tip_tol = MAX_TIP_ERR if max_tip is None else float(max_tip)
     Rwb, twb = Twb[:3, :3], Twb[:3, 3]
+
+    def frame_at(i, f):
+        """The tool rotation the PLAN commanded at fraction `f` of interval i."""
+        if tl is not None:                      # tilt.py: world-frame lean
+            from .tilt import pen_rot
+            return pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
+        if ph_arr is not None:
+            R = rotz(ph_arr[i] + f * (ph_arr[i + 1] - ph_arr[i])) @ rotx(np.pi)
+        else:
+            R = R_w
+        if lv is not None:                      # lateral: TOOL-frame lean
+            from .planner import tool_lean
+            return tool_lean(R, lv[i] + f * (lv[i + 1] - lv[i]))
+        return R
 
     def fill(i, k):
         """The k-1 configurations inserted inside interval `i`. -> ([q], nfb)."""
         seed = out_q[-1]
         got, nfb = [], 0
+        # `k` is chosen so the plan's own step over this interval divides into
+        # sub-steps of at most `max_dq`, so that is the scale a legitimate fill
+        # moves on; the guard is against a BRANCH, not against a step
+        budget = FILL_DQ_FACTOR * max_dq
         for m in range(1, k):
             f = m / k
             p = pts[i] + f * (pts[i + 1] - pts[i])
-            if tl is not None:
-                from .tilt import pen_rot
-                R = pen_rot(tl[i] + f * (tl[i + 1] - tl[i]))[0]
-            elif ph_arr is not None:
-                R = rotz(ph_arr[i] + f * (ph_arr[i + 1] - ph_arr[i])) \
-                    @ rotx(np.pi)
-            else:
-                R = R_w
+            R = frame_at(i, f)
             T_w[:3, :3] = R
             T_w[:3, 3] = np.array([p[0], p[1], 0.0]) - R @ off
             q7 = qs[i, 6] + f * (qs[i + 1, 6] - qs[i, 6])
             q = ik.solve_cc(Twb_inv @ T_w, q7, seed)
-            if q is None:                       # no case-consistent solution
+            # no case-consistent solution, OR one that walked off the branch
+            # its seed was on: the chord between the certified nodes is the
+            # honest fill and an off-branch pose is not (see FILL_DQ_FACTOR)
+            if q is None or float(np.max(np.abs(q - seed))) > budget:
                 q = qs[i] + f * (qs[i + 1] - qs[i])
                 nfb += 1
             got.append(q)
@@ -690,6 +761,7 @@ def segment_draw_time(spec, seg, draw_speed=DRAW_SPEED_FLEET, qd_frac=QD_FRAC,
     pts = np.asarray(seg["plan"]["pts"], float)
     qd, ud, _ = densify(qs, pts, spec, h_inv, pen_ext,
                         tilt=seg["plan"].get("tilt"),
+                        lean=seg["plan"].get("lean_vec"),
                         phi=seg["plan"].get("phi", 0.0))
     return draw_duration(qd, ud, seg["length"], draw_speed, qd_frac)
 
@@ -1470,6 +1542,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         pts = np.asarray(s["plan"]["pts"], float)
         tl = s["plan"].get("tilt")
         qd, ud, fb = densify(qs, pts, spec, h_inv, pen_ext, tilt=tl,
+                             lean=s["plan"].get("lean_vec"),
                              phi=s["plan"].get("phi", 0.0))
         ref = np.column_stack([np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 0]),
                                np.interp(ud, np.linspace(0, 1, len(pts)), pts[:, 1])])

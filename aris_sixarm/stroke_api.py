@@ -644,6 +644,14 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
     for k in ("qs", "pts", "sigmas", "margins", "stroke", "q7", "tilt", "lean"):
         if k in plan:
             out[k] = np.asarray(plan[k], float)[::-1].copy()
+    # `lean_vec` is the LATERAL plan's version of the same field, and today
+    # `lateral.plan_adaptive` pins ONE (2,) lean for the whole stroke — which
+    # is reversal-invariant, so the dict copy above is already right for it.
+    # It is here because a per-sample lean is not, and because `writing.densify`
+    # now READS this key (it did not until 2026-08-31, which is the only reason
+    # a forward-ordered copy next to reversed joints was ever harmless).
+    if np.ndim(plan.get("lean_vec")) > 1:
+        out["lean_vec"] = np.asarray(plan["lean_vec"], float)[::-1].copy()
     # `phi` is a SCALAR on a fixed-phi lateral plan (rides along in the dict
     # copy) and a PER-SAMPLE array on a phi-varying rescue, where it reverses
     # with the samples it belongs to — same argument as tilt/lean above.
