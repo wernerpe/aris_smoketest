@@ -717,13 +717,26 @@ def manifest(out_dir=None):
     mesh_src = out_dir / "meshes/MESH_SOURCES.json"
     meshes = json.loads(mesh_src.read_text()) if mesh_src.is_file() else {}
     bodies = []
+    recert_worst = 0.0
     for b in SM.bodies(h):
+        esc = SM.recert_escape_mm(b, h)
+        rec = {}
+        if esc is not None and esc > 0.0:
+            recert_worst = max(recert_worst, esc)
+            rec = dict(status="RE-CERT-PENDING",
+                       escapes_modelled_envelope_mm=esc,
+                       envelope="mounts.arm_mount_boxes — the schematic "
+                                "0.226x0.190x0.05 plate and the 0.2x0.2 "
+                                "column every certified number was earned "
+                                "against")
+        elif esc is not None:
+            rec = dict(status="inside the modelled envelope")
         bodies.append(dict(
             name=b.name, kind=b.kind, provenance=b.provenance,
             size_mm=list(b.size), centre_mm=list(b.centre),
             lo_mm=list(b.lo), hi_mm=list(b.hi),
             collision=b.collision, source=b.source,
-            **({"note": b.note} if b.note else {})))
+            **({"note": b.note} if b.note else {}), **rec))
     caps = SM.arm_collision_capsules()
     return dict(
         model="aris_system_model",
@@ -845,6 +858,18 @@ def manifest(out_dir=None):
             note="ESTIMATED, visual only, translucent.  Nothing about the "
                  "real dress has been measured."),
         meshes=meshes,
+        recert=dict(
+            bodies_pending=sum(1 for b in bodies
+                               if b.get("status") == "RE-CERT-PENDING"),
+            worst_escape_mm=round(recert_worst, 2),
+            what="every piece of mount hardware reaches outside the schematic "
+                 "keep-out `mounts.arm_mount_boxes` models, measured per body "
+                 "in `bodies[].escapes_modelled_envelope_mm`",
+            note="INCLUDING THE PLATE.  The re-issued layout sheet reads the "
+                 "plate as inside because it compared thicknesses (12.7 real "
+                 "against 50 modelled); in PLAN it escapes by 25.06 mm, "
+                 "because the modelled plate is centred on the J1 axis and "
+                 "the real one is offset 25.15 mm off it."),
         reconciliation=SM.reconciliation(h),
         open_questions=SM.OPEN_QUESTIONS,
         bodies=bodies)

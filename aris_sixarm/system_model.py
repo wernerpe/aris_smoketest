@@ -414,6 +414,46 @@ def cage_bodies(h=None):
     return out
 
 
+def modelled_envelope(aid, h=None):
+    """`mounts.arm_mount_boxes` for one arm, in mm -> [(lo, hi)].
+
+    The SCHEMATIC keep-out every certified number was earned against: a
+    0.226 x 0.190 x 0.05 plate on the base axis and a 0.2 x 0.2 column above
+    it to `ceiling_z`.  Read straight out of `mounts.py`, never restated.
+    """
+    spec = layout.FLEET_PROPOSED[aid]
+    h_m = (H_MOUNT if h is None else float(h)) / MM
+    return [(np.asarray(b["lo"], float) * MM, np.asarray(b["hi"], float) * MM)
+            for b in mounts.arm_mount_boxes(spec.mount, spec.xy, spec.yaw,
+                                            h_m, tag=f"mount{aid}")]
+
+
+def recert_escape_mm(body, h=None):
+    """How far `body` reaches outside the modelled keep-out -> mm, or None.
+
+    None when the body is not a piece of one arm's mount hardware.  0.0 when
+    it fits inside what was certified.  Anything positive is steel the
+    certified envelope does not contain, and therefore a RE-CERTIFICATION
+    item — the drop cluster is the big one, and it is 38.15 mm in x on the
+    plate alone, purely because the plate is offset off the axis.
+    """
+    aid = None
+    for a in layout.FLEET_PROPOSED:
+        for pfx in (f"post{a}_", f"gusset{a}_", f"clamp{a}", f"plate{a}"):
+            if body.name.startswith(pfx):
+                aid = a
+    if aid is None:
+        return None
+    lo = np.asarray(body.lo, float)
+    hi = np.asarray(body.hi, float)
+    # distance the box reaches outside the UNION of the envelope boxes; the
+    # two share a face in z, so a per-axis max over the merged span is exact
+    boxes = modelled_envelope(aid, h)
+    elo = np.min([b[0] for b in boxes], axis=0)
+    ehi = np.max([b[1] for b in boxes], axis=0)
+    return round(float(max(0.0, np.max(np.maximum(elo - lo, hi - ehi)))), 2)
+
+
 def bodies(h=None):
     """Every static body of the installation -> [Body]."""
     return ground_bodies() + cage_bodies(h)
@@ -507,7 +547,10 @@ def reconciliation(h=None):
              delta_mm=round(CLUSTER_W - 2 * m.boom_r * MM, 2),
              direction="MODEL IS WIDER IN X, NARROWER IN Y — the certified "
                        "column neither contains nor is contained by the real "
-                       "steel",
+                       "steel.  MEASURED per body: all 60 pieces of mount "
+                       "hardware escape it, worst 172.55 mm (a gusset), and "
+                       "the PLATE escapes by 25.06 mm in plan even though the "
+                       "sheet reads it as inside on thickness alone",
              action="RE-CERT REQUIRED before fabrication; send the steel "
                     "design back"),
         dict(item="mount plate thickness",

@@ -497,6 +497,50 @@ def test_the_holder_envelope_still_encloses_the_committed_meshes():
     assert worst <= 1e-5, worst
 
 
+def test_the_recert_label_is_measured_not_asserted(manifest):
+    """Every piece of mount hardware really does escape the modelled keep-out.
+
+    The re-issued layout sheet reads the PLATE as inside on thickness alone
+    (12.7 real against 50 modelled).  In plan it escapes by 25.06 mm, because
+    the modelled plate is centred on the J1 axis and the real one is offset
+    25.15 mm off it — which is why the label is computed from the geometry
+    rather than assigned by hand.
+    """
+    hw = [b for b in SM.bodies() if SM.recert_escape_mm(b) is not None]
+    assert len(hw) == 10 * len(layout.FLEET_PROPOSED)
+    by = {b["name"]: b for b in manifest["bodies"]}
+    for b in hw:
+        e = SM.recert_escape_mm(b)
+        assert e > 0.0, f"{b.name} is inside the envelope — has mounts.py moved?"
+        assert by[b.name]["status"] == "RE-CERT-PENDING", b.name
+        assert by[b.name]["escapes_modelled_envelope_mm"] == pytest.approx(
+            e, abs=1e-9)
+    assert manifest["recert"]["bodies_pending"] == len(hw)
+    assert manifest["recert"]["worst_escape_mm"] == pytest.approx(172.55,
+                                                                  abs=0.01)
+    assert SM.recert_escape_mm(
+        next(b for b in SM.bodies() if b.name == "plate13")) == pytest.approx(
+            25.06, abs=0.01)
+    # a body that is not mount hardware is not labelled
+    assert SM.recert_escape_mm(
+        next(b for b in SM.bodies() if b.name == "paper")) is None
+    assert not [b for b in manifest["bodies"]
+                if b.get("status") == "RE-CERT-PENDING"
+                and b["name"] not in {x.name for x in hw}]
+
+
+def test_the_modelled_envelope_is_read_from_mounts_not_restated():
+    """`modelled_envelope` must be `mounts.arm_mount_boxes`, not a copy."""
+    for aid, spec in layout.FLEET_PROPOSED.items():
+        want = mounts.arm_mount_boxes(spec.mount, spec.xy, spec.yaw, H_INV,
+                                      tag=f"mount{aid}")
+        got = SM.modelled_envelope(aid)
+        assert len(got) == len(want) == 2
+        for (lo, hi), w in zip(got, want):
+            assert np.allclose(lo, np.asarray(w["lo"]) * MM, atol=1e-9)
+            assert np.allclose(hi, np.asarray(w["hi"]) * MM, atol=1e-9)
+
+
 def test_the_cable_dress_is_visual_only_and_marked_estimated(links, manifest):
     found = [n for n in links if "cable_dress" in n]
     assert len(found) == len(SM.CABLE_DRESS) * len(layout.FLEET_PROPOSED)

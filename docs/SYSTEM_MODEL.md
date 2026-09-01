@@ -204,6 +204,27 @@ readably, in `model_manifest.json`:
 **The two that block fabrication are the drop cluster and the cable
 pass-through.**
 
+### RE-CERT-PENDING, measured per body
+
+The label is computed from the geometry, not assigned by hand:
+`system_model.recert_escape_mm` asks how far each body reaches outside
+`mounts.arm_mount_boxes` — the schematic envelope every certified number was
+earned against — and the manifest carries the answer on every body.
+
+| hardware | count | escape past the modelled keep-out |
+|---|---:|---|
+| gussets | 24 | 122.25 – **172.55 mm** |
+| drop posts | 24 | 58.75 – 109.05 mm |
+| clamp stacks | 6 | 25.15 mm |
+| **base plates** | 6 | **25.06 mm** |
+
+**All 60 pieces are outside it, the plate included** — and the plate is worth
+calling out, because the re-issued layout sheet reads it as *inside*. It
+compared thicknesses (12.7 real against 50 modelled) and that is true; in
+**plan** it escapes by 25.06 mm, because the modelled plate is centred on the
+J1 axis and the real one is offset 25.15 mm off it. Nothing here is inside
+what was certified.
+
 ## 7. The pen holder — RED FLAG
 
 The placement is **inferred, not read**. The 2026.08.19 CAD delivery is eight

@@ -240,10 +240,20 @@ ok("every arm collision body is an audited capsule",
    ckinds.get("Capsule", 0) == len(selfcoll.BODY_CAPSULES) * len(FLEET_PROPOSED),
    f"{ckinds.get('Capsule', 0)} of "
    f"{len(selfcoll.BODY_CAPSULES) * len(FLEET_PROPOSED)}")
-recert = [b.name for b in SM.bodies()
-          if b.name.startswith(("post", "gusset", "clamp"))]
-ok("the drop clusters are present as boxes", len(recert) == 6 * 9,
-   f"{len(recert)} bodies")
+recert = [b for b in SM.bodies() if SM.recert_escape_mm(b) is not None]
+ok("the drop clusters are present as boxes",
+   len(recert) == 10 * len(FLEET_PROPOSED),
+   f"{len(recert)} mount-hardware bodies (4 posts + 4 gussets + clamp + "
+   f"plate per arm)")
+_man = json.loads((DIR / "model_manifest.json").read_text())
+_by = {b["name"]: b for b in _man["bodies"]}
+ok("every piece of mount hardware is labelled RE-CERT-PENDING",
+   all(_by[b.name].get("status") == "RE-CERT-PENDING" for b in recert),
+   f"worst escape {_man['recert']['worst_escape_mm']} mm past the modelled "
+   "keep-out")
+ok("nothing else carries the label",
+   sum(1 for b in _man["bodies"]
+       if b.get("status") == "RE-CERT-PENDING") == len(recert))
 ok("cable dress carries no collision geometry",
    not lk[f"arm13_cable_dress_0"].findall("collision"))
 
