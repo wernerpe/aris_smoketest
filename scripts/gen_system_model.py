@@ -516,8 +516,8 @@ def _shell_rpy(link_el):
     it lies entirely on one side — so an unmirrored right finger puts its
     collision shell up to 52.8 mm from where the finger is.
     """
-    v = link_el.find("visual")
-    o = None if v is None else v.find("origin")
+    vis = link_el.find("visual")
+    o = None if vis is None else vis.find("origin")
     rpy = [float(t) for t in (o.get("rpy", "0 0 0") if o is not None
                               else "0 0 0").split()]
     if not any(rpy):
@@ -533,8 +533,8 @@ def _shell_rpy(link_el):
     # 5e-12 residual in floats.  A nanoradian is not a rotation; snap it, so
     # the left finger reads `0 0 0` and a reader can see at a glance that only
     # the right one is mirrored.
-    return tuple(0.0 if abs(v) < 1e-9 else v
-                 for v in rpy_from_R(R @ _RX_M90))
+    return tuple(0.0 if abs(t) < 1e-9 else t
+                 for t in rpy_from_R(R @ _RX_M90))
 
 
 def _add_capsule(link, a, b, r):
