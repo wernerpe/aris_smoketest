@@ -207,6 +207,8 @@ def retexture_gltfs(out_dir=None):
     recs = []
     for stem in FR3_MESHES:
         src = VENDOR_GLTF / f"{stem}.gltf"
+        if not src.is_file():
+            raise SystemExit(f"missing vendored glTF {src}")
         d = json.loads(src.read_text())
         # THE .bin COMES TOO, and the package is self-contained because of it.
         # Pointing the buffer at ../../../franka_description works in drake and
@@ -236,6 +238,11 @@ def retexture_gltfs(out_dir=None):
             d["images"] = keep
             for t in d.get("textures", []):
                 t.pop("extensions", None)
+                if t["source"] not in remap:
+                    raise SystemExit(
+                        f"{src.name}: texture {t} names only a ktx2 image, "
+                        "which VTK cannot read and this model does not "
+                        "vendor; it has no PNG to fall back to")
                 t["source"] = remap[t["source"]]
             used = [e for e in d.get("extensionsUsed", [])
                     if e != "KHR_texture_basisu"]
@@ -265,6 +272,8 @@ def vendor_collision(out_dir=None):
     recs = []
     for stem in FR3_MESHES:
         src = COLLISION_SRC / f"{stem}.obj"
+        if not src.is_file():
+            raise SystemExit(f"missing collision shell {src}")
         shutil.copyfile(src, dst / f"{stem}.obj")
         recs.append(dict(file=f"meshes/collision/{stem}.obj",
                          bytes=(dst / f"{stem}.obj").stat().st_size,
@@ -482,6 +491,7 @@ def clone_arm(robot, arm_id, spec, collision):
                                   filename=f"meshes/collision/{shell}.obj")
             else:
                 for a, b, r, tag in caps_by_link.get(bare, ()):
+                    el.append(ET.Comment(f" selfcoll.BODY_CAPSULES {tag} "))
                     _add_capsule(el, a, b, r)
         elif el.tag == "joint":
             name = el.get("name")
@@ -503,7 +513,7 @@ def clone_arm(robot, arm_id, spec, collision):
     j = ET.SubElement(robot, "joint", name=f"{pfx}mount_weld", type="fixed")
     ET.SubElement(j, "parent", link="world")
     ET.SubElement(j, "child", link=f"{pfx}panda_link0")
-    _origin(j, T[:3, 3], rpy_from_R(T[:3, :3]))
+    _origin(j, T[:3, 3], _rpy_checked(T[:3, :3]))
     return pfx
 
 
@@ -547,23 +557,56 @@ def _shell_rpy(link_el):
     # the left finger reads `0 0 0` and a reader can see at a glance that only
     # the right one is mirrored.
     return tuple(0.0 if abs(t) < 1e-9 else t
-                 for t in rpy_from_R(R @ _RX_M90))
+                 for t in _rpy_checked(R @ _RX_M90))
 
 
-def _add_capsule(link, a, b, r):
-    """A link-frame capsule -> a `drake:capsule` collision element."""
+def _axis_frame(a, b):
+    """Segment a->b -> (centre, rpy, length) for a z-axis-aligned primitive.
+
+    Any frame whose z is the segment will do — a capsule and a cylinder are
+    both axisymmetric — so the other two axes are picked off whichever world
+    axis is least parallel to it.  The `0.9` pivot keeps the cross product
+    away from zero: the worst case leaves it at 0.436 of unit length.
+    """
     a, b = np.asarray(a, float), np.asarray(b, float)
     d = b - a
     L = float(np.linalg.norm(d))
+    if L <= 0.0:
+        raise ValueError(f"degenerate segment {a} -> {b}")
     z = d / L
-    # any frame whose z is the capsule axis; the capsule is axisymmetric
     tmp = np.array([0.0, 0.0, 1.0]) if abs(z[2]) < 0.9 \
         else np.array([1.0, 0.0, 0.0])
     x = np.cross(tmp, z)
     x /= np.linalg.norm(x)
     R = np.column_stack([x, np.cross(z, x), z])
+    return 0.5 * (a + b), _rpy_checked(R), L
+
+
+def _rpy_checked(R):
+    """`rpy_from_R`, with its own decomposition verified here.
+
+    The only thing that checks a decomposition today is a bare `assert` inside
+    `gen_final_rig_urdf`, which `python -O` removes — and every rotation this
+    generator writes goes through it: base welds, shell mirrors, capsule
+    frames, holder cylinders.  Re-composing is three matrix products.
+    """
+    rpy = rpy_from_R(R)
+    r, p, y = (float(v) for v in rpy)
+    cr, sr, cp, sp, cy, sy = (np.cos(r), np.sin(r), np.cos(p), np.sin(p),
+                              np.cos(y), np.sin(y))
+    back = (np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1.0]])
+            @ np.array([[cp, 0, sp], [0, 1.0, 0], [-sp, 0, cp]])
+            @ np.array([[1.0, 0, 0], [0, cr, -sr], [0, sr, cr]]))
+    if not np.allclose(back, R, atol=1e-9):
+        raise ValueError(f"rpy {rpy} does not recompose to\n{R}")
+    return rpy
+
+
+def _add_capsule(link, a, b, r):
+    """A link-frame capsule -> a `drake:capsule` collision element."""
+    ctr, rpy, L = _axis_frame(a, b)
     c = ET.SubElement(link, "collision")
-    _origin(c, 0.5 * (a + b), rpy_from_R(R))
+    _origin(c, ctr, rpy)
     ET.SubElement(ET.SubElement(c, "geometry"),
                   "{http://drake.mit.edu}capsule",
                   radius=_fmt(r), length=_fmt(L))
@@ -586,8 +629,8 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     measurement — see system_model.OPEN_QUESTIONS["penholder_cradle"].
     """
     P = rig_final.PENHOLDER22
-    T_h, _, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
-                                                       D_HAND_TCP)
+    _, _, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
+                                                     D_HAND_TCP)
     # --- the holder: mesh visual, primitive collision --------------------
     link = ET.SubElement(robot, "link", name=f"{pfx}pen_holder")
     for mesh, rgba in ((f"meshes/penholder/{Path(P['visual_meshes'][0]).name}",
@@ -604,7 +647,7 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
                                                            D_HAND_TCP):
         assert kind == "cylinder", kind
         c = ET.SubElement(link, "collision")
-        _origin(c, T[:3, 3], rpy_from_R(T[:3, :3]))
+        _origin(c, T[:3, 3], _rpy_checked(T[:3, :3]))
         ET.SubElement(ET.SubElement(c, "geometry"), "cylinder",
                       radius=_fmt(r), length=_fmt(L))
     j = ET.SubElement(robot, "joint", name=f"{pfx}pen_holder_weld",
@@ -657,19 +700,12 @@ def add_cable_dress(robot, pfx):
     turning them on is a re-certification, not a switch.
     """
     for i, (parent, a, b, what) in enumerate(SM.CABLE_DRESS):
-        a, b = np.asarray(a, float), np.asarray(b, float)
-        d = b - a
-        L = float(np.linalg.norm(d))
-        z = d / L
-        tmp = np.array([0.0, 0.0, 1.0]) if abs(z[2]) < 0.9 \
-            else np.array([1.0, 0.0, 0.0])
-        x = np.cross(tmp, z)
-        x /= np.linalg.norm(x)
-        R = np.column_stack([x, np.cross(z, x), z])
+        ctr, rpy, L = _axis_frame(a, b)
         name = f"{pfx}cable_dress_{i}"
         link = ET.SubElement(robot, "link", name=name)
+        link.append(ET.Comment(f" ESTIMATED: {what} "))
         v = ET.SubElement(link, "visual")
-        _origin(v, 0.5 * (a + b), rpy_from_R(R))
+        _origin(v, ctr, rpy)
         ET.SubElement(ET.SubElement(v, "geometry"), "cylinder",
                       radius=_fmt(SM.CABLE_R / MM), length=_fmt(L))
         mat = ET.SubElement(v, "material", name=f"{name}_mat")
@@ -728,7 +764,12 @@ def manifest(out_dir=None):
     out_dir = Path(out_dir or OUT_DIR)
     h = SM.H_MOUNT
     mesh_src = out_dir / "meshes/MESH_SOURCES.json"
-    meshes = json.loads(mesh_src.read_text()) if mesh_src.is_file() else {}
+    if not mesh_src.is_file():
+        # emitting a manifest with no provenance record at all, quietly, is
+        # the one failure this file exists to make impossible
+        raise SystemExit(f"{mesh_src} is missing — run "
+                         "`gen_system_model.py meshes` before `urdf`")
+    meshes = json.loads(mesh_src.read_text())
     bodies = []
     recert_worst = 0.0
     for b in SM.bodies(h):

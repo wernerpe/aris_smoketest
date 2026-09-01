@@ -615,6 +615,25 @@ def test_the_capsule_variant_is_the_audited_set():
     assert worst < 1e-12, worst
 
 
+def test_the_two_collision_variants_differ_only_where_selfcoll_is_silent():
+    """And say where: the capsule set has no row for link8 or either finger."""
+    caps = {lnk for lnk, *_ in SM.arm_collision_capsules()}
+    assert caps == {f"panda_link{i}" for i in range(8)} | {"panda_hand"}
+    root_c = ET.parse(CAPSULES).getroot()
+    bare = {}
+    for el in root_c.findall("link"):
+        n = el.get("name")
+        if n.startswith("arm13_panda"):
+            bare[n[len("arm13_"):]] = len(el.findall("collision"))
+    for lnk in ("panda_link8", "panda_leftfinger", "panda_rightfinger"):
+        assert bare[lnk] == 0, f"{lnk} should be bare in the capsule variant"
+    # and the mesh variant does clothe the fingers
+    root_m = ET.parse(INSTALL).getroot()
+    m = {el.get("name"): el for el in root_m.findall("link")}
+    for lnk in ("panda_leftfinger", "panda_rightfinger"):
+        assert m[f"arm13_{lnk}"].findall("collision"), lnk
+
+
 def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
                                                           manifest):
     j = joints["arm13_pen_holder_weld"]

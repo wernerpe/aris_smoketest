@@ -212,6 +212,14 @@ exact mesh maximum it rounds up from.
 Two opinions on the same question, from the same measurement, in the same
 frame. Read a disagreement between them as a real result.
 
+**They are not interchangeable at the fingertips.** `selfcoll.BODY_CAPSULES`
+covers link0–7 and the hand; it has no row for `panda_link8` (a pure frame) or
+for either finger, because the finger is gripped shut around the holder and
+the holder's own envelope is what the planner watches there. So the capsule
+variant gives those three links **no collision geometry at all**, where the
+mesh variant gives the fingers their shells. If you are asking a question
+about the fingertips, ask it of `installation.urdf`.
+
 The tool is a cylinder set in both (3 envelope + 1 graphite). The cage is
 boxes. **No sphere carries a collision role anywhere in either file.**
 

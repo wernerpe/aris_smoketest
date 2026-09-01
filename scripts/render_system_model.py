@@ -41,6 +41,18 @@ from PIL import Image  # noqa: E402
 from aris_sixarm import system_model as SM  # noqa: E402
 from aris_sixarm.layout import FLEET_PROPOSED, Q_PARK_PROPOSED  # noqa: E402
 
+
+def _rel(p):
+    """Path for the log — relative to the repo when it is inside it.
+
+    `--out` may point anywhere; `relative_to` raises rather than falling back,
+    and raising after a successful render is a bad trade.
+    """
+    try:
+        return Path(p).relative_to(ROOT)
+    except ValueError:
+        return Path(p)
+
 URDF = ROOT / "assets/system_model/installation.urdf"
 MM = SM.MM
 CW, CL = SM.CANVAS_W / MM, SM.CANVAS_L / MM     # 1.8034 x 3.63064 m
@@ -93,7 +105,7 @@ LIGHTS = [
 ]
 
 
-def build(width, height):
+def build():
     b = DiagramBuilder()
     plant, sg = AddMultibodyPlantSceneGraph(b, time_step=0.0)
     Parser(plant).AddModels(str(URDF))
@@ -123,7 +135,7 @@ def pose_fleet(plant, ctx):
 
 
 def stills(out_dir, width, height):
-    b, plant, sg = build(width, height)
+    b, plant, sg = build()
     # the holder close-up needs a pose to aim at, so build the plant once,
     # solve the fleet, then read arm 31's hand out of it
     probe = b.Build().CreateDefaultContext()
@@ -134,7 +146,7 @@ def stills(out_dir, width, height):
     tip = plant.EvalBodyPoseInWorld(
         pctx, plant.GetBodyByName("arm31_pen_tip")).translation()
 
-    b, plant, sg = build(width, height)
+    b, plant, sg = build()
     sensors = {}
     for name, eye, target, fov in VIEWS:
         if name == "holder":
@@ -159,8 +171,7 @@ def stills(out_dir, width, height):
         img = s.color_image_output_port().Eval(s.GetMyContextFromRoot(root))
         p = out_dir / f"system_model_{name}.png"
         Image.fromarray(np.asarray(img.data)[:, :, :3]).save(p)
-        print(f"wrote {p.relative_to(ROOT)}  "
-              f"({p.stat().st_size / 1e6:.2f} MB)")
+        print(f"wrote {_rel(p)}  ({p.stat().st_size / 1e6:.2f} MB)")
 
 
 def meshcat_html(out_dir):
@@ -176,7 +187,7 @@ def meshcat_html(out_dir):
     dia.ForcedPublish(root)
     p = out_dir / "system_model.html"
     p.write_text(m.StaticHtml())
-    print(f"wrote {p.relative_to(ROOT)}  ({p.stat().st_size / 1e6:.1f} MB)")
+    print(f"wrote {_rel(p)}  ({p.stat().st_size / 1e6:.1f} MB)")
 
 
 def main():

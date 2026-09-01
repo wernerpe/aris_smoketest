@@ -1918,6 +1918,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm13_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -1934,6 +1935,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm13_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -2371,6 +2373,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm17_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -2387,6 +2390,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm17_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -2824,6 +2828,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm31_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -2840,6 +2845,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm31_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -3277,6 +3283,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm71_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -3293,6 +3300,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm71_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -3730,6 +3738,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm2_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -3746,6 +3755,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm2_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -4183,6 +4193,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm97_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -4199,6 +4210,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm97_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>

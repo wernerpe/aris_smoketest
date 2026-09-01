@@ -1548,42 +1548,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -1603,18 +1610,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -1641,18 +1651,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -1679,18 +1692,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -1717,18 +1733,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -1755,18 +1774,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -1793,18 +1815,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -1831,18 +1856,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -1881,18 +1909,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -2038,6 +2069,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm13_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -2054,6 +2086,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm13_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -2121,42 +2154,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -2176,18 +2216,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -2214,18 +2257,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -2252,18 +2298,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -2290,18 +2339,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -2328,18 +2380,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -2366,18 +2421,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -2404,18 +2462,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -2454,18 +2515,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -2611,6 +2675,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm17_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -2627,6 +2692,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm17_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -2694,42 +2760,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -2749,18 +2822,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -2787,18 +2863,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -2825,18 +2904,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -2863,18 +2945,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -2901,18 +2986,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -2939,18 +3027,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -2977,18 +3068,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -3027,18 +3121,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -3184,6 +3281,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm31_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -3200,6 +3298,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm31_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -3267,42 +3366,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -3322,18 +3428,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -3360,18 +3469,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -3398,18 +3510,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -3436,18 +3551,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -3474,18 +3592,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -3512,18 +3633,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -3550,18 +3674,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -3600,18 +3727,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -3757,6 +3887,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm71_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -3773,6 +3904,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm71_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -3840,42 +3972,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -3895,18 +4034,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -3933,18 +4075,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -3971,18 +4116,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -4009,18 +4157,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -4047,18 +4198,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -4085,18 +4239,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -4123,18 +4280,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -4173,18 +4333,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -4330,6 +4493,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm2_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -4346,6 +4510,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm2_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>
@@ -4413,42 +4578,49 @@
         <mesh filename="meshes/fr3/link0.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link0.0 -->
     <collision>
       <origin xyz="0.0 0.0 -0.1565" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.177" length="0.16299999999999998" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.1 -->
     <collision>
       <origin xyz="0.0 0.0 -0.0375" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.176" length="0.075" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.2 -->
     <collision>
       <origin xyz="0.0 0.0 0.0175" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.171" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.3 -->
     <collision>
       <origin xyz="0.0 0.0 0.052500000000000005" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.16" length="0.035" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.4 -->
     <collision>
       <origin xyz="0.0 0.0 0.085" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.112" length="0.03" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.5 -->
     <collision>
       <origin xyz="0.0 0.0 0.11" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.076" length="0.01999999999999999" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link0.6 -->
     <collision>
       <origin xyz="0.0 0.0 0.132" rpy="-0.0 -0.0 -1.5707963267948966" />
       <geometry>
@@ -4468,18 +4640,21 @@
         <mesh filename="meshes/fr3/link1.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link1.0 -->
     <collision>
       <origin xyz="-0.00034999999999999994 0.0044 -0.15155000000000002" rpy="-3.1091841190578955 -0.05816500022817679 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0894982681396685" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.1 -->
     <collision>
       <origin xyz="0.00595 -0.025099999999999997 -0.06935" rpy="2.5981002871536756 -0.0 2.875731178562999" />
       <geometry>
         <drake:capsule radius="0.068" length="0.1302710251744416" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link1.2 -->
     <collision>
       <origin xyz="-0.0002999999999999999 -0.05605 0.007449999999999998" rpy="0.7553307920524034 0.0 0.2900209659969322" />
       <geometry>
@@ -4506,18 +4681,21 @@
         <mesh filename="meshes/fr3/link2.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link2.0 -->
     <collision>
       <origin xyz="0.0003 -0.15455 -0.004" rpy="1.4780164233112232 -0.0 3.116626219111016" />
       <geometry>
         <drake:capsule radius="0.063" length="0.0885081352193119" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.1 -->
     <collision>
       <origin xyz="0.006500000000000001 -0.07 0.0244" rpy="1.1638949746962095 -0.0 -3.0709469144887533" />
       <geometry>
         <drake:capsule radius="0.069" length="0.1172411190666483" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link2.2 -->
     <collision>
       <origin xyz="0.0010499999999999997 0.0076500000000000005 0.05615" rpy="2.291826573308119 -0.0 -0.1754074028948897" />
       <geometry>
@@ -4544,18 +4722,21 @@
         <mesh filename="meshes/fr3/link3.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link3.0 -->
     <collision>
       <origin xyz="0.08675 0.0516 0.0042" rpy="1.488094746382991 -0.0 2.905409575158651" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11621243479077444" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.1 -->
     <collision>
       <origin xyz="0.03785 0.025250000000000005 -0.0416" rpy="1.4767509777476853 -0.0 3.1165800012334874" />
       <geometry>
         <drake:capsule radius="0.075" length="0.1405649316152503" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link3.2 -->
     <collision>
       <origin xyz="-0.011 -0.0066 -0.0858" rpy="0.5286258094039101 -0.0 -1.1208464911669562" />
       <geometry>
@@ -4582,18 +4763,21 @@
         <mesh filename="meshes/fr3/link4.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link4.0 -->
     <collision>
       <origin xyz="0.0075 -0.00555 0.05365" rpy="-3.085639956792522 0.053411028303068056 1.5707963267948966" />
       <geometry>
         <drake:capsule radius="0.062" length="0.11444203773089678" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.1 -->
     <collision>
       <origin xyz="-0.052 0.0379 0.03395" rpy="1.2726639232104888 -0.0 2.2661607769861534" />
       <geometry>
         <drake:capsule radius="0.077" length="0.128346756873713" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link4.2 -->
     <collision>
       <origin xyz="-0.0916 0.09230000000000001 -0.008249999999999999" rpy="2.1335169025665826 -0.0 -0.43918524419316307" />
       <geometry>
@@ -4620,18 +4804,21 @@
         <mesh filename="meshes/fr3/link5.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link5.0 -->
     <collision>
       <origin xyz="-0.0017500000000000007 0.06905 -0.0091" rpy="1.6018262940847847 -0.0 2.955090607061986" />
       <geometry>
         <drake:capsule radius="0.063" length="0.12248191703267874" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.1 -->
     <collision>
       <origin xyz="0.0009500000000000001 0.05615 -0.11410000000000001" rpy="1.4530991499948906 -0.0 -0.06426277051808396" />
       <geometry>
         <drake:capsule radius="0.067" length="0.09878593017226694" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link5.2 -->
     <collision>
       <origin xyz="0.0034 0.01865 -0.21960000000000002" rpy="2.2921176210131864 -0.0 -0.17547556351571875" />
       <geometry>
@@ -4658,18 +4845,21 @@
         <mesh filename="meshes/fr3/link6.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link6.0 -->
     <collision>
       <origin xyz="-0.01625 0.005049999999999999 0.0254" rpy="1.6313167811305427 -0.0 3.0760646662688846" />
       <geometry>
         <drake:capsule radius="0.051" length="0.10250726803500325" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.1 -->
     <collision>
       <origin xyz="0.049949999999999994 0.0154 0.008" rpy="1.4850750855159296 -0.0 -0.22899947785451033" />
       <geometry>
         <drake:capsule radius="0.056" length="0.14016022973725464" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link6.2 -->
     <collision>
       <origin xyz="0.09609999999999999 0.010350000000000002 -0.0015999999999999999" rpy="1.6012772303117038 -0.0 2.9545121711451654" />
       <geometry>
@@ -4696,18 +4886,21 @@
         <mesh filename="meshes/fr3/link7.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES link7.0 -->
     <collision>
       <origin xyz="-0.014199999999999999 -0.013600000000000001 0.07445" rpy="0.9040139704155793 -0.0 -0.8805870051400753" />
       <geometry>
         <drake:capsule radius="0.047" length="0.07195283177193236" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.1 -->
     <collision>
       <origin xyz="0.013750000000000002 0.013300000000000001 0.0861" rpy="1.5707963267948966 0.0 0.7701383038182409" />
       <geometry>
         <drake:capsule radius="0.044" length="0.08804504528932904" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES link7.2 -->
     <collision>
       <origin xyz="0.0437 0.04195 0.0848" rpy="1.43318116989653 -0.0 2.303340535996942" />
       <geometry>
@@ -4746,18 +4939,21 @@
         <mesh filename="meshes/fr3/hand.gltf" />
       </geometry>
     </visual>
+    <!-- selfcoll.BODY_CAPSULES hand.0 -->
     <collision>
       <origin xyz="-0.00905 0.0544 0.07215" rpy="0.6506846253023058 -0.0 -0.10450586156321183" />
       <geometry>
         <drake:capsule radius="0.05" length="0.16300742314385563" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.1 -->
     <collision>
       <origin xyz="0.0002999999999999999 -0.006850000000000002 0.027550000000000005" rpy="0.8374643911661814 0.0 0.044309854122043885" />
       <geometry>
         <drake:capsule radius="0.04" length="0.1701653901355972" />
       </geometry>
     </collision>
+    <!-- selfcoll.BODY_CAPSULES hand.2 -->
     <collision>
       <origin xyz="-5.0000000000000565e-05 -0.0815 0.0103" rpy="0.6588776553089218 0.0 0.2751013756671831" />
       <geometry>
@@ -4903,6 +5099,7 @@
     <origin xyz="0.11 0.0 0.11" />
   </joint>
   <link name="arm97_cable_dress_0">
+    <!-- ESTIMATED: forearm service loop -->
     <visual>
       <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
       <geometry>
@@ -4919,6 +5116,7 @@
     <origin xyz="0.0 0.0 0.0" />
   </joint>
   <link name="arm97_cable_dress_1">
+    <!-- ESTIMATED: wrist service loop -->
     <visual>
       <origin xyz="0.0575 0.0075 0.015" rpy="1.6647993606024736 -0.0 2.356194490192345" />
       <geometry>

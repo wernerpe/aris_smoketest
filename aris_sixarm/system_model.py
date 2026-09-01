@@ -171,8 +171,6 @@ GRID_T_CODE = round(GRID_U_CODE + PROFILE, 2)           # 2416.2
 POST_B = round(H_MOUNT - POST_OVER, 2)                  # 905.02
 POST_L = round(GRID_U - POST_B, 2)                      # 718.60 at h = 940
 POST_L_CODE = round(GRID_U_CODE - POST_B, 2)            # 1434.98
-PLATE_TOP = round(H_MOUNT + PLATE[2], 2)                # 952.70
-CLAMP_TOP = round(PLATE_TOP + CLAMP[2], 2)              # 1048.40
 
 # The gusset fix.  Four 8-in gussets per arm in the ORIGINAL orientation face
 # each other across a transverse pair and need 406.4 mm where only 216.20 mm
@@ -500,13 +498,6 @@ def bodies(h=None):
 # ---------------------------------------------------------------------------
 # 5.  THE ARMS AND THE TOOL
 # ---------------------------------------------------------------------------
-def arm_poses(h=None):
-    """{arm_id: 4x4 world<-base}, metres, at the layout's own mount height."""
-    h_m = (H_MOUNT if h is None else float(h)) / MM
-    return {aid: spec.T_world_base(h_m)
-            for aid, spec in layout.FLEET_PROPOSED.items()}
-
-
 def arm_collision_capsules():
     """The AUDITED per-link capsule set -> [(link, a, b, radius)], metres.
 
@@ -531,8 +522,6 @@ def arm_collision_capsules():
 # 0.344 mm, i.e. the Panda and FR3 collision shells are the same object.
 # Drake reports their convex hulls as the same volume to 0.1 % on nine of ten
 # (link6 4.2 %), so they are already convex and nothing is lost by using them.
-COLLISION_MESH_LINKS = ("link0", "link1", "link2", "link3", "link4", "link5",
-                        "link6", "link7", "hand", "finger")
 COLLISION_MESH_SOURCE = "vamp/resources/panda/meshes/collision"
 PANDA_VS_FR3_WORST_MM = 0.344      # out/collision_audit.json validate
 
