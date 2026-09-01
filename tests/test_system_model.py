@@ -430,20 +430,44 @@ def test_every_collision_shell_lands_on_its_own_link():
 
 
 def test_the_capsule_variant_is_the_audited_set():
+    """Every capsule's ENDPOINTS, not just its radius.
+
+    `_add_capsule` writes a centre, an rpy and a length; whether that says
+    what `selfcoll.BODY_CAPSULES` says is a question about frame construction
+    and it is worth asking directly.  Reconstruct a and b from what was
+    written and compare.
+    """
     root_c = ET.parse(CAPSULES).getroot()
     ns = "{http://drake.mit.edu}capsule"
-    got = []
+    want = {}
+    for lnk, a, b, r, _tag in SM.arm_collision_capsules():
+        want.setdefault(lnk, []).append((a, b, r))
+    n = 0
+    worst = 0.0
     for el in root_c.findall("link"):
         if not el.get("name").startswith("arm13_"):
             continue
+        bare = el.get("name")[len("arm13_"):]
+        got = []
         for c in el.findall("collision"):
             g = c.find(f"geometry/{ns}")
-            if g is not None:
-                got.append(float(g.get("radius")))
-    want = sorted(r for *_, r in
-                  ((c[0], c[5]) for c in selfcoll.BODY_CAPSULES))
-    assert len(got) == len(selfcoll.BODY_CAPSULES)
-    assert sorted(got) == pytest.approx(want, abs=1e-12)
+            if g is None:
+                continue
+            xyz, r_ = _origin_of(c)
+            z = _rpy(*r_)[:, 2]
+            L = float(g.get("length"))
+            got.append((xyz - 0.5 * L * z, xyz + 0.5 * L * z,
+                        float(g.get("radius"))))
+        assert len(got) == len(want.get(bare, [])), bare
+        for (ga, gb, gr), (wa, wb, wr) in zip(got, want.get(bare, [])):
+            assert gr == pytest.approx(wr, abs=1e-12)
+            # a capsule is symmetric, so either endpoint pairing is correct
+            worst = max(worst, min(
+                max(np.abs(ga - wa).max(), np.abs(gb - wb).max()),
+                max(np.abs(ga - wb).max(), np.abs(gb - wa).max())))
+            n += 1
+    assert n == len(selfcoll.BODY_CAPSULES), n
+    assert worst < 1e-12, worst
 
 
 def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
