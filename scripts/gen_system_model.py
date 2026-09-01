@@ -322,14 +322,21 @@ def decimate_holder(out_dir=None, faces=HOLDER_FACES):
             raise SystemExit(f"raw CAD not found: {src}")
         m = trimesh.load(src, force="mesh")
         ext0 = m.bounds[1] - m.bounds[0]
-        assert 5.0 < ext0.max() < 500.0, f"{name}: not millimetres? {ext0}"
+        # NOT an assert: a units check that `python -O` switches off is not a
+        # units check.  A printed pen holder is a 10 cm object; if these were
+        # metres the part would be 80 m long, if centimetres 80 cm.
+        if not 5.0 < ext0.max() < 500.0:
+            raise SystemExit(f"{name}: extent {ext0} is not millimetres — "
+                             "has the CAD been re-exported in other units?")
         n0 = len(m.faces)
         m.merge_vertices(merge_tex=True, merge_norm=True)
         if len(m.faces) > faces:
             m = m.simplify_quadric_decimation(face_count=faces)
         ext1 = m.bounds[1] - m.bounds[0]
         shrink = float(np.abs(ext1 - ext0).max())
-        assert shrink < 1.0, f"{name}: decimation lost {shrink:.3f} mm"
+        if shrink >= 1.0:
+            raise SystemExit(f"{name}: decimation lost {shrink:.3f} mm of "
+                             "extent; raise the face target")
         m.apply_scale(0.001)                       # mm -> m
         m.apply_transform(T)                       # -> panda_hand frame
         out = dst / f"penholder22_{name}_hand.obj"
@@ -360,7 +367,11 @@ def decimate_holder(out_dir=None, faces=HOLDER_FACES):
     # band — a tenth of the printer's own layer resolution, and five orders
     # below the 50 mm static margin.  It is REPORTED rather than hidden:
     # `envelope_worst_escape_m` goes into the manifest on every run.
-    assert worst <= 1e-5, f"holder escapes its envelope by {worst * 1000:.4f} mm"
+    if worst > 1e-5:
+        raise SystemExit("the holder escapes its collision envelope by "
+                         f"{worst * 1000:.4f} mm — the envelope is no longer "
+                         "conservative and rig_final.PENHOLDER22 must be "
+                         "re-fitted before this mesh is used")
     return recs, dict(parts=quality, envelope_worst_escape_m=round(worst, 12),
                       envelope_bar_m=1e-5)
 

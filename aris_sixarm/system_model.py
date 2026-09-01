@@ -266,10 +266,15 @@ _FLOOR_C = (0.30, 0.31, 0.33, 1.0)
 
 def _b(name, kind, lo, hi, provenance, source, rgba=_STEEL, collision=True,
        note=""):
-    assert provenance in PROVENANCE_CLASSES, provenance
+    if provenance not in PROVENANCE_CLASSES:
+        raise ValueError(f"{name}: provenance {provenance!r} is not one of "
+                         f"{PROVENANCE_CLASSES}")
     lo = tuple(round(float(v), 4) for v in lo)
     hi = tuple(round(float(v), 4) for v in hi)
-    assert all(b > a for a, b in zip(lo, hi)), (name, lo, hi)
+    # raise rather than assert: a degenerate box writes a degenerate URDF, and
+    # `python -O` must not be able to turn that check off
+    if not all(b > a for a, b in zip(lo, hi)):
+        raise ValueError(f"{name}: lo {lo} is not strictly below hi {hi}")
     return Body(name, kind, lo, hi, provenance, source, rgba, collision, note)
 
 
