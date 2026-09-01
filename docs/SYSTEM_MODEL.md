@@ -350,6 +350,7 @@ AUDIT**; the tool **geometry** is AUDIT and its **placement** is ASSUMED.
 | arm collision bodies | 66 manufacturer shells / 186 audited capsules |
 | dangling glTF references | **0** |
 | URDF regeneration | byte-stable, twice, equal to what is committed |
+| **clean-room rebuild** | `gen_system_model.py all` into an empty directory reproduces **all 64 committed files byte for byte** — textures, glTFs, shells, the re-decimated holder, the URDFs and the manifest |
 | **arm inside the steel at a park pose** | **none**, in either collision variant |
 
 ### What the corrected cage leaves around the certified programme
