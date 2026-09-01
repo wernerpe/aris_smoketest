@@ -318,6 +318,29 @@ AUDIT**; the tool **geometry** is AUDIT and its **placement** is ASSUMED.
 | arm collision bodies | 66 manufacturer shells / 186 audited capsules |
 | dangling glTF references | **0** |
 | URDF regeneration | byte-stable, twice, equal to what is committed |
+| **arm inside the steel at a park pose** | **none**, in either collision variant |
+
+### What the corrected cage leaves around the certified programme
+
+The question this model was built to answer, measured at the six certified
+park poses (`Q_PARK_PROPOSED`) — the poses the programme actually holds for
+whole phases:
+
+| | manufacturer shells | audited capsules |
+|---|---:|---:|
+| closest arm to another arm | 403.2 mm | **264.0 mm** |
+| closest arm to any structure | **196.5 mm** | **196.5 mm** |
+
+**Nothing interpenetrates.** And the 196.5 mm is the pen's own graphite over
+the *paper* — the park hover — not steel: the nearest actual steel is arm 2's
+hand to the back-left cage leg at 326.5 mm. The capsules read tighter than the
+shells because they are a conservative envelope of the same meshes, which is
+what a conservative envelope is for.
+
+This is the **park poses only**. The drawing poses are gated by the atlas
+against `mounts.py`'s schematic column, and re-gating them against this cage
+is exactly the re-certification item in §6 — the corrected cage is *lower*
+than the modelled column but *wider*, so neither result carries over.
 
 The generator writes every number as an **exact float64 round trip**
 (`repr`), so `float(text) == value` and there is no truncation error to pick a

@@ -19,9 +19,18 @@ WHAT IT CHECKS
      the 3-cylinder envelope matches rig_final exactly
   5  every cage body == aris_sixarm.system_model, to 10 pm
   6  NO UNAUDITED PRIMITIVES: no collision sphere anywhere, and every arm
-     collision geometry is either a manufacturer shell or an audited capsule
+     collision geometry is either a manufacturer shell or an audited capsule.
+     Whether each shell LANDS on its own link is checked in
+     `tests/test_system_model.py::test_every_collision_shell_lands_on_its_own_link`,
+     which needs trimesh rather than drake.
   7  the manifest agrees with the code it claims to describe
   8  the textures the glTFs ask for are all present
+  9  MEASURED CLEARANCES at the certified park poses, in both collision
+     variants.  Gated only on interpenetration — an arm inside the steel at a
+     pose the programme holds for whole phases is a broken model, not a tight
+     one.  The minima themselves are reported, because what the corrected cage
+     leaves around the certified programme is the question this model was
+     built to answer.
 """
 import json
 import sys
@@ -44,7 +53,8 @@ from aris_sixarm import system_model as SM  # noqa: E402
 from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN, PEN_EXT,  # noqa: E402
                                 PEN_LAT_HOLDER, QD_MAX, TAU_MAX, fk,
                                 tool_offset)
-from aris_sixarm.layout import FLEET_PROPOSED, LAYOUT_PROPOSED  # noqa: E402
+from aris_sixarm.layout import (FLEET_PROPOSED, LAYOUT_PROPOSED,  # noqa: E402
+                                Q_PARK_PROPOSED)
 
 DIR = ROOT / "assets/system_model"
 H_INV = float(LAYOUT_PROPOSED["h"])
@@ -271,6 +281,51 @@ ok("no dangling glTF reference", not missing, "; ".join(missing[:4]))
 ok("KHR_texture_basisu is gone (VTK cannot read it)",
    not any("KHR_texture_basisu" in g.read_text()
            for g in (DIR / "meshes/fr3").glob("*.gltf")))
+
+# --- 9. measured clearances ------------------------------------------------
+print("\n9. measured clearances at the certified park poses (mm)")
+CAGE = ("frame_", "leg_", "runway_", "post", "gusset", "clamp", "plate",
+        "table", "paper", "floor")
+
+
+def clearances(p, s_g, c, rt):
+    for aid in FLEET_PROPOSED:
+        for i in range(7):
+            p.GetJointByName(f"arm{aid}_panda_joint{i + 1}").set_angle(
+                c, float(Q_PARK_PROPOSED[aid][i]))
+    qo = s_g.get_query_output_port().Eval(s_g.GetMyContextFromRoot(rt))
+    ins = s_g.model_inspector()
+    nm = {g: ins.GetName(ins.GetFrameId(g)).split("::")[-1]
+          for g in ins.GetAllGeometryIds()
+          if ins.GetProperties(g, Role.kProximity) is not None}
+    best = {}
+    for d in qo.ComputeSignedDistancePairwiseClosestPoints(max_distance=0.60):
+        a, b = nm.get(d.id_A), nm.get(d.id_B)
+        if a is None or b is None:
+            continue
+        for x, y in ((a, b), (b, a)):
+            if not x.startswith("arm"):
+                continue
+            aid = x.split("_")[0]
+            if y.startswith("arm"):
+                k = "arm vs arm" if y.split("_")[0] != aid else None
+            elif y.startswith(CAGE):
+                k = "arm vs structure"
+            else:
+                k = None
+            if k and d.distance < best.get(k, (1e9,))[0]:
+                best[k] = (d.distance, x, y)
+    return best
+
+
+for tag, p, s_g, c, rt in (("manufacturer shells", plant, sg, ctx, root),
+                           ("audited capsules", cplant, csg, cctx, croot)):
+    best = clearances(p, s_g, c, rt)
+    for k, (dist, a, b) in sorted(best.items()):
+        print(f"     {tag:20s} {k:18s} {dist * 1000:8.1f}   {a} <-> {b}")
+    ok(f"{tag}: nothing interpenetrates at a park pose",
+       all(v[0] > 0 for v in best.values()),
+       f"min {min(v[0] for v in best.values()) * 1000:.1f} mm")
 
 print(f"\n{'FAILED' if fails else 'ALL PASS'} — worst pen tip "
       f"{worst_tip:.3e} m over {len(qs)} configs x {len(FLEET_PROPOSED)} arms")
