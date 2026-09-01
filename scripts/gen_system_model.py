@@ -65,8 +65,11 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
+# guarded: the tests load this module by path three times, and an unguarded
+# insert leaves six copies of the same two directories on sys.path
+for _p in (str(ROOT / "scripts"), str(ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from aris_sixarm import frames, layout, mounts, rig_final, selfcoll  # noqa: E402
 from aris_sixarm import system_model as SM                            # noqa: E402
