@@ -64,6 +64,32 @@ The corrected post is within 18 mm of the one that was actually built. The
 sheet's own UNKNOWN 3 spotted the same thing from the other end ("a grid at
 the ORIGINAL's own beam height gives a 718.6 post").
 
+### Corroborated straight off the drawing, not only through the extraction
+
+Everything above descends from the DXF solids via
+`rig_final.FRAME_BOXES_W_CM`. The PDF also carries a **text block written by
+the person who drew it**, and it says the same things independently:
+
+> Table height 63,5 cm, Height construction **233,7 cm**
+> Entire cage construction built with T-slotted aluminum profile:
+> 3" x 3" (**7,62 x 7,62 cm**) or 1,5" x 3"
+> Base plate robot arms: **22,6 x 19,0 cm**
+> Position of center of rotation of the arm: **13,8** x 9,5 cm on the base plate
+> **Note: the axis of rotation of the robot arms is not in the center of the base plates!**
+
+And the front view **dimensions the 233,7 from the floor**, with 63,5 (the
+table) stacked underneath it — which is the datum correction, in the author's
+own drafting. `test_the_model_reproduces_the_drawings_own_TEXT_block` holds
+the model to those figures at the text's own rounding.
+
+One text-versus-solid disagreement is worth knowing about and changes nothing
+here: *"Distance backside base plate to surface ( drawing paper: 91,6 cm"*
+says 916 mm where the `down_plate` solid sits at **922.0**. That is the
+*original* rig's mount plane; the height in force is
+`layout.LAYOUT_PROPOSED["h"] = 940`, so nothing in this model depends on it.
+Pinned so nobody re-derives 922 from the text and concludes the model is
+wrong.
+
 **Nothing here is a survey. The real room has never been measured.**
 
 ## 2. The z ladder in force

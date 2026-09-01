@@ -89,6 +89,67 @@ def test_the_cage_reproduces_the_drawings_own_overall_height():
     assert SM.GRID_T - SM.GRID_U == pytest.approx(SM.PROFILE, abs=1e-9)
 
 
+def test_the_model_reproduces_the_drawings_own_TEXT_block():
+    """A second provenance path: the drawing's words, not its solids.
+
+    Everything else here descends from the DXF through
+    `rig_final.FRAME_BOXES_W_CM`.  The PDF also carries a human-readable text
+    block, written by the person who drew it, and it is an independent
+    statement of the same geometry.  If the extraction ever silently changed
+    which solid it read, these would part company with it.
+
+    Quoted verbatim from "Drawing installation, 3 arms, 1 up, 1 side, 1 down,
+    sizes cm", page 1:
+
+        "Table height 63,5 cm, Height construction  233,7 cm"
+        "Entire cage construction built with T-slotted aluminum profile:
+         3" x 3" (7,62 x 7,62 cm) or 1,5" x 3""
+        "Base plate robot arms: 22,6 x 19,0 cm"
+        "Position of center of rotation of the arm: 13,8 x 9,5 cm on the
+         base plate"
+        "Note: the axis of rotation of the robot arms is not in the center
+         of the base plates!"
+
+    The tolerances are the TEXT's own rounding, not the model's: the block is
+    quoted to the millimetre and the solids carry more digits.
+    """
+    # "Height construction 233,7 cm" — and the front view dimensions it from
+    # the FLOOR.  This is the whole datum correction, in the author's words.
+    assert SM.CAGE_TOTAL_H == pytest.approx(2337.0, abs=1.0)
+    # "Table height 63,5 cm"
+    assert -SM.FLOOR_Z + SM.TABLE_TOP_Z == pytest.approx(635.0, abs=2.0)
+    # '3" x 3" (7,62 x 7,62 cm)'
+    assert SM.PROFILE == pytest.approx(76.2, abs=1e-9)
+    # "Base plate robot arms: 22,6 x 19,0 cm"
+    assert SM.PLATE[0] == pytest.approx(226.0, abs=0.5)
+    assert SM.PLATE[1] == pytest.approx(190.0, abs=0.5)
+    # "the axis of rotation ... 13,8 ... on the base plate", i.e. the centre of
+    # a 22.6 plate is 11.3 from the edge and the axis is 13.8, so the plate
+    # centre sits 25 mm off the axis — which is the offset whose DIRECTION is
+    # OPEN_QUESTIONS["plate_offset_direction"], and the drawing itself calls
+    # the asymmetry out: "Note: the axis of rotation of the robot arms is not
+    # in the center of the base plates!"
+    assert SM.PLATE_OFF == pytest.approx((22.6 / 2 - 13.8) * 10, abs=0.5)
+    # "218,4" on both views — and the derived frame lands on it by choosing
+    # the 190.5 margin, which is the one place the new frame quotes the old
+    assert SM.FR_W == pytest.approx(2184.0, abs=1.0)
+
+
+def test_the_drawings_text_and_its_solids_disagree_about_the_mount_plane():
+    """91,6 cm in the text, 92.2 in the solid.  Noted, and it changes nothing.
+
+    "Distance backside base plate to surface ( drawing paper: 91,6 cm" says
+    916 mm; `down_plate` lo sits at 922.0 above the paper.  The 6 mm is a
+    text-versus-solid disagreement in the ORIGINAL drawing, and this model is
+    unaffected by it because the mount plane in force is
+    `layout.LAYOUT_PROPOSED["h"] = 940`, not the drawing's.  It is pinned so
+    that nobody re-derives 922 from the text and thinks the model is wrong.
+    """
+    assert SM.O_MOUNT == pytest.approx(922.0, abs=0.05)
+    assert abs(SM.O_MOUNT - 916.0) == pytest.approx(6.0, abs=0.1)
+    assert SM.H_MOUNT == 940.0, "the rig's own height, not the drawing's"
+
+
 def test_the_paper_datum_is_corroborated_by_two_independent_numbers():
     """The whole correction turns on where the paper's top surface is.
 
