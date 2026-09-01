@@ -186,6 +186,17 @@ def test_the_open_questions_are_the_ones_that_block_fabrication():
         assert set(q) == {"what", "why", "rides_on", "answer_by", "blocking"}, k
 
 
+def test_the_loader_finds_all_three_files_and_refuses_a_fourth():
+    assert SM.urdf_path("mesh") == INSTALL
+    assert SM.urdf_path("capsule") == CAPSULES
+    assert SM.urdf_path(with_arms=False) == ENV
+    assert SM.manifest_path() == MANIFEST
+    for p in (INSTALL, CAPSULES, ENV, MANIFEST):
+        assert p.is_file()
+    with pytest.raises(ValueError):
+        SM.urdf_path("spheres")      # the model this one exists to replace
+
+
 def test_the_truth_module_does_not_touch_the_tool_global():
     before = frames.PEN_LAT
     SM.report()

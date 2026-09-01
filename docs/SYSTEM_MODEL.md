@@ -16,6 +16,17 @@ python3 scripts/gen_system_model.py all           # meshes + URDFs + manifest
 
 `<station venv>` = `/home/franka/git/franka_manipulation_station/.venv`.
 
+From python, so nothing hardcodes the layout:
+
+```python
+from aris_sixarm import system_model as SM
+SM.urdf_path()                      # installation.urdf, manufacturer shells
+SM.urdf_path("capsule")             # installation_capsules.urdf
+SM.urdf_path(with_arms=False)       # environment.urdf
+SM.manifest_path()                  # model_manifest.json
+SM.report()                         # the dimensions, as text
+```
+
 ---
 
 ## 1. The headline: the ceiling datum was wrong, and this model says so

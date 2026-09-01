@@ -59,6 +59,7 @@ Every body carries a `source` naming exactly one of:
 `Body.provenance` is one of those four strings; `manifest()` reports the mix.
 """
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -703,6 +704,35 @@ def provenance_mix(h=None):
     n = len(bs)
     return {c: (counts[c], round(100.0 * counts[c] / n, 1))
             for c in PROVENANCE_CLASSES}
+
+
+# ---------------------------------------------------------------------------
+# 7.  FINDING THE ASSET
+# ---------------------------------------------------------------------------
+ASSET_DIR = Path(__file__).resolve().parents[1] / "assets/system_model"
+COLLISION_VARIANTS = ("mesh", "capsule")
+
+
+def urdf_path(collision="mesh", with_arms=True):
+    """The generated URDF -> Path.  So no consumer hardcodes the layout.
+
+    `collision` picks which arm collision model the file carries:
+      "mesh"     the manufacturer's own collision shells
+      "capsule"  the audited capsule set (`selfcoll.BODY_CAPSULES`)
+    `with_arms=False` gives the static scene alone — cage, table, canvas.
+    """
+    if collision not in COLLISION_VARIANTS:
+        raise ValueError(f"collision must be one of {COLLISION_VARIANTS}, "
+                         f"not {collision!r}")
+    if not with_arms:
+        return ASSET_DIR / "environment.urdf"
+    return ASSET_DIR / ("installation.urdf" if collision == "mesh"
+                        else "installation_capsules.urdf")
+
+
+def manifest_path():
+    """The machine-readable provenance record -> Path."""
+    return ASSET_DIR / "model_manifest.json"
 
 
 def report(h=None):
