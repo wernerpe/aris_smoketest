@@ -205,9 +205,25 @@ def test_cage_members_come_from_the_drawing_not_from_here():
 
 
 def test_the_plate_nests_between_the_posts_only_just():
-    """7.34 mm each side — which is why the offset DIRECTION is load-bearing."""
-    clear = (SM.POST_GAP - SM.PLATE[0]) / 2
-    assert clear == pytest.approx(7.34, abs=0.01)
+    """7.79 mm each side — which is why the offset DIRECTION is load-bearing.
+
+    MEASURED OFF THE BODIES THE MODEL EMITS, not off `POST_GAP`.  `POST_GAP`
+    is the slot the DRAWING's slightly-fat 77.2 mm booms leave (240.5); this
+    model builds nominal 76.2 posts, so its own slot is 241.4.  A test that
+    reads the constant cannot see the pitch or the section move.
+    """
+    by = {b.name: b for b in SM.bodies()}
+    for aid in layout.FLEET_PROPOSED:
+        west, east = by[f"post{aid}_00"], by[f"post{aid}_10"]
+        plate = by[f"plate{aid}"]
+        slot = east.lo[0] - west.hi[0]
+        assert slot == pytest.approx(SM.POST_SLOT, abs=1e-9)
+        assert plate.lo[0] > west.hi[0], f"arm {aid}: plate fouls the west post"
+        assert plate.hi[0] < east.lo[0], f"arm {aid}: plate fouls the east post"
+        clear = min(plate.lo[0] - west.hi[0], east.lo[0] - plate.hi[0])
+        assert clear == pytest.approx(SM.PLATE_SIDE_CLEAR, abs=0.01)
+    clear = SM.PLATE_SIDE_CLEAR
+    assert clear == pytest.approx(7.79, abs=0.01)
     assert "plate_offset_direction" in SM.OPEN_QUESTIONS
     q = SM.OPEN_QUESTIONS["plate_offset_direction"]
     assert "7.34" in q["rides_on"]
@@ -222,6 +238,39 @@ def test_the_rotated_gussets_actually_clear_each_other():
     assert SM.GUSSET_GAP == pytest.approx(216.20, abs=0.01)
     assert SM.GUSSET_PAIR_CLEAR > 0, "the fix must actually fix it"
     assert SM.GUSSET_PAIR_CLEAR == pytest.approx(89.20, abs=0.01)
+
+
+def test_no_two_static_bodies_interpenetrate():
+    """Steel inside steel is a length nobody can cut.
+
+    This caught the corner legs: drawn to the perimeter rail's TOP they put
+    76.2 mm of themselves inside the rail they carry, and `reconciliation()`
+    published the resulting 1727.2 mm as a leg length.  They stop at the
+    rail's underside now, the way the drop posts stop under the runway, and
+    the cut length is 1651.0.
+    """
+    bs = SM.bodies()
+    bad = []
+    for i, a in enumerate(bs):
+        for b in bs[i + 1:]:
+            ov = [min(a.hi[k], b.hi[k]) - max(a.lo[k], b.lo[k])
+                  for k in range(3)]
+            if all(o > 1e-9 for o in ov):
+                bad.append(f"{a.name} n {b.name} by "
+                           f"{tuple(round(o, 2) for o in ov)}")
+    assert not bad, "; ".join(bad)
+
+
+def test_the_legs_are_a_length_somebody_can_cut():
+    by = {b.name: b for b in SM.bodies()}
+    leg = by["leg_FL"]
+    rail = by["frame_side_W"]
+    assert leg.hi[2] == pytest.approx(SM.GRID_U, abs=1e-9)
+    assert rail.lo[2] == pytest.approx(SM.GRID_U, abs=1e-9), \
+        "the leg must stop where the rail it carries begins"
+    assert leg.hi[2] - leg.lo[2] == pytest.approx(1651.0, abs=0.01)
+    item = next(r for r in SM.reconciliation() if r["item"] == "cage legs")
+    assert item["delta_mm"] == pytest.approx(1651.0, abs=0.01)
 
 
 def test_every_body_carries_a_provenance_class_and_assumed_ones_a_note():
@@ -475,6 +524,11 @@ def test_the_mesh_variant_uses_the_manufacturers_own_shells(links):
                 assert (DIR / p).is_file(), p
                 seen.add(p.stem)
     assert seen == want, seen
+    # a SET would not notice one finger losing its shell, since both fingers
+    # name the same mesh; count the collision elements too
+    n = sum(len(el.findall("collision/geometry/mesh"))
+            for name, el in links.items() if name.startswith("arm13_"))
+    assert n == 11, f"{n} shells on arm 13; want link0..7 + hand + 2 fingers"
 
 
 def test_every_collision_shell_lands_on_its_own_link():
@@ -576,6 +630,11 @@ def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
         assert float(g.get("length")) == pytest.approx(L, abs=1e-12)
         xyz, rpy = _origin_of(c)
         assert np.allclose(xyz, T[:3, 3], atol=1e-12)
+        # the AXIS too: "coaxial with the bore" is the whole claim, and a
+        # cylinder written with an identity rotation would pass on radius,
+        # length and centre alone
+        assert np.allclose(_rpy(*rpy), T[:3, :3], atol=1e-12), \
+            "the envelope cylinder is not on the bore axis"
     # the red flag must be in the machine-readable manifest, not only in prose
     assert manifest["tool"]["provenance"] == "ASSUMED"
     assert "INFERRED" in manifest["tool"]["red_flag"]
@@ -631,8 +690,18 @@ def test_the_recert_label_is_measured_not_asserted(manifest):
         assert by[b.name]["escapes_modelled_envelope_mm"] == pytest.approx(
             e, abs=1e-9)
     assert manifest["recert"]["bodies_pending"] == len(hw)
-    assert manifest["recert"]["worst_escape_mm"] == pytest.approx(172.55,
+    assert manifest["recert"]["worst_escape_mm"] == pytest.approx(185.55,
                                                                   abs=0.01)
+    # AND INDEPENDENTLY, because re-deriving through recert_escape_mm cannot
+    # see a bug in recert_escape_mm.  A gusset sits 1.5 m up, where the only
+    # envelope box is the 200-wide COLUMN; measuring it against the union's
+    # bounding box (226 wide, from the plate below) reported 13 mm short.
+    g = next(b for b in SM.bodies() if b.name == "gusset13_10")
+    col = SM.modelled_envelope(13)[1]                       # the boom column
+    assert col[0][2] > SM.z_ladder()["plate_top"], "boxes[1] must be the column"
+    assert g.lo[2] > col[0][2], "the gusset must sit in the column's band only"
+    assert g.hi[0] - col[1][0] == pytest.approx(185.55, abs=0.01)
+    assert SM.recert_escape_mm(g) == pytest.approx(185.55, abs=0.01)
     assert SM.recert_escape_mm(
         next(b for b in SM.bodies() if b.name == "plate13")) == pytest.approx(
             25.06, abs=0.01)

@@ -20,7 +20,7 @@
 > §4's keep-out envelope is also **not** what the real steel does: the
 > radius-100 column is neither contained by nor contains the 2 × 2 drop-post
 > cluster the drawing actually specifies. All 60 pieces of mount hardware
-> fall outside it, worst 172.55 mm. That is a re-certification, and it is
+> fall outside it, worst 185.55 mm. That is a re-certification, and it is
 > queued.
 
 Adopted 2026-08-25 (layout `LAYOUT_PROPOSED`, certified 99.98 % coverage at

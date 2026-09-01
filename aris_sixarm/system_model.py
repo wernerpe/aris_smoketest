@@ -31,8 +31,11 @@ PAPER the same steel reaches only
     2260.3 - 636.68 = 1623.62 mm      (beam underside — what a post hangs from)
 
 `ceiling_z = 2.34` is that 233,7 re-datumed to the paper, i.e. the floor-
-referenced number used as a paper-referenced one.  It puts the top of the
-construction 2976.68 mm above the paper — 716.4 mm higher than the drawing.
+referenced number used as a paper-referenced one.  It puts the beam underside
+at 2340.0 above the paper against the drawing's 1623.62, and the top of the
+construction at 2416.2 against 1699.82 — 716.4 mm too high, both of them.
+Measured from the FLOOR, where the drawing measures, the code datum stands the
+cage 3052.88 mm tall against the 2336.5 that was drawn.
 
 Being too tall is CONSERVATIVE for the collision model (the schematic booms
 are modelled ~700 mm longer than the steel will be, and a longer obstacle
@@ -104,7 +107,14 @@ PROFILE_THIN = 38.1                # 1.5 in, the permitted alternate
 PLATE = tuple(np.round((_PL_HI - _PL_LO) * 10.0, 2))          # 225.82x190x12.7
 POST_PITCH_X = round(float((_BE_LO[0] + _BE_HI[0]
                             - _BW_LO[0] - _BW_HI[0]) / 2 * 10.0), 2)   # 317.6
+# The drawing's own booms are 77.2 and 77.0 wide, so the slot they leave is
+# 240.5.  This model builds nominal 76.2 posts at that pitch, so ITS slot is
+# 241.4 and the plate has 7.79 mm each side rather than 7.34.  Both are
+# carried: the fabricator gets the model's, and the 240.5 stays because it is
+# what the drawing measures.
 POST_GAP = round(float((_BE_LO[0] - _BW_HI[0]) * 10.0), 2)             # 240.5
+POST_SLOT = round(POST_PITCH_X - PROFILE, 2)                           # 241.4
+PLATE_SIDE_CLEAR = round((POST_SLOT - PLATE[0]) / 2, 2)                # 7.79
 POST_PITCH_Y = PROFILE                                                 # 76.2
 POST_Y_BAND = round(float((_BW_HI[1] - _BW_LO[1]) * 10.0), 2)          # 152.4
 PLATE_OFF = round(float(((_PL_LO[0] + _PL_HI[0]) / 2 - _AX[0]) * 10.0), 2)
@@ -191,7 +201,7 @@ def plate_centre_x(x_axis):
     §3), so the offset flips: the plate centre is 25.15 mm in canvas +x.
 
     THE DIRECTION IS AN INFERENCE and 7.3 mm rides on it — the plate nests in
-    a 240.5 mm slot with 7.34 mm clear each side, so a plate offset the wrong
+    a 241.4 mm slot with 7.79 mm clear each side, so a plate offset the wrong
     way does not fit.  See OPEN_QUESTIONS["plate_offset_direction"].
     """
     return float(x_axis) - PLATE_OFF
@@ -291,13 +301,14 @@ def ground_bodies():
            _FLOOR_C, collision=False,
            note="visual datum only — the room has never been surveyed"),
         _b("table", "table",
-           (FR_X0, FR_Y0, FLOOR_Z),
-           (FR_X1, FR_Y1, TABLE_TOP_Z),
+           (IN_X0, FR_Y0 + PROFILE, FLOOR_Z),
+           (IN_X1, FR_Y1 - PROFILE, TABLE_TOP_Z),
            "ASSUMED",
            f"top and floor from the drawing's table_block "
            f"({FLOOR_Z} .. {TABLE_TOP_Z} mm about the paper); the FOOTPRINT is "
-           f"assumed to be the cage's, because the original's 2.08 m table "
-           f"cannot carry a {CANVAS_L / 1000:.2f} m canvas",
+           f"assumed to be the cage's INNER span, because the original's "
+           f"2.08 m table cannot carry a {CANVAS_L / 1000:.2f} m canvas and a "
+           "table drawn out to the frame's OUTSIDE would swallow the legs",
            _TABLE_C,
            note="height is DRAWING, footprint is ASSUMED"),
         _b("paper", "canvas",
@@ -336,12 +347,17 @@ def cage_bodies(h=None):
                         ("BL", FR_X0, FR_Y1 - PROFILE),
                         ("BR", FR_X1 - PROFILE, FR_Y1 - PROFILE)):
         out.append(_b(f"leg_{tag}", "cage",
-                      (cx, cy, LEG_BOTTOM), (cx + PROFILE, cy + PROFILE,
-                                             GRID_T),
+                      (cx, cy, LEG_BOTTOM),
+                      (cx + PROFILE, cy + PROFILE, GRID_U),
                       "ASSUMED",
                       "the cage is self-supporting and floor-standing, so it "
-                      "needs legs; section, plan position and z-range mirror "
-                      f"the drawing's post_{tag} exactly, but a "
+                      "needs legs; section and plan position mirror the "
+                      f"drawing's post_{tag}.  It stops at the perimeter "
+                      f"rail's UNDERSIDE ({GRID_U}), the way the drop posts "
+                      "stop under the runway — a leg drawn to the rail's TOP "
+                      "is 76.2 mm of steel inside the rail and a length no "
+                      f"one can cut.  Cut length {round(GRID_U - LEG_BOTTOM, 2)}"
+                      ".  But a "
                       f"{FR_L / 1000:.2f} m frame on four legs has NO "
                       "precedent — the original spans 2.08 m",
                       _STEEL_DARK,
@@ -415,8 +431,10 @@ def cage_bodies(h=None):
                       f"Centre offset {-PLATE_OFF} mm in canvas +x from the "
                       "J1 axis — DIRECTION INFERRED",
                       _PLATE_C,
-                      note=f"nests in the {POST_GAP} mm post slot with "
-                           f"{(POST_GAP - PLATE[0]) / 2:.2f} mm each side"))
+                      note=f"nests in this model's {POST_SLOT} mm post slot "
+                           f"with {PLATE_SIDE_CLEAR} mm each side (the "
+                           f"drawing's own booms leave {POST_GAP}, i.e. "
+                           f"{(POST_GAP - PLATE[0]) / 2:.2f} each side)"))
     return out
 
 
@@ -452,12 +470,26 @@ def recert_escape_mm(body, h=None):
         return None
     lo = np.asarray(body.lo, float)
     hi = np.asarray(body.hi, float)
-    # distance the box reaches outside the UNION of the envelope boxes; the
-    # two share a face in z, so a per-axis max over the merged span is exact
     boxes = modelled_envelope(aid, h)
-    elo = np.min([b[0] for b in boxes], axis=0)
-    ehi = np.max([b[1] for b in boxes], axis=0)
-    return round(float(max(0.0, np.max(np.maximum(elo - lo, hi - ehi)))), 2)
+
+    # THE UNION, NOT ITS BOUNDING BOX.  The two envelope boxes stack in z but
+    # do NOT share a footprint: the plate is 226 x 190 over z in [h, h+50] and
+    # the column is 200 x 200 above it.  Merging them into one AABB would
+    # score a gusset 1.5 m up — where only the 200-wide column exists —
+    # against a 226-wide envelope, and report every escape above the plate
+    # band 13 mm SHORT.  Under-reporting is the wrong direction for a re-cert
+    # queue, so the bands are walked separately.
+    esc = 0.0
+    # z first, against the union's own span (the boxes are contiguous in z)
+    zlo = min(float(b[0][2]) for b in boxes)
+    zhi = max(float(b[1][2]) for b in boxes)
+    esc = max(esc, zlo - lo[2], hi[2] - zhi)
+    # then x and y, against each band the body actually reaches into
+    for blo, bhi in boxes:
+        if hi[2] > blo[2] and lo[2] < bhi[2]:
+            for ax in (0, 1):
+                esc = max(esc, blo[ax] - lo[ax], hi[ax] - bhi[ax])
+    return round(float(max(0.0, esc)), 2)
 
 
 def bodies(h=None):
@@ -554,7 +586,7 @@ def reconciliation(h=None):
              direction="MODEL IS WIDER IN X, NARROWER IN Y — the certified "
                        "column neither contains nor is contained by the real "
                        "steel.  MEASURED per body: all 60 pieces of mount "
-                       "hardware escape it, worst 172.55 mm (a gusset), and "
+                       "hardware escape it, worst 185.55 mm (a gusset), and "
                        "the PLATE escapes by 25.06 mm in plan even though the "
                        "sheet reads it as inside on thickness alone",
              action="RE-CERT REQUIRED before fabrication; send the steel "
@@ -564,9 +596,14 @@ def reconciliation(h=None):
                   f"{m.plate_xy[0] * MM:.0f} x {m.plate_xy[1] * MM:.0f}",
              model=f"{PLATE[2]} mm thick, {PLATE[0]} x {PLATE[1]}",
              delta_mm=round((m.plate_t * MM) - PLATE[2], 2),
-             direction="CODE IS CONSERVATIVE — the modelled plate is thicker "
-                       "and marginally wider, so the real one is inside it",
-             action="none; carried as a known conservatism"),
+             direction="CONSERVATIVE IN THICKNESS ONLY.  50 modelled against "
+                       "12.7 real, and 226 against 225.82 — but the modelled "
+                       "plate is centred on the J1 axis and the real one sits "
+                       f"{-PLATE_OFF} mm off it, so IN PLAN it escapes by "
+                       f"{25.06} mm.  The layout sheet reads this row as "
+                       "'INSIDE' on the thickness alone; it is not",
+             action="re-certify with the plate at its true offset — it is one "
+                    "of the 60 bodies the queue already carries"),
         dict(item="steel below the mount plane",
              code="none modelled below z = h",
              model=f"the drop posts run {POST_OVER} mm past the plate "
@@ -602,7 +639,7 @@ def reconciliation(h=None):
              code="not modelled — no structure below z = h anywhere",
              model=f"four corner legs, {LEG_BOTTOM} .. {GRID_T} mm, at the "
                    "frame corners",
-             delta_mm=round(GRID_T - LEG_BOTTOM, 2),
+             delta_mm=round(GRID_U - LEG_BOTTOM, 2),
              direction="MODEL HAS STEEL THE CODE DOES NOT, but it stands "
                        f"{min(abs(FR_X0), abs(FR_Y0)):.0f} mm clear of the "
                        "canvas on every side",
@@ -618,9 +655,10 @@ OPEN_QUESTIONS = {
             "this rig clocks every arm the other way, so the offset flips. "
             "That flip is an INFERENCE about which edge of a Franka base "
             "plate is its front (rig_final flags it too).",
-        rides_on="7.34 mm.  The plate nests in a 240.5 mm slot between the "
-                 "post pairs with 7.34 mm clear each side; offset the wrong "
-                 "way it does not fit at all.",
+        rides_on="7.79 mm.  The plate nests in this model's 241.4 mm slot "
+                 "between the post pairs with 7.79 mm clear each side (the "
+                 "drawing's own slightly-fat booms leave 240.5 and 7.34); "
+                 "offset the wrong way it does not fit at all.",
         answer_by="measure the real plate, or open the post gap to 304.8 mm "
                   "(posts at axis +/- 190.5), which fits either way with "
                   "14.4 mm each side",

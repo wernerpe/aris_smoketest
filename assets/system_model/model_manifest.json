@@ -647,7 +647,7 @@
   },
   "recert": {
     "bodies_pending": 60,
-    "worst_escape_mm": 172.55,
+    "worst_escape_mm": 185.55,
     "what": "every piece of mount hardware reaches outside the schematic keep-out `mounts.arm_mount_boxes` models, measured per body in `bodies[].escapes_modelled_envelope_mm`",
     "note": "INCLUDING THE PLATE.  The re-issued layout sheet reads the plate as inside because it compared thicknesses (12.7 real against 50 modelled); in PLAN it escapes by 25.06 mm, because the modelled plate is centred on the J1 axis and the real one is offset 25.15 mm off it."
   },
@@ -665,7 +665,7 @@
       "code": "a single circumscribed square column 200 x 200 mm (a radius-100 cylinder) on the base axis",
       "model": "a 2x2 post cluster 393.8 x 152.4 mm in plan, offset 25.15 mm in +x, plus gussets 203.2 mm wide",
       "delta_mm": 193.8,
-      "direction": "MODEL IS WIDER IN X, NARROWER IN Y \u2014 the certified column neither contains nor is contained by the real steel.  MEASURED per body: all 60 pieces of mount hardware escape it, worst 172.55 mm (a gusset), and the PLATE escapes by 25.06 mm in plan even though the sheet reads it as inside on thickness alone",
+      "direction": "MODEL IS WIDER IN X, NARROWER IN Y \u2014 the certified column neither contains nor is contained by the real steel.  MEASURED per body: all 60 pieces of mount hardware escape it, worst 185.55 mm (a gusset), and the PLATE escapes by 25.06 mm in plan even though the sheet reads it as inside on thickness alone",
       "action": "RE-CERT REQUIRED before fabrication; send the steel design back"
     },
     {
@@ -673,8 +673,8 @@
       "code": "50 mm thick, 226 x 190",
       "model": "12.7 mm thick, 225.82 x 190.0",
       "delta_mm": 37.3,
-      "direction": "CODE IS CONSERVATIVE \u2014 the modelled plate is thicker and marginally wider, so the real one is inside it",
-      "action": "none; carried as a known conservatism"
+      "direction": "CONSERVATIVE IN THICKNESS ONLY.  50 modelled against 12.7 real, and 226 against 225.82 \u2014 but the modelled plate is centred on the J1 axis and the real one sits 25.15 mm off it, so IN PLAN it escapes by 25.06 mm.  The layout sheet reads this row as 'INSIDE' on the thickness alone; it is not",
+      "action": "re-certify with the plate at its true offset \u2014 it is one of the 60 bodies the queue already carries"
     },
     {
       "item": "steel below the mount plane",
@@ -704,7 +704,7 @@
       "item": "cage legs",
       "code": "not modelled \u2014 no structure below z = h anywhere",
       "model": "four corner legs, -27.38 .. 1699.82 mm, at the frame corners",
-      "delta_mm": 1727.2,
+      "delta_mm": 1651.0,
       "direction": "MODEL HAS STEEL THE CODE DOES NOT, but it stands 190 mm clear of the canvas on every side",
       "action": "confirm the legs miss every certified pose once their count and position are decided"
     }
@@ -713,7 +713,7 @@
     "plate_offset_direction": {
       "what": "Does the mount plate's 25.15 mm offset run in canvas +x or -x?",
       "why": "The drawing gives the offset for an arm whose front faces +X; this rig clocks every arm the other way, so the offset flips. That flip is an INFERENCE about which edge of a Franka base plate is its front (rig_final flags it too).",
-      "rides_on": "7.34 mm.  The plate nests in a 240.5 mm slot between the post pairs with 7.34 mm clear each side; offset the wrong way it does not fit at all.",
+      "rides_on": "7.79 mm.  The plate nests in this model's 241.4 mm slot between the post pairs with 7.79 mm clear each side (the drawing's own slightly-fat booms leave 240.5 and 7.34); offset the wrong way it does not fit at all.",
       "answer_by": "measure the real plate, or open the post gap to 304.8 mm (posts at axis +/- 190.5), which fits either way with 14.4 mm each side",
       "blocking": "fabrication of the drop clusters"
     },
@@ -794,8 +794,8 @@
       "kind": "table",
       "provenance": "ASSUMED",
       "size_mm": [
-        2184.4,
-        4011.64,
+        2032.0,
+        3859.24,
         634.68
       ],
       "centre_mm": [
@@ -804,17 +804,17 @@
         -319.34
       ],
       "lo_mm": [
-        -190.5,
-        -190.5,
+        -114.3,
+        -114.3,
         -636.68
       ],
       "hi_mm": [
-        1993.9,
-        3821.14,
+        1917.7,
+        3744.94,
         -2.0
       ],
       "collision": true,
-      "source": "top and floor from the drawing's table_block (-636.68 .. -2.0 mm about the paper); the FOOTPRINT is assumed to be the cage's, because the original's 2.08 m table cannot carry a 3.63 m canvas",
+      "source": "top and floor from the drawing's table_block (-636.68 .. -2.0 mm about the paper); the FOOTPRINT is assumed to be the cage's INNER span, because the original's 2.08 m table cannot carry a 3.63 m canvas and a table drawn out to the frame's OUTSIDE would swallow the legs",
       "note": "height is DRAWING, footprint is ASSUMED"
     },
     {
@@ -959,12 +959,12 @@
       "size_mm": [
         76.2,
         76.2,
-        1727.2
+        1651.0
       ],
       "centre_mm": [
         -152.4,
         -152.4,
-        836.22
+        798.12
       ],
       "lo_mm": [
         -190.5,
@@ -974,10 +974,10 @@
       "hi_mm": [
         -114.3,
         -114.3,
-        1699.82
+        1623.62
       ],
       "collision": true,
-      "source": "the cage is self-supporting and floor-standing, so it needs legs; section, plan position and z-range mirror the drawing's post_FL exactly, but a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
+      "source": "the cage is self-supporting and floor-standing, so it needs legs; section and plan position mirror the drawing's post_FL.  It stops at the perimeter rail's UNDERSIDE (1623.62), the way the drop posts stop under the runway \u2014 a leg drawn to the rail's TOP is 76.2 mm of steel inside the rail and a length no one can cut.  Cut length 1651.0.  But a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
       "note": "mid-span legs are almost certainly required; see OPEN_QUESTIONS['cage_legs']"
     },
     {
@@ -987,12 +987,12 @@
       "size_mm": [
         76.2,
         76.2,
-        1727.2
+        1651.0
       ],
       "centre_mm": [
         1955.8,
         -152.4,
-        836.22
+        798.12
       ],
       "lo_mm": [
         1917.7,
@@ -1002,10 +1002,10 @@
       "hi_mm": [
         1993.9,
         -114.3,
-        1699.82
+        1623.62
       ],
       "collision": true,
-      "source": "the cage is self-supporting and floor-standing, so it needs legs; section, plan position and z-range mirror the drawing's post_FR exactly, but a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
+      "source": "the cage is self-supporting and floor-standing, so it needs legs; section and plan position mirror the drawing's post_FR.  It stops at the perimeter rail's UNDERSIDE (1623.62), the way the drop posts stop under the runway \u2014 a leg drawn to the rail's TOP is 76.2 mm of steel inside the rail and a length no one can cut.  Cut length 1651.0.  But a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
       "note": "mid-span legs are almost certainly required; see OPEN_QUESTIONS['cage_legs']"
     },
     {
@@ -1015,12 +1015,12 @@
       "size_mm": [
         76.2,
         76.2,
-        1727.2
+        1651.0
       ],
       "centre_mm": [
         -152.4,
         3783.04,
-        836.22
+        798.12
       ],
       "lo_mm": [
         -190.5,
@@ -1030,10 +1030,10 @@
       "hi_mm": [
         -114.3,
         3821.14,
-        1699.82
+        1623.62
       ],
       "collision": true,
-      "source": "the cage is self-supporting and floor-standing, so it needs legs; section, plan position and z-range mirror the drawing's post_BL exactly, but a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
+      "source": "the cage is self-supporting and floor-standing, so it needs legs; section and plan position mirror the drawing's post_BL.  It stops at the perimeter rail's UNDERSIDE (1623.62), the way the drop posts stop under the runway \u2014 a leg drawn to the rail's TOP is 76.2 mm of steel inside the rail and a length no one can cut.  Cut length 1651.0.  But a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
       "note": "mid-span legs are almost certainly required; see OPEN_QUESTIONS['cage_legs']"
     },
     {
@@ -1043,12 +1043,12 @@
       "size_mm": [
         76.2,
         76.2,
-        1727.2
+        1651.0
       ],
       "centre_mm": [
         1955.8,
         3783.04,
-        836.22
+        798.12
       ],
       "lo_mm": [
         1917.7,
@@ -1058,10 +1058,10 @@
       "hi_mm": [
         1993.9,
         3821.14,
-        1699.82
+        1623.62
       ],
       "collision": true,
-      "source": "the cage is self-supporting and floor-standing, so it needs legs; section, plan position and z-range mirror the drawing's post_BR exactly, but a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
+      "source": "the cage is self-supporting and floor-standing, so it needs legs; section and plan position mirror the drawing's post_BR.  It stops at the perimeter rail's UNDERSIDE (1623.62), the way the drop posts stop under the runway \u2014 a leg drawn to the rail's TOP is 76.2 mm of steel inside the rail and a length no one can cut.  Cut length 1651.0.  But a 4.01 m frame on four legs has NO precedent \u2014 the original spans 2.08 m",
       "note": "mid-span legs are almost certainly required; see OPEN_QUESTIONS['cage_legs']"
     },
     {
@@ -1253,7 +1253,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1283,7 +1283,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1313,7 +1313,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1343,7 +1343,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1374,7 +1374,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1405,7 +1405,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1436,7 +1436,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1467,7 +1467,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1497,7 +1497,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1526,7 +1526,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1558,7 +1558,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1588,7 +1588,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1618,7 +1618,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1648,7 +1648,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1679,7 +1679,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1710,7 +1710,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1741,7 +1741,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1772,7 +1772,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1802,7 +1802,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1831,7 +1831,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1863,7 +1863,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1893,7 +1893,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1923,7 +1923,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1953,7 +1953,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -1984,7 +1984,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2015,7 +2015,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2046,7 +2046,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2077,7 +2077,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2107,7 +2107,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2136,7 +2136,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2168,7 +2168,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2198,7 +2198,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2228,7 +2228,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2258,7 +2258,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2289,7 +2289,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2320,7 +2320,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2351,7 +2351,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2382,7 +2382,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2412,7 +2412,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2441,7 +2441,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2473,7 +2473,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2503,7 +2503,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2533,7 +2533,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2563,7 +2563,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2594,7 +2594,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2625,7 +2625,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2656,7 +2656,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2687,7 +2687,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2717,7 +2717,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2746,7 +2746,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2778,7 +2778,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2808,7 +2808,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 58.75,
+      "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2838,7 +2838,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2868,7 +2868,7 @@
       "collision": true,
       "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 109.05,
+      "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2899,7 +2899,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2930,7 +2930,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 122.25,
+      "escapes_modelled_envelope_mm": 135.25,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2961,7 +2961,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -2992,7 +2992,7 @@
       "source": "an 203.2 x 203.2 x 38.1 gusset at the drawing's own size, but ROTATED onto the runway's outboard y face \u2014 the drawing's inboard orientation needs 406.4 mm across a transverse pair and only 216.2 exists",
       "note": "the rotation leaves 89.2 mm clear between a pair's gussets; exact attachment is a fabrication detail",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 172.55,
+      "escapes_modelled_envelope_mm": 185.55,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -3022,7 +3022,7 @@
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
       "status": "RE-CERT-PENDING",
-      "escapes_modelled_envelope_mm": 25.15,
+      "escapes_modelled_envelope_mm": 38.15,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
@@ -3051,7 +3051,7 @@
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
-      "note": "nests in the 240.5 mm post slot with 7.34 mm each side",
+      "note": "nests in this model's 241.4 mm post slot with 7.79 mm each side (the drawing's own booms leave 240.5, i.e. 7.34 each side)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 25.06,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"

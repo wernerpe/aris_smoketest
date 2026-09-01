@@ -26,7 +26,7 @@ the truth separately and `system_model.reconciliation()` reports the gap.
 
 | Finding | Number | Status |
 |---|---|---|
-| Every piece of mount hardware escapes the modelled keep-out | worst **172.55 mm** (a gusset); the **plate** by 25.06 mm in plan, which the layout sheet reads as inside because it compared thicknesses | **RE-CERT before fabrication**, labelled per body in the manifest |
+| Every piece of mount hardware escapes the modelled keep-out | worst **185.55 mm** (a gusset); the **plate** by 25.06 mm in plan, which the layout sheet reads as inside because it compared thicknesses | **RE-CERT before fabrication**, labelled per body in the manifest |
 | The inverted base cable | the manufacturer's link0 visual runs **230.7 mm** past the flange, i.e. UP through the 12.7 plate and the 95.7 clamp stack; the collision shell stops at the flange | **OPEN.** the plate and clamp stack need cutting; nothing in this repo had seen it |
 | Clearance at the six certified park poses | arm-arm **264.0 mm** (audited capsules) / 403.2 (manufacturer shells); arm-structure **196.5 mm**, and that is the graphite over the PAPER — nearest steel 326.5 | **CLEAN.** park poses only; drawing poses are still gated against `mounts.py` |
 | Gusset interference | the drawing's inboard orientation needs 406.4 mm across a transverse pair and 216.20 exists; rotated onto the runway's y faces it clears by **89.20 mm** | ADOPTED in the model, attachment detail OPEN |

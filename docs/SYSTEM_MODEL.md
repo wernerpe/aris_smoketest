@@ -46,8 +46,10 @@ standing on the floor; it defines no room ceiling anywhere. The paper sits
 | cage total height above the **floor** | **2336.50** | = the drawing's 233,7 cm |
 
 `ceiling_z = 2.34 m` is that 233,7 re-datumed to the paper — a floor-
-referenced number used as a paper-referenced one. It puts the top of the cage
-**2976.68 mm** above the paper, **716.4 mm** higher than the drawing.
+referenced number used as a paper-referenced one. It puts the beam underside
+at **2340.0** above the paper against the drawing's 1623.62, and the top of the cage at **2416.2** against 1699.82 — **716.4 mm**
+too high, both of them. Measured from the floor, where the drawing measures,
+the code datum stands the cage **3052.88 mm** tall against the 2336.5 drawn.
 
 Being too tall is **conservative for collision** — a longer obstacle never
 certifies a pose a shorter one refuses — which is why nothing has broken and
@@ -116,7 +118,7 @@ All mm, canvas frame, `z = 0` at the **top surface of the paper**.
 
 | | count | what |
 |---|---:|---|
-| cage | 68 | 4 perimeter rails, 4 corner legs, 6 runway beams (3 rows × 2), 24 drop posts (6 arms × 4), 24 gussets, 6 clamp stacks |
+| cage | 68 | 4 perimeter rails, 4 corner legs (1651.0 long, stopping under the rails they carry), 6 runway beams (3 rows × 2), 24 drop posts (6 arms × 4), 24 gussets, 6 clamp stacks |
 | mount | 6 | the robot base plates, 225.82 × 190 × 12.7 |
 | table | 2 | the table, and the floor plane |
 | canvas | 1 | the paper, 1803.4 × 3630.64 × 2.0 |
@@ -142,8 +144,9 @@ Plus, per arm × 6:
   on it.
 - **Per arm a 2 × 2 drop-post cluster**, pitch 317.6 (x) × 76.2 (y), plan
   footprint 393.8 × 152.4.
-- The **plate nests between the post pairs**: 240.5 mm slot, 225.82 mm plate,
-  **7.34 mm clear each side**. Its centre sits 25.15 mm in canvas **+x** from
+- The **plate nests between the post pairs**: 241.4 mm slot, 225.82 mm plate,
+  **7.79 mm clear each side** (the drawing's own slightly-fat 77.2 booms
+  leave 240.5 and 7.34). Its centre sits 25.15 mm in canvas **+x** from
   the J1 axis — and that direction is an inference. See §8.
 - **Gussets rotated onto the runway's outboard y faces.** In the drawing's
   own orientation two 203.2 mm gussets face each other across a transverse
@@ -231,12 +234,12 @@ readably, in `model_manifest.json`:
 | item | Δ | which way it cuts | action |
 |---|---:|---|---|
 | **ceiling datum** | 716.38 mm | code is **conservative** (booms ~700 mm too long) | survey the room; the fabricator's post is 718.6, not 1435.0 |
-| **drop cluster vs boom column** | 193.80 mm | **neither contains the other** — 393.8 × 152.4 real vs a Ø200 column | **RE-CERT REQUIRED before fabrication** |
-| mount plate thickness | 37.30 mm | code is conservative (50 modelled vs 12.7 real) | none; known conservatism |
+| **drop cluster vs boom column** | 193.80 mm | **neither contains the other** — 393.8 × 152.4 real vs a Ø200 column; measured per body, all 60 pieces escape, worst **185.55 mm** | **RE-CERT REQUIRED before fabrication** |
+| mount plate thickness | 37.30 mm | conservative **in thickness only** — the modelled plate is centred on the J1 axis and the real one sits 25.15 mm off it, so in plan it escapes by **25.06 mm** | re-certify at the true offset |
 | steel below the mount plane | 34.98 mm | model has steel the code does not; 60 mm of the 95 mm chain gap still spare | confirm at re-certification |
 | **base cable pass-through** | 230.70 mm | **neither model has it, and the steel to be cut is not drawn** | §8 |
 | mount height | 90.00 mm | `docs/BUILD_SHEET.md` still publishes 850.0 against the 940.0 in force | re-issue the build sheet |
-| cage legs | 1727.20 mm | model has steel the code does not; stands 190 mm clear of the canvas | confirm once count and position are decided |
+| cage legs | 1651.00 mm | model has steel the code does not; stands 190 mm clear of the canvas | confirm once count and position are decided |
 
 **The two that block fabrication are the drop cluster and the cable
 pass-through.**
@@ -250,9 +253,9 @@ earned against — and the manifest carries the answer on every body.
 
 | hardware | count | escape past the modelled keep-out |
 |---|---:|---|
-| gussets | 24 | 122.25 – **172.55 mm** |
-| drop posts | 24 | 58.75 – 109.05 mm |
-| clamp stacks | 6 | 25.15 mm |
+| gussets | 24 | 135.25 – **185.55 mm** |
+| drop posts | 24 | 71.75 – 122.05 mm |
+| clamp stacks | 6 | 38.15 mm |
 | **base plates** | 6 | **25.06 mm** |
 
 **All 60 pieces are outside it, the plate included** — and the plate is worth
@@ -307,7 +310,7 @@ what rides on it and what would answer it.
 1. **Plate offset direction.** Does the plate's 25.15 mm offset run in canvas
    +x or −x? The drawing gives it for an arm whose front faces +X; this rig
    clocks every arm the other way, so it flips — and *which edge of a Franka
-   base plate is its front* is itself an inference. **7.34 mm rides on it:**
+   base plate is its front* is itself an inference. **7.79 mm rides on it:**
    offset the wrong way the plate does not fit between the posts at all. Fix
    either by measuring the real plate, or by opening the post gap to 304.8 mm
    (posts at axis ± 190.5), which fits either way with 14.4 mm each side.
