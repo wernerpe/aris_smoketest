@@ -89,6 +89,24 @@ def test_the_cage_reproduces_the_drawings_own_overall_height():
     assert SM.GRID_T - SM.GRID_U == pytest.approx(SM.PROFILE, abs=1e-9)
 
 
+def test_the_paper_datum_is_corroborated_by_two_independent_numbers():
+    """The whole correction turns on where the paper's top surface is.
+
+    `system_model` derives it from the drawing's `table_block`: the paper's
+    TOP is `PAPER_ORIGIN_W_CM[2]` and the table's top is `table_block` hi, so
+    the gap between them is the paper's thickness — 2.00 mm.  `rig_final`
+    carries that thickness as its own constant, from the drawing's text rather
+    than from the solid.  They agree exactly, which is what says the paper
+    origin is on the right face.
+    """
+    assert SM.PAPER_T == pytest.approx(rig_final.PAPER_THICK_CM * 10.0,
+                                       abs=1e-9)
+    assert SM.PAPER_T == pytest.approx(2.0, abs=1e-9)
+    paper = next(b for b in SM.bodies() if b.name == "paper")
+    assert paper.hi[2] == 0.0, "z = 0 is the paper's TOP surface"
+    assert paper.lo[2] == pytest.approx(SM.TABLE_TOP_Z, abs=1e-9)
+
+
 def test_the_datum_bug_is_modelled_as_a_difference_not_silently_adopted():
     """`mounts.ceiling_z` stays where it is; the model records the gap."""
     assert mounts.MOUNTS.ceiling_z == 2.34, "mounts.py must not be edited here"
