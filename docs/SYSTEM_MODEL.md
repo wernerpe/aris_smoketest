@@ -389,6 +389,7 @@ AUDIT**; the tool **geometry** is AUDIT and its **placement** is ASSUMED.
 | URDF regeneration | byte-stable, twice, equal to what is committed |
 | **clean-room rebuild** | `gen_system_model.py all` into an empty directory reproduces **all 64 committed files byte for byte** — textures, glTFs, shells, the re-decimated holder, the URDFs and the manifest |
 | **arm inside the steel at a park pose** | **none**, in either collision variant |
+| **static bodies interpenetrating** | **none** — all 77 checked pairwise |
 
 ### What the corrected cage leaves around the certified programme
 
@@ -398,14 +399,24 @@ whole phases:
 
 | | manufacturer shells | audited capsules |
 |---|---:|---:|
-| closest arm to another arm | 403.2 mm | **264.0 mm** |
-| closest arm to any structure | **196.5 mm** | **196.5 mm** |
+| closest arm to another **arm** | 403.2 mm | **264.0 mm** |
+| closest arm to **steel** | 349.3 mm | **316.1 mm** |
+| closest arm to the **paper** | 196.5 mm | 196.5 mm |
+| closest arm to the **table** | 198.5 mm | 198.5 mm |
 
-**Nothing interpenetrates.** And the 196.5 mm is the pen's own graphite over
-the *paper* — the park hover — not steel: the nearest actual steel is arm 2's
-hand to the back-left cage leg at 326.5 mm. The capsules read tighter than the
-shells because they are a conservative envelope of the same meshes, which is
-what a conservative envelope is for.
+**Nothing interpenetrates.** The overall minimum, 196.5 mm, is the pen's own
+graphite over the paper — that is the park hover, and it is meant to be small.
+
+**The tightest steel approach in the whole rig is an arm to its neighbour's
+drop post** (arm 71's link2 to arm 31's post, 316.1 mm under the audited
+capsules). That is worth reading twice: the thing an arm comes closest to is
+precisely the structure the certified envelope models as a Ø200 column and
+which the real steel escapes by up to 185.55 mm. It clears today, by a wide
+margin — but it is the reason the drop-cluster re-certification is the item
+that matters, rather than a formality.
+
+The capsules read tighter than the shells because they are a conservative
+envelope of the same meshes, which is what a conservative envelope is for.
 
 This is the **park poses only**. The drawing poses are gated by the atlas
 against `mounts.py`'s schematic column, and re-gating them against this cage
