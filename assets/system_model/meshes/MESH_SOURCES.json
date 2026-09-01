@@ -1,0 +1,396 @@
+{
+  "files": [
+    {
+      "file": "meshes/fr3/textures/link0_color.png",
+      "bytes": 209831,
+      "sha256": "baa01be094de0b9cdd31ee5d30e7a88c220097f950b4996eba7aa2ac7684bf8c",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link0_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link0_normal.png",
+      "bytes": 620616,
+      "sha256": "21d8b20bd681f5d2cfe39d066f64f70bab2d7cc6eb8d1d8fe2cba8f0a8e92b24",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link0_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link0_occlusion_roughness_metallic.png",
+      "bytes": 877932,
+      "sha256": "fee94a2c31579f394012379e017245813e52f07cbc2d49ff0647581a5674d29f",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link0_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link1_color.png",
+      "bytes": 149180,
+      "sha256": "fb3dee91b24e899ead98dc0b473f64b7520c93c127f32cc994b9f4dfa1650f1b",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link1_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link1_normal.png",
+      "bytes": 256811,
+      "sha256": "2460a3d3e92cf97e52b3e2e8b7d15028675ca9cbffbecc4c170bd63b88f1d7c1",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link1_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link1_occlusion_roughness_metallic.png",
+      "bytes": 149059,
+      "sha256": "ed3cebfa0c6ac0839264e0d043e0cfb4e44a086c64a547690edbdb4ae4aa9244",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link1_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link2_color.png",
+      "bytes": 137996,
+      "sha256": "0074ec4e39556cbf4a8304dcad49443d2d77fe93d06ef9a326a94005ae90131b",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link2_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link2_normal.png",
+      "bytes": 245071,
+      "sha256": "72d428d7926d6a89b0fd7d12d66b62fb4e0a136c297f3405cb6a22d45c90edd5",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link2_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link2_occlusion_roughness_metallic.png",
+      "bytes": 146954,
+      "sha256": "255b63742d687af97c217a17e152f60da23713df69ef1877cd32ab9e30f80e40",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link2_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link3_color.png",
+      "bytes": 143472,
+      "sha256": "6827a3f470ffb3db7836ab58c26eac2f898d27177a18065b05f5c16a41243a6a",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link3_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link3_normal.png",
+      "bytes": 367095,
+      "sha256": "b46f7292d2241a4155a181bf7ae0601c1ddaa8a5e3210d7881f7893111e2f1b1",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link3_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link3_occlusion_roughness_metallic.png",
+      "bytes": 713163,
+      "sha256": "18f7a440ff1edd86137dfafc3b1947d3256552cde7fc298fef2727aab67f7cf2",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link3_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link4_color.png",
+      "bytes": 147235,
+      "sha256": "eee9b9908195ff1ac7ed22658e4d79d541346bff3e09bbc99dc187a97c4667e0",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link4_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link4_normal.png",
+      "bytes": 377473,
+      "sha256": "b40db67b5653d1e57b1d345f771b36d644249899fdcc8e2182677be370e11f53",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link4_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link4_occlusion_roughness_metallic.png",
+      "bytes": 667006,
+      "sha256": "d7a38cf6cf52af718d0dc0798b9100803da746eca38abd39873784106e303da3",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link4_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link5_color.png",
+      "bytes": 74860,
+      "sha256": "58fae4fddd6d7c9713e111fa7afea756cc5827ab1dcfed030328a1029ddee849",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link5_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link5_normal.png",
+      "bytes": 215783,
+      "sha256": "1101ba81f74c40f7cad6a008bb2ed6bc2015a9a8b24b21dfbd3f936029e96af6",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link5_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link5_occlusion_roughness_metallic.png",
+      "bytes": 297605,
+      "sha256": "056faf9f782a2f96a5adff17cd52375322498ab19bb55f7ea2d1f5061c0f9f73",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link5_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link6_color.png",
+      "bytes": 72483,
+      "sha256": "a3020c7fecd0726f6923331b36dfc084b78a26a2ed06e9436e1b18f003d04caf",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link6_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link6_normal.png",
+      "bytes": 374962,
+      "sha256": "89b49130b57bc6aaa4d9c3366532a9cdf5cb5c928ecfd72b6ee5c2d27b0653ee",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link6_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link6_occlusion_roughness_metallic.png",
+      "bytes": 896750,
+      "sha256": "b4942041828aadffffb60a1bb52d245758bb2080d88bc3c570734eefd50a4dea",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link6_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link7_color.png",
+      "bytes": 150973,
+      "sha256": "fa410f5cf2dc77331c38b4171f77887b028cc7eeaaa2fc3f30e64d6187b09701",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link7_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link7_normal.png",
+      "bytes": 578763,
+      "sha256": "c860bb863a5bf1fb052419933f7068a6240c63e84caf898bed2c7f53d4bf01f6",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link7_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/link7_occlusion_roughness_metallic.png",
+      "bytes": 1030682,
+      "sha256": "b0616fa8e7a8426c28fbeb19ee31172b0576f9fbad3f047d08c7d0eec29d577e",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link7_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/textures/hand_color.png",
+      "bytes": 164394,
+      "sha256": "13b32f85545660d62fb7445c5085b14d0eb3fb056cc298ca388489ec24cbd7c7",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/hand_color.png"
+    },
+    {
+      "file": "meshes/fr3/textures/hand_normal.png",
+      "bytes": 596577,
+      "sha256": "c718f0e643235ed1593bd9d6d2f039eed142e990a27cd3d98c0c6e60e1539068",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/hand_normal.png"
+    },
+    {
+      "file": "meshes/fr3/textures/hand_occlusion_roughness_metallic.png",
+      "bytes": 552205,
+      "sha256": "53bc67985e9931e26d6a5102eb3f1271dd3e8bd26b1b59c557e3ea6856ab32d2",
+      "source": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/hand_occlusion_roughness_metallic.png"
+    },
+    {
+      "file": "meshes/fr3/link0.bin",
+      "bytes": 1583496,
+      "sha256": "9a331758bb063d1d287e24ad5b5b786b2b6461ce7fe0c6f112b75111f8584b60",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link0.bin"
+    },
+    {
+      "file": "meshes/fr3/link0.gltf",
+      "bytes": 2451,
+      "sha256": "5f981b0d47c1e442d668a492ec11808a7cd0e653b439a616fcdcc504b7e1049e",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link0.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link1.bin",
+      "bytes": 263612,
+      "sha256": "213c672d14c68676226b49ef20ab70c98862d437754b3c63680ca67d91c65719",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link1.bin"
+    },
+    {
+      "file": "meshes/fr3/link1.gltf",
+      "bytes": 2358,
+      "sha256": "7a3c916de407b74666edcc556562eaa261d4f2cbd2cbe3b01a325681e2f94e5f",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link1.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link2.bin",
+      "bytes": 260812,
+      "sha256": "005672817f29a118e77656995d1d0f5ce4f77c0f03645f198b88498553f94d38",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link2.bin"
+    },
+    {
+      "file": "meshes/fr3/link2.gltf",
+      "bytes": 2359,
+      "sha256": "a0c4c9e9daedc535e184c17610db832a6fa4a916409868c33abf80fa8eee42b4",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link2.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link3.bin",
+      "bytes": 589648,
+      "sha256": "383296cae44b7ee280ab50ec9c8f77087cf76aa39a2f299b21a0cd5a81d7a7f7",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link3.bin"
+    },
+    {
+      "file": "meshes/fr3/link3.gltf",
+      "bytes": 2365,
+      "sha256": "cbc285b3ba1ab00b3e10c937be0c7e9aa460eea588ef0c49f7c71230105faa8c",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link3.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link4.bin",
+      "bytes": 589616,
+      "sha256": "e31bdb4e96066dcfd5bdd25193646a3903f119c750d59c95b6bfa42371a12d3c",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link4.bin"
+    },
+    {
+      "file": "meshes/fr3/link4.gltf",
+      "bytes": 2364,
+      "sha256": "fb3833588531ddac38d7f4169d2aea74d2c6b85b5ee508b57eb0dd31563f6366",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link4.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link5.bin",
+      "bytes": 349664,
+      "sha256": "184e732692ef8b8cce5aa8a1a9d50694840fee65e173a95bb2d40cb312f4ba83",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link5.bin"
+    },
+    {
+      "file": "meshes/fr3/link5.gltf",
+      "bytes": 2362,
+      "sha256": "08e0c3aa5005b26f6fa8a575537b5bb065e7eedda8e9ee6d8d0b271845ba32cc",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link5.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link6.bin",
+      "bytes": 589336,
+      "sha256": "3933a0c84157e6055d8246cb54ba5d4abeb967cbc27ebbe0394ec15bf66fb2f7",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link6.bin"
+    },
+    {
+      "file": "meshes/fr3/link6.gltf",
+      "bytes": 2363,
+      "sha256": "e8c428add0046dcc6fa2e3b5996ed37ef9736f74a5f41d2a8cba59ad01a319d0",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link6.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/link7.bin",
+      "bytes": 742072,
+      "sha256": "c66930e04417be6ce87e8996c2b3046ba72f4dea8d1671a75fca4ddf4f6927cc",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link7.bin"
+    },
+    {
+      "file": "meshes/fr3/link7.gltf",
+      "bytes": 2365,
+      "sha256": "09ae883214fa79dba121e7ac21bfe86d3a2d37238201fe6dd5d8c174baf44239",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/link7.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/hand.bin",
+      "bytes": 912736,
+      "sha256": "cd9a2ec452be9dfafeed1fe979e75d4a147a328c55b48b56d750b1b6a7d0e19b",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/hand.bin"
+    },
+    {
+      "file": "meshes/fr3/hand.gltf",
+      "bytes": 2343,
+      "sha256": "ade9f569a07a2732b3bf8b692393e7ad9f5924d0ae8ecdae2eed17b05fcf3932",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/hand.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/fr3/finger.bin",
+      "bytes": 48672,
+      "sha256": "2443431a159b2cae17796027ecc6282e63a2b27d50bd35757f23e5987912db89",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/finger.bin"
+    },
+    {
+      "file": "meshes/fr3/finger.gltf",
+      "bytes": 3524,
+      "sha256": "a9515d6f8d9edcfcbd314eafaaf09dba076fc571c2bbe73ccfd45f979e7b000e",
+      "source": "/home/franka/aris_project/aris_sixarm/assets/franka_description/meshes/visual/finger.gltf",
+      "note": "geometry byte-identical (the vendor's own .bin, vendored alongside); image table re-pointed at the vendored .png set, ktx2 dropped"
+    },
+    {
+      "file": "meshes/collision/link0.obj",
+      "bytes": 14925,
+      "sha256": "d29233f03537b6ee92a6861d4139290960325c2bacf9a640ab7935a5539c653f",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link0.obj"
+    },
+    {
+      "file": "meshes/collision/link1.obj",
+      "bytes": 22976,
+      "sha256": "0879335b20930eccccdc7d2565553895589f9125d4c8c0d462ad0f74f17e7472",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link1.obj"
+    },
+    {
+      "file": "meshes/collision/link2.obj",
+      "bytes": 22688,
+      "sha256": "cfca62e5846d3ba6db8be3740fc2219454401f1048db11a78bd9ec8f30cdc128",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link2.obj"
+    },
+    {
+      "file": "meshes/collision/link3.obj",
+      "bytes": 22870,
+      "sha256": "22235fb3676b5cb45a2f512065fab94fecf052a767cddfaed62cbb6d1efcf1f8",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link3.obj"
+    },
+    {
+      "file": "meshes/collision/link4.obj",
+      "bytes": 68016,
+      "sha256": "64b5914ef159149f87b767ff0eae4db41b9c267aecdddf2816ff25726fa0e6f2",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link4.obj"
+    },
+    {
+      "file": "meshes/collision/link5.obj",
+      "bytes": 67745,
+      "sha256": "ff8d4bb5ab506b8cf621f44b928be7714dff86b669a92909b8d4f71c5b01597e",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link5.obj"
+    },
+    {
+      "file": "meshes/collision/link6.obj",
+      "bytes": 140218,
+      "sha256": "e1dc8bbca8690944e6331f5a108d49c363eeec179b56a9f913541a541e6a2cfc",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link6.obj"
+    },
+    {
+      "file": "meshes/collision/link7.obj",
+      "bytes": 45132,
+      "sha256": "675a784e949b2b47894f1965016bd56b992b136bd90e1a62e832f49b4a55b240",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/link7.obj"
+    },
+    {
+      "file": "meshes/collision/hand.obj",
+      "bytes": 15247,
+      "sha256": "a216bedc742a736f2c6cab010c6014475fe5f7b5ed53e371509adf885df618a2",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/hand.obj"
+    },
+    {
+      "file": "meshes/collision/finger.obj",
+      "bytes": 7603,
+      "sha256": "c05dee2e2770ac3d45a097cec4a9d758e279ebdb7dc550eb249571c4690a6476",
+      "source": "/home/franka/git/vamp/resources/panda/meshes/collision/finger.obj"
+    },
+    {
+      "file": "meshes/penholder/penholder22_housing_hand.obj",
+      "bytes": 512774,
+      "sha256": "160a95c3908443fd4bd7ad55e4028c92acc6218fe9574f23041f190fd6121d9d",
+      "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder housing - 22 deg - reinforced - v20260429.STL"
+    },
+    {
+      "file": "meshes/penholder/penholder22_cap_hand.obj",
+      "bytes": 513698,
+      "sha256": "c295d569bfb4bd0547976476ce22ebe9e38891027594eaf4a540ad0cb7eba9b1",
+      "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder cap v20250903.STL"
+    }
+  ],
+  "holder_decimation": {
+    "parts": [
+      {
+        "part": "housing",
+        "faces_raw": 174772,
+        "faces_out": 8000,
+        "extent_loss_mm": 0.1122,
+        "extent_mm": [
+          80.212,
+          33.781,
+          50.0
+        ]
+      },
+      {
+        "part": "cap",
+        "faces_raw": 30770,
+        "faces_out": 8000,
+        "extent_loss_mm": 0.0048,
+        "extent_mm": [
+          36.0,
+          36.001,
+          11.0
+        ]
+      }
+    ],
+    "envelope_worst_escape_m": 1.08895e-07,
+    "envelope_bar_m": 1e-05
+  }
+}

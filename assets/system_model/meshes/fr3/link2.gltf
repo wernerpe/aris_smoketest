@@ -1,0 +1,162 @@
+{
+	"accessors": [
+		{
+			"bufferView": 0,
+			"componentType": 5126,
+			"count": 6380,
+			"max": [
+				0.054998427629470825,
+				0.12920086085796356,
+				0.1939990222454071
+			],
+			"min": [
+				-0.05499833822250366,
+				-0.055000219494104385,
+				-0.054997894912958145
+			],
+			"type": "VEC3"
+		},
+		{
+			"bufferView": 1,
+			"componentType": 5126,
+			"count": 6380,
+			"type": "VEC3"
+		},
+		{
+			"bufferView": 2,
+			"componentType": 5126,
+			"count": 6380,
+			"type": "VEC2"
+		},
+		{
+			"bufferView": 3,
+			"componentType": 5123,
+			"count": 28326,
+			"type": "SCALAR"
+		}
+	],
+	"asset": {
+		"generator": "Khronos glTF Blender I/O v4.0.44",
+		"version": "2.0"
+	},
+	"bufferViews": [
+		{
+			"buffer": 0,
+			"byteLength": 76560,
+			"byteOffset": 0,
+			"target": 34962
+		},
+		{
+			"buffer": 0,
+			"byteLength": 76560,
+			"byteOffset": 76560,
+			"target": 34962
+		},
+		{
+			"buffer": 0,
+			"byteLength": 51040,
+			"byteOffset": 153120,
+			"target": 34962
+		},
+		{
+			"buffer": 0,
+			"byteLength": 56652,
+			"byteOffset": 204160,
+			"target": 34963
+		}
+	],
+	"buffers": [
+		{
+			"byteLength": 260812,
+			"uri": "link2.bin"
+		}
+	],
+	"images": [
+		{
+			"mimeType": "image/png",
+			"name": "link2_normal",
+			"uri": "textures/link2_normal.png"
+		},
+		{
+			"mimeType": "image/png",
+			"name": "link2_occlusion_roughness_metallic",
+			"uri": "textures/link2_occlusion_roughness_metallic.png"
+		},
+		{
+			"mimeType": "image/png",
+			"name": "link2_color",
+			"uri": "textures/link2_color.png"
+		}
+	],
+	"materials": [
+		{
+			"doubleSided": true,
+			"name": "link_2_material",
+			"normalTexture": {
+				"index": 0
+			},
+			"occlusionTexture": {
+				"index": 1
+			},
+			"pbrMetallicRoughness": {
+				"baseColorTexture": {
+					"index": 2
+				},
+				"metallicRoughnessTexture": {
+					"index": 1
+				}
+			}
+		}
+	],
+	"meshes": [
+		{
+			"name": "link2",
+			"primitives": [
+				{
+					"attributes": {
+						"NORMAL": 1,
+						"POSITION": 0,
+						"TEXCOORD_0": 2
+					},
+					"indices": 3,
+					"material": 0
+				}
+			]
+		}
+	],
+	"nodes": [
+		{
+			"mesh": 0,
+			"name": "link2"
+		}
+	],
+	"samplers": [
+		{
+			"magFilter": 9729,
+			"minFilter": 9987
+		}
+	],
+	"scene": 0,
+	"scenes": [
+		{
+			"name": "Scene",
+			"nodes": [
+				0
+			]
+		}
+	],
+	"textures": [
+		{
+			"sampler": 0,
+			"source": 0
+		},
+		{
+			"sampler": 0,
+			"source": 1
+		},
+		{
+			"sampler": 0,
+			"source": 2
+		}
+	]
+}

@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Render `assets/system_model/` — offscreen VTK stills, and a meshcat scene.
+
+    /home/franka/git/franka_manipulation_station/.venv/bin/python \
+        scripts/render_system_model.py [--out out] [--width 2400]
+
+Writes to `out/` (gitignored — these are a look, not an artefact):
+
+    system_model_three_quarter.png   the whole installation from above-corner
+    system_model_elevation.png       square on the long side, the z ladder
+    system_model_plan.png            from above, the 2x3 grid and the cage
+    system_model_drop_cluster.png    one drop cluster: posts, plate, clamp
+                                     stack, gussets, the arm and its holder
+    system_model_holder.png          the pen holder alone, on the hand
+    system_model.html                a static meshcat scene of everything
+
+The arms are posed at `Q_PARK_PROPOSED` — the certified park poses, which is
+what the rig actually looks like standing idle.  Shadows and PBR are on, which
+is only worth anything because the textures are now really there.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from pydrake.geometry import (ClippingRange, ColorRenderCamera,  # noqa: E402
+                              DepthRange, DepthRenderCamera, LightParameter,
+                              MakeRenderEngineVtk, Meshcat, MeshcatVisualizer,
+                              RenderCameraCore, RenderEngineVtkParams, Rgba)
+from pydrake.math import RigidTransform, RotationMatrix  # noqa: E402
+from pydrake.multibody.parsing import Parser  # noqa: E402
+from pydrake.multibody.plant import AddMultibodyPlantSceneGraph  # noqa: E402
+from pydrake.systems.framework import DiagramBuilder  # noqa: E402
+from pydrake.systems.sensors import CameraInfo, RgbdSensor  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from aris_sixarm import system_model as SM  # noqa: E402
+from aris_sixarm.layout import FLEET_PROPOSED, Q_PARK_PROPOSED  # noqa: E402
+
+URDF = ROOT / "assets/system_model/installation.urdf"
+MM = SM.MM
+CW, CL = SM.CANVAS_W / MM, SM.CANVAS_L / MM     # 1.8034 x 3.63064 m
+MID = np.array([CW / 2, CL / 2, 0.45])
+
+
+def look_at(eye, target, up=(0, 0, 1)):
+    """World<-camera for a camera at `eye` pointing at `target`.
+
+    Drake's camera looks down its own +z with +y down the image.  `up` must
+    not be parallel to the view ray — a camera looking straight down the world
+    z with up = +z produces a zero cross product and a NaN pose, which renders
+    as an empty frame rather than an error.
+    """
+    eye, target = np.asarray(eye, float), np.asarray(target, float)
+    f = target - eye
+    f /= np.linalg.norm(f)
+    up = np.asarray(up, float)
+    if abs(float(np.dot(f, up / np.linalg.norm(up)))) > 0.999:
+        raise ValueError(f"look_at: up {up} is parallel to the view ray {f}")
+    r = np.cross(f, up)
+    r /= np.linalg.norm(r)
+    return RigidTransform(RotationMatrix(np.column_stack([r, np.cross(f, r),
+                                                          f])), eye)
+
+
+# (name, eye, target, vertical field of view in degrees)
+VIEWS = (
+    ("three_quarter", (4.30, -2.30, 3.10), (CW / 2, CL / 2 - 0.15, 0.55), 42),
+    ("elevation", (8.20, CL / 2, 0.72), (CW / 2, CL / 2, 0.55), 29),
+    # a HIGH OBLIQUE, not a true plan: straight down, the runway beams roof
+    # the arms over completely and the picture is six grey rectangles
+    ("plan", (CW / 2 + 1.15, CL / 2 - 3.30, 5.70), (CW / 2, CL / 2, 0.35), 44),
+    # arm 31, middle row, west column: axis (0.5967, 1.81532).  The eye stands
+    # OUTSIDE the frame — from inside, the gussets fill the picture.
+    ("drop_cluster", (-1.55, 0.62, 2.05), (0.62, 1.78, 1.12), 30),
+    ("holder", None, None, 22),      # framed on the arm's own hand, below
+)
+
+LIGHTS = [
+    LightParameter(type="point", color=Rgba(1.0, 0.99, 0.96),
+                   intensity=0.75, position=[-1.6, -1.2, 3.2],
+                   attenuation_values=[1, 0, 0], frame="world"),
+    LightParameter(type="point", color=Rgba(0.92, 0.95, 1.0),
+                   intensity=0.55, position=[3.4, 4.8, 2.8],
+                   attenuation_values=[1, 0, 0], frame="world"),
+    LightParameter(type="point", color=Rgba(1.0, 1.0, 1.0),
+                   intensity=0.35, position=[3.0, -1.5, 0.9],
+                   attenuation_values=[1, 0, 0], frame="world"),
+]
+
+
+def build(width, height):
+    b = DiagramBuilder()
+    plant, sg = AddMultibodyPlantSceneGraph(b, time_step=0.0)
+    Parser(plant).AddModels(str(URDF))
+    plant.Finalize()
+    params = RenderEngineVtkParams(
+        default_clear_color=[0.94, 0.945, 0.95],
+        lights=LIGHTS, cast_shadows=True, shadow_map_size=2048,
+        exposure=1.15, force_to_pbr=True)
+    sg.AddRenderer("vtk", MakeRenderEngineVtk(params))
+    return b, plant, sg
+
+
+def camera(width, height, fov_deg):
+    core = RenderCameraCore("vtk", CameraInfo(width, height,
+                                              np.deg2rad(float(fov_deg))),
+                            ClippingRange(0.05, 60.0), RigidTransform())
+    return (ColorRenderCamera(core, False),
+            DepthRenderCamera(core, DepthRange(0.05, 50.0)))
+
+
+def pose_fleet(plant, ctx):
+    for aid in FLEET_PROPOSED:
+        q = Q_PARK_PROPOSED[aid]
+        for i in range(7):
+            plant.GetJointByName(f"arm{aid}_panda_joint{i + 1}").set_angle(
+                ctx, float(q[i]))
+
+
+def stills(out_dir, width, height):
+    b, plant, sg = build(width, height)
+    # the holder close-up needs a pose to aim at, so build the plant once,
+    # solve the fleet, then read arm 31's hand out of it
+    probe = b.Build().CreateDefaultContext()
+    pctx = plant.GetMyContextFromRoot(probe)
+    pose_fleet(plant, pctx)
+    hand = plant.EvalBodyPoseInWorld(
+        pctx, plant.GetBodyByName("arm31_panda_hand")).translation()
+    tip = plant.EvalBodyPoseInWorld(
+        pctx, plant.GetBodyByName("arm31_pen_tip")).translation()
+
+    b, plant, sg = build(width, height)
+    sensors = {}
+    for name, eye, target, fov in VIEWS:
+        if name == "holder":
+            # weight the frame toward the hand: the holder hangs off it, so
+            # the midpoint of hand-to-tip sits past the subject
+            ctr = hand + 0.32 * (tip - hand)
+            eye = ctr + np.array([0.30, -0.26, 0.14])
+            target = ctr
+        w, h = (width, height)
+        cc, dc = camera(w, h, fov)
+        s = b.AddSystem(RgbdSensor(sg.world_frame_id(),
+                                   look_at(eye, target), cc, dc))
+        b.Connect(sg.get_query_output_port(), s.query_object_input_port())
+        sensors[name] = s
+    dia = b.Build()
+    root = dia.CreateDefaultContext()
+    pose_fleet(plant, plant.GetMyContextFromRoot(root))
+    for name, s in sensors.items():
+        img = s.color_image_output_port().Eval(s.GetMyContextFromRoot(root))
+        p = out_dir / f"system_model_{name}.png"
+        Image.fromarray(np.asarray(img.data)[:, :, :3]).save(p)
+        print(f"wrote {p.relative_to(ROOT)}  "
+              f"({p.stat().st_size / 1e6:.2f} MB)")
+
+
+def meshcat_html(out_dir):
+    b = DiagramBuilder()
+    plant, sg = AddMultibodyPlantSceneGraph(b, time_step=0.0)
+    Parser(plant).AddModels(str(URDF))
+    plant.Finalize()
+    m = Meshcat()
+    MeshcatVisualizer.AddToBuilder(b, sg, m)
+    dia = b.Build()
+    root = dia.CreateDefaultContext()
+    pose_fleet(plant, plant.GetMyContextFromRoot(root))
+    dia.ForcedPublish(root)
+    p = out_dir / "system_model.html"
+    p.write_text(m.StaticHtml())
+    print(f"wrote {p.relative_to(ROOT)}  ({p.stat().st_size / 1e6:.1f} MB)")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="out")
+    ap.add_argument("--width", type=int, default=2400)
+    ap.add_argument("--no-html", action="store_true")
+    a = ap.parse_args()
+    out_dir = ROOT / a.out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stills(out_dir, a.width, int(a.width * 0.66))
+    if not a.no_html:
+        meshcat_html(out_dir)
+
+
+if __name__ == "__main__":
+    main()
