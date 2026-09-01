@@ -20,6 +20,7 @@ The drake-level checks (parse, collision roles, geometry provenance) live in
 `scripts/check_system_model.py`, which needs the station venv.  Nothing here
 imports drake.
 """
+import hashlib
 import importlib.util
 import json
 import xml.etree.ElementTree as ET
@@ -620,10 +621,14 @@ def test_manifest_records_where_every_vendored_file_came_from(manifest):
     # + 10 collision shells + 2 holder parts
     assert len(files) == 27 + 10 + 10 + 10 + 2, len(files)
     for f in files:
-        assert (DIR / f["file"]).is_file(), f["file"]
-        assert len(f["sha256"]) == 64
+        p = DIR / f["file"]
+        assert p.is_file(), f["file"]
         assert f["source"], f["file"]
-        assert (DIR / f["file"]).stat().st_size == f["bytes"], f["file"]
+        assert p.stat().st_size == f["bytes"], f["file"]
+        # the hash, not just the size: a re-vendored texture or a re-decimated
+        # holder that drifted from its record would otherwise pass
+        assert hashlib.sha256(p.read_bytes()).hexdigest() == f["sha256"], \
+            f"{f['file']} does not match its manifest sha256"
 
 
 def test_no_gltf_asks_for_a_texture_that_is_not_there():
