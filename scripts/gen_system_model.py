@@ -33,11 +33,13 @@ Three things were wrong with the older asset and are fixed here.
 
  2. THE VISUALS HAD NO TEXTURES.  The vendored glTFs reference 65 image files
     that were never copied across, so every renderer fell back to flat white
-    and printed a warning per image per mesh.  The 54 that the arm needs are
-    now vendored BYTE-IDENTICALLY from where the meshes themselves came from
-    (`~/git/franka_manipulation_station/assets/franka_description`), and the
-    glTFs are rewritten to point at them.  No runtime hack, no stripped
-    materials, no resampling.
+    and printed a warning per image per mesh.  The 54 the arm's own meshes
+    name — 27 PNG maps and their 27 .ktx2 twins — were all still sitting in
+    the directory the meshes themselves came from
+    (`~/git/franka_manipulation_station/assets/franka_description`).  The 27
+    PNGs are vendored BYTE-IDENTICALLY and the glTFs re-pointed at them; the
+    .ktx2 twins are dropped, because VTK says in as many words that it cannot
+    read them.  No runtime hack, no stripped materials, no resampling.
 
  3. THE STRUCTURE WAS A SCHEMATIC KEEP-OUT, NOT A BUILD.  `mounts.py` models
     each mount as a radius-100 column running to a 2.34 m "ceiling".  This

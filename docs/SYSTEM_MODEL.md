@@ -130,10 +130,10 @@ The vendored glTFs referenced **65 image files that were never copied
 across**. Every renderer fell back to flat white and printed a warning per
 image per mesh (`Meshcat could not get data for the named uri 'hand_color.png'`).
 
-**All 54 that the arm needs were found**, in the directory the meshes
-themselves came from —
+**All 54 the arm's own meshes name were found** — 27 PNG maps and their 27
+`.ktx2` twins — in the directory the meshes themselves came from,
 `~/git/franka_manipulation_station/assets/franka_description/meshes/visual`.
-The 27 this model uses (3 maps × link0–7 + hand: colour, normal,
+The **27 PNGs** (3 maps × link0–7 + hand: colour, normal,
 occlusion-roughness-metallic, 2048² each) are vendored **byte-identically**,
 with a sha256 per file in the manifest. No resampling: a resized texture is a
 texture whose provenance is "the tool resized it".
