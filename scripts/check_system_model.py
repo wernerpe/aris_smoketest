@@ -294,8 +294,12 @@ ok("KHR_texture_basisu is gone (VTK cannot read it)",
 
 # --- 9. measured clearances ------------------------------------------------
 print("\n9. measured clearances at the certified park poses (mm)")
-CAGE = ("frame_", "leg_", "runway_", "post", "gusset", "clamp", "plate",
-        "table", "paper", "floor")
+# STEEL is kept apart from the paper and the table on purpose: the overall
+# minimum is the pen's own graphite over the paper, which is the park hover
+# and is meant to be small.  Reporting it as "arm vs structure" invites
+# reading a 196 mm hover as a 196 mm steel clearance.
+STEEL = ("frame_", "leg_", "runway_", "post", "gusset", "clamp", "plate")
+SURFACES = ("paper", "table", "floor")
 
 
 def clearances(p, s_g, c, rt):
@@ -319,8 +323,10 @@ def clearances(p, s_g, c, rt):
             aid = x.split("_")[0]
             if y.startswith("arm"):
                 k = "arm vs arm" if y.split("_")[0] != aid else None
-            elif y.startswith(CAGE):
-                k = "arm vs structure"
+            elif y.startswith(STEEL):
+                k = "arm vs STEEL"
+            elif y in SURFACES:
+                k = f"arm vs {y}"
             else:
                 k = None
             if k and d.distance < best.get(k, (1e9,))[0]:
