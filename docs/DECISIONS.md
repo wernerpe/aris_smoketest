@@ -1,5 +1,38 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE CEILING DATUM IS A PROVENANCE BUG (2026-09-01) — and the model says so
+
+`assets/system_model/` is the installation as it will be built; the numbers and
+their sources are in `aris_sixarm/system_model.py` and, machine-readably, in
+`assets/system_model/model_manifest.json`.  Full write-up:
+`docs/SYSTEM_MODEL.md`.
+
+| Quantity | Value | Source / provenance |
+|---|---|---|
+| Cage total height | **2336.50 mm above the FLOOR** | the original drawing's own 233,7 cm, reproduced from `rig_final.FRAME_BOXES_W_CM["top_slab"]` |
+| Paper above the floor | **636.68 mm** | `rig_final.PAPER_ORIGIN_W_CM[2]` |
+| Grid underside / top **above the paper** | **1623.62 / 1699.82 mm** | the same steel, re-datumed to the canvas frame |
+| `mounts.MOUNTS.ceiling_z` | **2.34 m**, i.e. 2340 above the paper | the drawing's floor-referenced 233,7 read as paper-referenced.  **UNCHANGED — see below** |
+| Drop post at h = 940 | **718.60 mm** corrected, **1434.98** at the buggy datum, **736.90** as originally built | `system_model.z_ladder()` |
+
+**`mounts.py` IS NOT EDITED.**  Being too tall is conservative for collision —
+a longer obstacle never certifies a pose a shorter one refuses — so no
+certified number in this repo is in question, and correcting the obstacle
+model is a re-certification with its own gate rather than a typo fix.  It is
+not conservative for a fabricator, which is the whole reason the model carries
+the truth separately and `system_model.reconciliation()` reports the gap.
+
+### What else the model measured
+
+| Finding | Number | Status |
+|---|---|---|
+| Every piece of mount hardware escapes the modelled keep-out | worst **172.55 mm** (a gusset); the **plate** by 25.06 mm in plan, which the layout sheet reads as inside because it compared thicknesses | **RE-CERT before fabrication**, labelled per body in the manifest |
+| The inverted base cable | the manufacturer's link0 visual runs **230.7 mm** past the flange, i.e. UP through the 12.7 plate and the 95.7 clamp stack; the collision shell stops at the flange | **OPEN.** the plate and clamp stack need cutting; nothing in this repo had seen it |
+| Clearance at the six certified park poses | arm-arm **264.0 mm** (audited capsules) / 403.2 (manufacturer shells); arm-structure **196.5 mm**, and that is the graphite over the PAPER — nearest steel 326.5 | **CLEAN.** park poses only; drawing poses are still gated against `mounts.py` |
+| Gusset interference | the drawing's inboard orientation needs 406.4 mm across a transverse pair and 216.20 exists; rotated onto the runway's y faces it clears by **89.20 mm** | ADOPTED in the model, attachment detail OPEN |
+| Arm collision geometry | the vendored Panda's **66 unaudited spheres per arm are gone**; the manufacturer's own shells (FR3-identical to 0.344 mm) and the audited capsules replace them, in two files | ADOPTED |
+| Franka textures | all 54 the arm needs were on disk and never copied; vendored byte-identically, ktx2 dropped (VTK cannot read it) | FIXED |
+
 ## LATERAL PEN HOLDER (2026-08-25) — the tool model changed
 
 | Quantity | Value | Source / provenance |
