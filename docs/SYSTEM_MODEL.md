@@ -175,6 +175,15 @@ frame. Read a disagreement between them as a real result.
 The tool is a cylinder set in both (3 envelope + 1 graphite). The cage is
 boxes. **No sphere carries a collision role anywhere in either file.**
 
+One shell needed care. `finger.obj` is a single mesh used for both fingers and
+it lies **entirely on one side** — y ∈ [−0.0001, 0.0264] — so the right finger
+has to carry the same `Rz(180)` mirror its *visual* carries, or its collision
+geometry sits up to **52.8 mm** from the finger. The generator derives it from
+the vendored URDF's own visual origin rather than hardcoding it, and
+`test_every_collision_shell_lands_on_its_own_link` holds every shell's AABB to
+its link's visual (link0 exempted, because its disagreement *is* the base-cable
+finding of §8.2).
+
 ## 6. Reconciliation with `mounts.py` — the re-cert queue
 
 `aris_sixarm/mounts.py` is **not changed by this work**. It carries the

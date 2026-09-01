@@ -464,11 +464,7 @@ def clone_arm(robot, arm_id, spec, collision):
                 shell = SHELL_OF.get(bare)
                 if shell:
                     c = ET.SubElement(el, "collision")
-                    if bare.endswith("finger"):
-                        # the vendored finger visual already carries the
-                        # left/right mirror in its joint origin, so the shell
-                        # rides the same frame with no extra transform
-                        _origin(c, (0, 0, 0))
+                    _origin(c, (0, 0, 0), _shell_rpy(el))
                     ET.SubElement(ET.SubElement(c, "geometry"), "mesh",
                                   filename=f"meshes/collision/{shell}.obj")
             else:
@@ -496,6 +492,49 @@ def clone_arm(robot, arm_id, spec, collision):
     ET.SubElement(j, "child", link=f"{pfx}panda_link0")
     _origin(j, T[:3, 3], rpy_from_R(T[:3, :3]))
     return pfx
+
+
+# Rx(-90), for stripping the fingers' extra glTF correction (see _shell_rpy)
+_RX_M90 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+
+
+def _shell_rpy(link_el):
+    """Where a manufacturer collision shell sits in ITS link's frame -> rpy.
+
+    Identity for nine of the eleven, and Rz(180) for the RIGHT FINGER, which
+    is the whole reason this is a function.
+
+    The shells are authored in each link's own frame, so they need no
+    transform — EXCEPT that the two fingers are one mesh used twice, and the
+    vendored URDF mirrors the right one with `rpy = (pi/2, 0, pi)` against the
+    left's `(pi/2, 0, 0)`.  The common `pi/2` is a glTF-orientation
+    correction that only the finger visual needs and that the shell does not;
+    the `pi` is the mirror, and the shell needs it exactly as much as the
+    visual does.  So: take the visual's own rotation and strip the Rx(pi/2).
+
+    Dropping it is not cosmetic.  `finger.obj` spans y in [-0.0001, 0.0264] —
+    it lies entirely on one side — so an unmirrored right finger puts its
+    collision shell up to 52.8 mm from where the finger is.
+    """
+    v = link_el.find("visual")
+    o = None if v is None else v.find("origin")
+    rpy = [float(t) for t in (o.get("rpy", "0 0 0") if o is not None
+                              else "0 0 0").split()]
+    if not any(rpy):
+        return (0.0, 0.0, 0.0)
+    R = np.eye(3)
+    for ax, th in zip("xyz", rpy):
+        c, s_ = np.cos(th), np.sin(th)
+        M = {"x": [[1, 0, 0], [0, c, -s_], [0, s_, c]],
+             "y": [[c, 0, s_], [0, 1, 0], [-s_, 0, c]],
+             "z": [[c, -s_, 0], [s_, c, 0], [0, 0, 1]]}[ax]
+        R = np.asarray(M, float) @ R
+    # Rx(pi/2) @ Rx(-pi/2) is the identity in exact arithmetic and leaves a
+    # 5e-12 residual in floats.  A nanoradian is not a rotation; snap it, so
+    # the left finger reads `0 0 0` and a reader can see at a glance that only
+    # the right one is mirrored.
+    return tuple(0.0 if abs(v) < 1e-9 else v
+                 for v in rpy_from_R(R @ _RX_M90))
 
 
 def _add_capsule(link, a, b, r):

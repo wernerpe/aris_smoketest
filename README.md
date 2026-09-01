@@ -42,12 +42,43 @@ moves are routed around it with certified via-configurations
 same document has the dead-zone tiers (the atlas overstates death by **7.04 pp**)
 and the attribution of the 86.97 % coverage.
 
+**AND THE PHYSICAL MODEL OF ALL OF IT IS `assets/system_model/`** (2026-09-01)
+— the 80/20 cage off the original drawing, the table and paper under it, six
+FR3 arms, a pen holder on every hand, visual and collision, with the drawing
+entity or code constant behind every one of 77 static bodies in
+`model_manifest.json`. `docs/SYSTEM_MODEL.md` is that model.
+
+It carries a **datum correction**. The drawing's one overall height, 233,7 cm,
+is FLOOR to top-of-construction — it draws a self-supporting cage and defines
+no room ceiling anywhere — and the paper sits 636.68 mm above that floor. So
+`mounts.MOUNTS.ceiling_z = 2.34 m` is that number re-datumed to the paper, and
+it stands the cage **716.4 mm** too tall. Too tall is conservative for
+collision, so no certified number is in question and **`mounts.py` is not
+changed**; it is not conservative for a fabricator, who is being asked for a
+1435.0 mm drop post where the corrected datum asks for 718.6 against the
+736.9 that was actually built. All seven disagreements are in
+`system_model.reconciliation()`, and the two that block fabrication are the
+drop cluster (a 393.8 x 152.4 post cluster against a modelled 200 mm column)
+and a hole nobody has cut: the manufacturer's link0 visual carries the base
+connector **230.7 mm** past the flange, which on an inverted arm points
+straight up through the 12.7 mm plate and the 95.7 mm clamp stack, and the
+collision shell stops at the flange so nothing here has ever seen it.
+
+The arms' **unaudited collision spheres are gone** — `installation.urdf` uses
+the manufacturer's own shells and `installation_capsules.urdf` the audited
+capsule set — and the **textures are really there**, vendored byte-identically
+from where the meshes came from, so the thing renders like the robot it is.
+
 ## Layout
 
 ```
 aris_sixarm/
   frames.py        FR3 DH model, FK, joint/torque limits, pen transform  (single source of truth)
   fleet.py         the 6-arm world layout (mounts, base transforms, per-arm colors)
+  system_model.py  THE PHYSICAL INSTALLATION: the 80/20 cage, table and canvas
+                   as dimensioned, provenance-classed bodies; the corrected
+                   ceiling datum; the reconciliation queue against mounts.py
+                   and the open physical questions  (docs/SYSTEM_MODEL.md)
   ik.py            analytic IK wrapper (He/Liu solver via wernerpe bindings; FR3-filtered)
   metrics.py       joint margin, pen-tip Jacobian, sigma_min, f_max
   atlas.py         reachability sweep over the paper plane

@@ -386,6 +386,49 @@ def test_the_mesh_variant_uses_the_manufacturers_own_shells(links):
     assert seen == want, seen
 
 
+def test_every_collision_shell_lands_on_its_own_link():
+    """The shell and the manufacturer's own visual must occupy the same box.
+
+    This is the invariant that catches a mis-placed shell, and it caught one:
+    `finger.obj` lies entirely on one side (y in [-0.0001, 0.0264]) and is used
+    for BOTH fingers, so the right one has to carry the same Rz(180) mirror its
+    visual carries or its collision geometry sits 52.8 mm from the finger.
+
+    link0 is exempt and its exemption is the finding in
+    `test_the_inverted_base_cable_is_carried_as_a_finding`: the visual has a
+    base cable the shell does not.
+    """
+    trimesh = pytest.importorskip("trimesh")
+    root = ET.parse(INSTALL).getroot()
+    links = {el.get("name"): el for el in root.findall("link")}
+    # drake's glTF import lands a mesh in the frame trimesh gives + Rx(90);
+    # measured, not assumed — it is what makes the shells and the visuals
+    # coincide for the nine links whose visual origin is identity
+    RX90 = _rpy(np.pi / 2, 0, 0)
+    worst = 0.0
+    for bare in [f"panda_link{i}" for i in range(8)] + [
+            "panda_hand", "panda_leftfinger", "panda_rightfinger"]:
+        el = links[f"arm13_{bare}"]
+        vis = el.find("visual")
+        v = np.asarray(trimesh.load(
+            DIR / Path(vis.find("geometry/mesh").get("filename")),
+            force="mesh").vertices, float)
+        v = (_rpy(*_origin_of(vis)[1]) @ RX90 @ v.T).T
+        col = el.find("collision")
+        c = trimesh.load(DIR / Path(col.find("geometry/mesh").get("filename")),
+                         force="mesh")
+        cv = (_rpy(*_origin_of(col)[1]) @ np.asarray(c.vertices, float).T).T
+        err = float(max(np.abs(cv.min(0) - v.min(0)).max(),
+                        np.abs(cv.max(0) - v.max(0)).max()))
+        if bare == "panda_link0":
+            assert err == pytest.approx(0.2307, abs=5e-4), \
+                "link0's only disagreement should be the base cable"
+            continue
+        worst = max(worst, err)
+    # link5's visual overhangs its shell by 5.6 mm; everything else is under 1
+    assert worst < 0.006, worst
+
+
 def test_the_capsule_variant_is_the_audited_set():
     root_c = ET.parse(CAPSULES).getroot()
     ns = "{http://drake.mit.edu}capsule"

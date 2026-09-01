@@ -77,7 +77,7 @@ VIEWS = (
     # arm 31, middle row, west column: axis (0.5967, 1.81532).  The eye stands
     # OUTSIDE the frame — from inside, the gussets fill the picture.
     ("drop_cluster", (-1.55, 0.62, 2.05), (0.62, 1.78, 1.12), 30),
-    ("holder", None, None, 22),      # framed on the arm's own hand, below
+    ("holder", None, None, 33),      # framed on the arm's own hand, below
 )
 
 LIGHTS = [
@@ -138,10 +138,13 @@ def stills(out_dir, width, height):
     sensors = {}
     for name, eye, target, fov in VIEWS:
         if name == "holder":
-            # weight the frame toward the hand: the holder hangs off it, so
-            # the midpoint of hand-to-tip sits past the subject
-            ctr = hand + 0.32 * (tip - hand)
-            eye = ctr + np.array([0.30, -0.26, 0.14])
+            # Frame the hand-plus-holder-plus-graphite, about 0.19 m of
+            # subject.  Hold the EYE at a fixed 0.50 m from the subject centre
+            # rather than at a fixed offset from a moving point — otherwise
+            # re-weighting the centre silently re-zooms the shot.
+            ctr = hand + 0.45 * (tip - hand)
+            d = np.array([0.30, -0.26, 0.14])
+            eye = ctr + 0.50 * d / np.linalg.norm(d)
             target = ctr
         w, h = (width, height)
         cc, dc = camera(w, h, fov)
