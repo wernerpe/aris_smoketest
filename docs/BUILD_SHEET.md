@@ -1,5 +1,28 @@
 # Build sheet — all-ceiling rig (6 inverted FR3, 2×3 grid)
 
+> **STOP — THIS SHEET IS STALE IN TWO PLACES. DO NOT CUT STEEL FROM IT.**
+> Nothing below has been edited; the corrections live in
+> `docs/SYSTEM_MODEL.md` and `aris_sixarm/system_model.py`, and re-issuing
+> this sheet is a separate job.
+>
+> 1. **§1 says the mounting plane is z = +850.0 mm. The height in force is
+>    940.0** (`layout.LAYOUT_PROPOSED["h"]`, adopted 2026-08-26). Every base
+>    position, orientation and tolerance below is still right; the one number
+>    that moved is the height, and it moved by 90 mm.
+> 2. **§4's ceiling grid at z ≥ 2340 is a provenance bug.** The original
+>    drawing's 233,7 cm is FLOOR to top-of-construction, and the paper sits
+>    636.68 mm above that floor, so the grid underside belongs at **1623.6**
+>    above the paper and its top at **1699.8** — the cage is self-supporting
+>    and floor-standing, and there is no surveyed room ceiling anywhere in
+>    this project. At h = 940 that makes the drop post **718.6 mm**, not the
+>    1435.0 the 2340 datum asks for.
+>
+> §4's keep-out envelope is also **not** what the real steel does: the
+> radius-100 column is neither contained by nor contains the 2 × 2 drop-post
+> cluster the drawing actually specifies. All 60 pieces of mount hardware
+> fall outside it, worst 172.55 mm. That is a re-certification, and it is
+> queued.
+
 Adopted 2026-08-25 (layout `LAYOUT_PROPOSED`, certified 99.98 % coverage at
 commit 820dd3b; URDF `assets/proposed_rig/installation.urdf`, commit 58a7674).
 All dimensions in **mm** unless noted. This sheet is the single source for
