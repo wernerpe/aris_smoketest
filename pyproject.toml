@@ -9,6 +9,11 @@ dependencies = [
     "meshcat",
     "trimesh",
     "fast-simplification",
+    "scipy",
+    "shapely",
+    "networkx",
+    "rtree",
+    "pillow",
 ]
 
 [project.optional-dependencies]
