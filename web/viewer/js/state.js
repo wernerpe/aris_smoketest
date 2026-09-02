@@ -237,6 +237,15 @@ function reduceItem(s, st, p) {
 // is: `scene_check` is inside `conduction`, and nothing else nests.
 const NESTED = {conduction: ["scene_check"]};
 
+// A substage's seconds INCLUDING the run that has not closed yet.  Without
+// this, `replan` reads 0 s for the four minutes it is actually running and the
+// "slowest allocation phase" counter names whichever short pass finished last
+// — which is precisely wrong at the moment somebody is watching.
+export function subSeconds(v, clock) {
+  return (v.seconds || 0)
+       + (v.open_t != null ? Math.max(0, clock - v.open_t) : 0);
+}
+
 export function stageTimes(s) {
   const out = [];
   for (const name of [...STAGES, "export"]) {

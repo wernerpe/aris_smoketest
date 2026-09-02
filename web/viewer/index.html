@@ -117,10 +117,13 @@ button:disabled { opacity: .4; cursor: default; }
 .stagebar .nm { color: var(--dim); }
 .stagebar .track { position: relative; height: 13px; background: var(--panel2);
                    border-radius: 2px; overflow: hidden; }
-.stagebar .fill { position: absolute; inset: 0 auto 0 0; background: var(--run);
+/* the fill is deliberately DIMMER than any substage colour: it is the
+   background the coloured bands are read against, not a band itself */
+.stagebar .fill { position: absolute; inset: 0 auto 0 0; background: #2f4256;
                   transition: width .15s linear; }
-.stagebar.done .fill { background: var(--ok); }
-.stagebar.failed .fill { background: var(--bad); }
+.stagebar.done .fill { background: #2b4a39; }
+.stagebar.failed .fill { background: #5a2f2b; }
+.stagebar.aborted .fill { background: #5a4a2b; }
 .stagebar.idle .fill { background: var(--line); }
 .stagebar .subs { position: absolute; inset: 0; display: flex; }
 .stagebar .sub { height: 100%; opacity: .85; }

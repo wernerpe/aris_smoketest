@@ -8,7 +8,8 @@
 // a red band filling most of the allocation row, visible ninety seconds into a
 // run rather than an hour later.
 
-import {STAGES, STAGE_LABEL, SUB_COLOR, stageTimes} from "./state.js";
+import {STAGES, STAGE_LABEL, SUB_COLOR, stageTimes, subSeconds}
+  from "./state.js";
 import {F, fmtS} from "./panel.js";
 
 export class Strip {
@@ -60,17 +61,19 @@ export class Strip {
       // hiding it behind a full-width green bar (the finished fill showing
       // through) made the stage look fully attributed when it was not.
       r.subs.innerHTML = "";
-      const subs = Object.entries(t.subs).sort((a, b) =>
-        b[1].seconds - a[1].seconds);
-      const tot = subs.reduce((a, [, v]) => a + v.seconds, 0);
+      const subs = Object.entries(t.subs)
+        .map(([n, v]) => [n, v, subSeconds(v, s.clock)])
+        .sort((a, b) => b[2] - a[2]);
+      const tot = subs.reduce((a, x) => a + x[2], 0);
       if (tot > 0) {
-        for (const [name, v] of subs) {
+        for (const [name, v, sec] of subs) {
           const b = F("div", {class: "sub"});
-          b.style.width = (100 * v.seconds / wall).toFixed(3) + "%";
+          b.style.width = (100 * sec / wall).toFixed(3) + "%";
           b.style.background = SUB_COLOR[name] || SUB_COLOR.other;
-          b.title = `${name}: ${fmtS(v.seconds)} `
-                  + `(${(100 * v.seconds / wall).toFixed(1)} % of the run)`
-                  + (v.runs > 1 ? `, over ${v.runs} runs` : "");
+          b.title = `${name}: ${fmtS(sec)} `
+                  + `(${(100 * sec / wall).toFixed(1)} % of the run)`
+                  + (v.runs > 1 ? `, over ${v.runs} runs` : "")
+                  + (v.open_t != null ? ", still running" : "");
           r.subs.appendChild(b);
         }
         const rest = t.exclusive - tot;
@@ -130,9 +133,10 @@ export class Strip {
     const alloc = s.subs && s.subs.allocation;
     if (alloc) {
       const worst = Object.entries(alloc)
-        .sort((a, b) => b[1].seconds - a[1].seconds)[0];
-      if (worst && worst[1].seconds > 0)
-        put("slowest allocation phase", `${worst[0]} ${fmtS(worst[1].seconds)}`);
+        .map(([n, v]) => [n, subSeconds(v, s.clock)])
+        .sort((a, b) => b[1] - a[1])[0];
+      if (worst && worst[1] > 0)
+        put("slowest allocation phase", `${worst[0]} ${fmtS(worst[1])}`);
     }
     this.countersEl.innerHTML = bits.join(" &nbsp;·&nbsp; ");
   }

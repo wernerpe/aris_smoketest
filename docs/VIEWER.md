@@ -23,8 +23,10 @@ started here and one started from a shell is that somebody is listening.
    canvas in the 3D view, faint, the moment they exist in sheet coordinates.
 3. **allocation** is the long one.  Its bar fills by strokes probed, then by
    strokes re-planned, and the coloured bands INSIDE the bar are the
-   substages — prefilter, probe, repair, replan, balance, park, sequence — in
-   proportion.  As each span is certified it is drawn on the canvas in the
+   substages — prefilter, probe, repair, replan, flycheck, balance, merge,
+   guarantee, sequence — as shares of the wall clock, with whatever no
+   substage accounts for drawn explicitly in grey.  As each span is certified
+   it is drawn on the canvas in the
    colour of the arm that will draw it, so the picture fills in by arm.  The
    load bars under the counters are per-arm ink, replaced by per-arm seconds
    once the balancer has spoken.
@@ -51,30 +53,51 @@ allocation was inside `balance`.  A stage that contains another (`scene_check`
 runs inside `conduction`) is reported EXCLUSIVE of it, so the shares add up to
 the wall clock.
 
-Measured on the smallest end-to-end run in this repository — the CSAIL mark at
-0.350 m wide, two drawing arms, `--max-probes 1 --no-rrt --no-balance
---no-split`, rig `proposed`, tool `lateral` — the shape of the clock is:
+### The baseline
+
+The smallest end-to-end run this repository can do — the CSAIL mark at 0.300 m
+wide, arms 31 and 71, fixed placement, `--max-probes 1 --no-rrt --no-balance
+--no-split --no-verify --skip-unconductable`, rig `proposed`, tool `lateral`,
+`--image-jobs 3`.  It draws 1.863 m of 2.865 m (65.03 % coverage, 15 certified
+segments), conducts to a 55.771 s makespan, and passes `scene_check` at
+87.3 mm against an 80 mm margin.  Read straight off its own event stream
+(`out/gui_jobs/20260902-142111-2e41/events.jsonl`):
 
 | stage | seconds | share |
 |---|---:|---:|
-| trace | 0.3 | 0.1 % |
-| placement (fixed, no search) | 0.0 | |
-| allocation | 418.4 | 94.3 % |
-| — prefilter | 0.1 | |
-| — probe | 20.5 | 4.6 % |
-| — repair | 0.8 | |
-| — **replan** | **391.5** | **88.2 %** |
-| — sequence | 5.5 | 1.2 % |
-| conduction (conduct + coordination) | 10.8 | 2.4 % |
-| scene_check | 14.2 | 3.2 % |
-| **wall clock** | **443.8** | |
+| trace | 0.2 | 0.1 % |
+| placement (fixed, no search) | 0.0 | — |
+| **allocation** | **310.0** | **90.3 %** |
+| &nbsp;&nbsp;— **replan** | **174.1** | **50.7 %** |
+| &nbsp;&nbsp;— **flycheck** | **62.2** | **18.1 %** |
+| &nbsp;&nbsp;— **merge** | **56.1** | **16.4 %** |
+| &nbsp;&nbsp;— probe | 8.8 | 2.6 % |
+| &nbsp;&nbsp;— sequence | 4.0 | 1.2 % |
+| &nbsp;&nbsp;— guarantee | 3.8 | 1.1 % |
+| &nbsp;&nbsp;— repair | 0.8 | 0.2 % |
+| &nbsp;&nbsp;— prefilter | 0.0 | — |
+| conduction (freeze + conduct + coordination) | 15.8 | 4.6 % |
+| scene_check | 14.9 | 4.3 % |
+| bundle export | 1.5 | 0.4 % |
+| **wall clock** | **343.3** | |
 
-and the finding is already visible: with the balancer off, `replan` — the clean
-re-plan of every chosen span, plus `fly_shrink` and `prune_unflyable` giving
-back the ends an arm cannot fly to — is 88 % of the run.  On the shipped
-`_h094_v14` programme, with the balancer on, phase 1 reads `probe 69.8 s ·
-replan 548.2 s · balance 929.7 s` of a 1600.4 s allocation; the GUI shows that
-split live instead of at the end of a log.
+Three things this says that no log said before.
+
+1. **With the balancer off, `replan` is half the run.**  That is the clean
+   re-plan of every chosen span (`replan_segment`) plus `fly_shrink` giving
+   back the span ends an arm cannot fly to, at one probe per (stroke, arm).
+2. **`flycheck` is 18 %.**  `prune_unflyable` prices a whole bag's home legs
+   on the transit router, once per arm per ban round, and the ban loop runs
+   up to four rounds.  Nobody had measured it; it was inside `timing["balance"]`
+   with two other things.
+3. **`merge` is 16 %.**  `merge_remainders` re-plans a segment to absorb the
+   ink lying against it — on this run it bought 15 mm of ink for 56 seconds.
+
+For contrast, the shipped `_h094_v14` programme (six arms, the full logo, the
+balancer ON) reads `prefilter 0.1 · probe 69.8 · repair 0.0 · replan 548.2 ·
+balance 929.7 · park 0.0 · sequence 5.7` of a 1600.4 s phase-1 allocation, and
+1824.1 s of its 4170.9 s total was the C-space pen-up planner.  The GUI shows
+that split as it happens instead of at the end of a log.
 
 ## Running a job the way the shipped programme was run
 
@@ -176,10 +199,21 @@ With no sink attached `emit` is a global load and a comparison against None,
 and the `active()` guard means an expensive payload is not built either.
 `progress.recording()` collects events into a list for tests and notebooks.
 
-**The planner's behaviour is unchanged with the GUI off**, and that is checked
-rather than asserted: the same run was executed twice, once with no sink and
-once with a JSONL sink attached, and the `_program.json`, `_schedule.json` and
-`_schedule.npz` compare equal (see "Verification" below).
+**The planner's behaviour is unchanged with the GUI off**, and that is measured
+rather than asserted.  The same end-to-end run was executed twice on the same
+machine, once with no sink and once with a JSONL sink attached to every event:
+
+* `det_schedule.npz` — all **54 arrays identical**, element for element
+  (`q_<arm>`, `seg_<arm>`, `u_<arm>`, `segpts_`, `segoff_`, the ink CSR block,
+  every scalar).
+* `det_program.json` — **identical** once the recorded wall times are removed.
+* `det_strokes.json` — **byte identical**, sha256 and all.
+* `det_schedule.json` — identical except **one field**:
+  `phases[0].priority_search.wall`, `0.08312726…` against `0.08006644…`, which
+  is a stopwatch reading and cannot be equal between two runs.
+
+Nothing about what is drawn, by whom, in what order, or how far anything is
+from anything else moved.
 
 ## The programme schema
 

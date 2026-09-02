@@ -737,7 +737,12 @@ def export_scene(out_path, h_inv=None):
         radii = scene_check._radii_for(FL, sorted(FL))
     except Exception:
         radii = scene_check.RADII
-    radii = [[float(x) for x in row] for row in radii]
+    # (i, j) are CHAIN INDICES and stay integers; r and the optional
+    # sub-segment parameters (t0, t1) are lengths.  Emitting the indices as
+    # floats works in JS by accident — `a[0.0]` is `a["0"]` — and is the kind
+    # of accident that stops working the first time something rounds.
+    radii = [[int(row[0]), int(row[1])] + [float(x) for x in row[2:]]
+             for row in radii]
 
     # the golden FK samples
     rng = np.random.default_rng(0)
