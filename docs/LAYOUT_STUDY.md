@@ -483,9 +483,18 @@ What the housing is, measured: a barrel with a 21.1 mm through bore (necking
 to 17.0 mm at the nose, exactly the clutch's OD, so the pen leaves at the
 nose), an external thread at the far end for the cap, and a **26 x 26 x 50 mm
 square mount post across the barrel with an 18 x 18 x 7 mm socket in each
-end**.  50 mm of post plus 2 x 3.5 mm of socket engagement is 57 mm — exactly
-the jaw gap of the 28.5 mm finger half-width the 10-degree build's CAD gave —
-so the post is what the fingers hold, and its axis is y_hand.
+end**.  The post is what the fingers hold and its axis is y_hand.
+
+> **Corrected 2026-09-02.** This paragraph used to read "50 mm of post plus
+> 2 x 3.5 mm of socket engagement is 57 mm — exactly the jaw gap of the
+> 28.5 mm finger half-width".  The seating faces are the socket FLOORS, so it
+> is 50 **minus** 2 x 7.000 = **36.000 mm**, and the 10-degree assembly (found
+> since; see `docs/SYSTEM_MODEL.md` §7a) puts the two fingertip grip faces
+> 36.0008 mm apart.  57 mm is 7 mm wider than the post is long and would hold
+> nothing.  Also corrected: the 17.0 mm nose is **not** "exactly the clutch's
+> OD, so the pen leaves at the nose" — 17.07 does not enter 17.00, and the
+> clutch lives 45 mm further back inside the sleeve.  The pen does leave at
+> the nose; it is the ⌀7 graphite that goes through, not the clutch.
 
 **The "22 deg" verdict.**  It is a CLOCKING, not a tilt, and it measures
 **23.00 degrees**: the post's flats and sockets are rotated 23.00 deg about
@@ -504,6 +513,20 @@ same disagreement with the file's name.
    square to the hand, the built tip lands at 23 deg — about **0.047 m
    lateral at this reach, not 0.110** — and either the constant or the
    housing has to move.
+
+   > **2026-09-02: the cradle turned out not to exist.**  The 10-degree
+   > build's complete `.SLDASM` was found in the nested zip and resolved: the
+   > fingertips are stock FR3 tips, drilled for brass inserts and nothing
+   > more, and they seat 7.000 mm **square** inside the post's own sockets.
+   > Nothing between holder and hand can absorb a rotation — and on that
+   > build the bore comes out 10.0000 deg off the hand's approach axis, which
+   > is the angle in its own file name, with the grip centre on the TCP to
+   > 0.14 mm.  So the "if" above is resolved in favour of 23 deg and the
+   > 0.047 m, and it is now **63.3 mm** of tip position rather than a
+   > hypothesis.  Still not changed here: the planning transform is
+   > gate-validated and moving it is a re-certification.  See
+   > `docs/SYSTEM_MODEL.md` §7a for the numbers and the one measurement that
+   > closes it.
 2. **100.5 mm of graphite.**  Grip-to-nose is 55.1 mm and the planning tip is
    155.6 mm from the TCP, so the stick has to protrude 100.5 mm past the
    nose.  (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
