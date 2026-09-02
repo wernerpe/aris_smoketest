@@ -187,15 +187,23 @@ shorter.
   inside it, and is 7 mm wider than the post is long. Nothing between holder
   and hand can absorb a rotation, so the housing's clocking **is** the pen's
   lean: 10.0000° here, 23.00° on the 23° build.
-- **flange→tip is ~30 mm short.** The 46.0 mm this table puts between the TCP
-  and the tip is a 25 mm grip-to-nose plus 21 mm of protrusion, but 25 mm is
-  the grip centre to the housing's **cap** end. The nose is **56.0 mm** the
-  other way (`rig_final.PENHOLDER22` independently says 55.1 for the 23°
-  housing, measured from the same side), and the assembly's own saved state
-  has **72.5 mm** of pencil past the nose, not 21 — putting its tip at
-  (−22.3, 0, +230.0) mm rather than (−8.0, 0, +148.7). `frames.py`'s
-  `TIP_HAND_HOLDER10` carries a CAUTION to that effect and is otherwise
-  untouched; `PEN_TILT_HOLDER10` = 10° is **confirmed exactly**.
+- **flange→tip is confirmed, to a tenth of a millimetre.** Re-derived from the
+  assembly's own transforms, the pencil's sharp point sits **46.096 mm** from
+  the grip centre at **(7.93, 0, 45.41) mm** — this table's TCP + (−8.0, 0,
+  +45.3), with the sign of x a mounting choice rather than a disagreement (the
+  post is square and seats either way up). The 46.1 is the cap end at 25.361
+  plus **20.7 mm** of pencil past it, i.e. the "21 mm protrusion" above,
+  measured. `PEN_TILT_HOLDER10` = 10° is exact: **10.0000°**.
+
+**But the 23° model in `rig_final.PENHOLDER22` has the housing end-for-end.**
+This table's 25 mm grip-to-nose is right and `PENHOLDER22["nose_x"] = 0.0` is
+not: the pen leaves through the **cap**, and x = 0 is the far end. The 17.0 mm
+land there is the **spring's** stop — 17.0 will not pass a 19.05 mm spring,
+which is exactly what it is cut to do — and the preview shows the sharpened
+point through the cap with 72.5 mm of blunt pencil tail out the other end.
+`assets/final_rig/` is unaffected (it carries the CAD-extracted mesh, already
+in hand coordinates). See `docs/SYSTEM_MODEL.md` §7c for what the correction
+costs and why it has not been applied here.
 
 The collision union is unaffected: it was sized on the housing's 30 mm max
 radius and a 0.209 m reach, both of which still bound these numbers.

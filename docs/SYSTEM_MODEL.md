@@ -375,34 +375,38 @@ them, VISUAL ONLY, in this order — which is the 10° assembly's order,
 interface by interface re-measured on this delivery's own STLs:
 
 ```
-x=0.00000  nose face, 17.00 mm land
-x=0.00334  nose shoulder — a flat 21.0 face lands here   [FRONT STOP]
+x=0.00000  TAIL face, 17.00 mm land — the spring's stop
+x=0.00334  tail shoulder — a flat 21.0 face lands here   [TAIL STOP]
            SPRING 9657K26, ⌀19.05/⌀14.97, free 50.81 → squeezed to 39.675
 x=0.04301  [optional shim: 5.1 or 10.1 mm, ⌀21.0]
            SLEEVE "pen holder for clutches v1.00", 40.10, ⌀21.0
 x=0.04811  CLUTCH "Creatcolor monolith graphite v1.01", 35.00, inside it
-x=0.08311  the cap's 16.00 mm shoulder                    [BACK STOP]
-x=0.08510  the cap's outer face
+x=0.08311  the cap's 16.00 mm shoulder                    [FRONT STOP]
+x=0.08510  the cap's outer face — AND THIS IS WHERE THE PEN LEAVES (§7c)
 ```
 
 Why each interface is what it is:
 
-- **Front stop.** The bore necks to a 17.00 mm land at the nose, so nothing
-  21 mm gets past x = 3.34. In the 10° assembly the spring's front coil lands
-  3.302 mm behind the nose; this housing's shoulder is at 3.34.
+- **Tail stop, and it is the spring's.** The bore necks to a 17.00 mm land at
+  x = 0, and **17.00 will not pass the 19.05 mm spring** — that land exists to
+  stop it, which is also how we know x = 0 is the tail and not the nose (§7c).
+  Nothing 21 mm gets past x = 3.34 either. In the 10° assembly the spring's
+  end coil lands 3.302 mm from that face; this housing's shoulder is at 3.34.
 - **The spring bears on the discs.** ⌀19.05 over ⌀14.97 clears the 21.148 bore
   by 1.05 mm and lands on the 21 mm parts' end annulus, which the sleeve's and
   the spacers' 15.0 mm bores are cut to match.
-- **Back stop.** The cap is a threaded **collar**, not a lid — 36 mm flange,
-  11.4 mm long, open right through, 21.51 mm counterbore stepping to a
+- **Front stop — the cap, and the pen goes out through it (§7c).** The cap is
+  a threaded **collar**, not a lid — 36 mm flange, 11.4 mm long, open right through, 21.51 mm counterbore stepping to a
   **16.00 mm** shoulder. 16.00 is under 21.0, so the shoulder retains the
   stack. And the counterbore is not incidental: **21.51 on a 21.00 sleeve** is
-  a clearance fit, 1.9 mm deep, and the sleeve's back 3.0 mm is exactly what
+  a clearance fit, 1.9 mm deep, and the sleeve's front 3.0 mm is exactly what
   crosses the housing's end face at 80.1 to reach the shoulder at 83.115. The
   cap is cut to receive this part.
 - **Preload.** 83.115 − 3.340 = 79.775 mm of space, less the 40.100 sleeve,
   squeezes the spring to 39.675: **11.135 mm of preload**, with 11.175 mm left
-  before coil bind. That is the pen's compliance, and the two spacers are a
+  before coil bind. **That is the pen's compliance** — the spring pushes the
+  sleeve toward the cap, and paper force on the graphite pushes it back and
+  compresses the spring — and the two spacers are a
   **shim set** that sets it — one of {none, 5, 10} mm, giving 11.1 / 16.2 /
   21.2 mm of preload against 22.3 mm to solid. Both at once asks 26.3 and
   binds, which is why there are two spacers and not a stack of them.
@@ -412,10 +416,11 @@ Why each interface is what it is:
   0.01750 mm/mm. Matched tapers wedge. The clutch's free 17.066 mm does not
   enter a 16.290 mm hole, which is the point: it is slit, and going in closes
   it onto the 7.0 mm graphite. Drawing load pushes it deeper, i.e. tighter.
-- **The 13.0 mm land** at the sleeve's back — and in both spacers — is the
+- **The 13.0 mm land** at the taper's small end — and in both spacers — is the
   bench extractor's guide: that tool is a 30 mm head on a **12.0 × 40 mm**
-  pusher rod, and 12.0 in 13.0 is what pushes the clutch back out of its
-  taper. It stays omitted; it is not part of the mounted holder.
+  pusher rod, 12.0 goes down 13.0, and 40 traverses the 40.1 mm sleeve. It
+  stays omitted; it is a bench tool, not part of the mounted holder, so which
+  end it is fed from is a workshop question and not a claim made here.
 
 One free check on all of that: the render shows the spring through the
 barrel — and it should. The housing has **two windows through the wall**,
@@ -431,6 +436,56 @@ through them.
 `rig_final.penholder22_internals_escape()` measures the complete stack against
 that hull on every generator run and the generator refuses to write a URDF if
 it is not **0.0 m**. It is 0.0 m, for all three shim settings.
+
+### 7c. The housing is modelled end-for-end — REPORTED, NOT FIXED
+
+`PENHOLDER22["nose_x"] = 0.0` says the pen leaves the housing at x = 0. **It
+leaves through the cap at the other end**, and four independent things say so:
+
+1. **The preview.** The assembly's own render shows the **sharpened point
+   through the cap**, with 72.5 mm of blunt, flat-cut pencil tail out the far
+   end. (`scripts/read_solidworks.py dump … PreviewPNG`.)
+2. **The 17.0 mm land is the SPRING's stop, not the pen's.** 17.00 will not
+   pass a 19.05 mm spring — that is the only thing in the holder it stops, and
+   it is cut 2.15 mm long to do exactly that. A ⌀7 graphite or a ⌀8.5 pencil
+   walks straight through it.
+3. **The spring only works this way round.** The spring sits between that land
+   and the sleeve, so it pushes the sleeve **toward the cap**. Paper force on
+   the graphite then compresses it — compliance. Modelled the other way round
+   the spring pushes the pen assembly into a rigid cap and the tool has no
+   compliance at all.
+4. **The grip is 25 mm from the cap and 55 mm from the far end.** A robot pen
+   grips close to its tip, and `docs/FINAL_RIG.md`'s independent extraction
+   read the same 25 mm — which is why its 46.0 mm flange-to-tip reproduces the
+   assembly's own 46.096 exactly, and this model's 55.1 mm grip-to-nose does
+   not reproduce anything.
+
+**What the correction is.** `penholder22_T_hand` points the housing's +X
+*away* from the tip; it should point *toward* it — a 180° flip about the post
+axis. Grip-to-writing-end becomes **25.0 mm, not 55.1**. Consequences:
+
+| | as modelled | corrected |
+|---|---:|---:|
+| grip → where the pen leaves | 55.1 mm | **25.0 mm** |
+| barrel toward the paper | 55.1 mm | **25.0 mm** |
+| barrel back toward the wrist | 25.0 mm | **55.1 mm** |
+| graphite past the exit for the planner's 155.6 mm tip | 100.5 mm | **130.5 mm** |
+
+**Why it is not applied here.** The flip moves the three collision cylinders
+30 mm along the bore and re-bakes the hand-frame meshes, and
+`penholder22_T_hand` is shared with `assets/proposed_rig/` — the tree this repo
+declares untouched because every certified number was checked against it. That
+is a re-certification with its own gate, not a render, and it is the same rule
+that keeps the 45° planning transform in place two sections up. The stack in
+§7b is unaffected: its x positions are measured from the housing's own datum
+and do not move.
+
+**It makes the tip disagreement worse, not better.** At the corrected 25.0 mm,
+the gate-validated tip (110 mm below the TCP, i.e. 119.5 mm along a 23° bore)
+needs **94.5 mm** of ⌀7 graphite past the cap, and the planner's 45° ray needs
+**130.5 mm**. The 10° build's own answer is 20.7 mm. Whatever is really on the
+arms, it is not this housing with a short stick — which is one more reason the
+measurement in §7a is worth taking.
 
 **And the fingers moved.** `gen_system_model.FINGER_FIX` was 0.0285; it is now
 **0.018**. 50 mm of post less 2 × 7.000 mm of socket is 36.000, and the

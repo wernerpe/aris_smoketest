@@ -359,8 +359,11 @@ TOOL = dict(
 #     over x in [0.00055, 0.0027] at the nose, and THE PEN LEAVES AT x = 0.
 #     The step between them is a chamfer bottoming at x = 0.00315 and reaching
 #     full bore at x = 0.0036; a flat 21.0 mm face lands on it at
-#     x = 0.003340, which is `stack_front_x` and the FRONT STOP of everything
-#     inside.  (An earlier reading called the 17.0 nose "exactly the clutch's
+#     x = 0.003340, which is `stack_front_x` and the TAIL STOP of everything
+#     inside.  x = 0 is the TAIL, not the nose: the 17.00 land is the SPRING's
+#     stop (17.00 will not pass a 19.05 spring, which is what it is cut for)
+#     and the pen leaves through the CAP at the other end.  See
+#     `penholder22_stack` and docs/SYSTEM_MODEL.md 7c.  (An earlier reading called the 17.0 nose "exactly the clutch's
 #     17.07 OD, so the clutch seats in the nose".  It does not: 17.07 does not
 #     enter 17.00, and the assembly puts the clutch 45 mm further back.)
 #   * an external THREAD at the far end, x in [0.072, 0.0801], OD 28.5 mm,
@@ -438,7 +441,8 @@ PENHOLDER22 = dict(
     lead_r_coll=0.005000,             # conservative envelope for the stick
     # --- the internal stack, all MEASURED off the same STL delivery ---
     stack_front_x=0.003340,           # where a flat 21.0 face lands on the
-                                      # nose chamfer: the stack's FRONT stop
+                                      # tail chamfer: the stack's TAIL stop
+                                      # (x = 0 is the tail; see 7c)
     stack_back_x=0.083115,            # the cap's 16.0 mm shoulder, from the
                                       # cap's own z = 0.001985 at cap_end_x:
                                       # the stack's BACK stop
@@ -567,17 +571,19 @@ def penholder22_stack(spacer=None):
     closed.zip" is the same architecture built out of the same shapes, and
     resolving its component transforms puts, along its bore from the nose:
 
-        nose shoulder  ->  SPRING  ->  SLEEVE  ->  CAP
+        tail shoulder  ->  SPRING  ->  SLEEVE  ->  CAP -> the pen
 
     with the spring's front coil landing 3.302 mm behind the nose (this
     housing's own shoulder is at 3.34) and the sleeve's front face on the
     spring's back coil to 0.1 mm.  Every interface below is then a measured
     fit on THIS delivery's parts:
 
-      * FRONT STOP.  The bore necks to 17.00 mm at the nose, so nothing 21 mm
-        gets past x = `stack_front_x`.  The spring is 19.05 mm over 14.97 mm:
-        it clears the 21.148 bore by 1.05 mm and bears on the 21 mm parts'
-        own end annulus, which the 15.0 mm sleeve bore is cut to match.
+      * TAIL STOP, AND IT IS THE SPRING'S.  The bore necks to a 17.00 mm land
+        at x = 0, and 17.00 will not pass the 19.05 mm spring — that land
+        exists to stop it.  Nothing 21 mm gets past `stack_front_x` either.
+        The spring clears the 21.148 bore by 1.05 mm and bears on the 21 mm
+        parts' end annulus, which the 15.0 mm sleeve bore is cut to match.
+        THE PEN LEAVES AT THE OTHER END, through the cap; see 7c.
       * BACK STOP.  The cap is a THREADED COLLAR, not a lid — 36 mm flange,
         11.4 mm long, open right through, with a 21.51 mm counterbore and a
         16.00 mm shoulder.  16.00 is under 21.0, so the shoulder is what
