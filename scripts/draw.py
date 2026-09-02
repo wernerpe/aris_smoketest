@@ -58,7 +58,7 @@ import matplotlib.pyplot as plt                              # noqa: E402
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from aris_sixarm import allocate, artwork, trace              # noqa: E402
+from aris_sixarm import allocate, artwork, progress, trace    # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET                    # noqa: E402
 from csail_allocate import (add_args, allocation_png, final_png,   # noqa: E402
                             program_json, totals)
@@ -370,10 +370,18 @@ def main(argv=None):
     # ---- 1. trace ------------------------------------------------------
     t0 = time.time()
     n_inks = None if str(a.inks).lower() in ("auto", "", "none") else int(a.inks)
-    px, dbg = trace.trace_any(
-        a.source, n_inks=n_inks, work_px=a.work_px, rdp_tol=a.rdp,
-        min_px=a.min_px, fill_erode=a.fill_erode, fill_frac=a.fill_frac,
-        bridge=not a.no_bridge)
+    with progress.stage("trace", source=str(a.source), inks=str(a.inks),
+                        work_px=int(a.work_px)) as _tend:
+        px, dbg = trace.trace_any(
+            a.source, n_inks=n_inks, work_px=a.work_px, rdp_tol=a.rdp,
+            min_px=a.min_px, fill_erode=a.fill_erode, fill_frac=a.fill_frac,
+            bridge=not a.no_bridge)
+        if px:
+            _tend.update(n_strokes=len(px),
+                         inks_found=list(dbg.get("names") or []),
+                         n_fill=sum(1 for s in px if s["kind"] == "fill"),
+                         n_outline=sum(1 for s in px
+                                       if s["kind"] == "outline"))
     if not px:
         raise SystemExit(f"{a.source}: nothing traced — is it blank, or is the "
                          "background not what --work-px sees at the border?")
@@ -392,6 +400,7 @@ def main(argv=None):
     print(f"  {per_kind.get('outline', 0)} centreline + {per_kind.get('fill', 0)} "
           f"boundary strokes, {sum(trace.plen(s['pts']) for s in px):.0f} px of path")
     trace_png(px, dbg, P("_trace.png"), a.name, a.source)
+    progress.artifact("trace_png", P("_trace.png"), stage="trace")
     print(f"  wrote {P('_trace.png')}  <- LOOK AT THIS")
     if a.trace_only:
         return dict(px=px, dbg=dbg)
@@ -404,29 +413,39 @@ def main(argv=None):
         print(f"\n=== placement search ({len(rots)} rotations, "
               f"{int(a.scales[2])} scales) ===")
         t0 = time.time()
-        doc = artwork.search_placement(
-            px, arms, a.atlas, margin=a.margin, radius=a.radius,
-            scales=tuple(a.scales), offset=a.search_offset,
-            offset_step=a.offset_step, rotations=rots, top=a.top,
-            slack=a.slack, jobs=a.jobs, min_len=a.min_len,
-            single_ink=(inks[0] if len(inks) == 1 else None),
-            # THE SEARCH IS A RANKING, so it pays for the one thing it ranks on
-            # and nothing else.  `balance` only moves spans a second arm already
-            # certified at the same endpoints, and `split` re-measures coverage
-            # and is invariant by construction: neither can change `cov`, and on
-            # this picture the two of them are 677 s of a 724 s allocation.  The
-            # probe budget and the SEQUENCER are both kept at the run's own — the
-            # budget because it is the one knob that does move coverage, the
-            # sequencer because `prune_unflyable` bans the spans whose tour is
-            # infeasible and a worse tour therefore bans more, and because it
-            # costs 0.9 s of the 724.
-            alloc_kw=dict(balance=False, split=False,
-                          sequencer=getattr(a, "sequencer", "opt"),
-                          max_probes=a.max_probes,
-                          merge=not a.no_merge))
+        with progress.stage("placement", n_rotations=len(rots),
+                            n_scales=int(a.scales[2]), top=int(a.top),
+                            search_offset=float(a.search_offset),
+                            slack=float(a.slack)) as _plend:
+            doc = artwork.search_placement(
+                px, arms, a.atlas, margin=a.margin, radius=a.radius,
+                scales=tuple(a.scales), offset=a.search_offset,
+                offset_step=a.offset_step, rotations=rots, top=a.top,
+                slack=a.slack, jobs=a.jobs, min_len=a.min_len,
+                single_ink=(inks[0] if len(inks) == 1 else None),
+                # THE SEARCH IS A RANKING, so it pays for the one thing it ranks
+                # on and nothing else.  `balance` only moves spans a second arm
+                # already certified at the same endpoints, and `split`
+                # re-measures coverage and is invariant by construction: neither
+                # can change `cov`, and on this picture the two of them are
+                # 677 s of a 724 s allocation.  The probe budget and the
+                # SEQUENCER are both kept at the run's own — the budget because
+                # it is the one knob that does move coverage, the sequencer
+                # because `prune_unflyable` bans the spans whose tour is
+                # infeasible and a worse tour therefore bans more, and because
+                # it costs 0.9 s of the 724.
+                alloc_kw=dict(balance=False, split=False,
+                              sequencer=getattr(a, "sequencer", "opt"),
+                              max_probes=a.max_probes,
+                              merge=not a.no_merge))
+            _plend.update(chosen=dict(doc["chosen"]),
+                          n_cells=len(doc.get("proxy", [])),
+                          n_real=len(doc.get("real", [])))
         print(f"  searched in {time.time() - t0:.1f} s")
         P("_placement.json").write_text(json.dumps(doc))
         placement_png(doc, P("_placement.png"), a.name, arms, a.slack, a.radius)
+        progress.artifact("placement_png", P("_placement.png"),
+                          stage="placement")
         a.placement = str(P("_placement.json"))
         print(f"  wrote {P('_placement.json')}, {P('_placement.png')}")
         if a.place_only:
@@ -484,6 +503,10 @@ def main(argv=None):
     strokes_json(strokes, info, P("_strokes.json"), palette)
     allocation_png(phases, strokes, P("_allocation.png"), name=a.name)
     final_png(phases, strokes, P("_final.png"), palette=palette, name=a.name)
+    for _nm in ("_sheet.png", "_strokes.json", "_allocation.png", "_final.png",
+                "_program.json", "_schedule.json", "_schedule.npz"):
+        if P(_nm).exists():
+            progress.artifact(_nm.lstrip("_").replace(".", "_"), P(_nm))
 
     T = totals(phases)
     print(f"\n=== {a.name} ===")

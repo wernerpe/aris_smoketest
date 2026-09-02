@@ -28,7 +28,7 @@ from matplotlib.lines import Line2D          # noqa: E402
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
-from aris_sixarm import (allocate, artwork, idle, paper, pwl,   # noqa: E402
+from aris_sixarm import (allocate, artwork, idle, paper, progress, pwl,  # noqa: E402
                          rig_final, selfcoll, trace, transit, writing)
 from aris_sixarm import fleet as fleet_mod                 # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT  # noqa: E402
@@ -854,6 +854,23 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
                                    min_len=float(getattr(a, "min_len", 0.025)))
     if not info["fits"]:
         raise SystemExit(f"placement does not fit the sheet: {info}")
+    if progress.active():
+        # THE PICTURE ON THE PAPER, ONCE, AND EVERY LATER EVENT REFERS TO IT.
+        # A placed span is reported as (stroke_id, s0, s1) and nothing else, so
+        # the viewer needs the polylines exactly once; sending them per span
+        # would repeat the same geometry forty times.  Decimated and rounded to
+        # a tenth of a millimetre, which is a hundred times finer than the
+        # screen and a tenth of the tracer's own tolerance.
+        progress.item("placement", what="sheet_strokes",
+                      sheet=[float(SHEET[0]), float(SHEET[1])],
+                      info={k: (list(v) if isinstance(v, (tuple, list))
+                                else bool(v) if isinstance(v, bool)
+                                else float(v)) for k, v in info.items()},
+                      strokes=[dict(id=int(s["id"]), color=s["color"],
+                                    kind=s["kind"],
+                                    length=float(trace.plen(s["pts"])),
+                                    pts=np.round(_decimate(s["pts"]), 4).tolist())
+                               for s in strokes])
     print(f"traced {len(strokes)} strokes, {trace.total_length(strokes):.2f} m, "
           f"logo {info['logo_w']:.3f} x {info['logo_h']:.3f} m at "
           f"({info['center'][0]:.3f}, {info['center'][1]:.3f})"
@@ -883,6 +900,25 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
         r.update(name=f"phase {len(phases) + 1}: {ink}", ink=ink, strokes=sub)
         phases.append(r)
     return phases, strokes, info
+
+
+def _decimate(pts, max_n=200):
+    """Every k-th point of a polyline, ends kept. -> (M,2).
+
+    FOR THE EVENT STREAM ONLY.  Nothing downstream of the browser reads these
+    points; the planner keeps the polyline it was given.  A 3000-point stroke
+    drawn on a 900-pixel canvas is 3000 numbers to say what 200 say, and the
+    live view is watched while an allocation is running, which is precisely
+    when the browser has other things to do.
+    """
+    p = np.asarray(pts, float)
+    if len(p) <= max_n:
+        return p
+    k = int(np.ceil(len(p) / max_n))
+    out = p[::k]
+    if not np.array_equal(out[-1], p[-1]):
+        out = np.vstack([out, p[-1]])
+    return out
 
 
 def totals(phases):

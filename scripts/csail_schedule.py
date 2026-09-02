@@ -53,8 +53,8 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from aris_sixarm import (allocate, artwork, coordination, frames, idle,  # noqa: E402
-                         layout, paper, pwl, scene_check, sequence, trace,
-                         transit, writing)
+                         layout, paper, progress, pwl, scene_check, sequence,
+                         trace, transit, writing)
 from aris_sixarm import fleet as fleet_mod                          # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET, H_INV_DEFAULT           # noqa: E402
 from aris_sixarm.frames import PEN_EXT                              # noqa: E402
@@ -229,6 +229,8 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
     t0, forbid, out = time.time(), {}, None
     policy = a.idle_policy if policy is None else policy
     tries = int(a.reseq_tries)
+    progress.emit("substage_start", "conduction", sub="conduct",
+                  phase=str(res["name"]), policy=str(policy))
     for attempt in range(tries + 2):
         try:
             out = idle.conduct(
@@ -300,6 +302,9 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
               + ("" if p.moves else "   (static)"))
     if out is None:
         raise SystemExit(f"{res['name']} could not be conducted")
+    progress.emit("substage_end", "conduction", sub="conduct", ok=True,
+                  elapsed_s=time.time() - t0, phase=str(res["name"]),
+                  policy=str(policy))
     print(f"  conducted in {time.time() - t0:.1f} s"
           + ("" if policy == a.idle_policy else
              f"   (idle policy fell back to {policy!r})"))
@@ -318,10 +323,33 @@ def build_phase(a, res, dt, pens, q_start=None, policy=None):
     draw_mask = {aid: samp[aid]["seg"][np.clip(sch["progress"][aid][:M], 0,
                                                samp[aid]["n"] - 1)] >= 0
                  for aid in FLEET}
-    rep = scene_check.check_timeline(
-        qtraj, dt, sch["margin"], programs=res["programs"], pen_ext=pens,
-        progress={k: v[:M] for k, v in sch["progress"].items()}, sub=a.subcheck,
-        drawing=draw_mask)
+    with progress.stage("scene_check", phase=str(res["name"]), n_frames=int(M),
+                        sub=int(a.subcheck),
+                        margin_mm=1000.0 * float(sch["margin"])) as _cend:
+        rep = scene_check.check_timeline(
+            qtraj, dt, sch["margin"], programs=res["programs"], pen_ext=pens,
+            progress={k: v[:M] for k, v in sch["progress"].items()},
+            sub=a.subcheck, drawing=draw_mask)
+        if progress.active():
+            # THE VETO, VERBATIM.  Every field here is one `scene_check`
+            # already computed and `csail_schedule` already prints; nothing is
+            # re-derived, so a green light in the browser is the same green
+            # light the file on disk was written under.
+            _cend.update(
+                verdict_ok=bool(rep["ok"]),
+                min_clearance_m=float(rep["min_clearance"]),
+                margin_m=float(rep["margin"]),
+                worst_pair=list(rep["worst_pair"]) if rep.get("worst_pair")
+                else None,
+                per_pair_m={str(k): float(v)
+                            for k, v in (rep.get("per_pair") or {}).items()},
+                segments_failed=int(rep.get("segments_failed", 0)),
+                n_segments=int(rep.get("n_segments", 0)),
+                frozen_failed=int(rep.get("frozen_failed", 0)),
+                paper_failed=[int(x) for x in (rep.get("paper_failed") or [])],
+                frame_failed=[int(x) for x in (rep.get("frame_failed") or [])],
+                column_failed=[int(x) for x in (rep.get("column_failed") or [])],
+                self_failed=[int(x) for x in (rep.get("self_failed") or [])])
     print(f"  checked in {time.time() - t0:.1f} s")
     if not rep["ok"]:
         # THE POSE AN ARM STOPS IN IS A CHOICE, AND IT IS THE POLICY'S CHOICE.
@@ -1239,6 +1267,23 @@ def allocate_all(a, verbose=False, share=None):
     run, and finding that out costs one allocation instead of one conduct.
     """
     share = {} if share is None else share
+    with progress.stage("allocation", arms=str(getattr(a, "arms", "all")),
+                        qd_frac=float(getattr(a, "qd_frac", 0.0) or 0.0),
+                        cluster=bool(getattr(a, "cluster", False)),
+                        two_pass=bool(getattr(a, "two_pass", False)),
+                        residual_passes=int(getattr(a, "residual_passes", 0)
+                                            or 0)) as end:
+        return _allocate_all(a, verbose, share, end)
+
+
+def _allocate_all(a, verbose, share, _end):
+    """The body of `allocate_all`, bracketed by its progress stage.
+
+    Split out ONLY so the stage bracket is a `with` and not a hand-unwound
+    context manager: the function is thirty lines with three early returns and
+    a `SystemExit`, and any of the three is a place a hand-written `__exit__`
+    would be forgotten.
+    """
     phases, strokes, info = run_allocation(a, verbose=False,
                                            px=getattr(a, "traced_px", None),
                                            share=share)
@@ -1266,6 +1311,10 @@ def allocate_all(a, verbose=False, share=None):
         phases[0]["dropped_len"] = float(sum(d["length"] for d in empty))
         phases = phases + extra
     T = totals(phases)
+    _end.update(n_phases=len(phases), n_segments=int(T["n_segments"]),
+                traced_m=float(T["traced"]), drawn_m=float(T["drawn"]),
+                dropped_m=float(T["dropped"]),
+                coverage_pct=100.0 * float(T["covered"]))
     print(f"\nALL PHASES: {T['traced']:.4f} m traced, {T['dropped']:.4f} m left "
           f"empty -> COVERAGE {100 * T['covered']:.4f} %"
           + (f"  ({n_primary} pass(es) + {len(extra)} residual)" if extra
@@ -1455,6 +1504,21 @@ def build_phases(a, phases, dt, pens, alt=None):
     before a single one is built — which is the normal case, because the normal
     case is that splitting worked.
     """
+    with progress.stage("conduction", n_phases=len(phases),
+                        qd_frac=float(getattr(a, "qd_frac", 0.0) or 0.0),
+                        idle_policy=str(a.idle_policy)) as end:
+        return _build_phases(a, phases, dt, pens, alt, end)
+
+
+def _build_phases(a, phases, dt, pens, alt, _cend):
+    """The body of `build_phases`, bracketed by its progress stage.
+
+    Split out for the same reason `_allocate_all` is: the loop below leaves by
+    `return`, by `SystemExit` on a refused phase, and by whatever
+    `idle.conduct` raises, and a hand-unwound context manager would have to
+    remember all three.  A `with` in the caller remembers them for free, and
+    the viewer's conduction lane therefore always closes.
+    """
     # A PASS STARTS WHERE THE LAST ONE STOPPED.  Under freeze-in-place the fleet
     # does not return to `q_seed` between passes, so pass 2 is sequenced from the
     # poses pass 1 actually froze in — including any minimal retreat, which is
@@ -1480,9 +1544,16 @@ def build_phases(a, phases, dt, pens, alt=None):
     # queue is popped once per entry in `phases` and this is the loop it was.
     built, q_start = [], None
     todo = [(k, ph) for k, ph in enumerate(phases)]
+    _conduct_done = [0]
     while todo:
         k, ph = todo.pop(0)
         last = not todo
+        # `k` is None for a RESCUE CHILD (`rescue_groups` pushes its phases
+        # with no index of their own), so the label comes off the phase and
+        # never off `k`.
+        progress.progress("conduction", _conduct_done[0],
+                          _conduct_done[0] + len(todo) + 1,
+                          label=str(ph.get("name") or "phase"))
         policy_k = a.idle_policy if (last or a.freeze_all_phases) \
             else idle.POLICY_HOME
 
@@ -1663,6 +1734,29 @@ def build_phases(a, phases, dt, pens, alt=None):
         ph["conducted"] = True
         B["split_kept"] = B["res"] is not other
         built.append(B)
+        _conduct_done[0] += 1
+        if progress.active():
+            # ONE VERDICT PER PHASE — the row the viewer's conduction lane is
+            # made of.  `scene_check_ok` is `B["rep"]["ok"]`, which is the
+            # gate that decides whether anything is written at all, so a
+            # viewer showing a green phase is showing the same PASS the file
+            # on disk was written under.
+            _rep = B.get("rep") or {}
+            progress.item("conduction", what="phase",
+                          index=(None if k is None else int(k)),
+                          name=str(ph.get("name", "")),
+                          ink=ph.get("ink"),
+                          duration_s=float(B["sch"].get("makespan", 0.0)
+                                           or B["M"] * dt),
+                          split_kept=bool(B["split_kept"]),
+                          scene_check_ok=bool(_rep.get("ok", False)),
+                          min_clearance_m=float(_rep.get("min_clearance", 0.0)),
+                          arm_metres={str(x): float(B["progs"][x]["draw_len"])
+                                      for x in B["res"]["arms"]},
+                          arm_draw_s={str(x): float(B["progs"][x]["draw_s"])
+                                      for x in B["res"]["arms"]},
+                          arm_transit_s={str(x): float(B["progs"][x]["transit_s"])
+                                         for x in B["res"]["arms"]})
         q_start = built[-1]["idle"]["q_end"]
         # a rescued child pays its ink back to the parent it was cut from, so
         # `skipped_m` ends up naming what NOBODY drew rather than the whole of
@@ -1695,6 +1789,8 @@ def build_phases(a, phases, dt, pens, alt=None):
                                  + (f" ({bad})" if bad else ""))
     if not built:
         raise SystemExit("no phase could be conducted")
+    _cend.update(n_conducted=len(built),
+                 makespan_s=float(sum(B["M"] for B in built) * dt))
     return built
 
 

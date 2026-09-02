@@ -82,7 +82,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import menu, sequence, writing
+from . import menu, progress, sequence, writing
 from .fleet import FLEET, H_INV_DEFAULT
 from .stroke_api import (plan_stroke, polyline_length, reverse_plan,
                          truncate_polyline)
@@ -3919,36 +3919,53 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         ivmap = {k: list(v) for k, v in iv0.items()}
         t_pre = t_probe = 0.0
     else:
-        pre = prefilter(strokes, arms, atlas_dir,
-                        tilt_max_deg=float((opts or {}).get("tilt_max_deg", 0.0)
-                                           or 0.0))
+        with progress.substage("allocation", "prefilter", n_strokes=len(strokes),
+                               n_arms=len(arms)):
+            pre = prefilter(strokes, arms, atlas_dir,
+                            tilt_max_deg=float((opts or {}).get("tilt_max_deg", 0.0)
+                                               or 0.0))
         t_pre = time.time() - t0
 
         ivmap, probe_stats = {}, []
         t1 = time.time()
-        for st in strokes:
-            ivs = []
-            for a in arms:
-                if pre is not None and not pre.get((st["id"], a), True):
-                    probe_stats.append(dict(arm=a, probes=0,
-                                            statuses=["prefiltered"],
-                                            stroke=st["id"]))
-                    continue
-                v, s = probe_stroke(st["pts"], specs[a], aopts[a],
-                                    max_probes=stroke_probes(
-                                        polyline_length(st["pts"]), max_probes,
-                                        probe_ref_m),
-                                    min_seg=min_seg, gap_tol=gap_tol,
-                                    bisect=probe_ref_m is not None)
-                s["stroke"] = st["id"]
-                probe_stats.append(s)
-                ivs += v
-            ivmap[st["id"]] = ivs
-            if verbose:
-                print(f"  stroke {st['id']:3d} {st['color']:6s} "
-                      f"L={polyline_length(st['pts']):.3f} m -> "
-                      + (", ".join(f"{v.arm}[{v.s0:.2f},{v.s1:.2f}]" for v in ivs)
-                         or "no arm"))
+        with progress.substage("allocation", "probe", n_strokes=len(strokes),
+                               n_arms=len(arms)):
+            for i_st, st in enumerate(strokes):
+                ivs = []
+                for a in arms:
+                    if pre is not None and not pre.get((st["id"], a), True):
+                        probe_stats.append(dict(arm=a, probes=0,
+                                                statuses=["prefiltered"],
+                                                stroke=st["id"]))
+                        continue
+                    v, s = probe_stroke(st["pts"], specs[a], aopts[a],
+                                        max_probes=stroke_probes(
+                                            polyline_length(st["pts"]), max_probes,
+                                            probe_ref_m),
+                                        min_seg=min_seg, gap_tol=gap_tol,
+                                        bisect=probe_ref_m is not None)
+                    s["stroke"] = st["id"]
+                    probe_stats.append(s)
+                    ivs += v
+                ivmap[st["id"]] = ivs
+                # ONE EVENT PER STROKE, AND ONLY WHEN SOMEBODY IS LISTENING.
+                # This is the O(strokes x arms) loop and the one a person
+                # watching the GUI spends the first minute of a run looking
+                # at; the payload is which arms certified which fraction of
+                # the stroke, which is exactly what the live canvas colours.
+                if progress.active():
+                    progress.item(
+                        "allocation", what="probe", stroke=int(st["id"]),
+                        color=st["color"], length_m=polyline_length(st["pts"]),
+                        spans=[[int(v.arm), round(float(v.s0), 4),
+                                round(float(v.s1), 4)] for v in ivs])
+                    progress.progress("allocation", i_st + 1, len(strokes),
+                                      label="probe")
+                if verbose:
+                    print(f"  stroke {st['id']:3d} {st['color']:6s} "
+                          f"L={polyline_length(st['pts']):.3f} m -> "
+                          + (", ".join(f"{v.arm}[{v.s0:.2f},{v.s1:.2f}]"
+                                       for v in ivs) or "no arm"))
         t_probe = time.time() - t1
         share[pk] = (pre, {k: list(v) for k, v in ivmap.items()}, probe_stats)
     mk = round(float(min_seg), 9)
@@ -4015,11 +4032,12 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         # the colours are fixed now, so the holes are finally known in the terms
         # that matter — the union of the arms carrying the right ink
         t_rep = time.time()
-        cover, n_repair = repair_gaps(
-            strokes, iv_ok, colors, cover, specs, aopts, min_seg, gap_tol,
-            rounds=repair_rounds,
-            min_len=float((opts or {}).get("min_length", 0.02)),
-            budget=repair_budget, verbose=verbose)
+        with progress.substage("allocation", "repair", round=int(_round)):
+            cover, n_repair = repair_gaps(
+                strokes, iv_ok, colors, cover, specs, aopts, min_seg, gap_tol,
+                rounds=repair_rounds,
+                min_len=float((opts or {}).get("min_length", 0.02)),
+                budget=repair_budget, verbose=verbose)
         t_repair += time.time() - t_rep
         if banned:
             # GAP REPAIR PROBES, SO IT CAN INVENT A SPAN THE BAN NEVER SAW.  It
@@ -4036,38 +4054,60 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         # ---- clean re-plans ---------------------------------------------
         t2 = time.time()
         n_replan, placed = 0, []
-        for ps in cover["per_stroke"]:
-            st, L = ps["stroke"], ps["L"]
-            for span in place_cuts(ps["chosen"], L, overlap):
-                rk = (int(st["id"]), int(span["arm"]),
-                      round(float(span["s0"]), 9), round(float(span["s1"]), 9))
-                hit = replan_memo.get(rk)
-                if hit is None:
-                    plan, sp = replan_segment(st["pts"], span,
-                                              specs[span["arm"]],
-                                              aopts[span["arm"]],
-                                              min_seg=min_seg)
-                    replan_memo[rk] = (plan, sp)
-                    n_replan += sp["replans"]
-                else:
-                    plan, sp = hit[0], dict(hit[1])
-                if plan is None:
-                    continue
-                # ...and the END the arm cannot fly to is given back before it
-                # can cost the whole stroke (`fly_shrink`).  Memoised on the
-                # same key: the ban loop re-covers up to three times and the
-                # same span is usually chosen again.
-                fk = rk + (int(sp["direction"]),)
-                hit = fly_memo.get(fk)
-                if hit is None:
-                    hit = fly_shrink(st, sp, plan, specs[span["arm"]],
-                                     aopts[span["arm"]], _mat(span["arm"]),
-                                     min_seg=min_seg, verbose=True)
-                    fly_memo[fk] = hit
-                plan, sp, gave = hit
-                fly_given += float(gave)
-                placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
-                                   entry=_entry(st, sp, plan)))
+        with progress.substage("allocation", "replan", round=int(_round),
+                               n_strokes=len(cover["per_stroke"])):
+            for i_ps, ps in enumerate(cover["per_stroke"]):
+                st, L = ps["stroke"], ps["L"]
+                progress.progress("allocation", i_ps + 1,
+                                  len(cover["per_stroke"]), label="replan")
+                for span in place_cuts(ps["chosen"], L, overlap):
+                    rk = (int(st["id"]), int(span["arm"]),
+                          round(float(span["s0"]), 9),
+                          round(float(span["s1"]), 9))
+                    hit = replan_memo.get(rk)
+                    if hit is None:
+                        plan, sp = replan_segment(st["pts"], span,
+                                                  specs[span["arm"]],
+                                                  aopts[span["arm"]],
+                                                  min_seg=min_seg)
+                        replan_memo[rk] = (plan, sp)
+                        n_replan += sp["replans"]
+                    else:
+                        plan, sp = hit[0], dict(hit[1])
+                    if plan is None:
+                        continue
+                    # ...and the END the arm cannot fly to is given back before
+                    # it can cost the whole stroke (`fly_shrink`).  Memoised on
+                    # the same key: the ban loop re-covers up to three times and
+                    # the same span is usually chosen again.
+                    fk = rk + (int(sp["direction"]),)
+                    hit = fly_memo.get(fk)
+                    if hit is None:
+                        hit = fly_shrink(st, sp, plan, specs[span["arm"]],
+                                         aopts[span["arm"]], _mat(span["arm"]),
+                                         min_seg=min_seg, verbose=True)
+                        fly_memo[fk] = hit
+                    plan, sp, gave = hit
+                    fly_given += float(gave)
+                    placed.append(dict(stroke=st, sp=sp, arm=span["arm"],
+                                       entry=_entry(st, sp, plan)))
+                    # THE LIVE CANVAS IS DRAWN FROM HERE.  A placed span is the
+                    # first moment anything is known to be drawable BY A NAMED
+                    # ARM, which is what the viewer colours; the s-range is
+                    # enough to slice the stroke polyline it already has, so no
+                    # geometry is duplicated into the event stream.
+                    if progress.active():
+                        progress.item("allocation", what="placed",
+                                      stroke=int(st["id"]), arm=int(span["arm"]),
+                                      s_range=[round(float(sp["s0"]), 5),
+                                               round(float(sp["s1"]), 5)],
+                                      length_m=round(
+                                          float(placed[-1]["entry"]["length"]), 5),
+                                      direction=int(sp["direction"]),
+                                      min_sigma=float(plan.get("min_sigma", 0.0)),
+                                      lean_deg=float(
+                                          plan.get("max_lean_deg")
+                                          or plan.get("lean_deg", 0.0) or 0.0))
         t_replan += time.time() - t2
 
         fresh, why = set(), {}
@@ -4121,15 +4161,41 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         if banned:
             reach = dict(pre or {})
             reach.update({(sid, a): False for a, sid in banned})
-        placed, bal = rebalance(placed, arms, colors, _flyable_ivmap(), specs, aopts,
-                                pen_m, draw_speed, seq_opts, min_seg,
-                                verbose=verbose, q_start=q_start,
-                                return_home=return_home, split=split,
-                                min_split=min_split, splice=splice,
-                                split_rounds=split_rounds,
-                                split_budget=split_budget, reach=reach,
-                                cost=cost, fast=fast_balance,
-                                entries=entry_memo)
+        # THE STAGE THE ALGORITHM ITERATION IS ABOUT.  `docs/FAST_PLANNING.md`
+        # measured 931.1 s of a 997.4 s allocation inside this one call, and
+        # then 929.7 s of phase 1 of the shipped run.  It is timed as its own
+        # substage for exactly that reason, and its verdict — what moved, what
+        # was cut, and where the per-arm loads ended up — rides out on the
+        # closing event so the viewer can show the balance bar without waiting
+        # for the whole allocation to finish.
+        with progress.substage("allocation", "balance",
+                               n_placed=len(placed), split=bool(split),
+                               fast=bool(fast_balance)) as _bst:
+            placed, bal = rebalance(placed, arms, colors, _flyable_ivmap(),
+                                    specs, aopts,
+                                    pen_m, draw_speed, seq_opts, min_seg,
+                                    verbose=verbose, q_start=q_start,
+                                    return_home=return_home, split=split,
+                                    min_split=min_split, splice=splice,
+                                    split_rounds=split_rounds,
+                                    split_budget=split_budget, reach=reach,
+                                    cost=cost, fast=fast_balance,
+                                    entries=entry_memo)
+            if progress.active() and bal:
+                _bst.update(
+                    rounds=int(bal.get("rounds", 0)),
+                    n_splits=int(bal.get("n_splits", 0)),
+                    n_movable=int(bal.get("n_movable", 0)),
+                    n_priced=int(bal.get("n_priced", 0)),
+                    max_before_s=float(bal.get("max_before", 0.0)),
+                    max_after_s=float(bal.get("max_after", 0.0)),
+                    loads_after_s={str(k): float(v) for k, v
+                                   in (bal.get("loads_after") or {}).items()})
+                progress.item("allocation", what="loads",
+                              loads_s={str(k): float(v) for k, v
+                                       in (bal.get("loads_after") or {}).items()},
+                              max_before_s=float(bal.get("max_before", 0.0)),
+                              max_after_s=float(bal.get("max_after", 0.0)))
         n_replan += bal["n_replans"]
     for it in placed:
         programs[it["arm"]].append(it["entry"])
@@ -4209,7 +4275,15 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out["q_start"] = {a: np.asarray(v, float) for a, v in (q_start or {}).items()}
     out["return_home"] = bool(return_home)
     out["menus"], out["menu_stats"] = {}, {}
-    for a in arms:
+    # Bracketed by hand rather than with `progress.substage`, because the loop
+    # below is followed by bookkeeping that belongs to the same clock (`t3`)
+    # and re-indenting thirty lines of shipped code to gain a `with` would be a
+    # bigger diff than the instrumentation itself.  The closing event is
+    # emitted on the same line as `out["timing"]["sequence"]`, off the same
+    # `t3`, so the two numbers cannot disagree.
+    progress.emit("substage_start", "allocation", sub="sequence",
+                  n_arms=len(arms))
+    for i_a, a in enumerate(arms):
         sq = dict(seq_opts or {})
         sq["pen_ext"] = out["pens"][a]
         sq["return_home"] = bool(return_home)
@@ -4217,6 +4291,14 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
             sq["q_start"] = np.asarray(q_start[a], float)
         seq = cost.sequence(a, programs[a], specs[a], sequencer, aopts[a], sq,
                             verbose=verbose)
+        progress.progress("allocation", i_a + 1, len(arms), label="sequence")
+        if progress.active():
+            progress.item("allocation", what="sequenced", arm=int(a),
+                          method=str(seq.get("method", "")),
+                          n=int(seq.get("n", 0)),
+                          transit_s=float(seq.get("cost", 0.0)),
+                          baseline_transit_s=float(seq.get("baseline_cost", 0.0)),
+                          n_reversed=int(seq.get("n_reversed", 0)))
         mus = seq.pop("menus", None)
         if mus is not None:
             # the lattices and their sheet decompositions are the memory-heavy
@@ -4237,6 +4319,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         out["transit"][a] = transit_metres(out["programs"][a], fl[a].xy)
         out["transit_time"][a] = seq["cost"]
     out["timing"]["sequence"] = time.time() - t3
+    progress.emit("substage_end", "allocation", sub="sequence", ok=True,
+                  elapsed_s=out["timing"]["sequence"])
     out["timing"]["total"] = time.time() - t0
     out["total_len"] = float(sum(polyline_length(s["pts"]) for s in strokes))
     out["drawn_len"] = float(sum(s["length"] for a in arms
@@ -4248,6 +4332,23 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     out["n_repair_probes"] = int(n_repair)
     out["n_repair_spans"] = int(cover.get("repair_added", 0))
     out["n_replans"] = n_replan
+    if progress.active():
+        # THE WHOLE POINT OF THE PANEL, IN ONE EVENT.  `out["timing"]` is the
+        # same dict `allocate.report` prints as its last line, so the bar the
+        # viewer draws and the line in the log are one measurement.
+        progress.item("allocation", what="allocated",
+                      timing={k: round(float(v), 3)
+                              for k, v in out["timing"].items()},
+                      n_segments=int(sum(len(out["programs"][a]) for a in arms)),
+                      drawn_m=float(out["drawn_len"]),
+                      dropped_m=float(out["dropped_len"]),
+                      total_m=float(out["total_len"]),
+                      n_dropped=int(len(dropped)),
+                      arm_metres={str(a): float(sum(s["length"] for s
+                                                    in out["programs"][a]))
+                                  for a in arms},
+                      arm_segments={str(a): len(out["programs"][a])
+                                    for a in arms})
     return out
 
 
