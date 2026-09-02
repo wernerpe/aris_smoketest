@@ -609,7 +609,7 @@ def penholder22_stack(spacer=None):
     sleeve, spring, clutch = P["sleeve"], P["spring"], P["clutch"]
     sleeve_x0 = x1 - sleeve["length"]           # the sleeve's front face
     spring_x1 = sleeve_x0 - sp                  # the spring's back coil
-    free_gap = spring_x1 - x0                   # what the spring is squeezed to
+    free_gap = spring_x1 - x0                   # what the spring squeezes to
     if free_gap <= spring["solid"]:
         raise ValueError(f"spacer {sp} coil-binds the spring: {free_gap:.5f} "
                          f"m against a {spring['solid']} m solid height")
