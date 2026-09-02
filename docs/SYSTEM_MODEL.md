@@ -299,7 +299,18 @@ fingertips, mated to the housing**. (The files are the SolidWorks 2024/25
 container: nibble-swapped stream names, raw-deflate payloads. The component
 transforms come out of `swXmlContents/COMPINSTANCETREE`, the per-part
 bounding boxes out of `Contents/DisplayLists`, and both cross-check against
-the STLs of the parts this delivery does ship.)
+the STLs of the parts this delivery does ship. `scripts/read_solidworks.py`
+is that decode, so none of what follows has to be taken on trust:
+
+```
+# -j, and ignore the "stripped absolute path spec" warning: the outer zip has
+# a stray "/" entry, and everything else extracts
+unzip -j '../raw_slack_file_dump/Pen holder cad(1).zip' -d /tmp/holder
+unzip -j '/tmp/holder/Natural hold assembly - closed.zip' -d /tmp/holder
+python3 scripts/read_solidworks.py asm \
+    '/tmp/holder/Natural hold assembly - closed.SLDASM'
+```
+)
 
 Resolved, that assembly says four things, all of them exact:
 
