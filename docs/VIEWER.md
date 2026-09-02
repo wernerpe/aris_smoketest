@@ -26,8 +26,9 @@ started here and one started from a shell is that somebody is listening.
    substages — prefilter, probe, repair, replan, flycheck, balance, merge,
    guarantee, sequence — as shares of the wall clock, with whatever no
    substage accounts for drawn explicitly in grey.  As each span is certified
-   it is drawn on the canvas in the
-   colour of the arm that will draw it, so the picture fills in by arm.  The
+   it is drawn on the canvas in the colour of the arm that will draw it, so
+   the picture fills in by arm and by the time the stage ends you are looking
+   at the allocation rather than reading about it.  The
    load bars under the counters are per-arm ink, replaced by per-arm seconds
    once the balancer has spoken.
 4. **conduction** conducts each phase; one row appears in the Programme panel
