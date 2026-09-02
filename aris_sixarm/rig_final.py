@@ -363,9 +363,10 @@ TOOL = dict(
 #     inside.  x = 0 is the TAIL, not the nose: the 17.00 land is the SPRING's
 #     stop (17.00 will not pass a 19.05 spring, which is what it is cut for)
 #     and the pen leaves through the CAP at the other end.  See
-#     `penholder22_stack` and docs/SYSTEM_MODEL.md 7c.  (An earlier reading called the 17.0 nose "exactly the clutch's
-#     17.07 OD, so the clutch seats in the nose".  It does not: 17.07 does not
-#     enter 17.00, and the assembly puts the clutch 45 mm further back.)
+#     `penholder22_stack` and docs/SYSTEM_MODEL.md 7c.  (An earlier reading
+#     called that 17.0 "exactly the clutch's 17.07 OD, so the clutch seats in
+#     the nose".  It does not: 17.07 does not enter 17.00, the assembly puts
+#     the clutch 45 mm further back, and the pen leaves at the OTHER end.)
 #   * an external THREAD at the far end, x in [0.072, 0.0801], OD 28.5 mm,
 #     onto which "pen holder cap v20250903" screws (its threaded recess is
 #     6 mm deep, matching);
@@ -417,8 +418,10 @@ TOOL = dict(
 # docs/SYSTEM_MODEL.md 7:
 #   1. at 23 deg and the gate-validated 0.110 m of axial depth the tip is
 #      0.0467 m lateral, not 0.110 — 63.3 mm of tip position;
-#   2. the grip-to-nose length is 55.10 mm, so reaching 155.56 mm needs
-#      100.5 mm of graphite past the nose, against 64.4 mm at 23 deg;
+#   2. the grip-to-exit length is 25.00 mm — NOT the 55.10 this module places
+#      the housing on, which is the tail; see docs/SYSTEM_MODEL.md 7c — so
+#      reaching 155.56 mm needs 130.5 mm of graphite past the cap, against
+#      94.5 mm at 23 deg and the 10-deg build's own measured 20.7;
 #   3. the SIGN of the lateral offset is a mounting choice, not a CAD fact:
 #      the post is square, so the holder seats in the sockets either way up
 #      and the lean is +/-23 deg.

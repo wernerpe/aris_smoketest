@@ -529,7 +529,13 @@ same disagreement with the file's name.
    > closes it.
 2. **100.5 mm of graphite.**  Grip-to-nose is 55.1 mm and the planning tip is
    155.6 mm from the TCP, so the stick has to protrude 100.5 mm past the
-   nose.  (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
+   nose.
+
+   > **2026-09-02: 55.1 mm is the wrong end**, and the real figure is worse.
+   > The pen leaves through the CAP, 25.0 mm from the grip — so the planner's
+   > ray needs **130.5 mm** past it, and 23 deg needs 94.5.  The 10-deg build's
+   > own protrusion, measured off its assembly, is **20.7 mm**.
+   > `docs/SYSTEM_MODEL.md` 7c.  (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
    reading, so this is not new — but it is a lot of unsupported 7 mm
    graphite.)
 

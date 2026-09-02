@@ -341,7 +341,7 @@ what ships:
 | | planner (45°) | CAD (23°), same axial depth |
 |---|---:|---:|
 | lateral offset from TCP | 0.110 m | **0.0467 m** |
-| graphite past the housing nose | 100.5 mm | **64.4 mm** |
+| graphite past the cap (see §7c) | 130.5 mm | **94.5 mm** |
 
 **63.3 mm of tip position.** Nothing here changes `frames.PEN_LAT_HOLDER`:
 the planning transform is gate-validated against a real touchdown and moving

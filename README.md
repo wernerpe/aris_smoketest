@@ -710,6 +710,8 @@ silently reconciled: the housing's **"22 deg" is a clocking about the mount
 post and measures 23.00°**, where the planning transform implies a 45° lean,
 and reaching 155.6 mm from a grip 55.1 mm behind the nose needs **100.5 mm of
 graphite** protruding.  §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
+(That 55.1 is itself the wrong end of the housing — see the update below —
+and the corrected figure is 25.0 mm and **130.5 mm** of graphite.)
 
 **Update 2026-09-02 — the assembly exists, and it settles the 23-vs-45.**
 `Pen holder cad(1).zip` nests `Natural hold assembly - closed.zip`, which

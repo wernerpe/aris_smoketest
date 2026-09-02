@@ -680,7 +680,7 @@ OPEN_QUESTIONS = {
         rides_on="63.3 mm of tip position.  At the gate-validated 0.110 m of "
                  "axial depth, 23 deg puts the tip 0.0467 m lateral where "
                  "frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently "
-                 "the planner's ray needs 100.5 mm of graphite past the nose "
+                 "the planner's ray needs 130.5 mm of graphite past the cap "
                  "and 23 deg needs 64.4 mm.  NOTHING IS CHANGED HERE: the "
                  "planning transform is gate-validated against a real "
                  "touchdown and moving it is a re-certification.",
