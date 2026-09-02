@@ -276,24 +276,146 @@ what was certified.
 ## 7. The pen holder — RED FLAG
 
 The placement is **inferred, not read**. The 2026.08.19 CAD delivery is eight
-printed parts as STL + SLDPRT pairs with **no assembly file** and **no
-fingertip cradle geometry**. `rig_final.penholder22_T_hand` puts the grip
-centre on the hand TCP and aims the bore along the **planner's** TCP-to-tip
-ray.
+printed parts as STL + SLDPRT pairs with **no assembly file**.
+`rig_final.penholder22_T_hand` puts the grip centre on the hand TCP and aims
+the bore along the **planner's** TCP-to-tip ray.
 
 The housing's own machined flats clock at **23.0°** (measured off the STL).
 The planner's ray leans **45.0°**. Those are different numbers and only one of
-them can be right about the real part. This model uses the planner's ray,
-which is the assumption that makes the geometry consistent with the
+them can be right about the real part. This model still uses the planner's
+ray, which is the assumption that makes the geometry consistent with the
 gate-validated tool transform — and the 3-cylinder envelope is only proven
 conservative *for that placement* (under the 23° hypothesis 211 696 housing
 vertices escape it, worst +19.43 mm).
 
-**Pending Pete's caliper measurement.** There is an unexploited lead:
-`raw_slack_file_dump/Pen holder cad(1).zip` contains a nested
-`Natural hold assembly - closed.zip` which **does** hold `.SLDASM` files and a
-`Franka_Finger_FR3 Fingertip only.SLDPRT` — for the older 10° build, but it is
-ground truth about how a holder sits in a hand.
+### 7a. The assembly was found, and it changes the answer
+
+The lead this section used to end on has been followed.
+`raw_slack_file_dump/Pen holder cad(1).zip` nests
+`Natural hold assembly - closed.zip`, and inside it is
+`Natural hold assembly - closed.SLDASM` — the **complete 10° "natural hold"
+build**: housing, sleeve, cap, Conté pencil, Mil-Spec spring and **two FR3
+fingertips, mated to the housing**. (The files are the SolidWorks 2024/25
+container: nibble-swapped stream names, raw-deflate payloads. The component
+transforms come out of `swXmlContents/COMPINSTANCETREE`, the per-part
+bounding boxes out of `Contents/DisplayLists`, and both cross-check against
+the STLs of the parts this delivery does ship.)
+
+Resolved, that assembly says four things, all of them exact:
+
+| what | value |
+|---|---|
+| post axis vs finger travel | **0.0000°** — they are the same axis |
+| bore vs finger travel | **90.0000°** |
+| bore vs the hand's approach axis | **10.0000°** — the housing's own file name |
+| grip centre from `panda_hand` | **103.26 mm**, against the stock TCP's 103.4 |
+| jaw gap at the seated fingertips | **36.0008 mm** |
+
+**There is no cradle.** That was the escape hatch and it is gone. The
+fingertips are stock FR3 tips — `Franka_Finger_FR3 Fingertip only.SLDPRT`,
+drilled for two `93514A130` brass inserts and nothing else — and they seat
+**7.000 mm inside the mount post's own 18 × 18 mm end sockets**. Nothing
+between holder and hand can absorb a rotation.
+
+So on the build that *has* an assembly, the angle in the housing's file name
+**is** the pen's lean out of the hand's approach axis, and the grip centre is
+the TCP to 0.14 mm. This delivery's housing is named `22 deg` and its flats
+measure **23.00** (independently confirmed here off the STL: the post socket's
+half-width along the bore direction is 9.78 mm = 9.0 / cos 23.03°). Same
+naming convention, same sockets, same square-seated tips.
+
+**Verdict: the pen leans 23°, not 45°.** What that costs, if the 23° build is
+what ships:
+
+| | planner (45°) | CAD (23°), same axial depth |
+|---|---:|---:|
+| lateral offset from TCP | 0.110 m | **0.0467 m** |
+| graphite past the housing nose | 100.5 mm | **64.4 mm** |
+
+**63.3 mm of tip position.** Nothing here changes `frames.PEN_LAT_HOLDER`:
+the planning transform is gate-validated against a real touchdown and moving
+it is a re-certification with its own gate, not a render. Note also that the
+**sign** is a mounting choice, not a CAD fact — the post is square, so the
+holder seats in the sockets either way up and the lean is ±23°.
+
+**What is still open: which build ships.** The newest parts are the 23° clutch
+and a `Fat Franka Finger v250904` (an 18.4 × 90 × 50 mm blade that replaces
+the stock finger, and is in no assembly). And the deployed arms grasp the
+holder at **43.2 mm** (`Aris_Kindt/franka_control_gui.py`
+`_PEN_GRASP_WIDTH = 0.0432`, "same holder on 31"), which matches neither the
+36.0 mm this CAD gives nor the 57 mm the earlier reading did. One measurement
+closes it: the perpendicular distance from the mounted pen's tip to the
+gripper's approach axis, 47 mm or 110 mm.
+
+### 7b. The stack inside the bore
+
+The internals are no longer omitted. `rig_final.penholder22_stack` places
+them, VISUAL ONLY, in this order — which is the 10° assembly's order,
+interface by interface re-measured on this delivery's own STLs:
+
+```
+x=0.00000  nose face, 17.00 mm land
+x=0.00334  nose shoulder — a flat 21.0 face lands here   [FRONT STOP]
+           SPRING 9657K26, ⌀19.05/⌀14.97, free 50.81 → squeezed to 39.675
+x=0.04301  [optional shim: 5.1 or 10.1 mm, ⌀21.0]
+           SLEEVE "pen holder for clutches v1.00", 40.10, ⌀21.0
+x=0.04811  CLUTCH "Creatcolor monolith graphite v1.01", 35.00, inside it
+x=0.08311  the cap's 16.00 mm shoulder                    [BACK STOP]
+x=0.08510  the cap's outer face
+```
+
+Why each interface is what it is:
+
+- **Front stop.** The bore necks to a 17.00 mm land at the nose, so nothing
+  21 mm gets past x = 3.34. In the 10° assembly the spring's front coil lands
+  3.302 mm behind the nose; this housing's shoulder is at 3.34.
+- **The spring bears on the discs.** ⌀19.05 over ⌀14.97 clears the 21.148 bore
+  by 1.05 mm and lands on the 21 mm parts' end annulus, which the sleeve's and
+  the spacers' 15.0 mm bores are cut to match.
+- **Back stop.** The cap is a threaded **collar**, not a lid — 36 mm flange,
+  11.4 mm long, open right through, 21.51 mm counterbore stepping to a
+  **16.00 mm** shoulder. 16.00 is under 21.0, so the shoulder retains the
+  stack.
+- **Preload.** 83.115 − 3.340 = 79.775 mm of space, less the 40.100 sleeve,
+  squeezes the spring to 39.675: **11.135 mm of preload**, with 11.175 mm left
+  before coil bind. That is the pen's compliance, and the two spacers are a
+  **shim set** that sets it — one of {none, 5, 10} mm, giving 11.1 / 16.2 /
+  21.2 mm of preload against 22.3 mm to solid. Both at once asks 26.3 and
+  binds, which is why there are two spacers and not a stack of them.
+- **The clutch is a split collet and the sleeve is its taper.** The sleeve's
+  bore is a true cone — 15.030 growing to 16.290 mm at 0.01747 mm/mm, a
+  surface of revolution to 1 µm — and the clutch's nose cone grows at
+  0.01750 mm/mm. Matched tapers wedge. The clutch's free 17.066 mm does not
+  enter a 16.290 mm hole, which is the point: it is slit, and going in closes
+  it onto the 7.0 mm graphite. Drawing load pushes it deeper, i.e. tighter.
+- **The 13.0 mm land** at the sleeve's back — and in both spacers — is the
+  bench extractor's guide: that tool is a 30 mm head on a **12.0 × 40 mm**
+  pusher rod, and 12.0 in 13.0 is what pushes the clutch back out of its
+  taper. It stays omitted; it is not part of the mounted holder.
+
+One free check on all of that: the render shows the spring through the
+barrel — and it should. The housing has **two windows through the wall**,
+spanning x ≈ 10…27 mm and roughly ±50…130° about the bore, which the outer
+surface's own angular coverage measures directly (no material at all in those
+sectors, at four sampled stations, and a closed wall at x = 8 and x = 30). The
+spring is 3.34…43.0 mm along the bore, so it is exactly what you would see
+through them.
+
+**Collision: unchanged, and re-proved.** Every internal body is inside the
+21.148 mm bore, so the shipped hull is still the same three coaxial cylinders
+`PENHOLDER22["env_cylinders"]` that the housing and cap were fitted to.
+`rig_final.penholder22_internals_escape()` measures the complete stack against
+that hull on every generator run and the generator refuses to write a URDF if
+it is not **0.0 m**. It is 0.0 m, for all three shim settings.
+
+**And the fingers moved.** `gen_system_model.FINGER_FIX` was 0.0285; it is now
+**0.018**. 50 mm of post less 2 × 7.000 mm of socket is 36.000, and the
+assembly puts the two fingertip grip faces 36.0008 mm apart. 0.0285 is the
+fingertip's **back** face — 3.5 mm proud of the post's end — and a finger
+parked there holds nothing, because 57 mm is 7 mm wider than the post is long.
+At 0.018 the URDF's `finger.gltf` (which includes its own tip) lands where the
+assembly puts it in all three axes: the finger's distal 18.1 mm covers
+`panda_hand` z 94.2…112.3 mm, and so does the CAD block.
 
 Meshes are re-decimated from the raw STLs, weld-then-decimate, 8000 faces per
 part:

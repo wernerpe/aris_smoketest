@@ -175,6 +175,31 @@ consumable Conté à Paris pencil; a full-length pencil interferes with the
 wrist (butt 23 mm behind the flange plane) — pencils must be sharpened
 shorter.
 
+**Amended 2026-09-02** — the assembly was re-read from scratch for
+`docs/SYSTEM_MODEL.md` §7a, and two of the rows above need correcting:
+
+- **There is no cradle.** `Fat Franka Finger v250904` is an 18.4 × 90 × 50 mm
+  blade that replaces the whole stock finger, not a cradle; and in the 10°
+  assembly the fingertips are stock `Franka_Finger_FR3` tips drilled for two
+  `93514A130` brass inserts, seating **7.000 mm inside the mount post's own
+  18 × 18 mm end sockets**. The jaw gap is **36.0008 mm**, not 57 — 57 adds
+  the 3.5 mm of tip left outside each socket instead of subtracting the 7 mm
+  inside it, and is 7 mm wider than the post is long. Nothing between holder
+  and hand can absorb a rotation, so the housing's clocking **is** the pen's
+  lean: 10.0000° here, 23.00° on the 23° build.
+- **flange→tip is ~30 mm short.** The 46.0 mm this table puts between the TCP
+  and the tip is a 25 mm grip-to-nose plus 21 mm of protrusion, but 25 mm is
+  the grip centre to the housing's **cap** end. The nose is **56.0 mm** the
+  other way (`rig_final.PENHOLDER22` independently says 55.1 for the 23°
+  housing, measured from the same side), and the assembly's own saved state
+  has **72.5 mm** of pencil past the nose, not 21 — putting its tip at
+  (−22.3, 0, +230.0) mm rather than (−8.0, 0, +148.7). `frames.py`'s
+  `TIP_HAND_HOLDER10` carries a CAUTION to that effect and is otherwise
+  untouched; `PEN_TILT_HOLDER10` = 10° is **confirmed exactly**.
+
+The collision union is unaffected: it was sized on the housing's 30 mm max
+radius and a 0.209 m reach, both of which still bound these numbers.
+
 ## Verification
 
 An independent agent re-derived the geometry from the DXF/PDF with its OWN

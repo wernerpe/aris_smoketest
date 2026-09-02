@@ -123,6 +123,19 @@ def tool_offset(pen_ext=PEN_EXT, pen_lat=None):
 # axis).  PEN_EXT = 0.110 above is a REAL touchdown measurement and remains
 # the planning default until the deployed build+protrusion is confirmed;
 # these constants are the CAD's own numbers, ready for that day.
+#
+# CAUTION, 2026-09-02: `PEN_TILT_HOLDER10` is CONFIRMED — re-deriving the 10-deg
+# assembly from its own component transforms gives 10.0000 deg off the hand's
+# approach axis, 90.0000 deg off finger travel, and the grip centre 103.26 mm
+# from panda_hand against this file's 0.1034.  `TIP_HAND_HOLDER10` is NOT.  It
+# sits 46.0 mm from the TCP along that ray, which is a 25 mm grip-to-nose plus
+# 21 mm of protrusion — but 25 mm is the distance from the grip centre to the
+# housing's CAP end.  The NOSE is 56.0 mm the other way (and
+# `rig_final.PENHOLDER22` says 55.1 for this delivery's housing, from the same
+# side).  So this constant is ~30 mm short, and the CAD's own saved state has
+# 72.5 mm of pencil past the nose rather than 21.  NOT CORRECTED HERE: it is
+# unused, the protrusion is a per-pencil setting either way, and re-deriving it
+# is its own job.  See docs/SYSTEM_MODEL.md 7a.
 TIP_HAND_HOLDER10 = np.array([-0.00804, 0.0, 0.14866])  # tip, panda_hand frame
 PEN_TILT_HOLDER10 = np.deg2rad(10.0)   # pen axis about y_hand (23.0 for clutch)
 PEN_EXT_HOLDER10 = 0.14866 - 0.1034    # = 0.0453: the along-z part, from TCP
