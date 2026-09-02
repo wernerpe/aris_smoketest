@@ -180,8 +180,8 @@ shorter.
 
 - **There is no cradle.** `Fat Franka Finger v250904` is an 18.4 × 90 × 50 mm
   blade that replaces the whole stock finger, not a cradle; and in the 10°
-  assembly the fingertips are stock `Franka_Finger_FR3` tips drilled for two
-  `93514A130` brass inserts, seating **7.000 mm inside the mount post's own
+  assembly the fingertips are stock `Franka_Finger_FR3` tips, each drilled for
+  one `93514A130` brass insert, seating **7.000 mm inside the mount post's own
   18 × 18 mm end sockets**. The jaw gap is **36.0008 mm**, not 57 — 57 adds
   the 3.5 mm of tip left outside each socket instead of subtracting the 7 mm
   inside it, and is 7 mm wider than the post is long. Nothing between holder

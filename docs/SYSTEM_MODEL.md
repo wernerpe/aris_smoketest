@@ -313,7 +313,7 @@ Resolved, that assembly says four things, all of them exact:
 
 **There is no cradle.** That was the escape hatch and it is gone. The
 fingertips are stock FR3 tips — `Franka_Finger_FR3 Fingertip only.SLDPRT`,
-drilled for two `93514A130` brass inserts and nothing else — and they seat
+drilled for one `93514A130` brass insert and nothing else — and they seat
 **7.000 mm inside the mount post's own 18 × 18 mm end sockets**. Nothing
 between holder and hand can absorb a rotation.
 
