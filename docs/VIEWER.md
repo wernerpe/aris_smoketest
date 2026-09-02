@@ -200,6 +200,14 @@ With no sink attached `emit` is a global load and a comparison against None,
 and the `active()` guard means an expensive payload is not built either.
 `progress.recording()` collects events into a list for tests and notebooks.
 
+Measured, with no sink: `emit()` 114 ns, `progress()` 48 ns, and the two
+context managers 636 ns each (a generator object, created and thrown away).
+The per-item calls are inside the probe and re-plan loops, so a 3000-stroke
+picture pays **0.5 ms** for the whole run; the context managers are per stage
+and per ban round, at most a few dozen times.  Against a 343-second
+allocation that is 1.5 parts per million, and the byte-level diff above is
+what says it is actually zero.
+
 **The planner's behaviour is unchanged with the GUI off**, and that is measured
 rather than asserted.  The same end-to-end run was executed twice on the same
 machine, once with no sink and once with a JSONL sink attached to every event:
