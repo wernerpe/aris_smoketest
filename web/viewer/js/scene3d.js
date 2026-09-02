@@ -298,13 +298,46 @@ export class Scene3D {
     this.spanLines.set(key, line);
   }
 
-  // The paper nobody certified.  Drawn in red, above the target and below the
-  // spans, so a coverage number has a picture: the residual IS the difference
-  // between the faint line and the coloured one, and this names it.
+  // WHERE THE PEN ACTUALLY GOES, which is not the same curve as the span it
+  // was given.  `addSpan` slices the TARGET stroke by the span's s-range —
+  // that is all the live event stream can say, because a running allocation
+  // reports (stroke, s0, s1) and no geometry.  A finished programme carries
+  // the plan's own dense tip path per segment (`segpts_<arm>` in the npz), and
+  // that is the line to draw once it exists: it shows the splice overlaps, the
+  // rounded corners and the ends `fly_shrink` gave back, none of which a slice
+  // of the target can show.
+  addPlanned(arm, xy, off, colorHex) {
+    const col = new THREE.Color(colorHex).getHex();
+    for (let s = 0; s + 1 < off.length; s++) {
+      const n = off[s + 1] - off[s];
+      if (n < 2) continue;
+      const a = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        a[i*3] = xy[(off[s] + i) * 2];
+        a[i*3+1] = xy[(off[s] + i) * 2 + 1];
+        a[i*3+2] = 0.004;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(a, 3));
+      const line = new THREE.Line(g, new THREE.LineBasicMaterial({color: col}));
+      line.userData = {arm, seg: s};
+      this.groups.strokes.add(line);
+    }
+  }
+
+  // The paper nobody certified, so a coverage number has a picture: the
+  // residual IS the difference between the faint target line and the coloured
+  // drawn one, and this names it.
+  //
+  // MAGENTA, NOT RED.  Arm 31's fleet colour is #d62629 and the obvious colour
+  // for "not drawn" is a red — on the CSAIL mark at 0.30 m the two were
+  // indistinguishable, and a viewer that draws a hole in the same colour as an
+  // arm is worse than one that draws no holes.  No arm in any rig registry is
+  // magenta.
   addDropped(list) {
     for (const d of list) {
       if (!d.pts || d.pts.length < 2) continue;
-      const line = polyline(d.pts, 0.0028, 0xd2544a, 2);
+      const line = polyline(d.pts, 0.0055, 0xff2fd0, 2);
       line.userData = {dropped: d};
       this.groups.strokes.add(line);
     }

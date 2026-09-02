@@ -291,11 +291,23 @@ async function maybeLoadBundle() {
     // decimated for the wire, this one is the record.
     if (p.strokes.length && p.strokes[0].pts.length)
       app.view.setStrokes(p.strokes);
-    for (const s of p.segments) {
-      app.view.addSpan({stroke: s.stroke_id, arm: s.arm,
-                        s0: s.s_range[0], s1: s.s_range[1]}, colorOf(s.arm));
+    // target (faint grey, above) vs drawn (the plan's own tip path, in the
+    // arm's colour) vs residual (red) — the three layers of the ink overlay
+    for (const a of p.arms) {
+      if (a.drawnXY && a.drawnOff && a.drawnOff.length > 1)
+        app.view.addPlanned(a.arm, a.drawnXY, a.drawnOff, colorOf(a.arm));
+      else
+        for (const s of p.segments.filter(x => x.arm === a.arm))
+          app.view.addSpan({stroke: s.stroke_id, arm: s.arm,
+                            s0: s.s_range[0], s1: s.s_range[1]},
+                           colorOf(s.arm));
     }
     app.view.addDropped(p.dropped);
+    app.legend = `target <span style="color:#5a6068">grey</span> · drawn `
+      + `<span style="color:#8a8f99">arm colour</span> · residual `
+      + `<span style="color:#ff2fd0">magenta</span>`
+      + ` — ${p.meta.coverage_pct.toFixed(2)} % of `
+      + `${p.meta.traced_m.toFixed(3)} m drawn, ${p.dropped.length} holes`;
     onFrame(0);
     el("b-conn").textContent = `programme · ${p.F} frames`;
   } catch (e) {
@@ -327,7 +339,8 @@ function onFrame(frame) {
              + `${seg.s_range[1].toFixed(2)}]` : "—"));
   }
   el("viewhud").innerHTML =
-    `t = ${p.timeAt(frame).toFixed(2)} s &nbsp; ` + bits.join(" &nbsp; ");
+    `t = ${p.timeAt(frame).toFixed(2)} s &nbsp; ` + bits.join(" &nbsp; ")
+    + (app.legend ? `<br>${app.legend}` : "");
 }
 
 function onSelectSegment(seg) {
