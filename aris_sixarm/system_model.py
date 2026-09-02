@@ -662,8 +662,27 @@ OPEN_QUESTIONS = {
         answer_by="survey the room",
         blocking="cutting the grid"),
     "penholder_cradle": dict(
-        what="Does the mounted pen lean 23 deg out of tool z, or 45?",
-        why="THERE IS NO CRADLE.  That was the escape hatch, and the assembly "
+        what="Does the mounted pen lean 23 deg out of tool z, or 45 — and "
+             "which fingers are on the arms?",
+        why="THERE IS NO CRADLE, AND THERE IS NO FEATURE ON THE FAT FINGER "
+            "EITHER.  The 2026-09-02 mesh of 'Fat Franka Finger v250904' has "
+            "been read (rig_final.FATFINGER, docs/SYSTEM_MODEL.md 7d).  It is "
+            "drawn in the FR3 fingertip's own CAD frame — its plate hole and "
+            "that tip's brass-insert axis agree to 0.0002 mm — so its place "
+            "on the hand is fixed by placing the fingertip, with a worst "
+            "residual of 0.155 mm against the manufacturer's own meshes.  Its "
+            "contact face is ONE FLAT PLANE: two 6.000 mm holes 69 mm apart "
+            "(mirror twins, because the part serves both fingers), R5 corners "
+            "and nothing else.  The post has nothing to receive a pin either "
+            "— rays down the 22-deg housing's post axis hit solid material at "
+            "z = 5.426 and 44.574, so the socket floor is a chamfered cone "
+            "and not a bore.  THE CLOCKING ABOUT THE JAW AXIS IS THEREFORE "
+            "FREE unless a FINGERTIP is fitted AND seated in the housing's "
+            "own 18 x 18 mm socket, which is a decision made by hand at grasp "
+            "time.  45 deg and 23 deg can both be true statements about "
+            "different builds.  WHAT THE ASSEMBLY ALREADY SAID, and still "
+            "does: the fingertip cradle was the escape hatch, and the "
+            "assembly "
             "closed it.  raw_slack_file_dump/'Pen holder cad(1).zip' nests "
             "'Natural hold assembly - closed.zip', which holds the COMPLETE "
             "10-deg build as an .SLDASM.  Resolved, it says: the two "
@@ -681,33 +700,46 @@ OPEN_QUESTIONS = {
                  "axial depth, 23 deg puts the tip 0.0467 m lateral where "
                  "frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently "
                  "the planner's ray needs 130.5 mm of graphite past the cap "
-                 "and 23 deg needs 64.4 mm.  NOTHING IS CHANGED HERE: the "
+                 "and 23 deg needs 94.5 mm.  NOTHING IS CHANGED HERE: the "
                  "planning transform is gate-validated against a real "
-                 "touchdown and moving it is a re-certification.",
-        answer_by="ONE measurement on a mounted holder — the perpendicular "
-                  "distance from the pen tip to the gripper's approach axis. "
-                  "47 mm or 110 mm; a ruler settles it.  Equivalently: the "
-                  "graphite protruding past the housing nose, 64 mm vs 100. "
-                  "Note the SIGN is a mounting choice either way — the post "
-                  "is square, so the holder seats both ways up and the lean "
-                  "is +/-23 deg.  STILL GENUINELY OPEN: which build ships, "
-                  "and the running robot says it is NOT the one that was "
-                  "assembled.  Aris_Kindt franka_control_gui.py closes on the "
-                  "holder with width 0.0432 and epsilon_inner 0.0, and "
-                  "libfranka calls a grasp successful only when the measured "
-                  "opening exceeds width - epsilon_inner — so 43.2 mm is a "
-                  "LOWER BOUND on the real jaw gap, and the 36.0 mm this CAD "
-                  "gives would report failure every time.  50 mm does not: "
-                  "that is the post's bare ends, which is what the newest "
-                  "finger part clamps.  'Fat Franka Finger v250904' is an "
-                  "18.4 x 90 x 50 mm blade replacing the whole stock finger, "
-                  "and 18.4 mm cannot enter an 18.0 mm socket.  So the likely "
-                  "deployed configuration is Fat fingers flat on the post "
-                  "ends at ~50 mm, NOT stock tips seated in the sockets at "
-                  "36 mm.  It changes no angle — the post is still square to "
-                  "the fingers either way — but it is the reason the model's "
-                  "0.018 is the ASSEMBLY's number and not necessarily the "
-                  "rig's.",
+                 "touchdown and moving it is a re-certification.  RIDING ON "
+                 "IT AS WELL, since the Fat finger was read: the self-"
+                 "collision guard.  A 90 mm blade reaching 69 mm sideways out "
+                 "of the hand escapes selfcoll.BODY_CAPSULES' hand rows by "
+                 "49.93 mm over the finger-joint range, where the stock "
+                 "finger is contained with 3.14 mm to spare, and it leaves "
+                 "coordination.HAND_R = 0.104 just 0.51 mm of margin at full "
+                 "open.  If the Fat fingers ship, the guard needs a finger "
+                 "row.  Reported in docs/SYSTEM_MODEL.md 7d, changed nowhere.",
+        answer_by="TWO measurements now, and the robot already knows one of "
+                  "them.  (1) THE RULER: the perpendicular distance from the "
+                  "mounted pen's tip to the gripper's approach axis, 47 mm or "
+                  "110 mm.  Note the SIGN is a mounting choice either way — "
+                  "the post is square, so the holder seats both ways up and "
+                  "the lean is +/-23 deg.  (2) THE GRIPPER'S OWN `width` "
+                  "while the pen is held (franka::GripperState, or a caliper "
+                  "across the jaw).  `width` is 2 q, the STOCK grip plane's "
+                  "opening, and every build adds back how far its real "
+                  "contact face sits outboard of it — so ONE number picks one "
+                  "row out of six: 0.0287 fat plates on the bare post ends, "
+                  "0.0339 fat RIBS on them (the plates cannot reach; the rib "
+                  "stands 2.5839 mm proud), 0.0357 fat plate + fingertip "
+                  "seated in the sockets, 0.0360 stock tips seated, 0.0497 "
+                  "fat plate + fingertip flat on the bare ends, 0.0500 stock "
+                  "finger faces flat on the bare ends.  See "
+                  "rig_final.fatfinger_widths().  WHAT THAT ALREADY RULES "
+                  "OUT: Aris_Kindt franka_control_gui.py closes with width "
+                  "0.0432 and epsilon_inner 0.0, and libfranka calls a grasp "
+                  "successful only above width - epsilon_inner, so 43.2 mm is "
+                  "a lower bound IF the grasp succeeds — and only the two "
+                  "grips on the post's BARE ends clear it.  The earlier guess "
+                  "here, 'Fat fingers flat on the post ends at ~50 mm', is "
+                  "ARITHMETICALLY RULED OUT: the Fat finger's contact plate "
+                  "sits 10.6502 mm outboard of the stock grip plane, so that "
+                  "grasp reports 0.0287, not 0.0500.  Weakened, honestly: the "
+                  "GUI's menu path falls back to a move-close on failure, so "
+                  "a failing grasp still holds the pen and 0.0432 is evidence "
+                  "rather than proof.",
         blocking="pen-tip calibration"),
     "cable_dress": dict(
         what="How is the arm cabling actually dressed?",
@@ -775,21 +807,35 @@ def provenance_mix(h=None):
 # ---------------------------------------------------------------------------
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets/system_model"
 COLLISION_VARIANTS = ("mesh", "capsule")
+FINGER_VARIANTS = ("stock", "fat")
 
 
-def urdf_path(collision="mesh", with_arms=True):
+def urdf_path(collision="mesh", with_arms=True, fingers="stock"):
     """The generated URDF -> Path.  So no consumer hardcodes the layout.
 
     `collision` picks which arm collision model the file carries:
       "mesh"     the manufacturer's own collision shells
       "capsule"  the audited capsule set (`selfcoll.BODY_CAPSULES`)
+    `fingers` picks which finger is on the hand:
+      "stock"    the manufacturer's `finger.gltf`, at gen's FINGER_FIX
+      "fat"      the printed 90 mm "Fat Franka Finger" (docs 7d) — a VARIANT,
+                 and only with the mesh collision model
     `with_arms=False` gives the static scene alone — cage, table, canvas.
     """
     if collision not in COLLISION_VARIANTS:
         raise ValueError(f"collision must be one of {COLLISION_VARIANTS}, "
                          f"not {collision!r}")
+    if fingers not in FINGER_VARIANTS:
+        raise ValueError(f"fingers must be one of {FINGER_VARIANTS}, "
+                         f"not {fingers!r}")
     if not with_arms:
         return ASSET_DIR / "environment.urdf"
+    if fingers == "fat":
+        if collision != "mesh":
+            raise ValueError("the fat finger is only built against the mesh "
+                             "collision model — selfcoll.BODY_CAPSULES has no "
+                             "finger row for it to replace")
+        return ASSET_DIR / "installation_fatfingers.urdf"
     return ASSET_DIR / ("installation.urdf" if collision == "mesh"
                         else "installation_capsules.urdf")
 

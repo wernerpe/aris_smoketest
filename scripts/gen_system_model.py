@@ -4,6 +4,7 @@
     python3 scripts/gen_system_model.py meshes    # vendor + decimate meshes
     python3 scripts/gen_system_model.py urdf      # write URDFs + manifest
     python3 scripts/gen_system_model.py all       # both
+    python3 scripts/gen_system_model.py urdf --fingers stock|fat|both
 
 WHAT IT WRITES
 --------------
@@ -12,11 +13,14 @@ WHAT IT WRITES
     installation_capsules.urdf   the same scene, collision = the AUDITED
                                  capsule set (selfcoll.BODY_CAPSULES)
     environment.urdf             the static scene alone, no arms
+    installation_fatfingers.urdf installation.urdf with the printed 90 mm
+                                 "Fat Franka Finger" in place of the stock one
     model_manifest.json          every body: dimensions, provenance, source
     meshes/fr3/*.gltf            the vendored Franka visuals, RETEXTURED
     meshes/fr3/textures/*.png    the 27 real texture maps, byte-identical
     meshes/collision/*.obj       the manufacturer's collision shells
     meshes/penholder/*.obj       the pen holder, re-decimated from raw CAD
+    meshes/fatfinger/*.obj       the Fat finger, in the LEFT finger's frame
 
 WHY THIS SUPERSEDES `assets/proposed_rig/`
 ------------------------------------------
@@ -98,6 +102,11 @@ CAD_SRC = ROOT.parent / "raw_slack_file_dump" / "Pen holder all parts 2026.08.19
 # stay out (PENHOLDER22["omitted"]).
 HOUSING_STL = "pen holder housing - 22 deg - reinforced - v20260429.STL"
 CAP_STL = "pen holder cap v20250903.STL"
+# The whole-finger replacement that arrived 2026-09-02.  It is a VARIANT, not a
+# replacement for the stock finger: `--fingers` picks which one the URDF gets,
+# and `installation.urdf` stays the stock build.  See rig_final.FATFINGER and
+# docs/SYSTEM_MODEL.md 7d.
+FAT_FINGER_STL = "Fat Franka Finger v250904.STL"
 
 FR3_MESHES = tuple(f"link{i}" for i in range(8)) + ("hand", "finger")
 TEXTURED = tuple(f"link{i}" for i in range(8)) + ("hand",)   # finger has none
@@ -123,7 +132,30 @@ TEX_KINDS = ("color", "normal", "occlusion_roughness_metallic")
 # v250904" is an 18.4 mm blade and 18.4 does not enter an 18.0 socket.  See
 # system_model.OPEN_QUESTIONS["penholder_cradle"]; it changes no angle.
 FINGER_FIX = 0.018           # m, fingertip grip half-width holding the holder
+
+# WHERE THE FAT FINGER'S JOINT SITS, m — and it is DERIVED, not chosen.  The
+# Fat blade's innermost feature is not its contact plate but the 2.5839 mm rib
+# along the plate's proximal edge (rig_final.FATFINGER), 8.0663 mm out from the
+# stock grip plane.  Closing two of these on the mount post's bare 50 mm ends,
+# the RIB lands first, at half the post less that reach — and bisecting the
+# blade against the committed holder meshes returns the same 16.9337 mm and
+# names the rib crest as the touching vertex.  The plates never get there; they
+# stop 2.5839 mm off.  libfranka would report `width` 0.0339.
+#
+# THIS IS NOT A CLAIM ABOUT WHAT THE ARMS DO.  It is the tightest the BARE
+# blade can close on this holder, which is what the URDF draws.  If a fingertip
+# is bolted to the plate — and four measurements say the plate is a seat for
+# one — the tip grips instead, at 0.0357 seated in the sockets or 0.0497 flat
+# on the bare ends.  `rig_final.fatfinger_widths()` lists all six, and
+# system_model.OPEN_QUESTIONS["penholder_cradle"] says which one measurement
+# settles it.
+FAT_FINGER_FIX = round(
+    0.5 * (rig_final.PENHOLDER22["post_z"][1]
+           - rig_final.PENHOLDER22["post_z"][0])
+    - rig_final.FATFINGER["rib_offset"], 7)          # 0.0169337
 HOLDER_FACES = 8000          # decimation target, per part
+FAT_FINGER_FACES = 8000      # same budget; 8234 raw, and it costs 0.0 mm
+FINGER_VARIANTS = ("stock", "fat")
 MM = SM.MM
 
 # the stack inside the bore: spring steel, printed black, printed grey, lead
@@ -418,6 +450,125 @@ def decimate_holder(out_dir=None, faces=HOLDER_FACES):
                       envelope_bar_m=1e-5)
 
 
+def _fat_boxes(m):
+    """The Fat blade's collision envelope -> [(lo, hi)], panda_leftfinger, m.
+
+    MEASURED off the mesh, not typed in.  Three contiguous z bands at the CAD's
+    own steps (foot / web / plate), the foot band split in two at the
+    part's own mirror plane because the two feet have 48.6 mm of air between
+    them, and each box the AABB of its cell.  The AABB is fitted over a z
+    window `overlap` wider than the band it is clamped to, so a triangle that
+    straddles a boundary is inside BOTH boxes rather than between them.
+    """
+    F = rig_final.FATFINGER
+    z0, z1 = F["collision_bands"]
+    ov = F["collision_overlap"]
+    lo_z, hi_z = float(m.bounds[0][2]), float(m.bounds[1][2])
+    P = np.vstack([np.asarray(m.vertices, float), m.triangles.mean(axis=1)])
+    split = F["collision_foot_split"]
+    cells = [((lo_z, z0), (-np.inf, split)),
+             ((lo_z, z0), (split, np.inf)),
+             ((z0, z1), (-np.inf, np.inf)),
+             ((z1, hi_z), (-np.inf, np.inf))]
+    out = []
+    for (za, zb), (xa, xb) in cells:
+        sel = ((P[:, 2] >= za - ov) & (P[:, 2] <= zb + ov)
+               & (P[:, 0] >= xa) & (P[:, 0] < xb))
+        if not sel.any():
+            raise SystemExit(f"fat finger: collision cell z[{za},{zb}] "
+                             f"x[{xa},{xb}] is empty — has the part changed?")
+        q = P[sel]
+        x0 = float(q[:, 0].min()) if np.isinf(xa) else float(xa)
+        x1 = float(q[:, 0].max()) if np.isinf(xb) else float(xb)
+        # the two foot boxes ABUT on the split rather than stopping at their
+        # own geometry: a triangle drawn across the 48 mm of air between the
+        # feet would otherwise have its middle in neither box, which is a
+        # 100 nm hole in the proof and no less a hole for being small
+        out.append(((x0, float(q[:, 1].min()), float(za)),
+                    (x1, float(q[:, 1].max()), float(zb))))
+    return out
+
+
+def _fat_escape(m, boxes):
+    """How far the blade reaches outside `boxes` -> metres (<= 0 is contained).
+
+    Vertices, face centroids AND edge midpoints, because a box set proved on
+    vertices alone says nothing about a long triangle's middle.
+    """
+    v = np.asarray(m.vertices, float)
+    t = m.triangles
+    P = np.vstack([v, t.mean(axis=1),
+                   0.5 * (t[:, 0] + t[:, 1]), 0.5 * (t[:, 1] + t[:, 2]),
+                   0.5 * (t[:, 2] + t[:, 0])])
+    out = np.full(len(P), np.inf)
+    for lo, hi in boxes:
+        lo, hi = np.asarray(lo, float), np.asarray(hi, float)
+        out = np.minimum(out, np.maximum(lo - P, P - hi).max(axis=1))
+    return float(out.max())
+
+
+def vendor_fat_finger(out_dir=None, faces=FAT_FINGER_FACES):
+    """The Fat Franka Finger, raw STL -> panda_leftfinger frame OBJ.
+
+    Same treatment as the holder — weld, decimate, units-check, measure what
+    the decimation cost — and one thing more: the STL and the SLDPRT of this
+    part DO NOT SHARE A DATUM (the STL is exported 10.5 mm along +y off the
+    part origin), and it is the SLDPRT's datum that puts the plate hole on the
+    finger centreline.  `rig_final.fatfinger_T_finger` carries that shift, so
+    the mesh written here is already in the LEFT finger's link frame; the right
+    finger gets the same file under `Rz(pi)` about x = 34.5 mm, which is the
+    other foot bolted down and the reason the part has two of everything.
+    """
+    import trimesh
+    out_dir = Path(out_dir or OUT_DIR)
+    dst = out_dir / "meshes/fatfinger"
+    dst.mkdir(parents=True, exist_ok=True)
+    src = CAD_SRC / FAT_FINGER_STL
+    if not src.is_file():
+        raise SystemExit(f"raw CAD not found: {src}")
+    m = trimesh.load(src, force="mesh")
+    ext0 = m.bounds[1] - m.bounds[0]
+    if not 5.0 < ext0.max() < 500.0:
+        raise SystemExit(f"fat finger: extent {ext0} is not millimetres — "
+                         "has the CAD been re-exported in other units?")
+    n0 = len(m.faces)
+    m.merge_vertices(merge_tex=True, merge_norm=True)
+    if len(m.faces) > faces:
+        m = m.simplify_quadric_decimation(face_count=faces)
+    ext1 = m.bounds[1] - m.bounds[0]
+    shrink = float(np.abs(ext1 - ext0).max())
+    if shrink >= 1.0:
+        raise SystemExit(f"fat finger: decimation lost {shrink:.3f} mm of "
+                         "extent; raise the face target")
+    m.apply_scale(0.001)                                    # mm -> m
+    m.apply_transform(rig_final.fatfinger_T_finger())       # -> left finger
+    out = dst / "fatfinger_leftfinger.obj"
+    out.write_text(_obj_with_normals(m, "fatfinger_leftfinger"))
+    # fit and prove the envelope on the mesh AS WRITTEN, the way
+    # `decimate_holder` re-loads before re-proving.  The OBJ writer rounds to
+    # 1 um, and a box fitted to the unrounded mesh is 0.1 um too small for the
+    # file that ships — which is a hull that does not contain its own asset.
+    m = trimesh.load(out, force="mesh")
+    boxes = _fat_boxes(m)
+    esc = _fat_escape(m, boxes)
+    if esc > 0.0:
+        raise SystemExit(f"the fat finger escapes its own box envelope by "
+                         f"{esc * 1000:.4f} mm — a hull that does not contain "
+                         "the part is not a hull")
+    rec = dict(file="meshes/fatfinger/fatfinger_leftfinger.obj",
+               bytes=out.stat().st_size, sha256=_sha256(out), source=str(src))
+    quality = dict(faces_raw=n0, faces_out=len(m.faces),
+                   extent_loss_mm=round(shrink, 4),
+                   extent_mm=[round(float(v), 4) for v in ext1],
+                   frame="panda_leftfinger",
+                   stl_y_shift_m=rig_final.FATFINGER["stl_y_shift"],
+                   collision_boxes_m=[[list(lo), list(hi)]
+                                      for lo, hi in boxes],
+                   collision_worst_escape_m=round(esc, 12),
+                   joint_value_m=FAT_FINGER_FIX)
+    return [rec], quality
+
+
 def build_meshes(out_dir=None):
     out_dir = Path(out_dir or OUT_DIR)
     files = []
@@ -426,9 +577,12 @@ def build_meshes(out_dir=None):
     files += vendor_collision(out_dir)
     holder, quality = decimate_holder(out_dir)
     files += holder
+    fat, fat_quality = vendor_fat_finger(out_dir)
+    files += fat
     (out_dir / "meshes/MESH_SOURCES.json").write_text(json.dumps(
-        dict(files=files, holder_decimation=quality), indent=2) + "\n")
-    return files, quality
+        dict(files=files, holder_decimation=quality,
+             fat_finger=fat_quality), indent=2) + "\n")
+    return files, quality, fat_quality
 
 
 # ---------------------------------------------------------------------------
@@ -473,14 +627,58 @@ def _set_fr3_limits(el, idx):
     lim.attrib.pop("{http://drake.mit.edu}acceleration", None)
 
 
-def clone_arm(robot, arm_id, spec, collision):
+def _fat_finger_geometry(link_el, right, boxes):
+    """Re-body one finger link as the Fat blade — visual mesh + box envelope.
+
+    ONE MESH SERVES BOTH FINGERS, and that is the part's own design rather than
+    an economy here: it is mirror-symmetric about its middle (0.44 mm over
+    every mating feature), so bolting the FAR foot down instead of the near one
+    gives the mirror placement — and only that lets both blades reach the same
+    way in the hand.  In the right finger's own link frame it is `Rz(pi)` about
+    x = mirror_pitch / 2.  See rig_final.FATFINGER.
+    """
+    F = rig_final.FATFINGER
+    for old in list(link_el.findall("visual")) + list(
+            link_el.findall("collision")):
+        link_el.remove(old)
+    xyz = (F["mirror_pitch"], 0.0, 0.0) if right else (0.0, 0.0, 0.0)
+    rpy = (0.0, 0.0, np.pi) if right else (0.0, 0.0, 0.0)
+    v = ET.SubElement(link_el, "visual")
+    _origin(v, xyz, rpy)
+    ET.SubElement(ET.SubElement(v, "geometry"), "mesh",
+                  filename="meshes/fatfinger/fatfinger_leftfinger.obj")
+    mat = ET.SubElement(v, "material", name=f"{link_el.get('name')}_fat_mat")
+    ET.SubElement(mat, "color", rgba="0.28 0.29 0.32 1.0")
+    R = np.array([[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]]) \
+        if right else np.eye(3)
+    for lo, hi in boxes:
+        lo, hi = np.asarray(lo, float), np.asarray(hi, float)
+        c = R @ (0.5 * (lo + hi)) + np.asarray(xyz, float)
+        col = ET.SubElement(link_el, "collision")
+        _origin(col, c, rpy)
+        ET.SubElement(ET.SubElement(col, "geometry"), "box", size=_v3(hi - lo))
+
+
+def clone_arm(robot, arm_id, spec, collision, fingers="stock",
+              fat_boxes=None):
     """Clone the vendored panda into `arm{id}_`, re-shelled and re-limited.
 
     `collision` is "mesh" (the manufacturer's shells) or "capsule" (the
     audited set).  Either way the vendored SPHERES are dropped on the floor:
     they are the one arm collision model in this repo that nothing has ever
     measured, and every certified number was earned against something else.
+
+    `fingers` is "stock" (the manufacturer's `finger.gltf` at FINGER_FIX) or
+    "fat" (the printed whole-finger replacement at FAT_FINGER_FIX).  The fat
+    blade carries its own MEASURED box envelope in both variants, because
+    neither of the two arm collision models has anything to say about it:
+    `finger.obj` is the wrong shape and `selfcoll.BODY_CAPSULES` has no finger
+    row at all.
     """
+    if fingers not in FINGER_VARIANTS:
+        raise ValueError(f"fingers must be one of {FINGER_VARIANTS}, "
+                         f"not {fingers!r}")
+    fix = FINGER_FIX if fingers == "stock" else FAT_FINGER_FIX
     pfx = f"arm{arm_id}_"
     src = ET.parse(SRC_URDF).getroot()
     caps_by_link = {}
@@ -511,6 +709,12 @@ def clone_arm(robot, arm_id, spec, collision):
 
         if el.tag == "link":
             bare = el.get("name")[len(pfx):]
+            if fingers == "fat" and bare in ("panda_leftfinger",
+                                             "panda_rightfinger"):
+                _fat_finger_geometry(el, bare.endswith("rightfinger"),
+                                     fat_boxes)
+                robot.append(el)
+                continue
             for c in list(el.findall("collision")):
                 el.remove(c)
             if collision == "mesh":
@@ -536,7 +740,7 @@ def clone_arm(robot, arm_id, spec, collision):
                         el.remove(c)
                 o = el.find("origin")
                 xyz = [float(v) for v in (o.get("xyz", "0 0 0")).split()]
-                xyz[1] = FINGER_FIX if name.endswith("joint1") else -FINGER_FIX
+                xyz[1] = fix if name.endswith("joint1") else -fix
                 o.set("xyz", _v3(xyz))
         robot.append(el)
 
@@ -800,16 +1004,36 @@ def add_collision_filters(robot, arm_id):
     group(f"{pfx}wrist", [f"{pfx}{n}" for n in WRIST_LINKS])
 
 
-def build(with_arms=True, collision="mesh"):
+def fat_boxes_from(out_dir):
+    """The measured Fat-finger envelope, out of the mesh stage's own record.
+
+    The URDF stage never re-reads the STL — the boxes were measured when the
+    mesh was vendored and they live in `meshes/MESH_SOURCES.json` beside the
+    sha256 of the mesh they were measured on, so the two cannot drift apart.
+    """
+    src = Path(out_dir) / "meshes/MESH_SOURCES.json"
+    if not src.is_file():
+        raise SystemExit(f"{src} is missing — run "
+                         "`gen_system_model.py meshes` before `urdf`")
+    d = json.loads(src.read_text()).get("fat_finger")
+    if not d:
+        raise SystemExit(f"{src} carries no fat_finger record — re-run "
+                         "`gen_system_model.py meshes`")
+    return [(tuple(lo), tuple(hi)) for lo, hi in d["collision_boxes_m"]]
+
+
+def build(with_arms=True, collision="mesh", fingers="stock", fat_boxes=None):
     name = ("aris_system_model" if with_arms else "aris_system_model_env")
     if with_arms and collision != "mesh":
         name = f"aris_system_model_{collision}"
+    if with_arms and fingers != "stock":
+        name = f"aris_system_model_{fingers}fingers"
     robot = ET.Element("robot", name=name)
     ET.SubElement(robot, "link", name="world")
     add_environment(robot)
     if with_arms:
         for aid, spec in layout.FLEET_PROPOSED.items():
-            pfx = clone_arm(robot, aid, spec, collision)
+            pfx = clone_arm(robot, aid, spec, collision, fingers, fat_boxes)
             add_tool(robot, pfx)
             add_cable_dress(robot, pfx)
             add_collision_filters(robot, aid)
@@ -820,6 +1044,89 @@ def build(with_arms=True, collision="mesh"):
 # ---------------------------------------------------------------------------
 # STAGE 3 — the manifest
 # ---------------------------------------------------------------------------
+def _fat_finger_manifest(meshes):
+    """The Fat finger's own block — geometry, placement, and what is OPEN."""
+    F = rig_final.FATFINGER
+    q = meshes.get("fat_finger", {})
+    return dict(
+        provenance="AUDIT for the geometry and the placement, ASSUMED for the "
+                   "grasp",
+        what="a printed whole-finger replacement, 18.4339 x 90.0003 x 50.000 "
+             "mm: two mounting feet 69 mm apart, a slanted web, and a flat "
+             "contact plate with a 2.5839 mm rib along its proximal edge",
+        source=F["source"],
+        used_in="installation_fatfingers.urdf",
+        stl_y_shift_m=F["stl_y_shift"],
+        stl_y_shift_why="the STL and the SLDPRT of this part DO NOT share a "
+                        "datum: the STL is exported 10.5000 mm along +y off "
+                        "the part origin (x and z agree to 0.0002 mm).  The "
+                        "SLDPRT datum is the one that matters — it puts the "
+                        "plate hole on the finger centreline.",
+        placement="rig_final.fatfinger_T_finger(); link x = cad y, link y = "
+                  "0.0785578 - cad x, link z = cad z - 0.0101579",
+        placement_evidence="the part is drawn in the SAME frame as "
+                           "'Franka_Finger_FR3 Fingertip only.SLDPRT': the "
+                           "plate's 6.000 mm hole is on the axis of that "
+                           "tip's 93514A130 brass insert to 0.0002 mm, the "
+                           "plate occupies exactly the tip's z band, and it "
+                           "lands 0.1502 mm outboard of the tip's back face.  "
+                           "So the map into the finger is fixed by placing "
+                           "the FINGERTIP, which the 10-deg assembly already "
+                           "did.",
+        placement_residual_mm=dict(
+            foot_outer_face_vs_finger_back=0.155,
+            plate_face_vs_fingertip_back=0.150,
+            grip_plane_vs_finger_inner_face=0.084,
+            fingertip_distal_face_vs_finger_tip=0.0,
+            note="worst 0.155 mm, against manufacturer meshes that disagree "
+                 "with each other by 0.051 mm.  Independent check: the "
+                 "plate's z centre lands at panda_hand z = 103.242 mm "
+                 "against the 10-deg assembly's grip centre of 103.26 and "
+                 "the stock TCP's 103.4."),
+        mirror=dict(plane_cad_y_m=F["mirror_y"], worst_m=F["mirror_worst"],
+                    volume_fraction=F["mirror_volume_fraction"],
+                    why="the part is its own mirror image, so bolting the FAR "
+                        "foot down gives the mirror placement — which is what "
+                        "a LEFT and a RIGHT finger need if both blades are to "
+                        "reach the same way in the hand.  That is why there "
+                        "are two feet, four foot holes and two plate holes."),
+        plate_offset_m=F["plate_offset"],
+        rib_offset_m=F["rib_offset"],
+        jaw_gap_m="2 q + %.7f at the plates, 2 q + %.7f at the ribs"
+                  % (2 * F["plate_offset"], 2 * F["rib_offset"]),
+        joint_value_m=FAT_FINGER_FIX,
+        joint_value_why="the tightest the BARE blade can close on the mount "
+                        "post's 50 mm ends before the rib fouls it (25.000 "
+                        "less the rib's own 8.0663).  Bisecting the blade "
+                        "against the committed holder meshes returns the same "
+                        "16.9337 mm and names the rib crest as the touching "
+                        "vertex.  NOT a claim about the arms — see "
+                        "open_questions.penholder_cradle.",
+        locates_post=F["locates_post"],
+        locates_post_why=F["locates_post_why"],
+        grasp_width_hypotheses_m=rig_final.fatfinger_widths(),
+        grasp_width_note="the running GUI commands width 0.0432 with "
+                         "epsilon_inner 0.0.  Only the two grips on the "
+                         "post's BARE 50 mm ends clear that — and a bare post "
+                         "end is a flat 26 mm square with nothing to key "
+                         "into, so the pen's lean is set at grasp time.",
+        collision=dict(
+            kind="4 axis-aligned boxes, panda_leftfinger frame",
+            why="a printed Z-bracket is not a collision geometry and neither "
+                "arm collision model has anything to say about it: "
+                "finger.obj is the wrong shape and selfcoll.BODY_CAPSULES has "
+                "no finger row at all",
+            boxes_m=q.get("collision_boxes_m"),
+            worst_escape_m=q.get("collision_worst_escape_m"),
+            method="measured off the vendored mesh on every run, then "
+                   "re-proved against its vertices, face centroids and edge "
+                   "midpoints"),
+        decimation=dict(faces_raw=q.get("faces_raw"),
+                        faces_out=q.get("faces_out"),
+                        extent_loss_mm=q.get("extent_loss_mm")),
+    )
+
+
 def manifest(out_dir=None):
     out_dir = Path(out_dir or OUT_DIR)
     h = SM.H_MOUNT
@@ -975,6 +1282,7 @@ def manifest(out_dir=None):
                                      "socket = 36.0008 mm of jaw in the "
                                      "10-deg assembly; was 0.0285, which is "
                                      "the fingertip's back face",
+            fat_finger=_fat_finger_manifest(meshes),
             internals=dict(
                 provenance="AUDIT",
                 order="nose shoulder -> spring -> [shim] -> sleeve (clutch "
@@ -1026,15 +1334,30 @@ def _rel(p):
         return p
 
 
-def write_urdfs(out_dir=None):
+def write_urdfs(out_dir=None, fingers="both"):
+    """Write the URDFs and the manifest.  `fingers` is stock | fat | both.
+
+    The default writes all four, which is what a clean-room rebuild has to
+    reproduce.  `--fingers stock` writes only the three the stock build needs
+    and `--fingers fat` only the variant, so either can be regenerated alone
+    without touching the other's bytes.
+    """
     out_dir = Path(out_dir or OUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if fingers not in FINGER_VARIANTS + ("both",):
+        raise SystemExit(f"--fingers must be one of "
+                         f"{FINGER_VARIANTS + ('both',)}, not {fingers!r}")
+    want = FINGER_VARIANTS if fingers == "both" else (fingers,)
+    files = (("installation.urdf", True, "mesh", "stock"),
+             ("installation_capsules.urdf", True, "capsule", "stock"),
+             ("environment.urdf", False, "mesh", "stock"),
+             ("installation_fatfingers.urdf", True, "mesh", "fat"))
+    boxes = fat_boxes_from(out_dir) if "fat" in want else None
     wrote = []
-    for fname, with_arms, coll in (("installation.urdf", True, "mesh"),
-                                   ("installation_capsules.urdf", True,
-                                    "capsule"),
-                                   ("environment.urdf", False, "mesh")):
-        tree = build(with_arms, coll)
+    for fname, with_arms, coll, fng in files:
+        if fng not in want:
+            continue
+        tree = build(with_arms, coll, fng, boxes)
         tree.write(out_dir / fname, xml_declaration=True, encoding="utf-8")
         n = len(tree.getroot().findall("link"))
         wrote.append((fname, n))
@@ -1047,11 +1370,18 @@ def write_urdfs(out_dir=None):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    fingers = "both"
+    if "--fingers" in argv:
+        i = argv.index("--fingers")
+        if i + 1 >= len(argv):
+            raise SystemExit(__doc__)
+        fingers = argv[i + 1]
+        del argv[i:i + 2]
     stage = argv[0] if argv else "all"
     if stage not in ("meshes", "urdf", "all"):
         raise SystemExit(__doc__)
     if stage in ("meshes", "all"):
-        files, quality = build_meshes(OUT_DIR)
+        files, quality, fat = build_meshes(OUT_DIR)
         tot = sum(f["bytes"] for f in files)
         print(f"meshes: {len(files)} files, {tot / 1e6:.2f} MB")
         for q in quality["parts"]:
@@ -1060,8 +1390,13 @@ def main(argv=None):
                   f"{q['extent_loss_mm']:.4f} mm")
         print(f"  holder envelope worst escape "
               f"{quality['envelope_worst_escape_m'] * 1000:+.6f} mm")
+        print(f"  fat finger      {fat['faces_raw']:>7d} -> "
+              f"{fat['faces_out']:>5d} faces, extent lost "
+              f"{fat['extent_loss_mm']:.4f} mm, "
+              f"{len(fat['collision_boxes_m'])} collision boxes, escape "
+              f"{fat['collision_worst_escape_m'] * 1000:+.6f} mm")
     if stage in ("urdf", "all"):
-        write_urdfs(OUT_DIR)
+        write_urdfs(OUT_DIR, fingers)
 
 
 if __name__ == "__main__":

@@ -69,6 +69,34 @@ the manufacturer's own shells and `installation_capsules.urdf` the audited
 capsule set — and the **textures are really there**, vendored byte-identically
 from where the meshes came from, so the thing renders like the robot it is.
 
+Since 2026-09-02 there is a fourth URDF, `installation_fatfingers.urdf`
+(`gen_system_model.py urdf --fingers stock|fat|both`,
+`SM.urdf_path(fingers="fat")`): the printed 90 mm **"Fat Franka Finger"**,
+whose mesh finally arrived, in place of the stock one. It is drawn in the FR3
+fingertip's own CAD frame — its plate hole and that tip's brass-insert axis
+agree to **0.0002 mm** — so its place on the hand is fixed with a 0.155 mm
+residual and no free parameter. Two things fall out and both are in
+`docs/SYSTEM_MODEL.md` §7d: **nothing on it locates the pen holder's post**, so
+the pen's lean is set by hand at grasp time and 45° and 23° can both be true;
+and a 90 mm blade reaching 69 mm sideways out of the hand **escapes
+`selfcoll.BODY_CAPSULES` by 49.93 mm** where the stock finger is contained.
+Reported, not fixed — no capsule radius, no gate constant and no tool
+transform is changed.
+
+## Setup — the repo's own venv
+
+Everything in this README that says `python3` wants numpy, scipy, trimesh and
+pytest. The repo carries no vendored environment; make one:
+
+```
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+```
+
+`.venv/` is gitignored. The drake-only scripts (`check_system_model.py`,
+`render_system_model.py`, `scene_check`) still want the station venv at
+`/home/franka/git/franka_manipulation_station/.venv`, which is why they name it
+explicitly.
+
 ## Layout
 
 ```

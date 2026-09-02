@@ -243,6 +243,106 @@
     ],
     "finger_half_width_m": 0.018,
     "finger_half_width_source": "AUDIT: post 50 mm less 2 x 7.000 mm of socket = 36.0008 mm of jaw in the 10-deg assembly; was 0.0285, which is the fingertip's back face",
+    "fat_finger": {
+      "provenance": "AUDIT for the geometry and the placement, ASSUMED for the grasp",
+      "what": "a printed whole-finger replacement, 18.4339 x 90.0003 x 50.000 mm: two mounting feet 69 mm apart, a slanted web, and a flat contact plate with a 2.5839 mm rib along its proximal edge",
+      "source": "raw_slack_file_dump/\"Pen holder all parts 2026.08.19\"/\"Fat Franka Finger v250904.STL\" (mm, watertight, 8234 faces); same solid as \"Fat Franka Finger v250904.SLDPRT\" in \"Pen holder cad(1).zip\"",
+      "used_in": "installation_fatfingers.urdf",
+      "stl_y_shift_m": -0.0105,
+      "stl_y_shift_why": "the STL and the SLDPRT of this part DO NOT share a datum: the STL is exported 10.5000 mm along +y off the part origin (x and z agree to 0.0002 mm).  The SLDPRT datum is the one that matters \u2014 it puts the plate hole on the finger centreline.",
+      "placement": "rig_final.fatfinger_T_finger(); link x = cad y, link y = 0.0785578 - cad x, link z = cad z - 0.0101579",
+      "placement_evidence": "the part is drawn in the SAME frame as 'Franka_Finger_FR3 Fingertip only.SLDPRT': the plate's 6.000 mm hole is on the axis of that tip's 93514A130 brass insert to 0.0002 mm, the plate occupies exactly the tip's z band, and it lands 0.1502 mm outboard of the tip's back face.  So the map into the finger is fixed by placing the FINGERTIP, which the 10-deg assembly already did.",
+      "placement_residual_mm": {
+        "foot_outer_face_vs_finger_back": 0.155,
+        "plate_face_vs_fingertip_back": 0.15,
+        "grip_plane_vs_finger_inner_face": 0.084,
+        "fingertip_distal_face_vs_finger_tip": 0.0,
+        "note": "worst 0.155 mm, against manufacturer meshes that disagree with each other by 0.051 mm.  Independent check: the plate's z centre lands at panda_hand z = 103.242 mm against the 10-deg assembly's grip centre of 103.26 and the stock TCP's 103.4."
+      },
+      "mirror": {
+        "plane_cad_y_m": 0.0345,
+        "worst_m": 0.0015045,
+        "volume_fraction": 0.99049,
+        "why": "the part is its own mirror image, so bolting the FAR foot down gives the mirror placement \u2014 which is what a LEFT and a RIGHT finger need if both blades are to reach the same way in the hand.  That is why there are two feet, four foot holes and two plate holes."
+      },
+      "plate_offset_m": 0.0106502,
+      "rib_offset_m": 0.0080663,
+      "jaw_gap_m": "2 q + 0.0213004 at the plates, 2 q + 0.0161326 at the ribs",
+      "joint_value_m": 0.0169337,
+      "joint_value_why": "the tightest the BARE blade can close on the mount post's 50 mm ends before the rib fouls it (25.000 less the rib's own 8.0663).  Bisecting the blade against the committed holder meshes returns the same 16.9337 mm and names the rib crest as the touching vertex.  NOT a claim about the arms \u2014 see open_questions.penholder_cradle.",
+      "locates_post": false,
+      "locates_post_why": "the contact face is one flat plane (1516 mm^2, the part's largest) broken only by the two 6.000 mm holes and the R5 corners; the holes are 69 mm apart and the post is 26 mm square, so at most one can face it; and the post's end faces have no bore for a pin to enter (measured on the 22-deg housing STL: rays down the post axis hit solid material at z = 5.426 and 44.574).  The clocking about the jaw axis is FREE unless a FINGERTIP is fitted and seated in the housing's own 18 x 18 mm socket, which is a decision made by hand.",
+      "grasp_width_hypotheses_m": {
+        "fat plates on the bare post ends": 0.0287,
+        "fat RIBS on the bare post ends (the plates cannot reach)": 0.033867,
+        "fat plate + fingertip, seated in the sockets": 0.0357,
+        "fat plate + fingertip, flat on the bare post ends": 0.0497,
+        "stock finger, tips seated in the sockets": 0.036,
+        "stock finger, faces flat on the bare post ends": 0.05
+      },
+      "grasp_width_note": "the running GUI commands width 0.0432 with epsilon_inner 0.0.  Only the two grips on the post's BARE 50 mm ends clear that \u2014 and a bare post end is a flat 26 mm square with nothing to key into, so the pen's lean is set at grasp time.",
+      "collision": {
+        "kind": "4 axis-aligned boxes, panda_leftfinger frame",
+        "why": "a printed Z-bracket is not a collision geometry and neither arm collision model has anything to say about it: finger.obj is the wrong shape and selfcoll.BODY_CAPSULES has no finger row at all",
+        "boxes_m": [
+          [
+            [
+              -0.0105,
+              0.0185,
+              0.003842
+            ],
+            [
+              0.0345,
+              0.0265,
+              0.0178421
+            ]
+          ],
+          [
+            [
+              0.0345,
+              0.0185,
+              0.003842
+            ],
+            [
+              0.0795,
+              0.0265,
+              0.0178421
+            ]
+          ],
+          [
+            [
+              -0.0105,
+              0.008066,
+              0.0178421
+            ],
+            [
+              0.0795,
+              0.0265,
+              0.0358421
+            ]
+          ],
+          [
+            [
+              -0.009081,
+              0.008066,
+              0.0358421
+            ],
+            [
+              0.0795,
+              0.015927,
+              0.053842
+            ]
+          ]
+        ],
+        "worst_escape_m": 0.0,
+        "method": "measured off the vendored mesh on every run, then re-proved against its vertices, face centroids and edge midpoints"
+      },
+      "decimation": {
+        "faces_raw": 8234,
+        "faces_out": 8000,
+        "extent_loss_mm": 0.0
+      }
+    },
     "internals": {
       "provenance": "AUDIT",
       "order": "nose shoulder -> spring -> [shim] -> sleeve (clutch inside it) -> cap shoulder",
@@ -654,6 +754,12 @@
         "bytes": 513698,
         "sha256": "c295d569bfb4bd0547976476ce22ebe9e38891027594eaf4a540ad0cb7eba9b1",
         "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder cap v20250903.STL"
+      },
+      {
+        "file": "meshes/fatfinger/fatfinger_leftfinger.obj",
+        "bytes": 508380,
+        "sha256": "6d4fbb64dfcf9a5a3b89c980455fc1bf9f0a92539fcb083f12b6ae5d5d026669",
+        "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/Fat Franka Finger v250904.STL"
       }
     ],
     "holder_decimation": {
@@ -683,6 +789,70 @@
       ],
       "envelope_worst_escape_m": 1.08895e-07,
       "envelope_bar_m": 1e-05
+    },
+    "fat_finger": {
+      "faces_raw": 8234,
+      "faces_out": 8000,
+      "extent_loss_mm": 0.0,
+      "extent_mm": [
+        18.4338,
+        90.0,
+        50.0
+      ],
+      "frame": "panda_leftfinger",
+      "stl_y_shift_m": -0.0105,
+      "collision_boxes_m": [
+        [
+          [
+            -0.0105,
+            0.0185,
+            0.003842
+          ],
+          [
+            0.0345,
+            0.0265,
+            0.0178421
+          ]
+        ],
+        [
+          [
+            0.0345,
+            0.0185,
+            0.003842
+          ],
+          [
+            0.0795,
+            0.0265,
+            0.0178421
+          ]
+        ],
+        [
+          [
+            -0.0105,
+            0.008066,
+            0.0178421
+          ],
+          [
+            0.0795,
+            0.0265,
+            0.0358421
+          ]
+        ],
+        [
+          [
+            -0.009081,
+            0.008066,
+            0.0358421
+          ],
+          [
+            0.0795,
+            0.015927,
+            0.053842
+          ]
+        ]
+      ],
+      "collision_worst_escape_m": 0.0,
+      "joint_value_m": 0.0169337
     }
   },
   "recert": {
@@ -765,10 +935,10 @@
       "blocking": "cutting the grid"
     },
     "penholder_cradle": {
-      "what": "Does the mounted pen lean 23 deg out of tool z, or 45?",
-      "why": "THERE IS NO CRADLE.  That was the escape hatch, and the assembly closed it.  raw_slack_file_dump/'Pen holder cad(1).zip' nests 'Natural hold assembly - closed.zip', which holds the COMPLETE 10-deg build as an .SLDASM.  Resolved, it says: the two fingertips are stock FR3 tips (drilled for brass inserts, nothing more), they seat 7.000 mm into the mount post's own 18 x 18 mm end sockets, the post axis is the finger-travel axis to 0 deg, the grip centre lands 103.26 mm from panda_hand against the stock TCP's 103.4 \u2014 and the bore comes out 10.0000 deg off the hand's approach axis, which is exactly the angle in that housing's file name.  This delivery's housing is named '22 deg' and its flats measure 23.00.  Same naming, same sockets, same square-seated tips: the clocking reaches the hand undivided, so the pen leans 23 deg, not 45.",
-      "rides_on": "63.3 mm of tip position.  At the gate-validated 0.110 m of axial depth, 23 deg puts the tip 0.0467 m lateral where frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently the planner's ray needs 130.5 mm of graphite past the cap and 23 deg needs 64.4 mm.  NOTHING IS CHANGED HERE: the planning transform is gate-validated against a real touchdown and moving it is a re-certification.",
-      "answer_by": "ONE measurement on a mounted holder \u2014 the perpendicular distance from the pen tip to the gripper's approach axis. 47 mm or 110 mm; a ruler settles it.  Equivalently: the graphite protruding past the housing nose, 64 mm vs 100. Note the SIGN is a mounting choice either way \u2014 the post is square, so the holder seats both ways up and the lean is +/-23 deg.  STILL GENUINELY OPEN: which build ships, and the running robot says it is NOT the one that was assembled.  Aris_Kindt franka_control_gui.py closes on the holder with width 0.0432 and epsilon_inner 0.0, and libfranka calls a grasp successful only when the measured opening exceeds width - epsilon_inner \u2014 so 43.2 mm is a LOWER BOUND on the real jaw gap, and the 36.0 mm this CAD gives would report failure every time.  50 mm does not: that is the post's bare ends, which is what the newest finger part clamps.  'Fat Franka Finger v250904' is an 18.4 x 90 x 50 mm blade replacing the whole stock finger, and 18.4 mm cannot enter an 18.0 mm socket.  So the likely deployed configuration is Fat fingers flat on the post ends at ~50 mm, NOT stock tips seated in the sockets at 36 mm.  It changes no angle \u2014 the post is still square to the fingers either way \u2014 but it is the reason the model's 0.018 is the ASSEMBLY's number and not necessarily the rig's.",
+      "what": "Does the mounted pen lean 23 deg out of tool z, or 45 \u2014 and which fingers are on the arms?",
+      "why": "THERE IS NO CRADLE, AND THERE IS NO FEATURE ON THE FAT FINGER EITHER.  The 2026-09-02 mesh of 'Fat Franka Finger v250904' has been read (rig_final.FATFINGER, docs/SYSTEM_MODEL.md 7d).  It is drawn in the FR3 fingertip's own CAD frame \u2014 its plate hole and that tip's brass-insert axis agree to 0.0002 mm \u2014 so its place on the hand is fixed by placing the fingertip, with a worst residual of 0.155 mm against the manufacturer's own meshes.  Its contact face is ONE FLAT PLANE: two 6.000 mm holes 69 mm apart (mirror twins, because the part serves both fingers), R5 corners and nothing else.  The post has nothing to receive a pin either \u2014 rays down the 22-deg housing's post axis hit solid material at z = 5.426 and 44.574, so the socket floor is a chamfered cone and not a bore.  THE CLOCKING ABOUT THE JAW AXIS IS THEREFORE FREE unless a FINGERTIP is fitted AND seated in the housing's own 18 x 18 mm socket, which is a decision made by hand at grasp time.  45 deg and 23 deg can both be true statements about different builds.  WHAT THE ASSEMBLY ALREADY SAID, and still does: the fingertip cradle was the escape hatch, and the assembly closed it.  raw_slack_file_dump/'Pen holder cad(1).zip' nests 'Natural hold assembly - closed.zip', which holds the COMPLETE 10-deg build as an .SLDASM.  Resolved, it says: the two fingertips are stock FR3 tips (drilled for brass inserts, nothing more), they seat 7.000 mm into the mount post's own 18 x 18 mm end sockets, the post axis is the finger-travel axis to 0 deg, the grip centre lands 103.26 mm from panda_hand against the stock TCP's 103.4 \u2014 and the bore comes out 10.0000 deg off the hand's approach axis, which is exactly the angle in that housing's file name.  This delivery's housing is named '22 deg' and its flats measure 23.00.  Same naming, same sockets, same square-seated tips: the clocking reaches the hand undivided, so the pen leans 23 deg, not 45.",
+      "rides_on": "63.3 mm of tip position.  At the gate-validated 0.110 m of axial depth, 23 deg puts the tip 0.0467 m lateral where frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently the planner's ray needs 130.5 mm of graphite past the cap and 23 deg needs 94.5 mm.  NOTHING IS CHANGED HERE: the planning transform is gate-validated against a real touchdown and moving it is a re-certification.  RIDING ON IT AS WELL, since the Fat finger was read: the self-collision guard.  A 90 mm blade reaching 69 mm sideways out of the hand escapes selfcoll.BODY_CAPSULES' hand rows by 49.93 mm over the finger-joint range, where the stock finger is contained with 3.14 mm to spare, and it leaves coordination.HAND_R = 0.104 just 0.51 mm of margin at full open.  If the Fat fingers ship, the guard needs a finger row.  Reported in docs/SYSTEM_MODEL.md 7d, changed nowhere.",
+      "answer_by": "TWO measurements now, and the robot already knows one of them.  (1) THE RULER: the perpendicular distance from the mounted pen's tip to the gripper's approach axis, 47 mm or 110 mm.  Note the SIGN is a mounting choice either way \u2014 the post is square, so the holder seats both ways up and the lean is +/-23 deg.  (2) THE GRIPPER'S OWN `width` while the pen is held (franka::GripperState, or a caliper across the jaw).  `width` is 2 q, the STOCK grip plane's opening, and every build adds back how far its real contact face sits outboard of it \u2014 so ONE number picks one row out of six: 0.0287 fat plates on the bare post ends, 0.0339 fat RIBS on them (the plates cannot reach; the rib stands 2.5839 mm proud), 0.0357 fat plate + fingertip seated in the sockets, 0.0360 stock tips seated, 0.0497 fat plate + fingertip flat on the bare ends, 0.0500 stock finger faces flat on the bare ends.  See rig_final.fatfinger_widths().  WHAT THAT ALREADY RULES OUT: Aris_Kindt franka_control_gui.py closes with width 0.0432 and epsilon_inner 0.0, and libfranka calls a grasp successful only above width - epsilon_inner, so 43.2 mm is a lower bound IF the grasp succeeds \u2014 and only the two grips on the post's BARE ends clear it.  The earlier guess here, 'Fat fingers flat on the post ends at ~50 mm', is ARITHMETICALLY RULED OUT: the Fat finger's contact plate sits 10.6502 mm outboard of the stock grip plane, so that grasp reports 0.0287, not 0.0500.  Weakened, honestly: the GUI's menu path falls back to a move-close on failure, so a failing grasp still holds the pen and 0.0432 is evidence rather than proof.",
       "blocking": "pen-tip calibration"
     },
     "cable_dress": {

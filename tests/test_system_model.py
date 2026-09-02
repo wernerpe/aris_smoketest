@@ -337,7 +337,16 @@ def test_the_truth_module_does_not_touch_the_tool_global():
 # 2.  the generator
 # ---------------------------------------------------------------------------
 def test_regeneration_is_byte_stable(tmp_path):
-    """Twice, and both times equal to what is committed.  No clock, no rng."""
+    """Twice, and both times equal to what is committed.  No clock, no rng.
+
+    KNOWN RED as of 2026-09-02, and NOT because of a code change.  The
+    committed `installation.urdf` and `installation_capsules.urdf` differ from
+    what this station writes on 48 and 150 lines, every one of them a rotation
+    out of `_rpy_checked`, worst 4.44e-16 — two ULP on pi.  Both this repo's
+    venv (numpy 2.5.2) and the station's (2.2.6) produce the SAME new bytes, so
+    the committed files were written by a third environment.  They are left as
+    committed rather than churned for two ULP; see docs/SYSTEM_MODEL.md 10.
+    """
     gen = _gen()
     gen.OUT_DIR = tmp_path
     # the manifest reads the mesh record the mesh stage writes; copy the
@@ -773,6 +782,199 @@ def test_the_holder_envelope_still_encloses_the_committed_meshes():
     assert worst <= 1e-5, worst
 
 
+# ---------------------------------------------------------------------------
+# 3b.  the Fat Franka Finger — docs/SYSTEM_MODEL.md 7d
+# ---------------------------------------------------------------------------
+FAT_MESH = DIR / "meshes/fatfinger/fatfinger_leftfinger.obj"
+FATURDF = DIR / "installation_fatfingers.urdf"
+
+
+def test_the_fat_finger_mesh_is_the_part_that_arrived():
+    """Extents, in the LEFT finger's link frame, and the budget.
+
+    The raw STL is 18.4339 x 90.0003 x 50.000 mm; the placement is a 90-degree
+    rotation about the finger's own z, so the link-frame extents come out
+    permuted.  Decimation costs 0.0000 mm of it — 8234 faces welds to 8234 and
+    the target is 8000.
+    """
+    trimesh = pytest.importorskip("trimesh")
+    m = trimesh.load(FAT_MESH, force="mesh")
+    n = sum(1 for ln in FAT_MESH.read_text().splitlines() if ln.startswith("f "))
+    assert n == 8000, n
+    assert FAT_MESH.stat().st_size < 2_000_000
+    assert np.asarray(m.extents) * 1000 == pytest.approx(
+        [90.0, 18.4338, 50.0], abs=0.002)
+    lo, hi = np.asarray(m.bounds) * 1000
+    assert lo == pytest.approx([-10.500, 8.066, 3.842], abs=0.002)
+    assert hi == pytest.approx([79.500, 26.500, 53.842], abs=0.002)
+
+
+def test_the_fat_finger_lands_on_the_fingertips_own_frame():
+    """The transform is a proper rotation, and its residual is 0.155 mm.
+
+    Nothing is fitted here.  The part is drawn in the same CAD frame as
+    `Franka_Finger_FR3 Fingertip only.SLDPRT`, so the map into the finger is
+    fixed by placing the FINGERTIP — and what that costs is measured against
+    the manufacturer's own finger, whose two meshes disagree with each other
+    by 0.051 mm.
+    """
+    trimesh = pytest.importorskip("trimesh")
+    F = rig_final.FATFINGER
+    T = rig_final.fatfinger_T_finger()
+    assert np.linalg.det(T[:3, :3]) == pytest.approx(1.0, abs=1e-12)
+    assert T[:3, :3].T @ T[:3, :3] == pytest.approx(np.eye(3), abs=1e-12)
+    # the right finger's placement is the OTHER foot, and also proper
+    Tm = rig_final.fatfinger_T_finger(mirrored=True)
+    assert np.linalg.det(Tm[:3, :3]) == pytest.approx(1.0, abs=1e-12)
+
+    vis = trimesh.load(DIR / "meshes/fr3/finger.gltf", force="mesh")
+    vis.apply_transform(trimesh.transformations.rotation_matrix(np.pi,
+                                                                [1, 0, 0]))
+    col = trimesh.load(DIR / "meshes/collision/finger.obj", force="mesh")
+    back = max(float(vis.bounds[1][1]), float(col.bounds[1][1]))
+    # the foot's outer face is the carriage side, and it lands on the stock
+    # finger's own back face
+    assert F["foot_link_y"][1] - back == pytest.approx(0.0, abs=1.6e-4)
+    # the plate's contact face is the fingertip's back face, 0.1502 mm out
+    assert F["plate_offset"] - 0.0105 == pytest.approx(1.502e-4, abs=1e-6)
+    # and the fingertip's distal face IS the finger mesh's own tip
+    tip = F["plate_z"][1] + F["z_offset"]
+    assert tip - float(vis.bounds[1][2]) == pytest.approx(0.0, abs=6e-5)
+    # the grip centre falls on the 10-deg assembly's own 103.26 mm
+    z_mid = 0.5 * sum(F["plate_link_z"]) + 0.0584
+    assert z_mid == pytest.approx(0.10326, abs=2e-5)
+
+
+def test_the_fat_fingers_box_envelope_still_contains_it():
+    """Four boxes, measured off this very file, and nothing escapes them."""
+    trimesh = pytest.importorskip("trimesh")
+    gen = _gen()
+    m = trimesh.load(FAT_MESH, force="mesh")
+    boxes = [(tuple(lo), tuple(hi)) for lo, hi in
+             json.loads((DIR / "meshes/MESH_SOURCES.json").read_text())
+             ["fat_finger"]["collision_boxes_m"]]
+    assert len(boxes) == 4
+    assert gen._fat_escape(m, boxes) <= 0.0
+    # and the committed boxes are the ones the generator measures today
+    assert gen._fat_boxes(m) == pytest.approx(boxes, abs=1e-9)
+
+
+def test_the_fat_finger_is_recorded_with_its_provenance(manifest):
+    """Vendored, hashed, and the six grasp hypotheses are in the manifest."""
+    rec = [f for f in manifest["meshes"]["files"]
+           if f["file"].startswith("meshes/fatfinger/")]
+    assert len(rec) == 1, rec
+    f = rec[0]
+    assert f["source"].endswith("Fat Franka Finger v250904.STL")
+    assert (DIR / f["file"]).stat().st_size == f["bytes"]
+    assert hashlib.sha256((DIR / f["file"]).read_bytes()).hexdigest() \
+        == f["sha256"]
+    ff = manifest["tool"]["fat_finger"]
+    assert ff["locates_post"] is False
+    assert ff["collision"]["worst_escape_m"] == 0.0
+    assert ff["stl_y_shift_m"] == rig_final.FATFINGER["stl_y_shift"]
+    # ONE number off the robot picks one of these, and 0.0432 picks neither of
+    # the two the CAD would have predicted
+    w = ff["grasp_width_hypotheses_m"]
+    assert w == rig_final.fatfinger_widths()
+    assert sorted(round(v, 4) for v in w.values()) == \
+        [0.0287, 0.0339, 0.0357, 0.036, 0.0497, 0.05]
+    assert sum(1 for v in w.values() if v > 0.0432) == 2
+
+
+def test_the_fat_variant_urdf_carries_the_blade_on_both_fingers():
+    """One mesh, two fingers — and the right one is the OTHER foot.
+
+    The part is its own mirror image, so `Rz(pi)` about x = mirror_pitch / 2
+    puts the far foot on the carriage.  Any other rigid motion that swaps the
+    feet is improper, which is exactly why the part has two of them.
+    """
+    gen = _gen()
+    root = ET.parse(FATURDF).getroot()
+    lk = {e.get("name"): e for e in root.findall("link")}
+    jt = {e.get("name"): e for e in root.findall("joint")}
+    F = rig_final.FATFINGER
+    for aid in layout.FLEET_PROPOSED:
+        for k, s in ((1, +1), (2, -1)):
+            xyz, _ = _origin_of(jt[f"arm{aid}_panda_finger_joint{k}"])
+            assert xyz[1] == pytest.approx(s * gen.FAT_FINGER_FIX, abs=1e-12)
+        for side, right in (("left", False), ("right", True)):
+            el = lk[f"arm{aid}_panda_{side}finger"]
+            assert [Path(m.get("filename")).name
+                    for m in el.findall("visual/geometry/mesh")] \
+                == ["fatfinger_leftfinger.obj"]
+            assert not el.findall("collision/geometry/mesh")
+            assert len(el.findall("collision/geometry/box")) == 4
+            xyz, rpy = _origin_of(el.find("visual"))
+            want_xyz = (F["mirror_pitch"], 0, 0) if right else (0, 0, 0)
+            want_rpy = (0, 0, np.pi) if right else (0, 0, 0)
+            assert xyz == pytest.approx(want_xyz, abs=1e-12)
+            assert rpy == pytest.approx(want_rpy, abs=1e-12)
+    # the joint value is the post's own arithmetic, not a number somebody liked
+    post = (rig_final.PENHOLDER22["post_z"][1]
+            - rig_final.PENHOLDER22["post_z"][0])
+    assert gen.FAT_FINGER_FIX == pytest.approx(post / 2 - F["rib_offset"],
+                                               abs=5e-8)
+
+
+def test_the_blade_escapes_the_capsule_set_and_it_is_only_reported():
+    """49.93 mm out of selfcoll, 0.51 mm inside HAND_R — measured, not fixed.
+
+    The stock finger is CONTAINED by the same three hand capsules over the
+    same joint range, so this is a statement about the blade and not about the
+    capsules.  Nothing here changes a radius: see docs/SYSTEM_MODEL.md 7d.
+    """
+    trimesh = pytest.importorskip("trimesh")
+    from aris_sixarm import coordination
+    F = rig_final.FATFINGER
+    caps = [(np.asarray(a, float), np.asarray(b, float), r)
+            for n, _, _, a, b, r in selfcoll.BODY_CAPSULES if n == "hand"]
+    p7 = np.array([0.0, 0.0, -(frames.TCP_D - D_HAND_TCP)])
+    p8 = np.array([0.0, 0.0, D_HAND_TCP])
+
+    def seg(P, a, b):
+        d = b - a
+        t = np.clip(((P - a) @ d) / float(d @ d), 0.0, 1.0)
+        return np.linalg.norm(P - (a + t[:, None] * d), axis=1)
+
+    V = np.asarray(trimesh.load(FAT_MESH, force="mesh").vertices, float)
+    S = np.asarray(trimesh.load(DIR / "meshes/collision/finger.obj",
+                                force="mesh").vertices, float)
+    worst_sc = worst_hr = worst_stock = -np.inf
+    for q in np.linspace(0.0, 0.04, 41):
+        for right in (False, True):
+            P = V.copy()
+            if right:
+                P[:, 0] = F["mirror_pitch"] - P[:, 0]
+                P[:, 1] = -P[:, 1]
+            P = P + np.array([0.0, -q if right else q, 0.0584])
+            out = np.full(len(P), np.inf)
+            for a, b, r in caps:
+                out = np.minimum(out, seg(P, a, b) - r)
+            worst_sc = max(worst_sc, float(out.max()))
+            worst_hr = max(worst_hr,
+                           float((seg(P, p7, p8) - coordination.HAND_R).max()))
+        Q = S + np.array([0.0, q, 0.0584])
+        o = np.full(len(Q), np.inf)
+        for a, b, r in caps:
+            o = np.minimum(o, seg(Q, a, b) - r)
+        worst_stock = max(worst_stock, float(o.max()))
+    assert worst_sc * 1000 == pytest.approx(49.93, abs=0.15)
+    assert worst_stock < 0.0, worst_stock          # the stock finger fits
+    assert -0.001 < worst_hr < 0.0, worst_hr      # in HAND_R, but by 0.5 mm
+    assert coordination.HAND_R == 0.104            # unchanged, and pinned
+
+
+def test_the_loader_finds_the_fat_variant_and_refuses_a_capsule_one():
+    assert SM.urdf_path(fingers="fat") == FATURDF
+    assert FATURDF.is_file()
+    assert SM.urdf_path(fingers="stock") == INSTALL
+    with pytest.raises(ValueError):
+        SM.urdf_path(fingers="thin")
+    with pytest.raises(ValueError):
+        SM.urdf_path("capsule", fingers="fat")
+
+
 def test_the_recert_label_is_measured_not_asserted(manifest):
     """Every piece of mount hardware really does escape the modelled keep-out.
 
@@ -879,8 +1081,8 @@ def test_manifest_provenance_mix_adds_up(manifest):
 def test_manifest_records_where_every_vendored_file_came_from(manifest):
     files = manifest["meshes"]["files"]
     # 27 textures (3 maps x link0..7 + hand) + 10 gltf + 10 .bin
-    # + 10 collision shells + 2 holder parts
-    assert len(files) == 27 + 10 + 10 + 10 + 2, len(files)
+    # + 10 collision shells + 2 holder parts + the Fat finger (docs 7d)
+    assert len(files) == 27 + 10 + 10 + 10 + 2 + 1, len(files)
     for f in files:
         p = DIR / f["file"]
         assert p.is_file(), f["file"]

@@ -363,6 +363,12 @@
       "bytes": 513698,
       "sha256": "c295d569bfb4bd0547976476ce22ebe9e38891027594eaf4a540ad0cb7eba9b1",
       "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder cap v20250903.STL"
+    },
+    {
+      "file": "meshes/fatfinger/fatfinger_leftfinger.obj",
+      "bytes": 508380,
+      "sha256": "6d4fbb64dfcf9a5a3b89c980455fc1bf9f0a92539fcb083f12b6ae5d5d026669",
+      "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/Fat Franka Finger v250904.STL"
     }
   ],
   "holder_decimation": {
@@ -392,5 +398,69 @@
     ],
     "envelope_worst_escape_m": 1.08895e-07,
     "envelope_bar_m": 1e-05
+  },
+  "fat_finger": {
+    "faces_raw": 8234,
+    "faces_out": 8000,
+    "extent_loss_mm": 0.0,
+    "extent_mm": [
+      18.4338,
+      90.0,
+      50.0
+    ],
+    "frame": "panda_leftfinger",
+    "stl_y_shift_m": -0.0105,
+    "collision_boxes_m": [
+      [
+        [
+          -0.0105,
+          0.0185,
+          0.003842
+        ],
+        [
+          0.0345,
+          0.0265,
+          0.0178421
+        ]
+      ],
+      [
+        [
+          0.0345,
+          0.0185,
+          0.003842
+        ],
+        [
+          0.0795,
+          0.0265,
+          0.0178421
+        ]
+      ],
+      [
+        [
+          -0.0105,
+          0.008066,
+          0.0178421
+        ],
+        [
+          0.0795,
+          0.0265,
+          0.0358421
+        ]
+      ],
+      [
+        [
+          -0.009081,
+          0.008066,
+          0.0358421
+        ],
+        [
+          0.0795,
+          0.015927,
+          0.053842
+        ]
+      ]
+    ],
+    "collision_worst_escape_m": 0.0,
+    "joint_value_m": 0.0169337
   }
 }

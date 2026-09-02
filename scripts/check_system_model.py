@@ -17,6 +17,9 @@ WHAT IT CHECKS
      accumulation and nothing else.
   4  the tool chain: holder pose == hand pose, bore along the planner's ray,
      the 3-cylinder envelope matches rig_final exactly
+ 4b  the fat-finger variant: it parses, its finger joints sit at the DERIVED
+     value, both fingers carry the measured box envelope and the vendored
+     blade, and the blade clears the holder at that joint value
   5  every cage body == aris_sixarm.system_model, to 10 pm
   6  NO UNAUDITED PRIMITIVES: no collision sphere anywhere, and every arm
      collision geometry is either a manufacturer shell or an audited capsule.
@@ -197,6 +200,56 @@ ok("every envelope cylinder matches rig_final",
 for m in lk["arm13_pen_holder"].findall("visual/geometry/mesh"):
     ok(f"holder visual {Path(m.get('filename')).name} exists",
        (DIR / m.get("filename")).is_file())
+
+# --- 4b. the fat-finger variant -------------------------------------------
+print("\n4b. the fat-finger variant")
+FAT = DIR / "installation_fatfingers.urdf"
+if not FAT.is_file():
+    ok("installation_fatfingers.urdf exists", False, str(FAT))
+else:
+    fplant, fsg, fctx, froot = load(FAT)
+    ok("fat variant parses with the same body count",
+       fplant.num_bodies() == plant.num_bodies(),
+       f"{fplant.num_bodies()} bodies, {fplant.num_positions()} dof")
+    froot_x = ET.parse(FAT).getroot()
+    fj = {j.get("name"): j for j in froot_x.findall("joint")}
+    flk = {ln.get("name"): ln for ln in froot_x.findall("link")}
+    F = rig_final.FATFINGER
+    fix = round(0.5 * (rig_final.PENHOLDER22["post_z"][1]
+                       - rig_final.PENHOLDER22["post_z"][0])
+                - F["rib_offset"], 7)
+    for k, s in ((1, +1), (2, -1)):
+        o = fj[f"arm13_panda_finger_joint{k}"].find("origin")
+        check(f"fat finger joint{k}",
+              [float(v) for v in o.get("xyz").split()][1], s * fix, quiet=True)
+    ok("both fat finger joints sit at the derived value",
+       not [f for f in fails if "fat finger joint" in f[0]],
+       f"{fix} m -> libfranka width {2 * fix:.4f}")
+    for side in ("left", "right"):
+        el = flk[f"arm13_panda_{side}finger"]
+        ok(f"{side} finger carries the measured box envelope",
+           len(el.findall("collision/geometry/box"))
+           == len(json.loads((DIR / "meshes/MESH_SOURCES.json").read_text())
+                  ["fat_finger"]["collision_boxes_m"])
+           and not el.findall("collision/geometry/mesh"),
+           f"{len(el.findall('collision/geometry/box'))} boxes")
+        ok(f"{side} finger visual is the vendored blade",
+           [Path(m.get("filename")).name
+            for m in el.findall("visual/geometry/mesh")]
+           == ["fatfinger_leftfinger.obj"])
+    # The blade-versus-holder distance is NOT asked of drake here: the tool
+    # group ignores the wrist group by construction (the holder is held BY the
+    # fingers, so an unfiltered pair would report a grip as a collision), and a
+    # filtered query returns nothing rather than a number.  The mesh-level
+    # proof lives in tests/test_system_model.py, which has trimesh.  What is
+    # checked here is the arithmetic the joint value claims to be.
+    check("fat joint value == post half-length less the rib's reach", fix,
+          0.5 * (rig_final.PENHOLDER22["post_z"][1]
+                 - rig_final.PENHOLDER22["post_z"][0]) - F["rib_offset"],
+          tol=5e-8)
+    ok("the plates stop short of the post by the rib's own stand-off",
+       abs((F["plate_offset"] - F["rib_offset"]) - F["rib_proud"]) < 1e-6,
+       f"{(F['plate_offset'] - F['rib_offset']) * 1000:.4f} mm")
 
 # --- 5. the cage -----------------------------------------------------------
 print("\n5. the cage == aris_sixarm.system_model")

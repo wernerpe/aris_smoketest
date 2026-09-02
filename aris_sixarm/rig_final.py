@@ -689,6 +689,248 @@ def penholder22_internals_escape(spacer=None):
     return float(max(0.0, worst))
 
 
+# ===========================================================================
+# THE "FAT FRANKA FINGER" — a whole-finger replacement, as CAD (2026-09-02)
+# ===========================================================================
+# Source: raw_slack_file_dump/"Pen holder all parts 2026.08.19"/
+# "Fat Franka Finger v250904.STL" — millimetres, watertight, 8234 faces.  The
+# same solid ships as an SLDPRT two levels inside "Pen holder cad(1).zip", and
+# THE TWO DO NOT SHARE A DATUM: the STL is exported 10.5000 mm along +y off the
+# SLDPRT's own origin (x and z agree to 0.0002 mm; only y moves), and
+# `stl_y_shift` undoes that.  The shift is not a guess: see WHICH FRAME,
+# below.
+#
+# WHAT THE PART IS.  A Z-section bracket, 18.4339 x 90.0003 x 50.000 mm:
+#
+#   * a MOUNTING FOOT at each end of the 90 mm — 8.000 mm thick (x 52.0578 ..
+#     60.0578), 20 mm of y, 14 mm of z (14.000 .. 28.000) — each carrying TWO
+#     M4 CLEARANCE holes on axes along x at z = 22.000, 12.000 mm apart: a
+#     4.296 mm waist over x 55.06 .. 57.06 with a 7.293 mm counterbore 3.0 mm
+#     deep from BOTH faces, so the foot bolts up either way round;
+#   * a SLANTED WEB, 8 mm thick, face normals +/-(0.8412, 0, -0.5407), rising
+#     over z 28 .. 46 and carrying the section from x 52..60 out to x 64..68;
+#   * a CONTACT PLATE, 3.8498 mm thick (x 64.0578 .. 67.9076), z 46.000 ..
+#     64.000, spanning the full length, with TWO 6.000 mm through-holes at
+#     z = 55.000, 69.000 mm apart, and R5 corners;
+#   * a RIB along the plate's PROXIMAL edge — the web's own outer face, run
+#     past the plate plane and then flat-topped at x = 70.4915 over z 45.509 ..
+#     46.000.  It stands 2.5839 mm proud of the contact plane, for the full
+#     90 mm, at every station sampled.  It is the innermost thing on the part,
+#     and (see below) it is what a BARE blade would touch first.
+#
+# EVERY FEATURE IS DOUBLED, and that is the design.  The part is mirror-
+# symmetric about y = 34.5 to 0.44 mm over everything that mates — both feet,
+# all four foot holes, both plate holes, both plate faces — and 99.05 % by
+# volume.  The two ends differ ONLY in the plate's outer edge (y = +79.500 at
+# one end, -9.000 at the other) and one R5 corner: 1.5045 mm, worst case.  Bolt
+# the near foot down and the blade reaches +69 mm along the finger's x; bolt
+# the far foot down and it reaches -69 mm.  Those two placements are the mirror
+# pair a LEFT and a RIGHT finger need if both blades are to reach THE SAME WAY
+# in the hand — which is why one printed part serves both, and why there are
+# two of everything.  (A 180-degree rotation about any one axis will not do
+# it: the map that swaps the feet is improper, and only the part's own mirror
+# symmetry makes it realisable.)
+#
+# WHICH FRAME — AND THIS IS THE LOAD-BEARING FINDING.  The SLDPRT is drawn in
+# the SAME coordinate system as "Franka_Finger_FR3 Fingertip only.SLDPRT", the
+# stock tip the 10-deg assembly seats in the post sockets.  Three independent
+# things say so, and none of them is a fit:
+#
+#   1. that fingertip is an 18.1156 mm square block on x 68.0578 .. 78.5578,
+#      centred on (y, z) = (0.0004, 55.000);
+#   2. the "Rodgers fingertip" sub-assembly presses its one 93514A130 brass
+#      insert on the axis (y, z) = (0.0004, 55.000) — and THIS part's plate
+#      hole is on (0.0002, 54.9998).  0.0002 mm apart;
+#   3. this part's plate occupies exactly the fingertip's own z band and lands
+#      0.1502 mm outboard of the fingertip's back face.
+#
+# So the map into the finger link frame is fixed by placing the FINGERTIP, and
+# the fingertip's place is already known (docs/SYSTEM_MODEL.md 7a):
+#
+#     link x =  cad y                (across the hand; the tip is centred)
+#     link y =  0.0785578 - cad x    (jaw axis; cad x 78.5578 IS the grip
+#                                     plane, where libfranka's width/2 is)
+#     link z =  cad z - 0.0101579    (finger length; the tip's distal face IS
+#                                     the finger mesh's own tip)
+#
+# a proper rotation (det +1, Rz(-90 deg)) plus a translation, no scaling and no
+# free parameter.  Residuals against the manufacturer's own finger: foot outer
+# face vs the finger's back face +0.155 mm (visual) / +0.097 (collision); plate
+# contact face vs the fingertip's back face +0.150; grip plane vs the finger's
+# own inner face +0.084 / +0.133; tip z 0.000 / +0.051.  WORST 0.155 mm, and
+# the two manufacturer meshes disagree with each other by 0.051.  Independent
+# check: the plate's z centre lands at panda_hand z = 103.242 mm against the
+# 10-deg assembly's own grip centre of 103.26 and the stock TCP's 103.4.
+#
+# WHAT IT MEANS FOR THE GRIP — see docs/SYSTEM_MODEL.md 7d.  The contact face
+# sits 10.6502 mm OUTBOARD of the stock grip plane and the rib 8.0663, so the
+# gap between two of these is `2 q + 21.3004` at the plates and `2 q + 16.1326`
+# at the ribs, where q is the finger joint and 2 q is what libfranka reports as
+# `width`.  TWO READINGS OF THE PLATE, and this module does not choose:
+#
+#   A  THE PLATE GRIPS.  Then it never reaches the post: closing on the 50 mm
+#      post ends, the RIB lands first, at q = 16.9337 mm (25.000 post half-
+#      length less the rib's own 8.0663), leaving the plates 2.5839 mm off.
+#      Measured, not argued: bisecting q against the committed holder meshes
+#      gives 16.9337 mm and names the rib crest as the touching vertex.
+#      libfranka width 0.0339.
+#   B  THE PLATE CARRIES THE STOCK FINGERTIP, and four measurements point at
+#      it.  The flat band between the rib and the plate's far edge is 18.000
+#      mm and the FR3 fingertip is an 18.1156 mm square.  The 6.000 mm hole is
+#      centred in that band on the fingertip's own brass-insert axis, 0.0002
+#      mm out.  The plate face is 0.1502 mm outboard of the fingertip's back
+#      face, i.e. exactly a seat.  And with the tips seated in the post's own
+#      sockets (the 10-deg assembly's 36.0008 mm), the rib clears the post by
+#      0.916 mm — which is a tight fit, not a coincidence.  Grip face at link
+#      y = 0.1502, gap `2 q + 0.3004`.
+#
+# NOTHING ON THIS FINGER LOCATES THE POST EITHER WAY.  The contact face is one
+# flat plane, the two holes are 69 mm apart where the post is 26 mm square, and
+# the post's end faces have no bore for a pin (rays down the post axis of the
+# 22-deg housing hit solid material at z = 5.426 and 44.574 — the socket floor
+# is a chamfered cone).  The only thing in the whole system that fixes the
+# clocking is the housing's own 18 x 18 socket closing on a FINGERTIP, and
+# whether a fingertip is fitted and seated is a decision made by hand.  Read
+# against the running GUI's `width = 0.0432` with `epsilon_inner = 0.0`, the
+# only configurations that clear 43.2 mm are grips on the post's BARE 50 mm
+# ends (0.0497 with a tip on the plate, 0.0500 with a stock finger) — and a
+# bare post end is a flat 26 mm square with nothing to key into.  So the pen's
+# lean out of the approach axis is set at grasp time, not by the CAD.
+FATFINGER = dict(
+    parent="panda_leftfinger / panda_rightfinger",
+    source='raw_slack_file_dump/"Pen holder all parts 2026.08.19"/'
+           '"Fat Franka Finger v250904.STL" (mm, watertight, 8234 faces); '
+           'same solid as "Fat Franka Finger v250904.SLDPRT" in '
+           '"Pen holder cad(1).zip"',
+    # --- the STL's own frame ---
+    stl_y_shift=-0.010500,        # STL -> SLDPRT datum, y only (x, z agree)
+    extent=(0.0184339, 0.0900003, 0.050000),
+    # --- CAD (SLDPRT) frame, metres ---
+    plate_x=(0.0640578, 0.0679076),   # (back face, CONTACT face)
+    plate_z=(0.046000, 0.064000),
+    plate_y=(-0.009000, 0.079500),    # the 1.5 mm the two ends differ by
+    plate_hole_d=0.006000,            # 5.994..6.000 over the bore, chamfered
+    plate_hole_y=(0.0, 0.069000),
+    plate_hole_z=0.055000,            # 18.000 of flat, rib to far edge —
+                                      # and the FR3 fingertip is 18.1156 square
+    rib_x=0.0704915,                  # the rib crest, cad x
+    rib_z=(0.045509, 0.046000),       # the flat top of it
+    rib_proud=0.0025839,              # how far past the contact plane
+    foot_x=(0.0520578, 0.0600578),    # (OUTER face -> carriage, inner face)
+    foot_z=(0.014000, 0.028000),
+    foot_y=((-0.010500, 0.009500), (0.059500, 0.079500)),
+    foot_hole_d=0.004296,             # M4 clearance waist, x 55.06..57.06
+    foot_hole_cbore_d=0.007293,       # 3.0 mm deep from BOTH faces
+    foot_hole_y=(-0.006000, 0.006000, 0.063000, 0.075000),
+    foot_hole_z=0.022000,
+    web_normal=(0.8412, 0.0, -0.5407),
+    mirror_y=0.034500,                # the part's own mirror plane
+    mirror_worst=0.0015045,           # and how far it misses being one
+    mirror_volume_fraction=0.99049,
+    # --- the placement, CAD -> panda_leftfinger ---
+    grip_face_x=0.0785578,            # cad x of the FR3 fingertip's grip plane
+    z_offset=-0.0101579,              # cad z -> link z
+    mirror_pitch=0.069000,            # left <-> right, about link z at x/2
+    # --- what falls out, in the finger link frame ---
+    plate_offset=0.0106502,           # contact face, link y  (the whole story)
+    rib_offset=0.0080663,             # the rib crest, link y — the innermost
+    fingertip_offset=0.0001502,       # a tip ON the plate would grip here
+    plate_link_z=(0.0358421, 0.0538421),
+    foot_link_y=(0.018500, 0.026500),
+    foot_hole_link=((-0.006, 0.0118421), (0.006, 0.0118421)),
+    # --- COLLISION.  A printed Z-bracket is not a collision geometry and the
+    # convex hull of one swallows the concavity whole, so this follows
+    # PENHOLDER22's own convention: a PRIMITIVE ENVELOPE, MEASURED off the
+    # vendored mesh rather than typed in, and re-proved on every generator run
+    # (`gen_system_model.vendor_fat_finger`).  The part cuts naturally into
+    # three z bands at the CAD's own steps — foot, web, plate — and the foot
+    # band into two boxes at the part's mirror plane, because the two feet have
+    # 48.6 mm of air between them.  Each box is that cell's AABB, so the web's
+    # fills the Z's concave side: conservative, which is the direction an
+    # envelope is allowed to be wrong in.  The two foot boxes ABUT on the split
+    # rather than stopping at their own geometry, so a triangle drawn across
+    # that air has its middle in a box rather than in neither.
+    collision_bands=(0.0178421, 0.0358421),   # link z cuts = cad z 28 and 46
+    collision_foot_split=0.034500,            # the foot band's own x cut
+    collision_overlap=0.000500,               # z slop when fitting the AABBs
+    insert="93514A130 flanged barbed insert, flange 7.9248 mm — the same one "
+           "the Rodgers fingertip carries, on the same axis to 0.0002 mm",
+    locates_post=False,
+    locates_post_why="the contact face is one flat plane (1516 mm^2, the "
+                     "part's largest) broken only by the two 6.000 mm holes "
+                     "and the R5 corners; the holes are 69 mm apart and the "
+                     "post is 26 mm square, so at most one can face it; and "
+                     "the post's end faces have no bore for a pin to enter "
+                     "(measured on the 22-deg housing STL: rays down the post "
+                     "axis hit solid material at z = 5.426 and 44.574).  The "
+                     "clocking about the jaw axis is FREE unless a FINGERTIP "
+                     "is fitted and seated in the housing's own 18 x 18 mm "
+                     "socket, which is a decision made by hand.",
+)
+
+
+def fatfinger_widths():
+    """The `width` libfranka would report, per grasp hypothesis -> dict.
+
+    One number off the running robot settles which build is on the arms, and
+    these are the five it has to choose between.  `width` is 2 q, the STOCK
+    grip plane's opening; each row adds back how far that build's real contact
+    face sits outboard of it.
+    """
+    F = FATFINGER
+    post = PENHOLDER22["post_z"][1] - PENHOLDER22["post_z"][0]      # 0.050
+    socket = 0.007
+    seated = post - 2 * socket                                      # 0.036
+    return {
+        "fat plates on the bare post ends":
+            round(post - 2 * F["plate_offset"], 6),
+        "fat RIBS on the bare post ends (the plates cannot reach)":
+            round(post - 2 * F["rib_offset"], 6),
+        "fat plate + fingertip, seated in the sockets":
+            round(seated - 2 * F["fingertip_offset"], 6),
+        "fat plate + fingertip, flat on the bare post ends":
+            round(post - 2 * F["fingertip_offset"], 6),
+        "stock finger, tips seated in the sockets": round(seated, 6),
+        "stock finger, faces flat on the bare post ends": round(post, 6),
+    }
+
+
+def fatfinger_T_finger(mirrored=False):
+    """(4,4) panda_leftfinger <- the Fat finger STL (metres).
+
+    `mirrored=True` gives the placement on the OTHER finger — the far foot
+    bolted down instead of the near one — which is a proper rotation only
+    because the part is its own mirror image (see FATFINGER's docstring).
+    In the right finger's own link frame it is `Rz(pi)` about x = 34.5 mm.
+    """
+    F = FATFINGER
+    T = np.eye(4)
+    T[:3, :3] = np.array([[0.0, 1.0, 0.0],
+                          [-1.0, 0.0, 0.0],
+                          [0.0, 0.0, 1.0]])
+    T[:3, 3] = (F["stl_y_shift"], F["grip_face_x"], F["z_offset"])
+    if not mirrored:
+        return T
+    M = np.diag([-1.0, -1.0, 1.0, 1.0])
+    M[0, 3] = F["mirror_pitch"]
+    return M @ T
+
+
+def fatfinger_jaw_gap(q):
+    """Finger joint value `q` (m) -> the gap between the two contact plates.
+
+    libfranka reports `2 q` as the gripper `width`; the plates add
+    `2 * plate_offset` because they sit that far outboard of the stock grip
+    plane.  The inverse is `fatfinger_width_for_gap`.
+    """
+    return 2.0 * (float(q) + FATFINGER["plate_offset"])
+
+
+def fatfinger_width_for_gap(gap):
+    """Gap between the plates (m) -> the `width` libfranka would report."""
+    return float(gap) - 2.0 * FATFINGER["plate_offset"]
+
+
 def _point_box_d(P, lo, hi):
     """(...,3) points vs one box -> (...,) distance (0 inside)."""
     d = np.maximum(np.maximum(lo - P, P - hi), 0.0)

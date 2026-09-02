@@ -54,6 +54,7 @@ def _rel(p):
         return Path(p)
 
 URDF = ROOT / "assets/system_model/installation.urdf"
+TAG = ""          # inserted into every output name; see --tag
 MM = SM.MM
 CW, CL = SM.CANVAS_W / MM, SM.CANVAS_L / MM     # 1.8034 x 3.63064 m
 MID = np.array([CW / 2, CL / 2, 0.45])
@@ -134,7 +135,8 @@ def pose_fleet(plant, ctx):
                 ctx, float(q[i]))
 
 
-def stills(out_dir, width, height):
+def stills(out_dir, width, height, views=None):
+    want = None if not views else set(views)
     b, plant, sg = build()
     # the holder close-up needs a pose to aim at, so build the plant once,
     # solve the fleet, then read arm 31's hand out of it
@@ -149,6 +151,8 @@ def stills(out_dir, width, height):
     b, plant, sg = build()
     sensors = {}
     for name, eye, target, fov in VIEWS:
+        if want is not None and name not in want:
+            continue
         if name == "holder":
             # Frame the hand-plus-holder-plus-graphite, about 0.19 m of
             # subject.  Hold the EYE at a fixed 0.50 m from the subject centre
@@ -169,7 +173,7 @@ def stills(out_dir, width, height):
     pose_fleet(plant, plant.GetMyContextFromRoot(root))
     for name, s in sensors.items():
         img = s.color_image_output_port().Eval(s.GetMyContextFromRoot(root))
-        p = out_dir / f"system_model_{name}.png"
+        p = out_dir / f"system_model_{TAG}{name}.png"
         Image.fromarray(np.asarray(img.data)[:, :, :3]).save(p)
         print(f"wrote {_rel(p)}  ({p.stat().st_size / 1e6:.2f} MB)")
 
@@ -191,14 +195,29 @@ def meshcat_html(out_dir):
 
 
 def main():
+    global URDF, TAG
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="out")
     ap.add_argument("--width", type=int, default=2400)
     ap.add_argument("--no-html", action="store_true")
+    # the fat-finger variant is a SECOND scene, not a replacement, so it gets
+    # its own file names rather than overwriting the stock renders
+    ap.add_argument("--urdf", default=None,
+                    help="which scene to render (default installation.urdf; "
+                         "installation_fatfingers.urdf is the other one)")
+    ap.add_argument("--tag", default="",
+                    help="inserted into every output name, e.g. 'fatfingers_'")
+    ap.add_argument("--views", default="",
+                    help="comma-separated subset of "
+                         + ",".join(v[0] for v in VIEWS))
     a = ap.parse_args()
+    if a.urdf:
+        URDF = Path(a.urdf) if Path(a.urdf).is_absolute() else ROOT / a.urdf
+    TAG = a.tag
     out_dir = ROOT / a.out
     out_dir.mkdir(parents=True, exist_ok=True)
-    stills(out_dir, a.width, int(a.width * 0.66))
+    stills(out_dir, a.width, int(a.width * 0.66),
+           [v for v in a.views.split(",") if v])
     if not a.no_html:
         meshcat_html(out_dir)
 

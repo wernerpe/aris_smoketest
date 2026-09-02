@@ -10,11 +10,13 @@ tests `tests/test_system_model.py`.
 
 ```
 python3 scripts/gen_system_model.py all           # meshes + URDFs + manifest
+python3 scripts/gen_system_model.py urdf --fingers stock|fat|both
 <station venv>/bin/python scripts/check_system_model.py
 <station venv>/bin/python scripts/render_system_model.py
 ```
 
-`<station venv>` = `/home/franka/git/franka_manipulation_station/.venv`.
+`<station venv>` = `/home/franka/git/franka_manipulation_station/.venv`. The
+repo's own venv (numpy, scipy, trimesh, pytest) is `.venv` — see the README.
 
 From python, so nothing hardcodes the layout:
 
@@ -22,6 +24,7 @@ From python, so nothing hardcodes the layout:
 from aris_sixarm import system_model as SM
 SM.urdf_path()                      # installation.urdf, manufacturer shells
 SM.urdf_path("capsule")             # installation_capsules.urdf
+SM.urdf_path(fingers="fat")         # installation_fatfingers.urdf  (§7d)
 SM.urdf_path(with_arms=False)       # environment.urdf
 SM.manifest_path()                  # model_manifest.json
 SM.report()                         # the dimensions, as text
@@ -511,6 +514,224 @@ a finer mesh follows the true barrel more closely and pokes a tenth of a
 printer layer proud of one band. It is reported, not hidden —
 `meshes.holder_decimation.envelope_worst_escape_m` in the manifest.)
 
+### 7d. The Fat Franka Finger — the mesh arrived, and it moves the argument
+
+`Fat Franka Finger v250904.STL` landed on 2026-09-02 (8234 faces, watertight,
+sha256 `b1a79369…`, 18.4339 × 90.0003 × 50.000 mm). §7a had it from the SLDPRT's
+bounding box alone and called it "a blade replacing the whole stock finger".
+That is right, and the mesh says a good deal more.
+
+**It is drawn in the FR3 fingertip's own frame, and that fixes the transform
+with no free parameter.** The same zip carries
+`Franka_Finger_FR3 Fingertip only.SLDPRT` — the stock tip the 10° assembly
+seats in the post sockets — and the two parts share one coordinate system:
+
+| | |
+|---|---|
+| the fingertip's `93514A130` brass-insert axis (from the `Rodgers fingertip` sub-assembly) | (y, z) = **(0.0004, 55.000)** |
+| this part's contact-plate hole | (y, z) = **(0.0002, 54.9998)** |
+| the fingertip block | x 68.0578 … 78.5578, an 18.1156 mm square |
+| this part's plate | occupies exactly that z band, 0.1502 mm outboard of the tip's back face |
+
+One caveat that is not a rounding error: **the STL and the SLDPRT do not share
+a datum.** The STL is exported **10.5000 mm along +y** off the part origin (x
+and z agree to 0.0002 mm; only y moves), and it is the SLDPRT's datum that puts
+the plate hole on the finger centreline. `rig_final.FATFINGER["stl_y_shift"]`
+carries it.
+
+So the placement is fixed by placing the *fingertip*, which §7a already did:
+
+```
+link x =  cad y                    across the hand — the tip is centred
+link y =  0.0785578 - cad x        the jaw axis; cad x 78.5578 IS the grip plane
+link z =  cad z - 0.0101579        the finger length; the tip's distal face is
+                                   the finger mesh's own tip
+```
+
+a proper rotation (det +1, `Rz(−90°)`) and a translation. **Residuals against
+the manufacturer's own finger: 0.155 mm worst** — foot outer face vs the
+finger's back face +0.155 (visual) / +0.097 (collision), plate face vs the
+fingertip's back face +0.150, grip plane vs the finger's inner face +0.084 /
++0.133, tip z 0.000 / +0.051. The two manufacturer meshes disagree with *each
+other* by 0.051 mm, so 0.155 is about as tight as this can be held.
+Independently: the plate band's centre lands at `panda_hand` z = **103.242 mm**
+against the 10° assembly's own grip centre of 103.26 and the stock TCP's 103.4.
+
+**In the finger link frame, then:**
+
+| feature | link x | link y | link z |
+|---|---|---|---|
+| mounting foot (×2) | −10.500 … 9.500 / 59.500 … 79.500 | 18.500 … 26.500 | 3.842 … 17.842 |
+| its two M4 holes (Ø4.296 waist, Ø7.293 counterbore **both** faces) | ±6.000 | along y | 11.842 |
+| slanted web | full | 26.500 → 8.066 | 17.842 … 35.842 |
+| **rib** (the web's own top, flat-cut) | full | **8.066** | 35.351 … 35.842 |
+| **contact plate** | −9.000 … 79.500 | **10.650** … 14.500 | 35.842 … 53.842 |
+| its two Ø6.000 holes | 0.000 and 69.000 | along y | 44.842 |
+
+**Why there are two of everything.** The part is its own mirror image about
+y = 34.5 — 0.44 mm over every mating feature, 99.05 % by volume, the two ends
+differing only in the plate's outer edge (+79.500 one end, −9.000 the other,
+1.5045 mm) and one R5 corner. Bolt the near foot down and the blade reaches
++69 mm along the finger's x; bolt the far foot down and it reaches −69. Those
+are the two placements a LEFT and a RIGHT finger need if both blades are to
+reach **the same way in the hand** — and no single 180° rotation gets you
+there, because the map that swaps the feet is improper. Only the part's own
+mirror symmetry makes it realisable. One printed part, two fingers.
+
+**The rib is the thing nobody had.** Along the plate's proximal (hand-side)
+edge the web's outer face runs *past* the contact plane and is flat-cut at
+cad x = 70.4915: **2.5839 mm proud, for the full 90 mm, at every station
+sampled.** It is the innermost feature on the part, so the jaw gap between two
+of these is
+
+```
+2 q + 21.3004 mm   at the plates      (q = the finger joint; 2 q is libfranka's `width`)
+2 q + 16.1326 mm   at the ribs
+```
+
+#### The deployed-grasp question
+
+**(a) Nothing on this finger locates the post.** The contact face is one flat
+plane — 1516 mm², the part's largest — broken only by the two Ø6.000 holes and
+the R5 corners. The holes are 69.000 mm apart where the post is 26 mm square,
+so at most one can ever face it; they are mirror twins of a single feature, not
+a two-point pattern. And the post has nothing to receive a pin: rays down the
+22° housing's post axis hit **solid material at z = 5.426 and 44.574** — the
+socket floor is a chamfered cone, not a bore. The Ø6.000 hole is the
+installation hole for the same `93514A130` flanged barbed insert the Rodgers
+fingertip carries, on the same axis to 0.0002 mm; it is a fastener hole, and
+there is nothing on the post for a fastener to reach.
+
+Two readings of the plate follow, and this model does not choose between them:
+
+- **A — the plate grips.** Then it never reaches the post. Closing on the bare
+  50 mm ends, the **rib** lands first, at q = 25.000 − 8.0663 = **16.9337 mm**,
+  leaving the plates 2.5839 mm off. Measured, not argued: bisecting the blade
+  against the committed holder meshes returns the same 16.9337 mm and names the
+  rib crest as the touching vertex.
+- **B — the plate carries the stock fingertip**, and four measurements point at
+  it. The flat band between the rib and the plate's far edge is **18.000 mm**
+  and the FR3 fingertip is an **18.1156 mm** square. The Ø6.000 hole is centred
+  in that band on the tip's own insert axis. The plate face is 0.1502 mm
+  outboard of the tip's back face, i.e. exactly a seat. And with the tips
+  seated in the post's sockets at the assembly's own 36.0008 mm, the rib clears
+  the post by **0.916 mm**.
+
+**(b) The clocking is free, and the lean is set by hand.** Under reading A two
+flat plates on a square post's ends leave the rotation about the jaw axis
+unconstrained. Under reading B it is constrained *only* if a fingertip is
+fitted **and** seated in the housing's own 18 × 18 mm socket — which is a
+decision made at grasp time, not a CAD fact. So **45° and 23° can both be true
+statements about different builds**: 23° is what the housing's flats clock a
+*seated* fingertip to, and the gate-validated 45° is what somebody's hands
+produced on the arms. Nothing here moves `frames.PEN_LAT_HOLDER`.
+
+**(c) The jaw opening, and the 43.2 mm does not fit.** `width` is 2 q, the
+*stock* grip plane's opening; each build adds back how far its real contact
+face sits outboard of it:
+
+| build | libfranka `width` | vs the GUI's 0.0432 |
+|---|---:|---|
+| fat plates on the bare post ends | **0.0287** | FAIL |
+| fat **ribs** on the bare post ends (the plates cannot reach) | **0.0339** | FAIL |
+| fat plate + fingertip, seated in the sockets | 0.0357 | FAIL |
+| stock fingertips seated in the sockets (the 10° assembly) | 0.0360 | FAIL |
+| **fat plate + fingertip, flat on the bare post ends** | **0.0497** | pass |
+| **stock finger faces flat on the bare post ends** | **0.0500** | pass |
+
+The fat blade's reachable gap is 21.300 … 101.300 mm, so it can *reach* 50 mm —
+at `width` 0.0287, which `grasp(0.0432, epsilon_inner=0.0)` would report as a
+failure every time. **§7a's guess — "Fat fingers flat on the post ends at
+~50 mm" — is arithmetically ruled out by the plate offset the mesh now gives.**
+Only the two grips on the post's **bare** ends clear 43.2 mm, and both of them
+put a *fingertip* or the stock finger's own face on the post, not the blade.
+
+One honest weakening of the 43.2 mm evidence while we are here: the GUI's menu
+path falls back to `open_gripper(width=0.001)` when the grasp reports failure,
+so a failing `grasp` still ends up holding the pen and nobody would notice. The
+constant is best read as "somebody tuned this until arm 13 reported success",
+which is evidence, not proof.
+
+**(d) The holder's pose, and what the tip does.** Post centred between the
+plates, on the plate band's own centre height:
+
+| | `panda_hand` |
+|---|---|
+| grip centre | (0, 0, **0.103242**) — 0.158 mm inboard of the stock TCP |
+| post axis | hand **y**, by construction |
+| bore | ⊥ the post, so it lies in the hand's x–z plane |
+| lean out of hand z | **free** |
+
+(Under reading A with the post butted against the rib rather than centred, the
+grip centre sits at z = **0.107242** instead — 3.842 mm further out, because a
+26 mm post cannot lie inside an 18 mm band.)
+
+Pen tip, holding the gate-validated 0.110 m of axial depth:
+
+| lean | tip, `panda_hand` | vs the current transform |
+|---|---|---:|
+| 45° (planner, gate-validated) | (0.110, 0, 0.213242) | 0.158 mm |
+| 23° (the housing's flats) | (0.046692, 0, 0.213242) | **63.31 mm** |
+
+The 63.3 mm of §7a is unchanged. What has changed is that there is now no
+mechanism left that *could* have carried 22° of difference: not a cradle (§7a),
+not the fingertip sockets (§7a), and not this blade.
+
+**The measurements that close it — now TWO.**
+
+1. **The perpendicular distance from the mounted pen's tip to the gripper's
+   approach axis.** 47 mm or 110 mm; a ruler settles it. Unchanged from §7a.
+2. **The gripper's own `width` while the pen is held** — read it off
+   `franka::GripperState`, or caliper the jaw. One number picks one row out of
+   the six in the table above, and with it: which fingers are on the arms,
+   whether a fingertip is fitted, and whether it is seated in the socket (which
+   is the only thing in the whole system that would fix the lean).
+
+#### In the model
+
+`installation_fatfingers.urdf` — the same scene as `installation.urdf` with the
+blade in place of the stock finger. `python3 scripts/gen_system_model.py urdf
+--fingers stock|fat|both`; `SM.urdf_path(fingers="fat")`. The three original
+URDFs are **byte-identical**; `model_manifest.json` and `meshes/MESH_SOURCES.json`
+grow by one record each.
+
+- **Mesh** `meshes/fatfinger/fatfinger_leftfinger.obj`, in the LEFT finger's
+  link frame, weld-then-decimate 8234 → 8000 faces, **0.0000 mm of extent
+  lost**. The right finger uses the same file under `rpy = (0, 0, π)`,
+  `xyz = (0.069, 0, 0)` — which *is* the other foot bolted down.
+- **Collision: four axis-aligned boxes**, measured off the vendored mesh on
+  every run (three contiguous z bands at the CAD's own steps, the foot band
+  split at the part's mirror plane) and re-proved against its vertices, face
+  centroids and edge midpoints. **Worst escape 0.000000 mm.** A convex hull was
+  rejected: it swallows the Z's concavity whole.
+- **Joint value** `FAT_FINGER_FIX = 0.0169337` — reading A's number, the
+  tightest the bare blade closes on this holder. It is what the URDF *draws*,
+  not a claim about the arms.
+
+#### Does the blade escape the envelopes the planner trusts? — REPORTED, NOT FIXED
+
+Worst over the whole finger-joint range (q ∈ [0, 0.040]), both fingers, against
+the vendored mesh:
+
+| envelope | stock finger | **Fat blade** |
+|---|---:|---:|
+| `selfcoll.BODY_CAPSULES` hand rows (r 0.040–0.050) | contained, 3.14 mm spare | **escapes by 49.93 mm** |
+| `coordination.HAND_R = 0.104` | contained, 36.79 mm spare | contained, **0.51 mm** spare |
+
+**The self-collision capsule set does not contain this finger.** That is not a
+surprise and it is not a bug in the capsules: §5 already says
+`BODY_CAPSULES` has **no finger row at all** — the finger is gripped shut
+around the holder and the holder's own envelope is what the guard watches
+there. A 90 mm blade reaching 69 mm sideways out of the hand is a different
+object, and the capsule set was never asked about it. At the modelled grasp
+(q = 16.93 mm) the escape is 41.17 mm.
+
+`HAND_R` still contains it — but by **0.51 mm at full open**, which is a margin
+and not a clearance. Nothing here is changed: no capsule radius,
+`frames.PEN_LAT_HOLDER`, `FINGER_FIX`, the gate constants or the layout. If the
+Fat fingers are what ship, the self-collision guard needs a finger row and
+`HAND_R` needs re-deriving, and both are re-certifications with their own gate.
+
 ## 8. Open physical questions — for Pete
 
 All seven are in `system_model.OPEN_QUESTIONS` and in the manifest, each with
@@ -541,7 +762,12 @@ what rides on it and what would answer it.
    floor-referenced dimension. 716.4 mm of modelled boom rides on it, and so
    does whether the cage fits the room at all. *Blocks: cutting the grid.*
 
-4. **Pen holder cradle.** §7. *Blocks: pen-tip calibration.*
+4. **Pen holder cradle.** §7, and now §7d: the Fat finger's mesh has arrived
+   and it carries no cradle either — the plate is flat, and the only thing in
+   the system that would fix the lean is a fingertip seated in the housing's
+   own socket. **Two** measurements close it now, and one of them is a number
+   the robot already knows: its own grasp `width`. *Blocks: pen-tip
+   calibration.*
 
 5. **Cage legs.** Correcting the datum turns the cage from something hanging
    off a room ceiling into something standing on the floor — and the re-issued
@@ -587,8 +813,22 @@ AUDIT**; the tool **geometry** is AUDIT and its **placement** is ASSUMED.
 | collision spheres in either file | **0** |
 | arm collision bodies | 66 manufacturer shells / 186 audited capsules |
 | dangling glTF references | **0** |
-| URDF regeneration | byte-stable, twice, equal to what is committed |
-| **clean-room rebuild** | `gen_system_model.py all` into an empty directory reproduces **all 64 committed files byte for byte** — textures, glTFs, shells, the re-decimated holder, the URDFs and the manifest |
+| URDF regeneration | byte-stable, twice — see the note below |
+| **clean-room rebuild** | `gen_system_model.py all` into an empty directory reproduces textures, glTFs, shells, the re-decimated holder, the Fat finger, the URDFs and the manifest |
+| fat-finger variant (§7d) | parses, 186 bodies / 42 DOF, joints at the derived value, 4 measured boxes per finger, envelope escape **0.000000 mm** |
+
+**A note on "equal to what is committed".** As of 2026-09-02 the committed
+`installation.urdf` and `installation_capsules.urdf` **do not** reproduce byte
+for byte on this station, and it is not a code change: 48 and 150 lines
+respectively differ, every one of them a rotation written by `_rpy_checked`,
+and the worst difference is **4.44e-16** — two ULP on π, i.e. sub-attometre at
+the tip. Both this repo's venv (numpy 2.5.2) and the station's (numpy 2.2.6)
+produce the *same* new bytes, so the committed files were written by a third
+environment whose matmul rounded one bit the other way.
+`test_regeneration_is_byte_stable` fails on that and was already failing before
+§7d was added. **The two files are left as committed** — regenerating them
+would churn 198 lines of a certified-adjacent asset for two ULP — and this row
+is here so nobody re-derives the finding from scratch.
 | **arm inside the steel at a park pose** | **none**, in either collision variant |
 | **static bodies interpenetrating** | **none** — all 77 checked pairwise |
 
@@ -637,6 +877,17 @@ here is picometres rather than nanometres.
 `_drop_cluster.png`, `_holder.png` (2400 px, PBR, shadows) and
 `system_model.html` (static meshcat, 32.6 MB). Arms are posed at
 `Q_PARK_PROPOSED`.
+
+`--urdf`, `--tag` and `--views` render a second scene without overwriting the
+first — the fat-finger close-up of §7d is
+
+```
+<station venv>/bin/python scripts/render_system_model.py \
+    --urdf assets/system_model/installation_fatfingers.urdf \
+    --tag fatfingers_ --views holder --no-html
+```
+
+→ `out/system_model_fatfingers_holder.png`.
 
 ## 12. Relationship to `assets/proposed_rig/`
 
