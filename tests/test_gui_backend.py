@@ -261,6 +261,51 @@ def test_cancel_kills_the_process_group(client, picture):
     assert ev[-1]["payload"].get("cancelled") is True
 
 
+def test_non_finite_numbers_survive_as_null_not_as_broken_json(tmp_path):
+    """`JSON.parse` refuses `Infinity`, and one of them killed a whole batch.
+
+    `sequence.solve` returns inf for a bag with no feasible tour, so this is a
+    value the planner really emits — and python's json writes it happily while
+    every browser refuses it.
+    """
+    import numpy as np
+    from aris_sixarm.gui.jobs import finite
+    from aris_sixarm.gui.worker import EventWriter
+
+    ev = {"seq": 1, "t": 0.0, "wall": 0.0, "kind": "item",
+          "stage": "allocation",
+          "payload": {"transit_s": float("inf"),
+                      "f32": np.float32("nan"),
+                      "f64": np.float64("-inf"),
+                      "arr": np.array([1.0, np.inf], np.float32),
+                      "n": np.int64(3), "ok": 1.5}}
+    path = tmp_path / "e.jsonl"
+    w = EventWriter(path)
+    w(ev)
+    w.close()
+    line = path.read_text().strip()
+    assert "Infinity" not in line and "NaN" not in line
+    back = json.loads(line)
+    assert back["payload"] == {"transit_s": None, "f32": None, "f64": None,
+                               "arr": [1.0, None], "n": 3, "ok": 1.5}
+
+    # ...and an event recorded BEFORE that fix still replays cleanly
+    path.write_text(json.dumps(
+        {"seq": 2, "t": 0.0, "wall": 0.0, "kind": "item", "stage": "",
+         "payload": {"x": float("inf")}}) + "\n")
+    assert "Infinity" in path.read_text()
+    mgr = JobManager(tmp_path / "jobs")
+    from aris_sixarm.gui.jobs import Job
+    j = Job(id="20200101-000000-inf", params={}, status="done",
+            root=str(tmp_path / "jobs"))
+    j.dir.mkdir(parents=True, exist_ok=True)
+    j.events_path.write_bytes(path.read_bytes())
+    j.save()
+    events, _ = JobManager(tmp_path / "jobs").read_events(j.id, 0)
+    assert events[0]["payload"] == {"x": None}
+    assert finite(float("nan")) is None
+
+
 def test_a_missing_job_is_a_404(client):
     assert client.get("/api/jobs/nope").status_code == 404
     assert client.post("/api/jobs/nope/cancel").status_code == 404

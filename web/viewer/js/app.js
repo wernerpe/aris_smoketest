@@ -218,14 +218,25 @@ function onEvents(events) {
     for (const sp of s.placedSpans.slice(-newSpans))
       app.view.addSpan(sp, colorOf(sp.arm));
   }
+  // THE LIVE PANELS ARE THROTTLED AND THE STAGE BARS ARE NOT.  `renderLive`
+  // rebuilds four panes of DOM including a several-hundred-row table, and the
+  // batches arrive six times a second while the planner is talking; rebuilding
+  // that on every batch is how a progress UI ends up costing more than the
+  // thing it is watching.  The bars are cheap and stay immediate.
   if (s.dirty.panels || s.dirty.counters) {
     app.panels.setState(s);
-    if (!app.prog) app.panels.renderLive(s);
+    const now = performance.now();
+    if (!app.prog && now - (app.lastPanels || 0) > 1000) {
+      app.lastPanels = now;
+      app.panels.renderLive(s);
+    }
   }
   flushDirty();
   if (jobEnded) {
     refreshJobs();
-    setTimeout(maybeLoadBundle, 300);
+    app.panels.setState(s);
+    if (!app.prog) app.panels.renderLive(s);   // the throttle must not eat the
+    setTimeout(maybeLoadBundle, 300);          // last state of a finished job
   }
 }
 
@@ -274,6 +285,7 @@ async function maybeLoadBundle() {
       app.view.addSpan({stroke: s.stroke_id, arm: s.arm,
                         s0: s.s_range[0], s1: s.s_range[1]}, colorOf(s.arm));
     }
+    app.view.addDropped(p.dropped);
     onFrame(0);
     el("b-conn").textContent = `programme · ${p.F} frames`;
   } catch (e) {

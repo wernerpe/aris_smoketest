@@ -4204,9 +4204,17 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     # LAST, ON PURPOSE.  Everything above is allowed to place a remainder as a
     # segment of its own if it is worth a pen-up; what reaches here is what
     # none of them would take.  See `merge_remainders`.
-    n_merged, merges = merge_remainders(
-        strokes, programs, specs, aopts, min_seg=min_seg, gap_tol=gap_tol,
-        mat_of=_mat, verbose=verbose) if merge else (0, [])
+    # INSTRUMENTED SEPARATELY BECAUSE IT IS NOT THE BALANCER'S TIME.  `t_balance`
+    # is wall time around this whole block, so a run with `--no-balance` still
+    # charges the merge and the flyability guarantee to "balance" — and the
+    # viewer's share bar would then say the balancer took two hundred seconds
+    # in a run where it was never called.  Measured on the smallest end-to-end
+    # example: 199 s of a 418 s allocation was here, not in `rebalance`.
+    with progress.substage("allocation", "merge", enabled=bool(merge)) as _mst:
+        n_merged, merges = merge_remainders(
+            strokes, programs, specs, aopts, min_seg=min_seg, gap_tol=gap_tol,
+            mat_of=_mat, verbose=verbose) if merge else (0, [])
+        _mst.update(n_merged=int(n_merged))
 
     # THE GUARANTEE, AFTER EVERY MOVE THE BALANCER MADE.  The retry above bans
     # a span from an arm before the cover so somebody else can have the paper;
@@ -4216,6 +4224,8 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
     # falls to `leftover` and is reported as dropped like any other hole.
     # THE SAME GUARANTEE FOR THE PARKED FLEET, and first, because a span
     # released here must not then be judged as part of somebody's tour.
+    _guard = progress.substage("allocation", "guarantee", n_arms=len(arms))
+    _gend = _guard.__enter__()
     park_blocked = []
     for a in arms:
         keep = []
@@ -4250,6 +4260,13 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
                   f"span {np.round(e['s_range'], 4).tolist()} "
                   f"({e['length']:.4f} m); giving it back")
         programs[a] = [segs[i] for i in keep]
+    # Closed by hand rather than with a `with`, for the same reason as the
+    # sequencing pass below: the block ends where `t_balance` is taken, and
+    # re-indenting the two prune loops to gain a `with` would be a bigger diff
+    # than the instrumentation.  There is no `return` and no `raise` between
+    # the `__enter__` above and here.
+    _gend.update(n_park_blocked=len(park_blocked), n_unflyable=len(unflyable))
+    _guard.__exit__(None, None, None)
     t_balance = time.time() - t2b
 
     dropped = leftover(strokes, programs, gap_tol)

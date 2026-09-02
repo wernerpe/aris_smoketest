@@ -52,6 +52,9 @@ export function newState() {
 
 function touch(s, ...what) { for (const w of what) s.dirty[w] = true; }
 
+// JSON has no Infinity, so the server sends null for one (gui/jobs.finite).
+const num = (x) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+
 export function reduce(s, ev) {
   s.seq = ev.seq;
   s.clock = Math.max(s.clock, ev.t || 0);
@@ -177,16 +180,21 @@ function reduceItem(s, st, p) {
       touch(s, "canvas");
       break;
 
-    case "placed":
+    case "placed": {
+      // `num` because a non-finite planner answer arrives as JSON null (see
+      // `gui/jobs.finite`), and `undefined + null` is NaN, which would poison
+      // a running total for the rest of the job.
+      const L = num(p.length_m);
       s.placedSpans.push({stroke: p.stroke, arm: p.arm,
-                          s0: p.s_range[0], s1: p.s_range[1],
-                          length: p.length_m, lean: p.lean_deg,
-                          sigma: p.min_sigma});
+                          s0: num(p.s_range[0]), s1: num(p.s_range[1]),
+                          length: L, lean: num(p.lean_deg),
+                          sigma: num(p.min_sigma)});
       s.counters.placed++;
-      s.counters.placedM += p.length_m;
-      s.armMetres[p.arm] = (s.armMetres[p.arm] || 0) + p.length_m;
+      s.counters.placedM += L;
+      s.armMetres[p.arm] = (s.armMetres[p.arm] || 0) + L;
       touch(s, "canvas", "counters");
       break;
+    }
 
     case "loads":
       s.loads = p.loads_s || {};

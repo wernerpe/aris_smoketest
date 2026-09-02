@@ -49,7 +49,20 @@ class EventWriter:
 
     def __call__(self, ev):
         try:
-            self.f.write(json.dumps(ev, default=_jsonable) + "\n")
+            # STRICT JSON, BECAUSE THE READER IS A BROWSER.  `json.dumps`
+            # happily writes `Infinity` and `NaN`; `JSON.parse` refuses them,
+            # and one such value in one event kills the whole batch the
+            # websocket delivers — measured: an arm whose bag has no feasible
+            # tour reports `transit_s = inf` from `sequence.solve`, and the
+            # GUI's entire stage timeline went blank for the rest of the run.
+            # The strict attempt is the fast path; only a payload that
+            # actually contains a non-finite number pays for the walk.
+            try:
+                line = json.dumps(ev, default=_jsonable, allow_nan=False)
+            except ValueError:
+                line = json.dumps(_finite(ev), default=_jsonable,
+                                  allow_nan=False)
+            self.f.write(line + "\n")
         except Exception as exc:                        # never raise at a caller
             try:
                 self.f.write(json.dumps(
@@ -66,6 +79,33 @@ class EventWriter:
             self.f.close()
         except Exception:
             pass
+
+
+def _finite(x):
+    """One recursive walk that resolves numpy AND kills non-finite floats.
+
+    It cannot delegate to `jobs.finite`: that one is for events read back from
+    disk, where every value is already a plain JSON type.  Here the sink is
+    handed whatever a call site passed, and `np.float32` is not a `float` to
+    `isinstance` (though `np.float64` is), so a nested one would sail past a
+    float-only check and straight into the encoder.
+    """
+    import math
+    try:
+        import numpy as np
+        if isinstance(x, np.generic):
+            x = x.item()
+        elif isinstance(x, np.ndarray):
+            x = x.tolist()
+    except Exception:
+        pass
+    if isinstance(x, float):
+        return None if not math.isfinite(x) else x
+    if isinstance(x, dict):
+        return {str(k): _finite(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_finite(v) for v in x]
+    return x
 
 
 def _jsonable(x):

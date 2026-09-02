@@ -52,19 +52,35 @@ export class Strip {
         ? Math.min(1, p.done / p.total) : share;
       r.fill.style.width = (100 * frac).toFixed(1) + "%";
 
-      // the substage bands, in proportion inside the row
+      // THE BANDS ARE SHARES OF THE WALL CLOCK, exactly like the fill they sit
+      // on, so a band's width means the same thing as a row's width and the
+      // two can be read against each other.  What the substages do not account
+      // for gets its own grey band and says so on hover — an allocation whose
+      // substages add to half of it is a fact about the instrumentation, and
+      // hiding it behind a full-width green bar (the finished fill showing
+      // through) made the stage look fully attributed when it was not.
       r.subs.innerHTML = "";
-      const subs = Object.entries(t.subs);
+      const subs = Object.entries(t.subs).sort((a, b) =>
+        b[1].seconds - a[1].seconds);
       const tot = subs.reduce((a, [, v]) => a + v.seconds, 0);
       if (tot > 0) {
         for (const [name, v] of subs) {
           const b = F("div", {class: "sub"});
-          b.style.width = (100 * v.seconds / Math.max(tot, 1e-9) *
-                           Math.min(1, tot / Math.max(t.exclusive, 1e-9)))
-                          .toFixed(2) + "%";
+          b.style.width = (100 * v.seconds / wall).toFixed(3) + "%";
           b.style.background = SUB_COLOR[name] || SUB_COLOR.other;
-          b.title = `${name}: ${fmtS(v.seconds)}` +
-                    (v.runs > 1 ? ` over ${v.runs} runs` : "");
+          b.title = `${name}: ${fmtS(v.seconds)} `
+                  + `(${(100 * v.seconds / wall).toFixed(1)} % of the run)`
+                  + (v.runs > 1 ? `, over ${v.runs} runs` : "");
+          r.subs.appendChild(b);
+        }
+        const rest = t.exclusive - tot;
+        if (rest > 0.05 * Math.max(t.exclusive, 1e-9)) {
+          const b = F("div", {class: "sub"});
+          b.style.width = (100 * rest / wall).toFixed(3) + "%";
+          b.style.background = SUB_COLOR.other;
+          b.style.opacity = "0.45";
+          b.title = `${fmtS(rest)} in this stage is not inside any instrumented `
+                  + "substage";
           r.subs.appendChild(b);
         }
       }
@@ -104,12 +120,17 @@ export class Strip {
       put("scene_check", `${c.checksOk} pass` +
           (c.checksBad ? ` / ${c.checksBad} FAIL` : ""));
     }
-    if (s.alloc && s.alloc.timing) {
-      const t = s.alloc.timing;
-      const worst = Object.entries(t)
-        .filter(([k]) => k !== "total")
-        .sort((a, b) => b[1] - a[1])[0];
-      if (worst) put("slowest allocation phase", `${worst[0]} ${fmtS(worst[1])}`);
+    // THE SUBSTAGES AND NOT `allocate`'s OWN `timing` DICT.  `timing["balance"]`
+    // is wall time around a block that also contains the remainder merge and
+    // the flyability guarantee, so with `--no-balance` it reads two hundred
+    // seconds for a pass that was never run.  The substage clocks bracket the
+    // calls themselves.
+    const alloc = s.subs && s.subs.allocation;
+    if (alloc) {
+      const worst = Object.entries(alloc)
+        .sort((a, b) => b[1].seconds - a[1].seconds)[0];
+      if (worst && worst[1].seconds > 0)
+        put("slowest allocation phase", `${worst[0]} ${fmtS(worst[1].seconds)}`);
     }
     this.countersEl.innerHTML = bits.join(" &nbsp;·&nbsp; ");
   }

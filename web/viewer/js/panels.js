@@ -166,10 +166,10 @@ export class Panels {
         L.canvas.parentElement.style.position = "relative";
         L.canvas.parentElement.appendChild(L.cur);
       }
+      // The lane grid is `46px | 6px gap | canvas`, so the canvas starts 52 px
+      // in and the cursor is that plus the fraction of its measured width.
       const frac = this.frame / Math.max(1, this.prog.F - 1);
-      L.cur.style.left = `calc(46px + 6px + ${(100 * frac).toFixed(3)}% * `
-        + `(1 - (52px / 100%)))`;
-      L.cur.style.left = (52 + frac * (L.w || 1)) + "px";
+      L.cur.style.left = (52 + frac * (L.w || 0)) + "px";
     }
   }
 

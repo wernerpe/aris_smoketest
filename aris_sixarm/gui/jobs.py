@@ -131,7 +131,13 @@ class JobManager:
 
     # -- registry ---------------------------------------------------------
     def _rescan(self):
-        """Adopt the job directories on disk, so a restart keeps the history.
+        """Sync the registry with the directories on disk.
+
+        THE DISK IS THE REGISTRY.  A job whose directory has been deleted —
+        `rm -rf out/gui_jobs/...` between runs, which is a thing anyone
+        clearing space will do — must leave the listing, or the GUI offers a
+        job whose every endpoint is a 404.  Holding it in memory because it
+        was once created here is remembering something that is not true.
 
         A job that was RUNNING when the server died is not running now: no
         supervisor survived to reap it and its pid means nothing after a
@@ -139,7 +145,9 @@ class JobManager:
         to be live forever, which is the failure mode of every progress UI
         that trusts a status field it never rewrites.
         """
+        on_disk = set()
         for meta in sorted(self.dir.glob("*/job.json")):
+            on_disk.add(meta.parent.name)
             try:
                 job = Job.load(meta)
             except Exception:
@@ -154,6 +162,10 @@ class JobManager:
                     job.finished = job.finished or time.time()
                     job.save()
             self._jobs[job.id] = job
+        for gone in [k for k in self._jobs if k not in on_disk]:
+            if gone in self._procs:
+                continue                # still running; its dir will reappear
+            del self._jobs[gone]
 
     def list(self, limit=100):
         self._rescan()
@@ -296,13 +308,38 @@ class JobManager:
             if not line.strip():
                 continue
             try:
-                out.append(json.loads(line))
+                ev = json.loads(line)
             except Exception:
                 continue                      # a corrupt line is not a stream
+            # STRICT JSON ON THE WAY OUT.  Python's parser accepts `Infinity`
+            # and `NaN` and its writer emits them again; the browser's
+            # `JSON.parse` refuses both, and one such value kills the whole
+            # batch the websocket delivers.  Workers write clean lines now,
+            # but a job recorded before that fix must still replay.
+            out.append(finite(ev))
         return out, offset + cut + 1
 
 
 # --------------------------------------------------------------------------
+def finite(x):
+    """Replace every non-finite float with None, recursively. -> a JSON-safe copy.
+
+    `inf` is a REAL ANSWER in this pipeline — `sequence.solve` returns it for a
+    bag with no feasible tour and `_ArmMatrix` uses it for a banned edge — so
+    it must not become a large number.  JSON cannot say it, and `null` is the
+    only value that reads as "no finite answer" on the far side.  Shared by the
+    worker (which writes) and the server (which replays), so the two cannot
+    disagree about what a non-finite number becomes.
+    """
+    if isinstance(x, float):
+        return None if x != x or x in (float("inf"), float("-inf")) else x
+    if isinstance(x, dict):
+        return {k: finite(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [finite(v) for v in x]
+    return x
+
+
 def _append_event(path, ev):
     ev.setdefault("seq", -1)
     ev.setdefault("t", 0.0)

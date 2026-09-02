@@ -298,6 +298,18 @@ export class Scene3D {
     this.spanLines.set(key, line);
   }
 
+  // The paper nobody certified.  Drawn in red, above the target and below the
+  // spans, so a coverage number has a picture: the residual IS the difference
+  // between the faint line and the coloured one, and this names it.
+  addDropped(list) {
+    for (const d of list) {
+      if (!d.pts || d.pts.length < 2) continue;
+      const line = polyline(d.pts, 0.0028, 0xd2544a, 2);
+      line.userData = {dropped: d};
+      this.groups.strokes.add(line);
+    }
+  }
+
   // ---- ink laid down during playback ----------------------------------
   setInk(chunks) {
     this.groups.ink.clear();
