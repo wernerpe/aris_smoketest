@@ -690,13 +690,24 @@ OPEN_QUESTIONS = {
                   "graphite protruding past the housing nose, 64 mm vs 100. "
                   "Note the SIGN is a mounting choice either way — the post "
                   "is square, so the holder seats both ways up and the lean "
-                  "is +/-23 deg.  Still genuinely open: which build ships. "
-                  "The newest parts are the 23-deg clutch and a 'Fat Franka "
-                  "Finger' (an 18.4 x 90 x 50 mm blade that replaces the "
-                  "stock finger and is in no assembly), and the deployed "
-                  "arms grasp at 43.2 mm (Aris_Kindt franka_control_gui.py "
-                  "_PEN_GRASP_WIDTH), which matches neither the 36.0 mm this "
-                  "CAD gives nor the 57 mm the old reading did.",
+                  "is +/-23 deg.  STILL GENUINELY OPEN: which build ships, "
+                  "and the running robot says it is NOT the one that was "
+                  "assembled.  Aris_Kindt franka_control_gui.py closes on the "
+                  "holder with width 0.0432 and epsilon_inner 0.0, and "
+                  "libfranka calls a grasp successful only when the measured "
+                  "opening exceeds width - epsilon_inner — so 43.2 mm is a "
+                  "LOWER BOUND on the real jaw gap, and the 36.0 mm this CAD "
+                  "gives would report failure every time.  50 mm does not: "
+                  "that is the post's bare ends, which is what the newest "
+                  "finger part clamps.  'Fat Franka Finger v250904' is an "
+                  "18.4 x 90 x 50 mm blade replacing the whole stock finger, "
+                  "and 18.4 mm cannot enter an 18.0 mm socket.  So the likely "
+                  "deployed configuration is Fat fingers flat on the post "
+                  "ends at ~50 mm, NOT stock tips seated in the sockets at "
+                  "36 mm.  It changes no angle — the post is still square to "
+                  "the fingers either way — but it is the reason the model's "
+                  "0.018 is the ASSEMBLY's number and not necessarily the "
+                  "rig's.",
         blocking="pen-tip calibration"),
     "cable_dress": dict(
         what="How is the arm cabling actually dressed?",

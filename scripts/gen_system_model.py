@@ -114,6 +114,14 @@ TEX_KINDS = ("color", "normal", "occlusion_roughness_metallic")
 # At 0.018 the mesh lands where the assembly puts it in all three axes: the
 # finger's distal 18.1 mm covers panda_hand z 94.2..112.3 and the CAD block
 # covers 94.2..112.3.  See rig_final.PENHOLDER22's docstring.
+#
+# THIS IS THE ASSEMBLY'S NUMBER, NOT NECESSARILY THE RIG'S.  The running robot
+# grasps with width 0.0432 and epsilon_inner 0.0, and libfranka only calls a
+# grasp successful above width - epsilon_inner, so the real jaw gap is at least
+# 43.2 mm and 36.0 would fail every time.  50 mm — the post's BARE ENDS — does
+# not, and 50 mm is what the newest finger part can clamp: "Fat Franka Finger
+# v250904" is an 18.4 mm blade and 18.4 does not enter an 18.0 socket.  See
+# system_model.OPEN_QUESTIONS["penholder_cradle"]; it changes no angle.
 FINGER_FIX = 0.018           # m, fingertip grip half-width holding the holder
 HOLDER_FACES = 8000          # decimation target, per part
 MM = SM.MM

@@ -338,14 +338,24 @@ it is a re-certification with its own gate, not a render. Note also that the
 **sign** is a mounting choice, not a CAD fact — the post is square, so the
 holder seats in the sockets either way up and the lean is ±23°.
 
-**What is still open: which build ships.** The newest parts are the 23° clutch
-and a `Fat Franka Finger v250904` (an 18.4 × 90 × 50 mm blade that replaces
-the stock finger, and is in no assembly). And the deployed arms grasp the
-holder at **43.2 mm** (`Aris_Kindt/franka_control_gui.py`
-`_PEN_GRASP_WIDTH = 0.0432`, "same holder on 31"), which matches neither the
-36.0 mm this CAD gives nor the 57 mm the earlier reading did. One measurement
-closes it: the perpendicular distance from the mounted pen's tip to the
-gripper's approach axis, 47 mm or 110 mm.
+**What is still open: which build ships — and the running robot says it is not
+the one that was assembled.** `Aris_Kindt/franka_control_gui.py` closes on the
+holder with `width = 0.0432`, `epsilon_inner = 0.0`, `epsilon_outer = 0.08`,
+and libfranka calls a grasp successful only when the measured opening exceeds
+`width − epsilon_inner`. So **43.2 mm is a lower bound on the real jaw gap**,
+and the 36.0 mm this CAD gives would report failure every time. 50 mm does
+not — and 50 mm is the post's *bare ends*, which is what the newest finger
+part clamps: `Fat Franka Finger v250904` is an 18.4 × 90 × 50 mm blade that
+replaces the whole stock finger, and 18.4 mm cannot enter an 18.0 mm socket.
+
+So the likely deployed configuration is **Fat fingers flat on the post ends at
+~50 mm**, not stock tips seated in the sockets at 36 mm. It changes no angle —
+the post is square to the fingers either way, which is the whole point — but
+it is why the model's 0.018 is the *assembly's* number and not necessarily the
+rig's, and it is another reason to think the 23° build is the one on the arms.
+
+One measurement still closes the transform: the perpendicular distance from
+the mounted pen's tip to the gripper's approach axis, 47 mm or 110 mm.
 
 ### 7b. The stack inside the bore
 
