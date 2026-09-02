@@ -711,6 +711,20 @@ post and measures 23.00°**, where the planning transform implies a 45° lean,
 and reaching 155.6 mm from a grip 55.1 mm behind the nose needs **100.5 mm of
 graphite** protruding.  §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
 
+**Update 2026-09-02 — the assembly exists, and it settles the 23-vs-45.**
+`Pen holder cad(1).zip` nests `Natural hold assembly - closed.zip`, which
+holds the complete 10° build as an `.SLDASM`.  Resolved, it says there is **no
+fingertip cradle** — stock FR3 tips seat 7.000 mm square inside the mount
+post's own 18 × 18 mm sockets — so the housing's clocking reaches the hand
+undivided, and on that build the angle in the housing's file name **is** the
+lean (10.0000°, with the grip centre on the TCP to 0.14 mm).  The pen leans
+**23°**, which at the gate-validated 0.110 m of axial depth is **0.0467 m
+lateral, not 0.110: 63.3 mm of tip position**.  The planning transform is
+UNCHANGED — it is gate-validated and moving it is a re-certification — and one
+measurement closes it (tip-to-approach-axis, 47 mm or 110 mm).  The same
+assembly gave the internal stack, which `assets/system_model/` now draws in
+full.  `docs/SYSTEM_MODEL.md` §7a–7b is the account.
+
 ## The capsules were wrong, and the package now says so (2026-08-26)
 
 `scripts/collision_audit.py` (commit 5c8d803) put every schematic collision
