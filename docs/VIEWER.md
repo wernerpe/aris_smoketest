@@ -282,14 +282,19 @@ put steel where there is none.
 | 1 | job panel, live progress, stage timeline, "where the time goes", counters, per-arm loads, event log, live 3D of strokes coloured by arm | **done** |
 | 2 | 3D viewport (six arms, paper, table, cage, mounts), per-arm lane timeline, scrubber, play/pause/speed | **done** |
 | 3 | clearance inspector: per-pair sparklines, click a dip to jump the scrubber and draw the witness line with the mm value | **done** |
-| 4 | ink overlay (target vs drawn) and per-segment inspector (arm, s-range, σ_min, margin, tip error, lean/cone, draw time) | **partly** — target and drawn are both drawn and the segment table is there; residual-by-cause colouring is not |
+| 4 | ink overlay (target vs drawn vs residual) and per-segment inspector (arm, s-range, σ_min, margin, tip error, lean/cone, draw time) | **mostly** — all three layers are drawn (grey target, the plan's own tip path in the arm's colour, magenta residual) and clicking a segment jumps the scrubber to it; what is missing is colouring the residual by CAUSE |
 | 5 | layer toggles for every geometry family; A/B ghost diff of two programmes; workspace-map paint mode | **partly** — layer toggles (arms, pens, paper, cage, mounts, strokes, ink, bases, capsule chain) are there; A/B diff and the workspace paint mode are not |
 
 ### What is next
 
 * **Residual by cause.** The `dropped` spans are in the bundle with their
-  `s_range` and where they lie; colouring them by *why* needs the reason the
-  allocator gave, which `allocate.leftover` does not currently record.
+  `s_range` and where they lie, and they are drawn in magenta; colouring them
+  by *why* — no arm certified it, the arm that certified it could not fly to
+  it, a parked partner stands on it, the balancer gave it back — needs the
+  reason, and `allocate.leftover` does not currently record one.  The
+  information exists at the moment of each refusal (`banned`, `unflyable`,
+  `park_blocked`, `fly_given_m` all name it) and is thrown away by the time
+  the hole list is assembled.
 * **A/B ghost diff.** The bundle is already self-contained, so this is a second
   `Program` loaded into a ghost material and a diff of the segment tables.
 * **Workspace paint.** `scripts/feasible_workspace.py` writes the JSON; it
