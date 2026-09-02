@@ -29,6 +29,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC_URDF = ROOT / "assets/franka_description/urdf/panda_arm_hand.urdf"
 OUT_DIR = ROOT / "assets/final_rig"
 MESH_REL = "../franka_description/meshes/visual"   # relative to OUT_DIR
+# NOT 0.018, DELIBERATELY.  The mount post is 50 mm long with a 7.000 mm socket
+# in each end, so the faces a fingertip seats on are 36.000 mm apart, and the
+# 10-deg assembly measures 36.0008 (rig_final.PENHOLDER22, docs/SYSTEM_MODEL.md
+# 7a).  0.0285 is the fingertip's BACK face and comes from 50 + 2 x 3.5, which
+# adds the tip left OUTSIDE the socket instead of subtracting the 7 mm inside
+# it.  `gen_system_model.py` carries the corrected 0.018.  This generator does
+# NOT, because assets/final_rig/ is what every certified number in the repo
+# was checked against and re-cutting it is a re-certification, not an edit.
 FINGER_FIX = 0.0285       # m, finger half-width holding the holder (CAD-derived)
 
 # tool config (filled by the pen-holder CAD step; see rig_final/tool notes)
