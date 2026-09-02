@@ -273,6 +273,16 @@ async function maybeLoadBundle() {
   if (!app.jobId || app.prog) return;
   try {
     const p = await Program.load(app.jobId);
+    if (p.meta.schema_version !== 1) {
+      // The python side refuses an unknown key by name; this is the same
+      // refusal on the browser side, and it is here rather than nowhere
+      // because a viewer silently ignoring a field it does not know is
+      // exactly the failure `program_schema` was written to end.
+      banner(`this bundle is schema version ${p.meta.schema_version} and the `
+             + `viewer speaks version 1 — re-export it with `
+             + `scripts/export_viewer_bundle.py`);
+      return;
+    }
     app.prog = p;
     app.panels.setState(app.state);
     app.panels.setProgram(p);
@@ -289,7 +299,13 @@ async function maybeLoadBundle() {
     onFrame(0);
     el("b-conn").textContent = `programme · ${p.F} frames`;
   } catch (e) {
-    // A trace-only or refused run has no bundle, and that is not an error.
+    // A trace-only or refused run has no bundle, and that is not an error —
+    // but a bundle that is there and will not load IS one, so it is at least
+    // said out loud in the console rather than swallowed.
+    if (!/404/.test(String(e.message))) {
+      console.error("could not load the programme bundle:", e);
+      banner(`the bundle for this job would not load: ${e.message}`);
+    }
   }
 }
 

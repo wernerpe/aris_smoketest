@@ -4115,23 +4115,31 @@ def allocate(strokes, arms=None, opts=None, atlas_dir=None, verbose=True,
         # is banned in the same place and for the same reason: so the cover can
         # hand the paper to somebody the parked fleet is not standing on.  This
         # is a pure PRUNE — the conductor still decides what actually runs.
-        for it in placed:
-            if park.blocked(it["arm"], it["entry"]):
-                k = (it["arm"], int(it["stroke"]["id"]))
-                fresh.add(k)
-                why[k] = "is standing in a parked partner"
-        for a in arms:
-            mine = [i for i, it in enumerate(placed) if it["arm"] == a]
-            if not mine:
-                continue
-            bag = [placed[i]["entry"] for i in mine]
-            _, bad = prune_unflyable(specs[a], bag, _mat(a),
-                                     home=home_legs(specs[a], bag, _mat(a)))
-            for k in bad:
-                it = placed[mine[k]]
-                key = (a, int(it["stroke"]["id"]))
-                fresh.add(key)
-                why.setdefault(key, "cannot fly to it")
+        # ITS OWN SUBSTAGE BECAUSE IT IS ITS OWN COST.  `prune_unflyable` prices
+        # a whole bag's home legs on the transit router, once per arm per ban
+        # round; on the smallest end-to-end example it was 61.5 s of a 301.5 s
+        # allocation that no substage claimed, which read as "the allocation is
+        # a fifth un-instrumented" in the viewer's bar.
+        with progress.substage("allocation", "flycheck", round=int(_round),
+                               n_placed=len(placed)) as _fst:
+            for it in placed:
+                if park.blocked(it["arm"], it["entry"]):
+                    k = (it["arm"], int(it["stroke"]["id"]))
+                    fresh.add(k)
+                    why[k] = "is standing in a parked partner"
+            for a in arms:
+                mine = [i for i, it in enumerate(placed) if it["arm"] == a]
+                if not mine:
+                    continue
+                bag = [placed[i]["entry"] for i in mine]
+                _, bad = prune_unflyable(specs[a], bag, _mat(a),
+                                         home=home_legs(specs[a], bag, _mat(a)))
+                for k in bad:
+                    it = placed[mine[k]]
+                    key = (a, int(it["stroke"]["id"]))
+                    fresh.add(key)
+                    why.setdefault(key, "cannot fly to it")
+            _fst.update(n_banned=len(fresh))
         if not fresh or fresh <= banned:
             break
         print("  !! " + ", ".join(f"arm {a} certifies the ink of stroke {s} "

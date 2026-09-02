@@ -19,7 +19,8 @@ export const STAGE_LABEL = {
 // same thing between runs.
 export const SUB_COLOR = {
   prefilter: "#4a6fa5", probe: "#4a8fd2", repair: "#5aa9c4",
-  replan: "#cb6608", balance: "#d2544a", park: "#8a6fb0",
+  replan: "#cb6608", flycheck: "#a05a2c", merge: "#b0803a",
+  balance: "#d2544a", guarantee: "#8a6fb0", park: "#7a5fa0",
   sequence: "#3fa46a", conduct: "#d8a13a", other: "#6d7480",
 };
 

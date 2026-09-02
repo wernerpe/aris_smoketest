@@ -77,8 +77,10 @@ export class Strip {
         if (rest > 0.05 * Math.max(t.exclusive, 1e-9)) {
           const b = F("div", {class: "sub"});
           b.style.width = (100 * rest / wall).toFixed(3) + "%";
-          b.style.background = SUB_COLOR.other;
-          b.style.opacity = "0.45";
+          // Opaque, not translucent: over a finished stage's green fill a
+          // 45 %-alpha grey reads as another green substage, which is the
+          // opposite of what it means.
+          b.style.background = "#3b414b";
           b.title = `${fmtS(rest)} in this stage is not inside any instrumented `
                   + "substage";
           r.subs.appendChild(b);

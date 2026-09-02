@@ -213,19 +213,38 @@ export class Panels {
       el.innerHTML = '<div class="muted">no clearance series in this bundle</div>';
       return;
     }
+    // THE TWO NUMBERS ARE DIFFERENT ON PURPOSE, AND THE PANEL SAYS SO.  The
+    // sparkline is the POINTWISE capsule distance at this bundle's frames; the
+    // number `scene_check` certified is that same distance re-sampled `--sub`
+    // times finer AND discounted by the sweep term
+    // `0.55 * (stepd_i + stepd_j)`, so it is always the smaller of the two.
+    // Showing only the sparkline's minimum next to a log line quoting the
+    // certified one is how a reader concludes the viewer is wrong.
     el.appendChild(F("div", {class: "muted", html:
       `minimum distance between two arms' capsule sets, per frame; the dotted `
       + `line is the ${(1000 * p.margin).toFixed(0)} mm margin the programme `
       + `was certified against.  Click a dip to jump the scrubber there and `
-      + `draw the witness.`}));
+      + `draw the witness.  The right-hand pair is <b>pointwise</b> (this `
+      + `series) and <b>certified</b> (scene_check's own, finer and discounted `
+      + `by the tip sweep) — the second is always the smaller.`}));
     const wrap = F("div", {id: "spark"});
     this.sparks = [];
+    const certified = {};
+    for (const ph of p.doc.phases)
+      for (const [k, v] of Object.entries(ph.per_pair_m || {}))
+        certified[k] = Math.min(certified[k] ?? Infinity, v);
     const rows = p.clearance.map(c => ({...c, min: minOf(c.d)}))
       .sort((a, b) => a.min - b.min);
     for (const c of rows) {
       const cv = F("canvas");
+      const cert = certified[`${c.a}-${c.b}`] ?? certified[`${c.b}-${c.a}`];
       const vv = F("div", {class: "v" + (c.min < p.margin ? " bad" : ""),
-                           text: `${(1000 * c.min).toFixed(1)} mm`});
+                           text: `${(1000 * c.min).toFixed(1)}`
+                                 + (cert == null ? " mm"
+                                    : ` / ${(1000 * cert).toFixed(1)} mm`)});
+      vv.title = cert == null ? "pointwise minimum over this bundle's frames"
+        : `pointwise ${(1000 * c.min).toFixed(1)} mm over this bundle's `
+          + `frames; scene_check certified ${(1000 * cert).toFixed(1)} mm`;
       const row = F("div", {class: "spk"}, [
         F("div", {html: `<span style="color:${this.hooks.colorOf(c.a)}">${c.a}</span>`
                        + `–<span style="color:${this.hooks.colorOf(c.b)}">${c.b}</span>`}),
