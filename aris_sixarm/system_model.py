@@ -662,20 +662,41 @@ OPEN_QUESTIONS = {
         answer_by="survey the room",
         blocking="cutting the grid"),
     "penholder_cradle": dict(
-        what="Where exactly does the pen holder sit in the hand?",
-        why="The 2026.08.19 delivery is eight printed parts with NO ASSEMBLY "
-            "FILE and no fingertip cradle geometry, so the mutual placement "
-            "of holder and hand is inferred, not read.",
-        rides_on="the whole tool transform.  The housing's own flats clock at "
-                 "23.0 deg (measured) while the planner's TCP-to-tip ray "
-                 "leans 45.0 deg; the model places the bore along the "
-                 "PLANNER's ray, which is the assumption that makes the "
-                 "drawing consistent with the gate-validated transform.",
-        answer_by="Pete's caliper measurement of the mounted holder, or the "
-                  "10-deg 'natural hold' assembly in "
-                  "raw_slack_file_dump/Pen holder cad(1).zip -> "
-                  "'Natural hold assembly - closed.zip', which DOES contain "
-                  "SLDASM files and a Franka FR3 fingertip part",
+        what="Does the mounted pen lean 23 deg out of tool z, or 45?",
+        why="THERE IS NO CRADLE.  That was the escape hatch, and the assembly "
+            "closed it.  raw_slack_file_dump/'Pen holder cad(1).zip' nests "
+            "'Natural hold assembly - closed.zip', which holds the COMPLETE "
+            "10-deg build as an .SLDASM.  Resolved, it says: the two "
+            "fingertips are stock FR3 tips (drilled for brass inserts, "
+            "nothing more), they seat 7.000 mm into the mount post's own "
+            "18 x 18 mm end sockets, the post axis is the finger-travel axis "
+            "to 0 deg, the grip centre lands 103.26 mm from panda_hand "
+            "against the stock TCP's 103.4 — and the bore comes out 10.0000 "
+            "deg off the hand's approach axis, which is exactly the angle in "
+            "that housing's file name.  This delivery's housing is named "
+            "'22 deg' and its flats measure 23.00.  Same naming, same "
+            "sockets, same square-seated tips: the clocking reaches the hand "
+            "undivided, so the pen leans 23 deg, not 45.",
+        rides_on="63.3 mm of tip position.  At the gate-validated 0.110 m of "
+                 "axial depth, 23 deg puts the tip 0.0467 m lateral where "
+                 "frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently "
+                 "the planner's ray needs 100.5 mm of graphite past the nose "
+                 "and 23 deg needs 64.4 mm.  NOTHING IS CHANGED HERE: the "
+                 "planning transform is gate-validated against a real "
+                 "touchdown and moving it is a re-certification.",
+        answer_by="ONE measurement on a mounted holder — the perpendicular "
+                  "distance from the pen tip to the gripper's approach axis. "
+                  "47 mm or 110 mm; a ruler settles it.  Equivalently: the "
+                  "graphite protruding past the housing nose, 64 mm vs 100. "
+                  "Note the SIGN is a mounting choice either way — the post "
+                  "is square, so the holder seats both ways up and the lean "
+                  "is +/-23 deg.  Still genuinely open: which build ships. "
+                  "The newest parts are the 23-deg clutch and a 'Fat Franka "
+                  "Finger' (an 18.4 x 90 x 50 mm blade that replaces the "
+                  "stock finger and is in no assembly), and the deployed "
+                  "arms grasp at 43.2 mm (Aris_Kindt franka_control_gui.py "
+                  "_PEN_GRASP_WIDTH), which matches neither the 36.0 mm this "
+                  "CAD gives nor the 57 mm the old reading did.",
         blocking="pen-tip calibration"),
     "cable_dress": dict(
         what="How is the arm cabling actually dressed?",

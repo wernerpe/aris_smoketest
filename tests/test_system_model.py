@@ -661,6 +661,89 @@ def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
     assert "45.0" in manifest["tool"]["red_flag"]
 
 
+def test_the_internal_stack_fills_the_bore_it_measured_exactly():
+    """The stack is a CHAIN, and a chain that does not close is not a stack.
+
+    Nose shoulder to the cap's own 16 mm shoulder is one measured span, and
+    spring + shim + sleeve must add back to it for every shim in the set —
+    otherwise the parts are floating and the preload is a story.
+    """
+    P = rig_final.PENHOLDER22
+    span = P["stack_back_x"] - P["stack_front_x"]
+    for sp in (0.0,) + tuple(P["spacers"]):
+        rows = {b["name"]: b for b in rig_final.penholder22_stack(sp)}
+        chain = sum(abs(rows[n]["x1"] - rows[n]["x0"])
+                    for n in ("spring", "sleeve") + (("spacer",) if sp else ()))
+        assert chain == pytest.approx(span, abs=1e-12), sp
+        # and the spring is really preloaded, never past coil bind
+        squeezed = abs(rows["spring"]["x1"] - rows["spring"]["x0"])
+        assert P["spring"]["solid"] < squeezed < P["spring"]["free"], sp
+    # both shims at once is the one combination that must be refused
+    with pytest.raises(ValueError):
+        rig_final.penholder22_stack(sum(P["spacers"]))
+
+
+def test_the_complete_assembly_still_fits_the_hull_the_shell_was_fitted_to():
+    """Modelling the internals is only free if they are inside the envelope.
+
+    The 3-cylinder hull was fitted to the housing and cap alone.  Adding five
+    more bodies inside the bore is allowed to change nothing about collision
+    ONLY while every one of them stays inside it — for every shim setting,
+    not just the one that ships.
+    """
+    for sp in (0.0,) + tuple(rig_final.PENHOLDER22["spacers"]):
+        assert rig_final.penholder22_internals_escape(sp) == 0.0, sp
+
+
+def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
+                                                                manifest):
+    """The whole stack as visual bodies, and not one collision.
+
+    A cylinder that quietly became a collision element would change every
+    certified clearance in the repo without changing a single number in it.
+    """
+    want = rig_final.penholder22_internals(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+    # spring, sleeve, clutch, buried graphite — plus a shim if one is fitted
+    assert len(want) == 4 + bool(rig_final.PENHOLDER22["spacer_fitted"])
+    vis = links["arm13_pen_holder"].findall("visual")
+    cyl = [v for v in vis if v.find("geometry/cylinder") is not None]
+    assert len(vis) == 2 + len(want) and len(cyl) == len(want)
+    for v, (name, T, (r, L), _) in zip(cyl, want):
+        g = v.find("geometry/cylinder")
+        assert float(g.get("radius")) == pytest.approx(r, abs=1e-12), name
+        assert float(g.get("length")) == pytest.approx(L, abs=1e-12), name
+        xyz, rpy = _origin_of(v)
+        assert np.allclose(xyz, T[:3, 3], atol=1e-12), name
+        assert np.allclose(_rpy(*rpy), T[:3, :3], atol=1e-12), name
+    # still exactly the three envelope cylinders, and nothing else
+    assert len(links["arm13_pen_holder"].findall("collision")) == 3
+    ins = manifest["tool"]["internals"]
+    assert ins["provenance"] == "AUDIT" and ins["collision"] is False
+    assert ins["envelope_escape_m"] == 0.0
+    assert len(ins["bodies"]) == len(want)
+
+
+def test_the_fingers_close_on_the_socket_floors_not_the_post_ends(joints,
+                                                                  manifest):
+    """18.0 mm, and it is the post's own arithmetic that says so.
+
+    The mount post is 50 mm long with a 7 mm socket in each end, so the faces
+    the fingertips seat on are 50 - 2 x 7 = 36 mm apart.  The 28.5 this used
+    to be is the fingertip's BACK face: 57 mm, which is 7 mm wider than the
+    post is long and would hold nothing at all.
+    """
+    gen = _gen()
+    P = rig_final.PENHOLDER22
+    post_len = P["post_z"][1] - P["post_z"][0]
+    socket = 0.007                       # measured: floors at post z 7 and 43
+    assert gen.FINGER_FIX == pytest.approx((post_len - 2 * socket) / 2,
+                                           abs=1e-12)
+    assert manifest["tool"]["finger_half_width_m"] == gen.FINGER_FIX
+    for k, s in ((1, +1), (2, -1)):
+        xyz, _ = _origin_of(joints[f"arm13_panda_finger_joint{k}"])
+        assert xyz[1] == pytest.approx(s * gen.FINGER_FIX, abs=1e-12)
+
+
 def test_the_holder_meshes_exist_and_stay_within_budget():
     for p in sorted((DIR / "meshes/penholder").glob("*.obj")):
         n = sum(1 for ln in p.read_text().splitlines() if ln.startswith("f "))

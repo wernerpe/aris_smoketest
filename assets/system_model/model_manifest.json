@@ -222,7 +222,7 @@
   "tool": {
     "transform": "rig_final.penholder22_T_hand(PEN_EXT=0.110, PEN_LAT_HOLDER=0.110, D_HAND_TCP=0.1034)",
     "provenance": "ASSUMED",
-    "red_flag": "THE PLACEMENT IS INFERRED.  The CAD delivery has no assembly file and no fingertip cradle geometry.  The housing's own flats clock at 23.0 deg; the planner's TCP-to-tip ray leans 45.0 deg; this model uses the planner's ray.  PENDING Pete's caliper measurement.",
+    "red_flag": "THE PLACEMENT IS INFERRED.  The 2026.08.19 delivery has no assembly file.  The housing's own flats clock at 23.0 deg; the planner's TCP-to-tip ray leans 45.0 deg; this model uses the planner's ray.  THE 10-DEG ASSEMBLY HAS NOW BEEN READ and it removes the fingertip cradle as the place that difference could hide: the stock FR3 fingertips seat square in the post's own 18x18x7 mm sockets, and on that build the file's name-angle IS the lean to 4 decimals with the grip centre on the TCP to 0.14 mm.  PENDING one measurement on the mounted holder \u2014 see open_questions.penholder_cradle.",
     "collision": "the 3-cylinder envelope, re-proved on every mesh regeneration to contain every visual vertex",
     "envelope_cylinders": [
       [
@@ -240,7 +240,47 @@
         0.0855,
         0.0181
       ]
-    ]
+    ],
+    "finger_half_width_m": 0.018,
+    "finger_half_width_source": "AUDIT: post 50 mm less 2 x 7.000 mm of socket = 36.0008 mm of jaw in the 10-deg assembly; was 0.0285, which is the fingertip's back face",
+    "internals": {
+      "provenance": "AUDIT",
+      "order": "nose shoulder -> spring -> [shim] -> sleeve (clutch inside it) -> cap shoulder",
+      "order_source": "the resolved component transforms of \"Natural hold assembly - closed.SLDASM\" (10-deg build, same architecture); every interface then re-measured on this delivery's own STLs",
+      "spacer_fitted_m": 0.0,
+      "spacer_choices_m": [
+        0.0051,
+        0.0101
+      ],
+      "envelope_escape_m": 0.0,
+      "collision": false,
+      "bodies": [
+        {
+          "name": "spring",
+          "radius_m": 0.009525,
+          "length_m": 0.039674999999999995,
+          "note": "9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil."
+        },
+        {
+          "name": "sleeve",
+          "radius_m": 0.0105,
+          "length_m": 0.0401,
+          "note": "pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder"
+        },
+        {
+          "name": "clutch",
+          "radius_m": 0.008533,
+          "length_m": 0.035,
+          "note": "pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land"
+        },
+        {
+          "name": "graphite_buried",
+          "radius_m": 0.0035,
+          "length_m": 0.04811499999999999,
+          "note": "the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead`"
+        }
+      ]
+    }
   },
   "cable_dress": {
     "provenance": "ASSUMED",
@@ -725,10 +765,10 @@
       "blocking": "cutting the grid"
     },
     "penholder_cradle": {
-      "what": "Where exactly does the pen holder sit in the hand?",
-      "why": "The 2026.08.19 delivery is eight printed parts with NO ASSEMBLY FILE and no fingertip cradle geometry, so the mutual placement of holder and hand is inferred, not read.",
-      "rides_on": "the whole tool transform.  The housing's own flats clock at 23.0 deg (measured) while the planner's TCP-to-tip ray leans 45.0 deg; the model places the bore along the PLANNER's ray, which is the assumption that makes the drawing consistent with the gate-validated transform.",
-      "answer_by": "Pete's caliper measurement of the mounted holder, or the 10-deg 'natural hold' assembly in raw_slack_file_dump/Pen holder cad(1).zip -> 'Natural hold assembly - closed.zip', which DOES contain SLDASM files and a Franka FR3 fingertip part",
+      "what": "Does the mounted pen lean 23 deg out of tool z, or 45?",
+      "why": "THERE IS NO CRADLE.  That was the escape hatch, and the assembly closed it.  raw_slack_file_dump/'Pen holder cad(1).zip' nests 'Natural hold assembly - closed.zip', which holds the COMPLETE 10-deg build as an .SLDASM.  Resolved, it says: the two fingertips are stock FR3 tips (drilled for brass inserts, nothing more), they seat 7.000 mm into the mount post's own 18 x 18 mm end sockets, the post axis is the finger-travel axis to 0 deg, the grip centre lands 103.26 mm from panda_hand against the stock TCP's 103.4 \u2014 and the bore comes out 10.0000 deg off the hand's approach axis, which is exactly the angle in that housing's file name.  This delivery's housing is named '22 deg' and its flats measure 23.00.  Same naming, same sockets, same square-seated tips: the clocking reaches the hand undivided, so the pen leans 23 deg, not 45.",
+      "rides_on": "63.3 mm of tip position.  At the gate-validated 0.110 m of axial depth, 23 deg puts the tip 0.0467 m lateral where frames.PEN_LAT_HOLDER says 0.110 (45 deg).  Equivalently the planner's ray needs 100.5 mm of graphite past the nose and 23 deg needs 64.4 mm.  NOTHING IS CHANGED HERE: the planning transform is gate-validated against a real touchdown and moving it is a re-certification.",
+      "answer_by": "ONE measurement on a mounted holder \u2014 the perpendicular distance from the pen tip to the gripper's approach axis. 47 mm or 110 mm; a ruler settles it.  Equivalently: the graphite protruding past the housing nose, 64 mm vs 100. Note the SIGN is a mounting choice either way \u2014 the post is square, so the holder seats both ways up and the lean is +/-23 deg.  Still genuinely open: which build ships. The newest parts are the 23-deg clutch and a 'Fat Franka Finger' (an 18.4 x 90 x 50 mm blade that replaces the stock finger and is in no assembly), and the deployed arms grasp at 43.2 mm (Aris_Kindt franka_control_gui.py _PEN_GRASP_WIDTH), which matches neither the 36.0 mm this CAD gives nor the 57 mm the old reading did.",
       "blocking": "pen-tip calibration"
     },
     "cable_dress": {

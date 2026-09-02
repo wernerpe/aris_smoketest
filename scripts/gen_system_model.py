@@ -92,8 +92,10 @@ TEXTURE_SRC = Path("/home/franka/git/franka_manipulation_station/assets/"
                    "franka_description/meshes/visual")
 COLLISION_SRC = Path("/home/franka/git/vamp/resources/panda/meshes/collision")
 CAD_SRC = ROOT.parent / "raw_slack_file_dump" / "Pen holder all parts 2026.08.19"
-# the two parts of the mounted holder that are visible from outside; the other
-# six live inside the 21.1 mm bore or are bench tools (PENHOLDER22["omitted"])
+# the two parts of the mounted holder that are visible from outside.  The
+# stack inside the 21.1 mm bore is drawn too, as primitives, out of
+# `rig_final.penholder22_internals`; only the shim set and the bench extractor
+# stay out (PENHOLDER22["omitted"]).
 HOUSING_STL = "pen holder housing - 22 deg - reinforced - v20260429.STL"
 CAP_STL = "pen holder cap v20250903.STL"
 
@@ -101,9 +103,27 @@ FR3_MESHES = tuple(f"link{i}" for i in range(8)) + ("hand", "finger")
 TEXTURED = tuple(f"link{i}" for i in range(8)) + ("hand",)   # finger has none
 TEX_KINDS = ("color", "normal", "occlusion_roughness_metallic")
 
-FINGER_FIX = 0.0285          # m, custom fingertip half-width holding the holder
+# WHERE THE FINGERS ACTUALLY CLOSE TO, m.  The mount post is 50 mm long with a
+# 7.000 mm socket in each end (measured on this delivery's own STL: the socket
+# floors are at post z = 7.00 and 43.00), and the 10-deg assembly seats an FR3
+# fingertip in each socket — its two grip faces come out 36.0008 mm apart.  So
+# the half-width is 18.000, not the 28.500 this constant used to carry: 28.500
+# is the fingertip's BACK face, 3.5 mm proud of the post's end, and a finger
+# parked there holds nothing because 57 mm is 7 mm wider than the post is long.
+# The URDF's `finger.gltf` includes its own tip, so it wants the grip plane.
+# At 0.018 the mesh lands where the assembly puts it in all three axes: the
+# finger's distal 18.1 mm covers panda_hand z 94.2..112.3 and the CAD block
+# covers 94.2..112.3.  See rig_final.PENHOLDER22's docstring.
+FINGER_FIX = 0.018           # m, fingertip grip half-width holding the holder
 HOLDER_FACES = 8000          # decimation target, per part
 MM = SM.MM
+
+# the stack inside the bore: spring steel, printed black, printed grey, lead
+INTERNAL_RGBA = dict(spring=(0.72, 0.74, 0.78, 1.0),
+                     spacer=(0.30, 0.31, 0.34, 1.0),
+                     sleeve=(0.20, 0.21, 0.24, 1.0),
+                     clutch=(0.55, 0.57, 0.60, 1.0),
+                     graphite_buried=(0.16, 0.16, 0.17, 1.0))
 
 # Where the arm's collision shells attach.  The vendored URDF's link8 and the
 # two fingers carry no shell of their own: link8 is a pure frame, and the
@@ -618,18 +638,30 @@ def _add_capsule(link, a, b, r):
 def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     """The pen holder and its graphite, welded to the hand.
 
-    RED FLAG, and it is the biggest one in this model.  The 2026.08.19 CAD
-    delivery is eight printed parts with NO ASSEMBLY FILE, and no fingertip
-    cradle geometry at all, so where the holder sits in the hand is INFERRED
-    rather than read: `rig_final.penholder22_T_hand` puts the grip centre on
-    the hand TCP and aims the bore along the PLANNER's TCP-to-tip ray.  The
-    housing's own machined flats clock at 23.0 deg (measured off the STL);
-    the planner's ray leans 45.0 deg.  Those are different numbers and only
-    one of them can be right about the real part.
+    RED FLAG, and it is still the biggest one in this model.  The 2026.08.19
+    CAD delivery is eight printed parts with NO ASSEMBLY FILE, so where the
+    holder sits in the hand is INFERRED rather than read:
+    `rig_final.penholder22_T_hand` puts the grip centre on the hand TCP and
+    aims the bore along the PLANNER's TCP-to-tip ray.  The housing's own
+    machined flats clock at 23.0 deg (measured off the STL); the planner's ray
+    leans 45.0 deg.  Those are different numbers and only one can be right.
 
-    The transform here is the PLANNING assumption, chosen so the model and the
-    gate-validated tool transform agree.  It is pending Pete's caliper
-    measurement — see system_model.OPEN_QUESTIONS["penholder_cradle"].
+    WHAT CHANGED.  The 10-deg "natural hold" ASSEMBLY has now been read
+    (`rig_final.penholder22_stack`), and it took away the place that
+    difference used to be parked.  There is no fingertip cradle: the stock FR3
+    fingertips seat square in the post's own 18 x 18 x 7 mm sockets, so the
+    housing's clocking reaches the hand undivided — and on the build that HAS
+    an assembly the file's name-angle IS the lean (10.0000 deg) with the grip
+    centre on the TCP to 0.14 mm.  The transform written here is UNCHANGED and
+    stays the PLANNING assumption, because the planning transform is
+    gate-validated and moving it is a re-certification rather than a render.
+    What it costs is now written down instead of guessed at: see
+    system_model.OPEN_QUESTIONS["penholder_cradle"].
+
+    The INTERNALS are drawn as primitives from `penholder22_internals` and are
+    VISUAL ONLY: every one of them is inside the 21.148 mm bore, and
+    `penholder22_internals_escape` re-proves on every run that the 3-cylinder
+    hull the housing and cap were fitted to still contains them.
     """
     P = rig_final.PENHOLDER22
     _, _, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
@@ -653,6 +685,23 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
         _origin(c, T[:3, 3], _rpy_checked(T[:3, :3]))
         ET.SubElement(ET.SubElement(c, "geometry"), "cylinder",
                       radius=_fmt(r), length=_fmt(L))
+    # --- the stack inside the bore.  VISUAL ONLY, and inside the hull -----
+    esc = rig_final.penholder22_internals_escape()
+    if esc > 0.0:
+        raise SystemExit(f"the holder's internals escape the 3-cylinder "
+                         f"envelope by {esc * 1000:.4f} mm — either the stack "
+                         "or PENHOLDER22['env_cylinders'] is wrong, and a "
+                         "hull that does not contain the assembly is not a "
+                         "hull")
+    for name, T, (r, L), note in rig_final.penholder22_internals(
+            pen_ext, pen_lat, D_HAND_TCP):
+        link.append(ET.Comment(f" {name}: {note} "))
+        v = ET.SubElement(link, "visual")
+        _origin(v, T[:3, 3], _rpy_checked(T[:3, :3]))
+        ET.SubElement(ET.SubElement(v, "geometry"), "cylinder",
+                      radius=_fmt(r), length=_fmt(L))
+        mat = ET.SubElement(v, "material", name=f"{pfx}pen_{name}_mat")
+        ET.SubElement(mat, "color", rgba=_v3(INTERNAL_RGBA[name]))
     j = ET.SubElement(robot, "joint", name=f"{pfx}pen_holder_weld",
                       type="fixed")
     ET.SubElement(j, "parent", link=f"{pfx}panda_hand")
@@ -898,15 +947,42 @@ def manifest(out_dir=None):
                       "PEN_LAT_HOLDER=%.3f, D_HAND_TCP=%.4f)"
                       % (PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP),
             provenance="ASSUMED",
-            red_flag="THE PLACEMENT IS INFERRED.  The CAD delivery has no "
-                     "assembly file and no fingertip cradle geometry.  The "
-                     "housing's own flats clock at 23.0 deg; the planner's "
-                     "TCP-to-tip ray leans 45.0 deg; this model uses the "
-                     "planner's ray.  PENDING Pete's caliper measurement.",
+            red_flag="THE PLACEMENT IS INFERRED.  The 2026.08.19 delivery has "
+                     "no assembly file.  The housing's own flats clock at "
+                     "23.0 deg; the planner's TCP-to-tip ray leans 45.0 deg; "
+                     "this model uses the planner's ray.  THE 10-DEG ASSEMBLY "
+                     "HAS NOW BEEN READ and it removes the fingertip cradle "
+                     "as the place that difference could hide: the stock FR3 "
+                     "fingertips seat square in the post's own 18x18x7 mm "
+                     "sockets, and on that build the file's name-angle IS the "
+                     "lean to 4 decimals with the grip centre on the TCP to "
+                     "0.14 mm.  PENDING one measurement on the mounted "
+                     "holder — see open_questions.penholder_cradle.",
             collision="the 3-cylinder envelope, re-proved on every mesh "
                       "regeneration to contain every visual vertex",
             envelope_cylinders=[list(c) for c in
-                                rig_final.PENHOLDER22["env_cylinders"]]),
+                                rig_final.PENHOLDER22["env_cylinders"]],
+            finger_half_width_m=FINGER_FIX,
+            finger_half_width_source="AUDIT: post 50 mm less 2 x 7.000 mm of "
+                                     "socket = 36.0008 mm of jaw in the "
+                                     "10-deg assembly; was 0.0285, which is "
+                                     "the fingertip's back face",
+            internals=dict(
+                provenance="AUDIT",
+                order="nose shoulder -> spring -> [shim] -> sleeve (clutch "
+                      "inside it) -> cap shoulder",
+                order_source='the resolved component transforms of "Natural '
+                             'hold assembly - closed.SLDASM" (10-deg build, '
+                             "same architecture); every interface then "
+                             "re-measured on this delivery's own STLs",
+                spacer_fitted_m=rig_final.PENHOLDER22["spacer_fitted"],
+                spacer_choices_m=list(rig_final.PENHOLDER22["spacers"]),
+                envelope_escape_m=rig_final.penholder22_internals_escape(),
+                collision=False,
+                bodies=[dict(name=n, radius_m=r, length_m=L, note=note)
+                        for n, _, (r, L), note
+                        in rig_final.penholder22_internals(
+                            PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)])),
         cable_dress=dict(
             provenance="ASSUMED",
             radius_mm=SM.CABLE_R,

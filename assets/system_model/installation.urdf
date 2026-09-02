@@ -1809,12 +1809,12 @@
   <joint name="arm13_panda_finger_joint1" type="fixed">
     <parent link="arm13_panda_hand" />
     <child link="arm13_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm13_panda_finger_joint2" type="fixed">
     <parent link="arm13_panda_hand" />
     <child link="arm13_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm13_group_link57">
     <drake:member link="arm13_panda_link5" />
@@ -1868,6 +1868,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm13_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm13_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm13_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm13_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm13_pen_holder_weld" type="fixed">
     <parent link="arm13_panda_hand" />
@@ -2264,12 +2304,12 @@
   <joint name="arm17_panda_finger_joint1" type="fixed">
     <parent link="arm17_panda_hand" />
     <child link="arm17_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm17_panda_finger_joint2" type="fixed">
     <parent link="arm17_panda_hand" />
     <child link="arm17_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm17_group_link57">
     <drake:member link="arm17_panda_link5" />
@@ -2323,6 +2363,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm17_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm17_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm17_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm17_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm17_pen_holder_weld" type="fixed">
     <parent link="arm17_panda_hand" />
@@ -2719,12 +2799,12 @@
   <joint name="arm31_panda_finger_joint1" type="fixed">
     <parent link="arm31_panda_hand" />
     <child link="arm31_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm31_panda_finger_joint2" type="fixed">
     <parent link="arm31_panda_hand" />
     <child link="arm31_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm31_group_link57">
     <drake:member link="arm31_panda_link5" />
@@ -2778,6 +2858,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm31_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm31_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm31_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm31_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm31_pen_holder_weld" type="fixed">
     <parent link="arm31_panda_hand" />
@@ -3174,12 +3294,12 @@
   <joint name="arm71_panda_finger_joint1" type="fixed">
     <parent link="arm71_panda_hand" />
     <child link="arm71_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm71_panda_finger_joint2" type="fixed">
     <parent link="arm71_panda_hand" />
     <child link="arm71_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm71_group_link57">
     <drake:member link="arm71_panda_link5" />
@@ -3233,6 +3353,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm71_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm71_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm71_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm71_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm71_pen_holder_weld" type="fixed">
     <parent link="arm71_panda_hand" />
@@ -3629,12 +3789,12 @@
   <joint name="arm2_panda_finger_joint1" type="fixed">
     <parent link="arm2_panda_hand" />
     <child link="arm2_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm2_panda_finger_joint2" type="fixed">
     <parent link="arm2_panda_hand" />
     <child link="arm2_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm2_group_link57">
     <drake:member link="arm2_panda_link5" />
@@ -3688,6 +3848,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm2_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm2_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm2_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm2_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm2_pen_holder_weld" type="fixed">
     <parent link="arm2_panda_hand" />
@@ -4084,12 +4284,12 @@
   <joint name="arm97_panda_finger_joint1" type="fixed">
     <parent link="arm97_panda_hand" />
     <child link="arm97_panda_leftfinger" />
-    <origin rpy="0 0 0" xyz="0.0 0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 0.018 0.0584" />
   </joint>
   <joint name="arm97_panda_finger_joint2" type="fixed">
     <parent link="arm97_panda_hand" />
     <child link="arm97_panda_rightfinger" />
-    <origin rpy="0 0 0" xyz="0.0 -0.0285 0.0584" />
+    <origin rpy="0 0 0" xyz="0.0 -0.018 0.0584" />
   </joint>
   <drake:collision_filter_group name="arm97_group_link57">
     <drake:member link="arm97_panda_link5" />
@@ -4143,6 +4343,46 @@
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
+    <visual>
+      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.009525" length="0.039674999999999995" />
+      </geometry>
+      <material name="arm97_pen_spring_mat">
+        <color rgba="0.72 0.74 0.78 1.0" />
+      </material>
+    </visual>
+    <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
+    <visual>
+      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0105" length="0.0401" />
+      </geometry>
+      <material name="arm97_pen_sleeve_mat">
+        <color rgba="0.2 0.21 0.24 1.0" />
+      </material>
+    </visual>
+    <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
+    <visual>
+      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.008533" length="0.035" />
+      </geometry>
+      <material name="arm97_pen_clutch_mat">
+        <color rgba="0.55 0.57 0.6 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <visual>
+      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.04811499999999999" />
+      </geometry>
+      <material name="arm97_pen_graphite_buried_mat">
+        <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
   </link>
   <joint name="arm97_pen_holder_weld" type="fixed">
     <parent link="arm97_panda_hand" />

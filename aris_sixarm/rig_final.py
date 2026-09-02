@@ -337,17 +337,32 @@ TOOL = dict(
 # THE 22-DEG CLUTCH HOLDER AS CAD (2026-08-25 delivery)
 # ===========================================================================
 # Source: raw_slack_file_dump/"Pen holder all parts 2026.08.19"/ — eight
-# printed parts as STL + SLDPRT pairs and NO ASSEMBLY FILE (no .SLDASM), so
-# the mutual placement of the parts is INFERRED, not read.  Units in the STLs
-# are MILLIMETRES (housing 80.1 x 33.78 x 50.0 mm); everything below is metres.
+# printed parts as STL + SLDPRT pairs and NO ASSEMBLY FILE FOR THIS BUILD.
+# Units in the STLs are MILLIMETRES (housing 80.1 x 33.78 x 50.0 mm);
+# everything below is metres.
+#
+# THE OTHER DELIVERY DOES HAVE AN ASSEMBLY, and it is what the internal stack
+# below is read off.  raw_slack_file_dump/"Pen holder cad(1).zip" carries a
+# nested "Natural hold assembly - closed.zip" holding
+# "Natural hold assembly - closed.SLDASM": the COMPLETE 10-deg build, seven
+# components, mated, with two FR3 fingertips in it.  Its architecture is this
+# build's architecture part-for-part (same 40.1 x 21.0 mm sleeve, same cap
+# thread, same 50 mm mount post), so it fixes the axial ORDER that eight loose
+# parts cannot.  See `penholder22_internals` for the order and its proof, and
+# docs/SYSTEM_MODEL.md 7 for the tip-transform verdict it also settles.
 #
 # WHAT THE HOUSING ACTUALLY IS (measured, not guessed — the numbers come out
 # of `scripts/extract_penholder22_meshes.py`, which prints every one of them):
 #
-#   * a BARREL along its own +X with a through bore: OD 27.2 mm, bore 21.1 mm
-#     over x in [0, 0.036], necking to 17.0 mm at the nose x = 0 (which is
-#     exactly the clutch's 17.07 mm OD, so the clutch seats in the nose and
-#     THE PEN LEAVES AT x = 0);
+#   * a BARREL along its own +X with a through bore: OD 27.2 mm, bore
+#     21.148 mm the whole way to the threaded end, necking to a 17.00 mm land
+#     over x in [0.00055, 0.0027] at the nose, and THE PEN LEAVES AT x = 0.
+#     The step between them is a chamfer bottoming at x = 0.00315 and reaching
+#     full bore at x = 0.0036; a flat 21.0 mm face lands on it at
+#     x = 0.003340, which is `stack_front_x` and the FRONT STOP of everything
+#     inside.  (An earlier reading called the 17.0 nose "exactly the clutch's
+#     17.07 OD, so the clutch seats in the nose".  It does not: 17.07 does not
+#     enter 17.00, and the assembly puts the clutch 45 mm further back.)
 #   * an external THREAD at the far end, x in [0.072, 0.0801], OD 28.5 mm,
 #     onto which "pen holder cap v20250903" screws (its threaded recess is
 #     6 mm deep, matching);
@@ -355,12 +370,22 @@ TOOL = dict(
 #     along the housing's own +Z, centred on the bore at x = 0.05513, with an
 #     18 x 18 x 7 mm square socket in each end.
 #
-# THE POST IS THE GRIP, AND IT PINS THE MOUNT AXIS.  50 mm of post plus 2 x
-# 3.5 mm of socket engagement is 57 mm = 2 x the 28.5 mm finger half-width the
-# 10-deg build's CAD gave (`gen_*_urdf.FINGER_FIX`), and the 10-deg holder mesh
-# spans exactly +/-0.02850 in y_hand.  So the post axis is the FINGER TRAVEL
-# axis, y_hand, and the grip centre is the point where the post axis crosses
-# the bore.
+# THE POST IS THE GRIP, AND THE ASSEMBLY NOW PROVES IT.  In the 10-deg
+# assembly the two FR3 fingertips are MATED to the housing (four Coincident
+# and two Parallel mates name both), the post axis lands on the finger-travel
+# axis to 0 deg, and each fingertip's 18.116 x 18.116 mm block sits 7.000 mm
+# inside a post socket.  So the post axis IS y_hand and the grip centre is
+# where the post axis crosses the bore.
+#
+# THE JAW GAP IS 36.0 mm, NOT 57.  The seating faces are the socket FLOORS:
+# 50 mm of post MINUS 2 x 7 mm of socket is 36.000, and the assembly puts the
+# two fingertip grip faces 36.0008 mm apart.  This housing's own sockets
+# measure the same (floors at post z = 7.00 and 43.00).  The 57 mm this
+# comment used to carry added the 3.5 mm of fingertip left OUTSIDE each socket
+# instead of subtracting the 7 mm inside it; 57 mm would hold nothing, because
+# it is 7 mm wider than the post is long.  Both planes are real — grip faces
+# at +/-18.000, fingertip BACK faces at +/-28.500 — and `FINGER_FIX` wants the
+# first, because the URDF's finger mesh includes its own tip.
 #
 # "22 DEG" IS A CLOCKING, NOT A TILT — AND IT MEASURES 23.00.  The post's four
 # flats (and its sockets) are rotated 23.00 +/- 0.00 deg about the POST axis
@@ -368,19 +393,32 @@ TOOL = dict(
 # to the bore.  Mounted on the hand, that clocking is a rotation about y_hand,
 # i.e. the pen leans 23 deg out of tool-z — which is the same 23.0 deg
 # docs/FINAL_RIG.md already recorded for this build and already flagged against
-# the file's "22 deg" name.
+# the file's "22 deg" name.  (Independent check off this STL: the socket's
+# half-width along the bore direction is 9.78 mm = 9.0 / cos 23.03 deg.)
+#
+# AND THE 10-DEG ASSEMBLY SAYS THAT CLOCKING *IS* THE TILT.  Same naming
+# convention ("10 d natural" / "22 deg"), same post-perpendicular-to-bore, same
+# fingertips-in-sockets — and when the assembly is resolved the bore comes out
+# 10.0000 deg off the hand's approach axis and 90.0000 deg off finger travel,
+# with the grip centre 103.26 mm from panda_hand against the stock TCP's 103.4.
+# The file's number is the lean, the grip centre is the TCP, and neither is a
+# coincidence at four decimal places.
 #
 # ...AND 23 DEG IS NOT WHAT THE PLANNER USES.  `frames`' lateral tool puts the
 # tip at TCP + R @ (0.110, 0, 0.110): a lean of 45 deg, 0.15556 m from the TCP.
 # The planning transform is GATE-VALIDATED and stays truth (`PEN_LAT_HOLDER`,
-# docs/DECISIONS.md), so the holder is DRAWN along the planner's ray and the
-# 22 deg of difference is left where it physically has to live — in the
-# fingertip cradle, whose geometry is not in this delivery.  Two consequences
-# Pete has to decide about, both flagged in docs/LAYOUT_STUDY.md:
-#   1. if the cradle is square to the hand, the built tip lands at 23 deg,
-#      i.e. ~0.047 m lateral at this reach, not 0.110;
-#   2. the grip-to-nose length is 55.13 mm, so reaching 155.56 mm needs
-#      100.4 mm of graphite protruding past the nose.
+# docs/DECISIONS.md), so the holder is still DRAWN along the planner's ray —
+# but the assembly has removed the place the 22 deg of difference used to be
+# parked.  There is no cradle: the fingertips seat square in the post's own
+# sockets, so the clocking reaches the hand undivided.  Consequences, all in
+# docs/SYSTEM_MODEL.md 7:
+#   1. at 23 deg and the gate-validated 0.110 m of axial depth the tip is
+#      0.0467 m lateral, not 0.110 — 63.3 mm of tip position;
+#   2. the grip-to-nose length is 55.10 mm, so reaching 155.56 mm needs
+#      100.5 mm of graphite past the nose, against 64.4 mm at 23 deg;
+#   3. the SIGN of the lateral offset is a mounting choice, not a CAD fact:
+#      the post is square, so the holder seats in the sockets either way up
+#      and the lean is +/-23 deg.
 PENHOLDER22 = dict(
     parent="panda_hand",
     source='raw_slack_file_dump/"Pen holder all parts 2026.08.19"/ '
@@ -398,6 +436,22 @@ PENHOLDER22 = dict(
     post_clock=0.401426,              # 23.00 deg, MEASURED (file says "22")
     lead_r=0.003500,                  # clutch bore/2 = the graphite stick
     lead_r_coll=0.005000,             # conservative envelope for the stick
+    # --- the internal stack, all MEASURED off the same STL delivery ---
+    stack_front_x=0.003340,           # where a flat 21.0 face lands on the
+                                      # nose chamfer: the stack's FRONT stop
+    stack_back_x=0.083115,            # the cap's 16.0 mm shoulder, from the
+                                      # cap's own z = 0.001985 at cap_end_x:
+                                      # the stack's BACK stop
+    bore_r=0.010574,                  # the 21.148 mm through bore
+    spring=dict(part="9657K26_Compression Spring", od=0.019050, id=0.014970,
+                wire=0.002040, free=0.050810, coils=14, solid=0.028500),
+    sleeve=dict(part="pen holder for clutches v1.00", length=0.040100,
+                od=0.021000, bore_small=0.015030, bore_large=0.016290,
+                pusher_land=(0.013000, 0.003000)),
+    clutch=dict(part="pen clutch - Creatcolor monolith graphite v1.01",
+                length=0.035000, od=0.017066, bore=0.007000),
+    spacers=(0.005100, 0.010100),     # the shim set: 5 mm and 10 mm, 21.0 OD
+    spacer_fitted=0.0,                # WHICH ONE IS IN.  ASSUMED: none.
     # --- the cap, in its own frame ---
     cap_xy=(0.018000, 0.018000),      # bore axis in the cap's own (x, y)
     cap_seat_z=0.005000,              # recess bottom: meets the housing end
@@ -418,14 +472,17 @@ PENHOLDER22 = dict(
                    (0.034000, 0.074000, 0.030100),
                    (0.074000, 0.085500, 0.018100)),
     # --- parts DELIBERATELY not placed ---
-    omitted=("pen holder for clutches v1.00", "pen clutch - Creatcolor "
-             "monolith graphite v1.01", "pen holder spacer 5 mm",
-             "pen holder spacer 10 mm", "9657K26_Compression Spring",
+    omitted=("pen holder spacer 5 mm", "pen holder spacer 10 mm",
              "pen clutch - extractor"),
-    omitted_why="the first five live INSIDE the 21.1 mm bore and are invisible "
-                "from outside; their axial order is not determined without an "
-                "assembly file, and the spring is a 37 MB coil mesh.  The "
-                "extractor is a bench tool, not part of the mounted holder.",
+    omitted_why="the two spacers are a SHIM SET, not a stack: the bore holds "
+                "the sleeve plus exactly one of {none, 5 mm, 10 mm} and the "
+                "third choice sets the spring preload (11.1 / 16.2 / 21.2 mm "
+                "of deflection against 22.3 mm to solid — fitting both "
+                "spacers would ask 26.3 mm and coil-bind).  `spacer_fitted` "
+                "picks one; the model draws none, which is ASSUMED.  The "
+                "extractor is a bench tool: a 30 mm head on a 12.0 x 40 mm "
+                "pusher rod that goes down the sleeve's 13.0 mm land to push "
+                "the clutch out of its taper, which is what that land is FOR.",
 )
 
 
@@ -496,6 +553,131 @@ def penholder22_collision(pen_ext, pen_lat, d_hand_tcp):
         T[:3, :3] = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
         out.append(("cylinder", T_h @ T, (r, x1 - x0)))
     return out
+
+
+def penholder22_stack(spacer=None):
+    """The internal stack along the bore -> [dict], housing frame, metres.
+
+    Each row is `dict(name, x0, x1, r, note)` with x measured from the nose
+    (x = 0) along the housing's own +X.  This is the ORDER, and the order is
+    the part of the holder eight loose STLs cannot give you.
+
+    WHERE THE ORDER COMES FROM.  The 10-deg "natural hold" assembly in
+    raw_slack_file_dump/"Pen holder cad(1).zip" -> "Natural hold assembly -
+    closed.zip" is the same architecture built out of the same shapes, and
+    resolving its component transforms puts, along its bore from the nose:
+
+        nose shoulder  ->  SPRING  ->  SLEEVE  ->  CAP
+
+    with the spring's front coil landing 3.302 mm behind the nose (this
+    housing's own shoulder is at 3.34) and the sleeve's front face on the
+    spring's back coil to 0.1 mm.  Every interface below is then a measured
+    fit on THIS delivery's parts:
+
+      * FRONT STOP.  The bore necks to 17.00 mm at the nose, so nothing 21 mm
+        gets past x = `stack_front_x`.  The spring is 19.05 mm over 14.97 mm:
+        it clears the 21.148 bore by 1.05 mm and bears on the 21 mm parts'
+        own end annulus, which the 15.0 mm sleeve bore is cut to match.
+      * BACK STOP.  The cap is a THREADED COLLAR, not a lid — 36 mm flange,
+        11.4 mm long, open right through, with a 21.51 mm counterbore and a
+        16.00 mm shoulder.  16.00 is under 21.0, so the shoulder is what
+        retains the stack; `stack_back_x` is where it sits once the cap is
+        home on the 5.5 mm of external thread.
+      * PRELOAD.  stack_back_x - stack_front_x = 79.775 mm and the sleeve is
+        40.100, so the spring is squeezed from 50.810 to 39.675 — 11.135 mm
+        of preload, and the tip can retract 11.175 mm more before coil bind.
+        A spacer takes 5.1 or 10.1 mm of that travel and adds it to preload.
+      * THE CLUTCH IS A SPLIT COLLET AND THE SLEEVE IS ITS TAPER.  The
+        sleeve's bore is a true cone, 15.030 mm growing to 16.290 over its
+        length (0.01747 mm/mm, a surface of revolution to 1 um); the clutch's
+        nose cone grows at 0.01750 mm/mm.  Two matched tapers wedge.  The
+        clutch's free 17.066 mm does not enter a 16.290 mm hole, which is the
+        point: it is slit, and going in closes it onto the 7.0 mm graphite.
+        It goes in from the sleeve's LARGE end, so its collet points at the
+        13.0 mm land — the same land the 12.0 mm extractor rod comes down —
+        and drawing load pushes it deeper, i.e. tighter.
+
+    WHAT IS STILL ASSUMED: which shim is fitted (`spacer_fitted`, drawn as
+    none), and that the clutch is seated to the back of the sleeve rather
+    than part-way.  Neither moves anything outside the barrel.
+    """
+    P = PENHOLDER22
+    sp = P["spacer_fitted"] if spacer is None else float(spacer)
+    if sp and not any(abs(sp - s) < 1e-9 for s in P["spacers"]):
+        raise ValueError(f"spacer {sp} is not one of {P['spacers']} (or 0)")
+    x0, x1 = P["stack_front_x"], P["stack_back_x"]
+    sleeve, spring, clutch = P["sleeve"], P["spring"], P["clutch"]
+    sleeve_x0 = x1 - sleeve["length"]           # the sleeve's front face
+    spring_x1 = sleeve_x0 - sp                  # the spring's back coil
+    free_gap = spring_x1 - x0                   # what the spring is squeezed to
+    if free_gap <= spring["solid"]:
+        raise ValueError(f"spacer {sp} coil-binds the spring: {free_gap:.5f} "
+                         f"m against a {spring['solid']} m solid height")
+    out = [dict(name="spring", x0=x0, x1=spring_x1, r=spring["od"] / 2,
+                note=f"{spring['part']}, free {spring['free']} m, squeezed to "
+                     f"{free_gap:.6f} (preload {spring['free'] - free_gap:.6f}"
+                     f" m, {free_gap - spring['solid']:.6f} m left to solid). "
+                     "DRAWN AS ITS OUTER ENVELOPE, not as a coil.")]
+    if sp:
+        out.append(dict(name="spacer", x0=spring_x1, x1=sleeve_x0,
+                        r=sleeve["od"] / 2,
+                        note=f"shim {sp} m of the set {P['spacers']}"))
+    out.append(dict(name="sleeve", x0=sleeve_x0, x1=x1, r=sleeve["od"] / 2,
+                    note=f"{sleeve['part']}, {sleeve['length']} m, seated on "
+                         "the cap's 16.0 mm shoulder"))
+    out.append(dict(name="clutch", x0=x1 - clutch["length"], x1=x1,
+                    r=clutch["od"] / 2,
+                    note=f"{clutch['part']}, inside the sleeve, collet at the "
+                         "sleeve's 13.0 mm land"))
+    out.append(dict(name="graphite_buried", x0=x1 - clutch["length"], x1=0.0,
+                    r=P["lead_r"],
+                    note="the 7.0 mm stick from the clutch's grip out through "
+                         "the nose; what shows PAST the nose is `pen_lead`"))
+    return out
+
+
+def penholder22_internals(pen_ext, pen_lat, d_hand_tcp, spacer=None):
+    """`penholder22_stack` placed in the panda_hand frame.
+
+    -> [(name, T (4,4), (radius, length), note)], each cylinder's axis being
+    its own frame's z, the way URDF wants it — the same convention
+    `penholder22_collision` uses, and for the same reason.
+
+    VISUAL ONLY.  Every one of these lives inside the 21.148 mm bore and is
+    already inside `env_cylinders`; adding them to the collision model would
+    add nothing but faces.  `penholder22_internals_escape` proves the first
+    half of that claim on every run.
+    """
+    T_h, _, _, _ = penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp)
+    by, bz = PENHOLDER22["bore_yz"]
+    out = []
+    for b in penholder22_stack(spacer):
+        lo, hi = sorted((b["x0"], b["x1"]))
+        T = np.eye(4)
+        T[:3, 3] = (0.5 * (lo + hi), by, bz)
+        T[:3, :3] = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
+        out.append((b["name"], T_h @ T, (b["r"], hi - lo), b["note"]))
+    return out
+
+
+def penholder22_internals_escape(spacer=None):
+    """How far the stack reaches outside `env_cylinders` -> metres.
+
+    0.0 when the complete assembly still fits the collision hull the housing
+    and cap were fitted to, which is the whole question modelling the
+    internals raises.  Measured on the bodies' own corner rings, so a body
+    that pokes out radially OR axially is caught.
+    """
+    P = PENHOLDER22
+    worst = -np.inf
+    for b in penholder22_stack(spacer):
+        lo, hi = sorted((b["x0"], b["x1"]))
+        for x in (lo, hi):
+            d = np.inf
+            for c0, c1, r in P["env_cylinders"]:
+                d = min(d, max(b["r"] - r, c0 - x, x - c1))
+            worst = max(worst, d)
+    return float(max(0.0, worst))
 
 
 def _point_box_d(P, lo, hi):
