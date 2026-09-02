@@ -396,7 +396,10 @@ Why each interface is what it is:
 - **Back stop.** The cap is a threaded **collar**, not a lid — 36 mm flange,
   11.4 mm long, open right through, 21.51 mm counterbore stepping to a
   **16.00 mm** shoulder. 16.00 is under 21.0, so the shoulder retains the
-  stack.
+  stack. And the counterbore is not incidental: **21.51 on a 21.00 sleeve** is
+  a clearance fit, 1.9 mm deep, and the sleeve's back 3.0 mm is exactly what
+  crosses the housing's end face at 80.1 to reach the shoulder at 83.115. The
+  cap is cut to receive this part.
 - **Preload.** 83.115 − 3.340 = 79.775 mm of space, less the 40.100 sleeve,
   squeezes the spring to 39.675: **11.135 mm of preload**, with 11.175 mm left
   before coil bind. That is the pen's compliance, and the two spacers are a
