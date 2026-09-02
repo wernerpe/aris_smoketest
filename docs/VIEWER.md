@@ -320,8 +320,16 @@ put steel where there is none.
   cancel kills the process group, and a restarted manager adopts what is on
   disk without claiming a dead job is running.
 
+Beyond the unit tests, the browser itself was driven: headless Chrome over CDP
+against a live server, four screenshots (`out/gui_live.png`,
+`out/gui_programme.png`, `out/gui_clearance.png`,
+`out/gui_where_the_time_goes.png`), **zero console errors or exceptions** in
+each, WebGL under SwiftShader, and the FK golden check silent — which is how
+the `Infinity` bug and the arm-31-coloured residual were found in the first
+place.
+
 Run only these plus whatever covers the instrumented stages — the whole suite
-is over an hour:
+is over an hour, and `tests/test_balance.py` alone is most of that:
 
     .venv/bin/python -m pytest tests/test_progress.py \
         tests/test_program_schema.py tests/test_gui_backend.py \
