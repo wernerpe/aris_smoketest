@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from aris_sixarm import rig_final  # noqa: E402
-from aris_sixarm.frames import D_HAND_TCP, PEN_EXT, PEN_LAT_HOLDER  # noqa: E402
+from aris_sixarm.frames import D_HAND_TCP, PEN_EXT_HOLDER, PEN_LAT_HOLDER  # noqa: E402
 
 CAD = (ROOT.parent / "raw_slack_file_dump" / "Pen holder all parts 2026.08.19")
 HOUSING = "pen holder housing - 22 deg - reinforced - v20260429.STL"
@@ -143,7 +143,7 @@ def outside_envelope(pts):
     being checked against a hull that was not fitted to it.  The order is part
     of `penholder22_hull`'s contract.
     """
-    prims = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER,
+    prims = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                             D_HAND_TCP)
     assert len(prims) == 4, "penholder22_hull has changed shape"
     worst = np.full(len(pts), np.inf)
@@ -203,8 +203,8 @@ def main():
           f"a lean about y_hand, not a tilt of the mount.")
 
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
-        PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
-    lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT))
+        PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
+    lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER))
     print(f"PLANNER asks for a {lean:.2f} deg lean and {reach * 1000:.2f} mm "
           f"of reach from the TCP; the housing gives {meas['clock_deg']:.2f} "
           f"deg and {exit_x * 1000:.2f} mm grip-to-exit (the CAP's outer face; "
@@ -238,7 +238,7 @@ def main():
         assert o.max() <= 1e-9, f"{name}: the envelope does not enclose it"
     print("   PASS  the envelope encloses every visual vertex")
 
-    tip = np.array([PEN_LAT_HOLDER, 0.0, D_HAND_TCP + PEN_EXT])
+    tip = np.array([PEN_LAT_HOLDER, 0.0, D_HAND_TCP + PEN_EXT_HOLDER])
     print(f"\npen tip (planning, hand frame): {np.round(tip, 4)} m — the "
           f"meshes are placed to point at it, and nothing here moves it.")
 

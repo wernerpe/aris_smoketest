@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 from aris_sixarm import fleet, frames, mounts, rig_final  # noqa: E402
 from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN,  # noqa: E402
-                                PEN_EXT, PEN_LAT_HOLDER, QD_MAX, TAU_MAX,
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, QD_MAX, TAU_MAX,
                                 fk, tool_offset)
 from aris_sixarm.layout import FLEET_PROPOSED, LAYOUT_PROPOSED  # noqa: E402
 from aris_sixarm.rig_final6 import SHEET_FINAL6  # noqa: E402
@@ -238,7 +238,7 @@ def test_pen_tip_fk_matches_frames(root):
     `pen_lat` is passed EXPLICITLY (the module global stays inline); this is
     the lateral holder, which is what the proposed rig carries.
     """
-    off = tool_offset(PEN_EXT, PEN_LAT_HOLDER)
+    off = tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)
     worst = 0.0
     for q in _sample_qs():
         qmap = {f"arm{a}_panda_joint{i + 1}": q[i]
@@ -257,8 +257,12 @@ def test_pen_tip_fk_matches_frames(root):
 
 
 def test_the_tool_chain_is_the_lateral_holder(root, links, joints):
-    """bracket 0.110 along hand x, then the pen 0.110 down to the tip — and
-    the TCP frame sits where `frames.TCP_D` says it does."""
+    """bracket `PEN_LAT_HOLDER` along hand x, then `PEN_EXT_HOLDER` down to
+    the tip — and the TCP frame sits where `frames.TCP_D` says it does.
+
+    Both were 0.110 until 2026-09-03, when the photo of the real gripper put
+    the tip ~5 cm below the Fat blades' plates (frames.py).  The pair is
+    USER-SPECIFIED, never gate-validated; only the INLINE pen's 0.110 was."""
     for aid in FLEET_PROPOSED:
         p = f"arm{aid}_"
         assert joints[f"{p}tcp_weld"].find("parent").get("link") == \
@@ -268,14 +272,14 @@ def test_the_tool_chain_is_the_lateral_holder(root, links, joints):
         assert np.allclose(_origin_of(joints[f"{p}pen_body_weld"])[:3, 3],
                            [PEN_LAT_HOLDER, 0, 0], atol=1e-9)
         assert np.allclose(_origin_of(joints[f"{p}pen_tip_weld"])[:3, 3],
-                           [0, 0, PEN_EXT], atol=1e-9)
+                           [0, 0, PEN_EXT_HOLDER], atol=1e-9)
         # `pen_bracket` / `pen_body` are STATIC_CAPSULES_LAT written out — the
         # L-shaped envelope the study gated every pose against.  They are
         # COLLISION-ONLY: the real holder is not an L, and drawing one would
         # be a lie, but a checker still gets what the planner certified.
         for name, r, L in ((f"{p}pen_bracket", rig_final.BRACKET_R_LAT,
                             PEN_LAT_HOLDER),
-                           (f"{p}pen_body", rig_final.PEN_R_LAT, PEN_EXT)):
+                           (f"{p}pen_body", rig_final.PEN_R_LAT, PEN_EXT_HOLDER)):
             assert links[name].find("visual") is None, name
             cyl = links[name].find("collision/geometry/cylinder")
             assert float(cyl.get("radius")) == pytest.approx(r, abs=1e-9)
@@ -318,7 +322,7 @@ def test_the_holder_collision_envelope_is_the_shared_one(links):
     """The URDF's collision primitives ARE `penholder22_collision` — one
     source, four cylinders coaxial with the bore (three for the housing and
     cap, one for the pencil tail), radii measured not fitted by eye."""
-    want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+    want = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
     for aid in FLEET_PROPOSED:
         cols = links[f"arm{aid}_pen_holder"].findall("collision")
         assert len(cols) == len(want) == 4
@@ -336,7 +340,7 @@ def test_the_holder_envelope_encloses_the_committed_meshes():
     trimesh = pytest.importorskip("trimesh")
     # the HOUSING's own three, not the tail's fourth: a hull that was not
     # fitted to these meshes has no business rescuing a vertex of them
-    prims = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER,
+    prims = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                             D_HAND_TCP)[:3]
     for mesh in rig_final.PENHOLDER22["visual_meshes"]:
         V = np.asarray(trimesh.load(URDF_DIR / mesh, force="mesh").vertices)
@@ -362,8 +366,8 @@ def test_the_holder_placement_aims_at_the_planning_tip():
     tail face, and its preview draws exactly that — so +X_housing points at
     the tip.  docs/SYSTEM_MODEL.md 7c."""
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
-        PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
+        PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
+    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
     u = u / np.linalg.norm(u)
     assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)    # bore
     assert np.allclose(T_h[:3, :3] @ [0, 0, 1], [0, 1, 0], atol=1e-12)  # post
@@ -371,17 +375,19 @@ def test_the_holder_placement_aims_at_the_planning_tip():
     grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
     assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3],
                        [0, 0, D_HAND_TCP], atol=1e-12)
-    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT), abs=1e-12)
+    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT_HOLDER), abs=1e-12)
     # the cap is the end the pen leaves by, i.e. IN FRONT of the TCP
     assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
     # ...and the numbers Pete has to rule on
     assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=0.01)
-    assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT)) == \
+    assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER)) == \
         pytest.approx(45.0, abs=1e-9)
     # grip -> the cap's outer face is 30.001 mm, so the graphite past it is
-    # 125.6 mm, not the 100.5 the end-for-end model asked for
+    # 53.2 mm (it was 125.6 mm at the old 0.110 / 0.110 pair, and 100.5 with
+    # the housing end-for-end).  53.2 mm along the bore reads 37.6 mm in the
+    # photo's own view, which is the 20-40 mm of graphite the photo shows.
     assert exit_x == pytest.approx(0.030001, abs=1e-6)
-    assert (reach - exit_x) == pytest.approx(0.12556, abs=5e-4)  # graphite
+    assert (reach - exit_x) == pytest.approx(0.05321, abs=5e-4)  # graphite
 
 
 def test_the_graphite_runs_from_the_cap_to_the_tip(links, joints):
@@ -390,9 +396,9 @@ def test_the_graphite_runs_from_the_cap_to_the_tip(links, joints):
     pen leaves — and end on the planning tip, or the picture and the transform
     disagree.  It started at the housing's TAIL face until 2026-09-03; see
     docs/SYSTEM_MODEL.md 7c."""
-    _, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+    _, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                      D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
+    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
     u = u / np.linalg.norm(u)
     for aid in FLEET_PROPOSED:
         p = f"arm{aid}_"

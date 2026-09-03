@@ -51,6 +51,7 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
 
 from aris_sixarm import atlas, layout, mounts  # noqa: E402
+from aris_sixarm.frames import PEN_LAT_HOLDER  # noqa: E402
 from aris_sixarm.layout import (MIN_BASE_DIST, MIN_FLOOR_INV_DIST,  # noqa: E402
                                 PROFILES_LAT, Z_FLOOR, arm_ids, build_fleet)
 from aris_sixarm.rig_final6 import SHEET_FINAL6  # noqa: E402
@@ -61,7 +62,10 @@ GRID_FINE = 0.02
 HEIGHTS = (0.85, 0.922, 1.00)
 FAMILIES = (2, 0)          # number of FLOOR arms; the rest hang
 MARGIN_OUT = 0.35          # how far outside the canvas a floor base may sit
-PEN_LAT = 0.110
+# the HOLDER's lateral offset, not a literal: it was 0.110 until 2026-09-03
+# and is 0.0588421 now (frames.py, docs/SYSTEM_MODEL.md 7e), so every number
+# this study printed before that date was earned at the older tool.
+PEN_LAT = PEN_LAT_HOLDER
 RNG = np.random.default_rng(20260825)
 
 

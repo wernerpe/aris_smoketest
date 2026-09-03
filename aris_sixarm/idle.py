@@ -64,7 +64,7 @@ import numpy as np
 
 from . import coordination, validate, writing
 from .fleet import FLEET, H_INV_DEFAULT
-from .frames import PEN_EXT
+from .frames import PEN_EXT, ext_of
 
 POLICY_FREEZE = writing.PARK_FREEZE
 POLICY_HOME = writing.PARK_HOME
@@ -136,7 +136,7 @@ def frozen_interference(q, arm, pen, paths, tails, margin,
 # ==========================================================================
 # the retreat: outward, a few centimetres, certified
 # ==========================================================================
-def retreat_candidates(spec, q_frozen, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+def retreat_candidates(spec, q_frozen, h_inv=H_INV_DEFAULT, pen_ext=None,
                        ups=RETREAT_UP, backs=RETREAT_BACK,
                        margin_min=validate.MARGIN_GATE):
     """Poses to try, nearest first. -> [dict(q, tag, dq)].
@@ -250,7 +250,7 @@ def _programs(specs, segs_by_arm, pens, q_start, parks, stretch, retreats,
             continue
         out[a] = writing.arm_program(
             specs[a], segs, draw_speed=draw_speed, transit_speed=transit_speed,
-            h_inv=h_inv, qd_frac=qd_frac, pen_ext=pens.get(a, PEN_EXT),
+            h_inv=h_inv, qd_frac=qd_frac, pen_ext=ext_of(pens.get(a)),
             q_start=(q_start or {}).get(a), park=parks[a],
             retreat=(retreats or {}).get(a),
             aside=(aside or {}).get(a),
@@ -445,7 +445,7 @@ def _refusal(exc, progs, dt, orders, specs=None):
         for a, p in progs.items():
             if p["duration"] <= 0.0 or "q_end" not in p:
                 continue
-            bad = frozen_interference(p["q_end"], a, p.get("pen", PEN_EXT),
+            bad = frozen_interference(p["q_end"], a, ext_of(p.get("pen")),
                                       {b: pb for b, pb in paths.items()
                                        if b != a}, {}, margin, sweep,
                                       spec=specs.get(a) if specs else None)
@@ -473,7 +473,7 @@ def _blocking_freezes(progs, paths, pens, margin, sweep, h_inv, specs=None):
     for a, p in progs.items():
         if p["duration"] <= 0.0 or "q_end" not in p:
             continue
-        hit = frozen_interference(p["q_end"], a, pens.get(a, PEN_EXT), paths,
+        hit = frozen_interference(p["q_end"], a, ext_of(pens.get(a)), paths,
                                   {b: 0 for b in paths}, margin, sweep, h_inv,
                                   spec=specs.get(a) if specs else None)
         if hit:
@@ -550,7 +550,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
         want, sent_home = {}, []
         for a in blocked:
             got = plan_retreat(specs[a], progs[a]["q_end"], a,
-                               pens.get(a, PEN_EXT), paths,
+                               ext_of(pens.get(a)), paths,
                                {b: 0 for b in paths}, margin, sweep, h_inv)
             if got is not None:
                 want[a] = got
@@ -652,7 +652,7 @@ def conduct(segs_by_arm, pens, dt, q_start=None, policy=POLICY_FREEZE,
             tails = {b: int(np.asarray(sch["progress"][b])[
                 min(m_free, sch["M"] - 1)]) for b in paths if b != a}
             got = plan_retreat(specs[a], progs[a]["q_end"], a,
-                               pens.get(a, PEN_EXT), paths, tails, sch["margin"],
+                               ext_of(pens.get(a)), paths, tails, sch["margin"],
                                sweep, h_inv)
             if got is not None:
                 want[a] = got

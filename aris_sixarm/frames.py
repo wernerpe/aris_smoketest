@@ -65,41 +65,83 @@ D_HAND_TCP = 0.1034   # flange -> hand TCP
 TCP_D = D_FLANGE + D_HAND_TCP   # = 0.2104, the solver's d7e
 PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
 
-# --- LATERAL PEN HOLDER (2026-08-25) --------------------------------------
+# --- LATERAL PEN HOLDER (2026-08-25; RE-DERIVED FROM THE PHOTO 2026-09-03) --
 # The real pen holder offsets the pen LATERALLY from the wrist axis, along the
 # hand's x-axis (perpendicular to the finger-travel direction):
 #
-#     tip = TCP + R_tcp @ (PEN_LAT, 0, PEN_EXT)
+#     tip = TCP + R_tcp @ (PEN_LAT, 0, PEN_EXT_ACTIVE)
 #
-# PEN_LAT_HOLDER = 0.110 is USER-SPECIFIED (2026-08-25).  The axial part stays
-# PEN_EXT = 0.110: originally carried as an assumption, now a USER-CONFIRMED
-# ESTIMATE — the user places the tip ~15 cm below the bottom of the gripper's
-# white housing; housing bottom ~0.066 m below the hand root puts the tip
-# ~0.216 m from the hand root = ~0.113 below TCP, within mm of 0.110.  Refine
-# by touchdown calibration once the holder is mounted (docs/DECISIONS.md).
+# WHAT THESE TWO NUMBERS ARE, AND WHAT THEY ARE NOT.  The INLINE pen's
+# `PEN_EXT = 0.110` above IS a real touchdown measurement (gate B, MZ 0.924)
+# and NOTHING here touches it.  The holder's own pair never was one:
+# `PEN_LAT_HOLDER = 0.110` was USER-SPECIFIED on 2026-08-25 from an estimate
+# ("tip ~15 cm below the bottom of the gripper's white housing"), and the
+# holder simply borrowed the inline pen's 0.110 for its axial part because
+# nobody had measured the holder's own.  Several places in the repo said that
+# pair was "gate-validated"; it never was, and they now say what this comment
+# says (docs/SYSTEM_MODEL.md 7a/7c/7e).
 #
-# `PEN_LAT` is the ACTIVE lateral offset and it DEFAULTS TO 0.0 (the inline
-# pen every published number and every pinned test was earned with).  Switch
-# the whole stack to the lateral holder the same way rigs are switched:
+# USER-SPECIFIED 2026-09-03, from the photo of the real gripper: the pen tip
+# sits ~5 cm below the bottom edge of the Fat Franka Finger blades' contact
+# plates.  That edge is at panda_hand z = 0.1122421 m
+# (rig_final.FATFINGER["plate_link_z"][1] + the finger joint's own 0.0584), so
+# the tip is at z = 0.1622421 and, from the hand TCP at D_HAND_TCP = 0.1034,
+#
+#     PEN_EXT_HOLDER = 0.1622421 - 0.1034 = 0.0588421 m
+#
+# The LEAN stays 45 deg, and that is not inertia — it is forced.  The
+# housing's mount post sits 55.099 mm from its tail face, so 55.1 mm of barrel
+# stands BEHIND the grip, pointing at the wrist, while the grip is only
+# ~37.4 mm below the hand's underside.  Swept against the manufacturer's own
+# hand collision shell, the raw housing STL is INSIDE the hand at every lean
+# below 35.17 deg (11.9 mm inside at the housing's own 23 deg clocking) and
+# clears by 6.15 mm at 45 deg.  The photo agrees that nothing fixes the
+# clocking — no fingertip is fitted and the bare plates clamp the post's end
+# faces — so the lean is set by hand at grasp time, and it cannot be 23 deg.
+#
+#     PEN_LAT_HOLDER = PEN_EXT_HOLDER * tan(PEN_LEAN_HOLDER)
+#
+# Refine by touchdown calibration once the holder is mounted
+# (docs/DECISIONS.md).  What one ruler reading would settle is in
+# docs/SYSTEM_MODEL.md 7e.
+#
+# `PEN_LAT` and `PEN_EXT_ACTIVE` are the ACTIVE pair and they DEFAULT TO the
+# inline pen (0.0, 0.110) — the tool every published number and every pinned
+# test was earned with.  Switch the whole stack to the lateral holder the same
+# way rigs are switched:
 #
 #     ARIS_TOOL=lateral python3 scripts/whatever.py     (read by __init__.py)
 #     frames.activate_tool("lateral")                    (in process, tests)
 #
-# Every function that takes `pen_lat=None` resolves None to the ACTIVE value
-# at call time, so a single switch reaches the planner, the atlas, the
-# validator, the capsule models and the transit router consistently.
-PEN_LAT_HOLDER = 0.110   # m, the real holder's lateral tip offset (hand x)
+# Every function that takes `pen_lat=None` or `pen_ext=None` resolves None to
+# the ACTIVE value at call time, so a single switch reaches the planner, the
+# atlas, the validator, the capsule models and the transit router
+# consistently.  BOTH halves switch together: before 2026-09-03 only the
+# lateral offset did, and a lateral run silently kept the inline pen's axial
+# 0.110.
+PEN_LEAN_HOLDER = np.deg2rad(45.0)   # rad, bore out of the hand's approach axis
+PEN_EXT_HOLDER = 0.0588421   # m, the holder's AXIAL tip depth below the TCP
+PEN_LAT_HOLDER = 0.0588421   # m, = PEN_EXT_HOLDER * tan(PEN_LEAN_HOLDER)
 PEN_LAT = 0.0            # m, ACTIVE lateral offset (0.0 = legacy inline pen)
+PEN_EXT_ACTIVE = PEN_EXT  # m, ACTIVE axial depth (PEN_EXT = the inline pen)
 TOOL_NAMES = ("inline", "lateral")
 ACTIVE_TOOL = "inline"
 
 
 def activate_tool(name):
-    """Select the ACTIVE tool model ("inline" | "lateral"), in this process."""
-    global PEN_LAT, ACTIVE_TOOL
+    """Select the ACTIVE tool model ("inline" | "lateral"), in this process.
+
+    Sets BOTH halves of the tool offset — the lateral `PEN_LAT` and the axial
+    `PEN_EXT_ACTIVE`.  Until 2026-09-03 it set only the first, so a lateral run
+    drew the holder's 45 deg ray out to the INLINE pen's 0.110 m of axial
+    depth; the holder's own is `PEN_EXT_HOLDER`.
+    """
+    global PEN_LAT, PEN_EXT_ACTIVE, ACTIVE_TOOL
     if name not in TOOL_NAMES:
         raise ValueError(f"unknown tool {name!r}; want one of {TOOL_NAMES}")
-    PEN_LAT = PEN_LAT_HOLDER if name == "lateral" else 0.0
+    lateral = name == "lateral"
+    PEN_LAT = PEN_LAT_HOLDER if lateral else 0.0
+    PEN_EXT_ACTIVE = PEN_EXT_HOLDER if lateral else PEN_EXT
     ACTIVE_TOOL = name
     return PEN_LAT
 
@@ -109,9 +151,20 @@ def lat_of(pen_lat=None):
     return PEN_LAT if pen_lat is None else float(pen_lat)
 
 
-def tool_offset(pen_ext=PEN_EXT, pen_lat=None):
+def ext_of(pen_ext=None):
+    """Resolve a `pen_ext` argument: None means the ACTIVE tool's depth.
+
+    The twin of `lat_of`, and it exists for the same reason: `PEN_EXT` is a
+    module constant, so a signature written `pen_ext=PEN_EXT` binds the INLINE
+    pen's 0.110 AT IMPORT and no later `activate_tool` can reach it.  Every
+    such default in this package is `None` instead, and resolves here.
+    """
+    return PEN_EXT_ACTIVE if pen_ext is None else float(pen_ext)
+
+
+def tool_offset(pen_ext=None, pen_lat=None):
     """The tip offset in the hand-TCP frame -> (3,).  tip = TCP + R @ this."""
-    return np.array([lat_of(pen_lat), 0.0, float(pen_ext)])
+    return np.array([lat_of(pen_lat), 0.0, ext_of(pen_ext)])
 # --- FINAL RIG tool (pen holder CAD; docs/FINAL_RIG.md "Pen holder") ------
 # The holder is CLAMPED BY THE HAND'S FINGERS (custom fingertips, half-width
 # 28.5 mm); the flange->hand chain is stock, so TCP_D stays the solver
@@ -213,19 +266,19 @@ def fk_many(qs, tcp=TCP_D):
     return T, P
 
 
-def tip_pos(q, pen_ext=PEN_EXT, pen_lat=None):
+def tip_pos(q, pen_ext=None, pen_lat=None):
     """Pen tip position in link0.  `pen_lat=None` -> the ACTIVE tool."""
     T, _ = fk(q)
     return T[:3, 3] + T[:3, :3] @ tool_offset(pen_ext, pen_lat)
 
 
-def tip_pos_many(qs, pen_ext=PEN_EXT, pen_lat=None):
+def tip_pos_many(qs, pen_ext=None, pen_lat=None):
     """`tip_pos` for a whole array. (N,7) -> (N,3)."""
     T, _ = fk_many(qs)
     return T[:, :3, 3] + T[:, :3, :3] @ tool_offset(pen_ext, pen_lat)
 
 
-def tool_points_many(T, pen_ext=PEN_EXT, pen_lat=None):
+def tool_points_many(T, pen_ext=None, pen_lat=None):
     """Chain points of the TOOL beyond the TCP, from (N,4,4) TCP poses.
 
     -> list of (N,3) arrays: [tip] for the inline pen; [tip, corner] for the

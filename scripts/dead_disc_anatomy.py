@@ -72,13 +72,17 @@ sys.path.insert(0, str(ROOT))
 import numpy as np                                              # noqa: E402
 from aris_sixarm import atlas, ik, mounts, rig_final            # noqa: E402
 from aris_sixarm.fleet import FLEET, SHEET                      # noqa: E402
+from aris_sixarm import frames as _F                            # noqa: E402
 from aris_sixarm.frames import (rotx, rotz, rot_axis, tool_offset,
                                 tool_points_many, FR3_MIN, FR3_MAX)  # noqa: E402
 
 GRID = 0.02
 H = 0.940                 # proposed rig mount height (LAYOUT_PROPOSED["h"])
-PEN_EXT = 0.110
-PEN_LAT = 0.110           # the lateral holder, passed EXPLICITLY everywhere
+# the HOLDER's own pair, not the inline pen's: both were 0.110 until
+# 2026-09-03 and are 0.0588421 now (frames.py, docs/SYSTEM_MODEL.md 7e), so
+# anything this script printed before that date was earned at the older tool.
+PEN_EXT = _F.PEN_EXT_HOLDER
+PEN_LAT = _F.PEN_LAT_HOLDER   # the lateral holder, passed EXPLICITLY everywhere
 ATLAS = ROOT / "out" / "atlas_proposed_h0940_banded"
 CELL_M2 = GRID * GRID
 

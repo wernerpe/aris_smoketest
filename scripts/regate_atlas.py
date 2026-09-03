@@ -84,8 +84,11 @@ def _resolve(job):
     h = _W["h"]
     boxes = spec.static_obstacles()
     Twb = spec.T_world_base(h)
+    # the HOLDER's OWN axial depth, not the spec's (which is the inline pen's
+    # 0.110 unless ARIS_TOOL says otherwise): naming pen_lat and letting
+    # pen_ext fall through asks about a tool that exists nowhere.  frames.py.
     r = atlas.solve_cell(x, y, Twb, np.linalg.inv(Twb), spec,
-                         atlas._candidates(15.0), spec.pen, boxes,
+                         atlas._candidates(15.0), frames.PEN_EXT_HOLDER, boxes,
                          pen_lat=frames.PEN_LAT_HOLDER,
                          gate_groups=atlas._gated_groups(15.0, _W["cone"]),
                          static_margin=_W["floor"])

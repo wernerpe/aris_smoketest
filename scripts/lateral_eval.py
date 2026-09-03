@@ -68,7 +68,8 @@ def main():
         print(f"\nE2E {name}: {L:.3f} m")
         out["strokes"][name] = dict(arc_len=L)
         for tag, opts in (("inline", {}),
-                          ("lateral", dict(pen_lat=frames.PEN_LAT_HOLDER))):
+                          ("lateral", dict(pen_lat=frames.PEN_LAT_HOLDER,
+                                           pen_ext=frames.PEN_EXT_HOLDER))):
             t0 = time.perf_counter()
             r = stroke_api.plan_stroke(arc, sp, opts)
             dt = time.perf_counter() - t0
@@ -106,7 +107,8 @@ def main():
             continue
         t0 = time.perf_counter()
         r = stroke_api.plan_stroke(seg, spec,
-                                   dict(pen_lat=frames.PEN_LAT_HOLDER))
+                                   dict(pen_lat=frames.PEN_LAT_HOLDER,
+                                        pen_ext=frames.PEN_EXT_HOLDER))
         times.append(1000 * (time.perf_counter() - t0))
         statuses.append(r["status"])
     print(f"  {len(times)} strokes: median {np.median(times):.0f} ms, "
@@ -118,11 +120,16 @@ def main():
     # ---- 2. the atlas patch ----------------------------------------------
     print(f"\natlas patch, arm {a.arm}, grid {a.grid} m, tilt {a.tilt} deg:")
     res = {}
-    for tag, lat in (("inline", 0.0), ("lateral", frames.PEN_LAT_HOLDER)):
+    # BOTH halves of each tool: the holder's axial depth is its own since
+    # 2026-09-03 and is no longer the inline pen's (frames.py)
+    for tag, lat, ext in (("inline", 0.0, frames.PEN_EXT),
+                          ("lateral", frames.PEN_LAT_HOLDER,
+                           frames.PEN_EXT_HOLDER)):
         d = ROOT / "out" / f"lateral_eval_{tag}"
         t0 = time.time()
         arr = atlas.sweep_arm(a.arm, d, grid=a.grid, tilt_max_deg=a.tilt,
-                              fleet=fl, sheet=sheet, pen_lat=lat)
+                              fleet=fl, sheet=sheet, pen_lat=lat,
+                              pen_ext=ext)
         go = atlas.strict_go(arr)
         r_cells = ((arr[:, 0] - bx) ** 2 + (arr[:, 1] - by) ** 2) ** 0.5
         res[tag] = dict(

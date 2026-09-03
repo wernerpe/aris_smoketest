@@ -53,9 +53,9 @@ from pydrake.systems.framework import DiagramBuilder  # noqa: E402
 
 from aris_sixarm import rig_final, selfcoll  # noqa: E402
 from aris_sixarm import system_model as SM  # noqa: E402
-from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN, PEN_EXT,  # noqa: E402
-                                PEN_LAT_HOLDER, QD_MAX, TAU_MAX, fk,
-                                tool_offset)
+from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN,  # noqa: E402
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, QD_MAX,
+                                TAU_MAX, fk, tool_offset)
 from aris_sixarm.layout import (FLEET_PROPOSED, LAYOUT_PROPOSED,  # noqa: E402
                                 Q_PARK_PROPOSED)
 
@@ -145,7 +145,7 @@ print("\n3. pen tip FK vs frames")
 rng = np.random.default_rng(20260901)
 qs = [np.asarray(next(iter(FLEET_PROPOSED.values())).q_seed, float)]
 qs += list(rng.uniform(FR3_MIN + 0.10, FR3_MAX - 0.10, size=(N_SAMPLES, 7)))
-off = tool_offset(PEN_EXT, PEN_LAT_HOLDER)      # explicit: never the global
+off = tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)      # explicit: never the global
 for aid, spec in FLEET_PROPOSED.items():
     Twb = spec.T_world_base(H_INV)
     e_tip = e_rot = 0.0
@@ -171,7 +171,7 @@ ok(f"every pen tip within {TOL:.0e} m of frames over {len(qs)} configs "
 
 # --- 4. the tool -----------------------------------------------------------
 print("\n4. the pen holder")
-T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                      D_HAND_TCP)
 for aid in FLEET_PROPOSED:
     Xh = plant.EvalBodyPoseInWorld(ctx,
@@ -182,7 +182,7 @@ for aid in FLEET_PROPOSED:
           Xh.GetAsMatrix4(), quiet=True)
 ok("the holder link frame IS the hand frame on every arm",
    not [f for f in fails if "rides the hand" in f[0]])
-u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT]) / reach
+u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER]) / reach
 # THE SENSE, NOT ONLY THE AXIS.  The housing's +X points AT the tip: the pen
 # leaves through the cap.  Until 2026-09-03 this line read [-1, 0, 0] and the
 # model had the housing end-for-end (docs/SYSTEM_MODEL.md 7c) — an axis-only
@@ -192,7 +192,7 @@ check("holder bore points along the planner's TCP->tip ray, cap first",
 check("the pen leaves 30.001 mm in front of the grip, not 55.099 behind it",
       exit_x, rig_final.PENHOLDER22["cap_end_x"]
       - rig_final.PENHOLDER22["post_xy"][0])
-want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+want = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
 lk = {ln.get("name"): ln for ln in xroot.findall("link")}
 cols = lk["arm13_pen_holder"].findall("collision")
 ok("the holder collision is the 4-cylinder envelope (3 housing + the tail)",

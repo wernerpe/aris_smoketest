@@ -38,7 +38,7 @@ docstring for why that is not a stylistic choice.
 import numpy as np
 
 from . import ik, planner
-from .frames import (PEN_EXT, QD_MAX, joint_margin, rotx, rotz, tip_pos_many,
+from .frames import (PEN_EXT, QD_MAX, ext_of, joint_margin, rotx, rotz, tip_pos_many,
                      lat_of, tool_offset)
 from .metrics import sigma_min as _sigma_min, tip_jacobian_many
 from .pacing import dq_ds
@@ -105,7 +105,7 @@ def pen_down_poses(pts_xy, Twb_inv, pen_ext, phi=0.0, pen_lat=None, tilt=None):
     return np.asarray(Twb_inv, float) @ T
 
 
-def chase_cc(poses, q7, q_seed, pen_ext=PEN_EXT, margin_gate=None,
+def chase_cc(poses, q7, q_seed, pen_ext=None, margin_gate=None,
              sigma_gate=None, jump_gate=None, fallback=False, pen_lat=None):
     """Walk a stroke with case-consistent IK.  THE feasibility test of the
     project: search on the grid, certify against the real kinematics.
@@ -940,7 +940,8 @@ def stroke_setup(stroke_pts, spec, q7_of_s, lat=None, ds=0.005, sheet=None,
     from .fleet import H_INV_DEFAULT
     Twb = lat["Twb"] if lat is not None else spec.T_world_base(
         H_INV_DEFAULT if h_inv is None else h_inv)
-    pen_ext = (lat["pen_ext"] if lat is not None else PEN_EXT) if pen_ext is None else pen_ext
+    pen_ext = (lat["pen_ext"] if lat is not None else ext_of()) \
+        if pen_ext is None else float(pen_ext)
     if phi is None:
         phi = float(lat.get("phi", 0.0)) if lat is not None else 0.0
     if tilt is None and lat is not None:

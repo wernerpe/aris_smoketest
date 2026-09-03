@@ -212,15 +212,21 @@ docs/
 
 - **Pen**: no CAD model exists anywhere. tip = hand-TCP + **0.110 m** tool-z
   (gate-validated on the rig). IK targets the tip, not the flange.
-- **LATERAL HOLDER (2026-08-25, env-selectable, NOT default)**: the real
-  holder offsets the pen 0.110 m along hand x — tip = TCP + R @ (0.110, 0,
-  0.110) — which BREAKS the yaw==q7 degeneracy: tool yaw phi becomes a real
-  redundancy DOF (`aris_sixarm/lateral.py`, coarse 8-phi ring + coupled
-  rescue lattice). `ARIS_TOOL=lateral` switches planner, atlas, validator,
-  capsules and router together; the axial 0.110 is a user-confirmed estimate
-  pending touchdown calibration (docs/DECISIONS.md). Measured: inverted-arm
-  strict-GO +51 % on its patch, GO radius 0.75 -> 0.86 m, strokes certify in
-  ~80-280 ms (`scripts/lateral_eval.py`).
+- **LATERAL HOLDER (2026-08-25, env-selectable, NOT default; RE-SPECIFIED
+  2026-09-03)**: the real holder offsets the pen along hand x — tip =
+  TCP + R @ (`PEN_LAT_HOLDER`, 0, `PEN_EXT_HOLDER`) — which BREAKS the
+  yaw==q7 degeneracy: tool yaw phi becomes a real redundancy DOF
+  (`aris_sixarm/lateral.py`, coarse 8-phi ring + coupled rescue lattice).
+  `ARIS_TOOL=lateral` switches planner, atlas, validator, capsules and router
+  together, and since 2026-09-03 it switches **both halves** of the tool
+  rather than only the lateral one. Both constants are **0.0588421 m** — the
+  45° lean the hand forces, out to the tip a photo of the real gripper shows
+  (~5 cm below the Fat blades' plates). They were 0.110 / 0.110 and were
+  **never gate-validated**; only the inline pen's axial 0.110 is
+  (docs/DECISIONS.md, docs/SYSTEM_MODEL.md §7e). The reach numbers below were
+  measured at the OLD pair: inverted-arm strict-GO +51 % on its patch, GO
+  radius 0.75 -> 0.86 m, strokes certify in ~80-280 ms
+  (`scripts/lateral_eval.py`) — re-run pending.
 - **IK**: raw `_franka_ik.solve_ik(T16_column_major, q7, seed)` where T16 is the
   **hand-TCP** pose. The `.so` hardcodes Panda limits → FR3 limits re-filtered in python.
   Build lives in `../franka_analytical_ik` (env `ARIS_FRANKA_IK_PATH` to relocate).
@@ -732,11 +738,12 @@ is a visual-only plate marking the level the booms stop at.
 **no assembly file**): `scripts/extract_penholder22_meshes.py` measures the
 housing, decimates it to ~5 k faces, and bakes the inferred hand-frame
 placement into `assets/proposed_rig/meshes/penholder22_*_hand.obj`.  The pen
-tip does not move — the gate-validated `TCP + R @ (0.110, 0, 0.110)` is still
-truth — but the CAD disagrees with it twice, and both are flagged rather than
-silently reconciled: the housing's **"22 deg" is a clocking about the mount
-post and measures 23.00°**, where the planning transform implies a 45° lean,
-and the graphite has to protrude a long way past the cap to reach 155.6 mm.
+tip moved on 2026-09-03 — `TCP + R @ (0.0588421, 0, 0.0588421)`, from the
+photo of the real gripper — and the CAD's one remaining disagreement is
+flagged rather than silently reconciled: the housing's **"22 deg" is a
+clocking about the mount post and measures 23.00°**, where the transform
+implies a 45° lean. That one is now settled *against* the CAD: at 23° the
+housing's own barrel would be 11.9 mm inside the manufacturer's hand shell.
 §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
 (That account used to say "a grip 55.1 mm behind the nose … 100.5 mm of
 graphite", which is the housing mounted **end-for-end**.  Fixed 2026-09-03:
@@ -752,11 +759,14 @@ holds the complete 10° build as an `.SLDASM`.  Resolved, it says there is **no
 fingertip cradle** — stock FR3 tips seat 7.000 mm square inside the mount
 post's own 18 × 18 mm sockets — so the housing's clocking reaches the hand
 undivided, and on that build the angle in the housing's file name **is** the
-lean (10.0000°, with the grip centre on the TCP to 0.14 mm).  The pen leans
-**23°**, which at the gate-validated 0.110 m of axial depth is **0.0467 m
-lateral, not 0.110: 63.3 mm of tip position**.  The planning transform is
-UNCHANGED — it is gate-validated and moving it is a re-certification — and one
-measurement closes it (tip-to-approach-axis, 47 mm or 110 mm).  The same
+lean (10.0000°, with the grip centre on the TCP to 0.14 mm).  That verdict —
+"the pen leans 23°" — was overturned on 2026-09-03 by a photo of the real
+gripper and by the hand itself: **no fingertip is fitted**, so nothing
+transmits the clocking, and 55.1 mm of barrel behind the grip does not fit in
+the 37.4 mm under the hand at any lean below **35.17°**.  The transform moved
+instead — to `TCP + R @ (0.0588421, 0, 0.0588421)`, the tip ~5 cm below the
+Fat blades' plates — and it was **never** gate-validated, contrary to what
+this file and several others used to say.  `docs/SYSTEM_MODEL.md` §7e.  The same
 assembly gave the internal stack, which `assets/system_model/` now draws in
 full.  `docs/SYSTEM_MODEL.md` §7a–7b is the account.
 

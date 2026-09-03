@@ -69,9 +69,10 @@ def probe(job):
     h = layout.LAYOUT_PROPOSED["h"]
     boxes = spec.static_obstacles()
     Twb = spec.T_world_base(h)
+    # the HOLDER's own axial depth, not the spec's — see regate_atlas.py
     r = atlas.solve_cell(x, y, Twb, np.linalg.inv(Twb), spec,
-                         atlas._candidates(max(CONE)), spec.pen, boxes,
-                         pen_lat=frames.PEN_LAT_HOLDER,
+                         atlas._candidates(max(CONE)), frames.PEN_EXT_HOLDER,
+                         boxes, pen_lat=frames.PEN_LAT_HOLDER,
                          gate_groups=atlas._gated_groups(max(CONE), CONE))
     if r is None:
         return (a, x, y, -1.0, float("nan"), float("nan"))

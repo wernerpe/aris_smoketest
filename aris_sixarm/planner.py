@@ -32,7 +32,7 @@ import numpy as np
 
 from . import ik
 from . import rig_final
-from .frames import (fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin, FR3_MIN,
+from .frames import (fk, rotx, rotz, rot_axis, PEN_EXT, ext_of, joint_margin, FR3_MIN,
                      FR3_MAX, lat_of, tool_offset)
 from .metrics import tip_jacobian, sigma_min as _sigma_min
 
@@ -144,7 +144,7 @@ def _lattice_setup(spec, h_inv, n_q7):
             np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, n_q7))
 
 
-def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
+def build_lattice(pts_xy, spec, h_inv=None, pen_ext=None, n_q7=N_Q7,
                   clearance=True, pen_lat=None, phi=0.0, tilt=None):
     """IK + gate the whole (s x q7 x branch) lattice for a vertical pen.
 
@@ -174,6 +174,7 @@ def build_lattice(pts_xy, spec, h_inv=None, pen_ext=PEN_EXT, n_q7=N_Q7,
     the equality test measures the fast path against.
     """
     impl = _build_lattice_batch if ik.has_batch() else _build_lattice_scalar
+    pen_ext = ext_of(pen_ext)     # None -> the ACTIVE tool's axial depth
     return impl(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
                 lat_of(pen_lat), float(phi), tilt)
 

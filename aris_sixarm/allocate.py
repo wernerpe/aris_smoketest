@@ -247,10 +247,10 @@ def pen_opts(opts, pens, arm):
 
 def pen_of(pens, arm, default=None):
     """The pen length arm `arm` is holding, in metres."""
-    from .frames import PEN_EXT
+    from .frames import ext_of
     if pens and arm in pens:
         return float(pens[arm])
-    return float(PEN_EXT if default is None else default)
+    return ext_of(default)
 
 
 EPS_S = 1e-6
@@ -1527,7 +1527,8 @@ def arm_load(spec, segs, draw_s, transit_speed=writing.TRANSIT_SPEED,
     """
     if not len(segs):
         return 0.0
-    pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
+    from .frames import ext_of
+    pen = ext_of(pen_ext)
     if C is None:
         C = sequence.cost_matrix(spec, segs, transit_speed, qd_frac, h_inv,
                                  ends=ends, pen_ext=pen, q_start=q_start,
@@ -1615,7 +1616,8 @@ def cluster_arm_load(spec, segs, draw_s, menus,
     """
     if not len(segs):
         return 0.0
-    pen = writing.PEN_EXT if pen_ext is None else float(pen_ext)
+    from .frames import ext_of
+    pen = ext_of(pen_ext)
     if C is None:
         C, T, e = sequence.cluster_cost_matrix(spec, menus, transit_speed,
                                                qd_frac, h_inv, pen,

@@ -7,12 +7,14 @@ hold to the package, and that `scripts/collision_audit.py` reads. Every
 certified number in this repo was earned against the obstacle model it
 encodes.
 
-**One thing in it has changed, once, and it is named here so nobody has to
-diff for it.** On **2026-09-03** the pen holder's housing was found to be
-mounted **end-for-end** — `penholder22_T_hand` pointed the housing's +X away
-from the pen tip, so the model had the pen leaving by the tail land instead of
-through the cap. It was corrected: the two hand-frame holder meshes were
-re-baked, the holder's three collision cylinders moved 30 mm along the bore, a
+**Two things in it have changed, and they are named here so nobody has to
+diff for them.**
+
+**(1) The pen holder's housing was mounted end-for-end.** On **2026-09-03**
+`penholder22_T_hand` was found to point the housing's +X away from the pen
+tip, so the model had the pen leaving by the tail land instead of through the
+cap. It was corrected: the two hand-frame holder meshes were re-baked, the
+holder's three collision cylinders moved 30 mm along the bore, a
 fourth was added for the pencil tail, and `pen_lead` grew from 100.5 mm to
 125.6 mm. **Nothing else moved** — no capsule radius, no arm collision
 geometry, no base pose, no layout number — and the **pen tip is unchanged to
@@ -20,6 +22,22 @@ the picometre**, which is what makes it a correction to a body rather than to
 a certified number. `docs/SYSTEM_MODEL.md` §7c has the evidence, the numbers
 and the measured cost (the r = 0.050 lateral tool capsules contained the old
 placement and do not contain this one).
+
+**(2) The pen TIP moved, on the same day and for a different reason.** A photo
+of the real gripper put the tip about 5 cm below the bottom edge of the Fat
+Franka Finger blades' contact plates, not 15 cm below the hand:
+`frames.PEN_LAT_HOLDER` and the new `frames.PEN_EXT_HOLDER` are **0.0588421 m**
+each where the pair used to be 0.110 / 0.110. In this file that moves
+`pen_bracket`'s and `pen_body`'s lengths, the `pen_tip` weld and `pen_lead`
+(53.2 mm of graphite past the cap now, not 125.6) — **and nothing else**: the
+holder's own placement depends on the ray's *direction* and on the grip centre,
+both unchanged at 45°, so the two hand-frame holder meshes here are
+**byte-identical** across the change. The old pair was never gate-validated;
+only the INLINE pen's axial 0.110 is. `docs/SYSTEM_MODEL.md` §7e.
+
+**What that costs the certified numbers, said plainly:** every programme and
+atlas in `out/` was planned at the old tip and is now **stale**. Re-planning
+them is a queued re-certification, not part of this change.
 
 Since 2026-09-01 there is also **`assets/system_model/`**, which is a
 different thing and supersedes this one *as a description of the physical

@@ -122,7 +122,7 @@ column bands already live under.
 """
 import numpy as np
 
-from .frames import D_HAND_TCP, PEN_EXT, lat_of, link_frames_many
+from .frames import D_HAND_TCP, PEN_EXT, ext_of, lat_of, link_frames_many
 
 SELF_MARGIN = 0.020      # m of metal-to-metal clearance an arm owes itself
 
@@ -244,7 +244,7 @@ _PI = np.array([p[0] for p in SELF_PAIRS], int)
 _PJ = np.array([p[1] for p in SELF_PAIRS], int)
 
 
-def capsule_ends(qs, pen_ext=PEN_EXT, pen_lat=None):
+def capsule_ends(qs, pen_ext=None, pen_lat=None):
     """(N,7) joints -> (A (N,C,3), B (N,C,3), R (C,)) in the arm's BASE frame.
 
     Self-collision is a question about one arm and nothing else, so this stays
@@ -278,7 +278,7 @@ def capsule_ends(qs, pen_ext=PEN_EXT, pen_lat=None):
     Rf, tf = T[:, 9, :3, :3], T[:, 9, :3, 3]
     tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
     corner = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf
-    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + float(pen_ext)]) + tf
+    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + ext_of(pen_ext)]) + tf
     A[:, BRACKET], B[:, BRACKET] = tcp, corner
     A[:, PEN], B[:, PEN] = corner, tip
     R[BRACKET] = R[PEN] = TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE
@@ -324,7 +324,7 @@ CHUNK = 2048          # configurations per broadcast; the (n, P, 3) temporaries
 #   are what decides this, and P is ~300 pairs
 
 
-def pair_clearance(qs, pen_ext=PEN_EXT, pen_lat=None, pairs=None):
+def pair_clearance(qs, pen_ext=None, pen_lat=None, pairs=None):
     """Per-pair surface gap. (N,7) -> (N, len(pairs))."""
     qs = np.asarray(qs, float).reshape(-1, 7)
     I, J = (_PI, _PJ) if pairs is None else (
@@ -402,7 +402,7 @@ def clearance_screened(A, B, R, floor=None):
     return out
 
 
-def path_clearance_lb(qs, floor=None, pen_ext=PEN_EXT, pen_lat=None, k=0.0):
+def path_clearance_lb(qs, floor=None, pen_ext=None, pen_lat=None, k=0.0):
     """A LOWER BOUND on one arm's self-clearance ALONG a sampled path. -> (m, res).
 
     `qs` is (N,7) read as consecutive samples of one motion.  `m` is
@@ -422,7 +422,7 @@ def path_clearance_lb(qs, floor=None, pen_ext=PEN_EXT, pen_lat=None, k=0.0):
     return min_clearance(A, B, R, lo), res
 
 
-def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
+def self_clearance(qs, pen_ext=None, pen_lat=None):
     """Worst surface gap between two non-adjacent bodies of one arm. (N,7)->(N,)
 
     A LOWER BOUND on the gap in the metal, because every capsule contains its
@@ -434,12 +434,12 @@ def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
     return pair_clearance(qs, pen_ext, pen_lat).min(axis=1)
 
 
-def self_ok(qs, margin=SELF_MARGIN, pen_ext=PEN_EXT, pen_lat=None, eps=0.0):
+def self_ok(qs, margin=SELF_MARGIN, pen_ext=None, pen_lat=None, eps=0.0):
     """Per-configuration pass/fail at `margin`. (N,7) -> (N,) bool."""
     return self_clearance(qs, pen_ext, pen_lat) >= float(margin) - float(eps)
 
 
-def pair_reach(n=200000, seed=11, pen_ext=PEN_EXT, pen_lat=None,
+def pair_reach(n=200000, seed=11, pen_ext=None, pen_lat=None,
                chunk=20000, d_min=1):
     """Largest clearance each candidate pair ever reaches. -> {pair: metres}.
 
@@ -458,12 +458,12 @@ def pair_reach(n=200000, seed=11, pen_ext=PEN_EXT, pen_lat=None,
     return {cand[k]: float(hi[k]) for k in range(len(cand))}
 
 
-def signature(pen_ext=PEN_EXT, pen_lat=None):
+def signature(pen_ext=None, pen_lat=None):
     """The whole self model as one flat array, for `atlas.model_signature`."""
     flat = [v for (_, band, f, a, b, r) in BODY_CAPSULES
             for v in (float(band), float(f), *a, *b, r)]
     lat = lat_of(pen_lat)
-    flat += [lat, float(pen_ext), TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE]
+    flat += [lat, ext_of(pen_ext), TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE]
     flat += [float(v) for p in SELF_PAIRS for v in p]
     flat.append(SELF_MARGIN)
     return np.asarray(flat, float)

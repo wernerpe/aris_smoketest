@@ -97,7 +97,8 @@ import numpy as np
 
 from . import paper, selfcoll
 from .fleet import H_INV_DEFAULT
-from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, joint_margin_many)
+from .frames import (FR3_MAX, FR3_MIN, PEN_EXT, QD_MAX, ext_of,
+                     joint_margin_many)
 from . import frames as _frames
 
 # --------------------------------------------------------------------------
@@ -203,7 +204,7 @@ def scene_signature(spec, boxes, pen_ext, h_inv, floors):
     a different tree.
     """
     h = hashlib.blake2b(digest_size=16)
-    h.update(np.asarray([int(getattr(spec, "arm_id", -1)), float(pen_ext),
+    h.update(np.asarray([int(getattr(spec, "arm_id", -1)), ext_of(pen_ext),
                          float(_frames.PEN_LAT), float(h_inv)],
                         float).tobytes())
     h.update(np.asarray([float(f) for f in floors], float).tobytes())
@@ -267,12 +268,12 @@ class Gate:
     disagree in one direction.
     """
 
-    def __init__(self, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+    def __init__(self, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
                  chain_floor=paper.CHAIN_CLEAR, tip_floor=paper.TIP_CLEAR,
                  static_floor=-np.inf, self_floor=-np.inf, probe=None,
                  probe_margin=0.0, pad=PAD, n=EDGE_N):
         self.spec = spec
-        self.pen = float(pen_ext)
+        self.pen = ext_of(pen_ext)
         self.h_inv = float(h_inv)
         self.boxes = paper.static_boxes(spec) if boxes is None else boxes
         self.chain_floor = float(chain_floor) + pad
@@ -460,7 +461,7 @@ class _Sampler:
         return self.buf[self.i - 1]
 
 
-def plan(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+def plan(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
          chain_floor=paper.CHAIN_CLEAR, tip_floor=paper.TIP_CLEAR,
          static_floor=-np.inf, self_floor=-np.inf, probe=None,
          probe_margin=0.0, step=None, max_nodes=None,

@@ -24,7 +24,7 @@ import numpy as np
 from . import frames as _frames
 from . import ik, letters, paper, planner
 from .fleet import FLEET, H_INV_DEFAULT
-from .frames import (FR3_MIN, FR3_MAX, PEN_EXT, QD_MAX, joint_margin, rotx,
+from .frames import (FR3_MIN, FR3_MAX, PEN_EXT, QD_MAX, ext_of, joint_margin, rotx,
                      rotz, tip_pos)
 
 DS = 0.01               # stroke resampling step, m
@@ -66,7 +66,7 @@ HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
 
 
 def lifted_config(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
-                  pen_ext=PEN_EXT, span=0.6, n_q7=25, margin_min=HOVER_MARGIN,
+                  pen_ext=None, span=0.6, n_q7=25, margin_min=HOVER_MARGIN,
                   tilt=None, phis=None, q7s=None, ok=None):
     """IK pose with the pen tip at (x, y, z), R = rotx(pi), nearest to q_ref.
 
@@ -283,7 +283,7 @@ MAX_TIP_STEPS = 4         # doublings one interval may spend reaching it
 FILL_DQ_FACTOR = 2.0
 
 
-def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=None,
             max_dq=None, tilt=None, phi=0.0, max_tip=None, lean=None):
     """Sub-sample a planned stroke so that FRAME interpolation stays on the curve.
 
@@ -489,7 +489,7 @@ def densify(qs, pts, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     return np.array(out_q), np.array(out_u), fallbacks
 
 
-def tip_error_pts(qs, pts_ref, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+def tip_error_pts(qs, pts_ref, spec, h_inv=H_INV_DEFAULT, pen_ext=None):
     """Max world tip-to-reference distance for an arbitrary (q, xy) pairing."""
     Twb = spec.T_world_base(h_inv)
     tip = np.array([Twb[:3, :3] @ tip_pos(q, pen_ext) + Twb[:3, 3] for q in qs])
@@ -769,7 +769,7 @@ def draw_duration(qd, ud, length, draw_speed=DRAW_SPEED_FLEET, frac=QD_FRAC):
 
 
 def segment_draw_time(spec, seg, draw_speed=DRAW_SPEED_FLEET, qd_frac=QD_FRAC,
-                      h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+                      h_inv=H_INV_DEFAULT, pen_ext=None):
     """How long THIS arm needs to lay THIS certified segment's ink. -> seconds.
 
     Densifies exactly as `arm_program` does (same IK, same pen) and paces the
@@ -880,7 +880,7 @@ def _route(spec, q0, q1, pen_ext, h_inv, tip_floor, qd_frac, floor,
 
 
 def transit_beats(spec, q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
-                  z_exit=LIFT_Z, z_entry=LIFT_Z, pen_ext=PEN_EXT,
+                  z_exit=LIFT_Z, z_entry=LIFT_Z, pen_ext=None,
                   h_inv=H_INV_DEFAULT, transit_speed=TRANSIT_SPEED,
                   qd_frac=QD_FRAC, paper_safe=PAPER_SAFE, q_home=None):
     """`transit_time`, with the paper as an obstacle. -> dict | None.
@@ -918,7 +918,7 @@ def transit_beats(spec, q_exit, q_hover_exit, q_hover_entry, q_entry, hop,
                 modes=(lift[1], trav[1], low[1]))
 
 
-def enter_beats(spec, q_home, q_hover_entry, q_entry, pen_ext=PEN_EXT,
+def enter_beats(spec, q_home, q_hover_entry, q_entry, pen_ext=None,
                 h_inv=H_INV_DEFAULT, qd_frac=QD_FRAC, paper_safe=PAPER_SAFE):
     """Ready pose -> hover -> the first segment's entry. -> dict | None."""
     # NEITHER END OF THIS ONE IS IN CONTACT.  The arm starts in its ready pose,
@@ -940,7 +940,7 @@ def enter_beats(spec, q_home, q_hover_entry, q_entry, pen_ext=PEN_EXT,
                 modes=(home[1], low[1]))
 
 
-def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=PEN_EXT,
+def exit_beats(spec, q_exit, q_hover_exit, q_home, pen_ext=None,
                h_inv=H_INV_DEFAULT, qd_frac=QD_FRAC, paper_safe=PAPER_SAFE):
     """Last exit -> hover -> the ready pose. -> dict | None.
 
@@ -1020,7 +1020,7 @@ def _clear_hovers():
 paper.on_clear(_clear_hovers)
 
 
-def static_gate(spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, floor=None,
+def static_gate(spec, pen_ext=None, h_inv=H_INV_DEFAULT, floor=None,
                 comfort=None):
     """How good a CHOSEN pen-up pose is. -> fn (N,7) -> (N,) float.
 
@@ -1072,7 +1072,7 @@ def static_gate(spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, floor=None,
 
 
 def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
-                pen_ext=PEN_EXT, tilt=None, margin_min=HOVER_MARGIN, ok=None):
+                pen_ext=None, tilt=None, margin_min=HOVER_MARGIN, ok=None):
     """The best hover over (xy, z) that `ok` allows. -> q (7,) | None.
 
     Two stages, cheap first, and the first stage is bit-for-bit the call this
@@ -1241,7 +1241,7 @@ def depot_hover_selected(spec, q_ref, xy):
             or hover_site(spec, q_ref, xy) in HOVER_DEPOT_SITES)
 
 
-def hover_fiber(spec, q_ref, xy, z, ok, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+def hover_fiber(spec, q_ref, xy, z, ok, h_inv=H_INV_DEFAULT, pen_ext=None,
                 tilt=None, margin_min=HOVER_MARGIN):
     """Every gated pose on the hover fiber over (xy, z), nearest first. -> (K,7).
 
@@ -1280,7 +1280,7 @@ def hover_fiber(spec, q_ref, xy, z, ok, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
     return Q[np.isfinite(np.asarray(ok(Q), float).reshape(-1))]
 
 
-def hover_joins_depot(spec, q_ref, h, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+def hover_joins_depot(spec, q_ref, h, h_inv=H_INV_DEFAULT, pen_ext=None):
     """Can the arm lift onto this hover, fly home from it, and fly back? -> bool.
 
     The three legs `writing` will actually lay down and `sequence.depot_legs`
@@ -1299,7 +1299,7 @@ def hover_joins_depot(spec, q_ref, h, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
 
 
 def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
-                    pen_ext=PEN_EXT, tilt=None):
+                    pen_ext=None, tilt=None):
     """A CERTIFIED hover over `xy`, as high as the arm can hold one.
     -> (q, height_used).
 
@@ -1321,7 +1321,7 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
     the entry a tier-off run stores.  Only the admitted end gets a second slot.
     """
     sel = depot_hover_selected(spec, q_ref, xy)
-    key = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
+    key = (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv),
            np.round(np.asarray(q_ref, float), 9).tobytes(),
            np.round(np.asarray(xy, float), 9).tobytes(),
            None if tilt is None else np.round(np.asarray(tilt, float),
@@ -1430,7 +1430,7 @@ class PaperRefused(RuntimeError):
 
 def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_SPEED,
                 h_inv=H_INV_DEFAULT, ink_chunk=INK_CHUNK, qd_frac=QD_FRAC,
-                pen_ext=PEN_EXT, q_start=None, park=PARK_FREEZE, retreat=None,
+                pen_ext=None, q_start=None, park=PARK_FREEZE, retreat=None,
                 taxi_stretch=0.0, paper_safe=PAPER_SAFE, verbose=False,
                 aside=None):
     """One arm's frozen nominal timeline from its allocated segments.
@@ -1551,7 +1551,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
                     taxi_s=0.0, retreat_s=0.0, aside_s=aside_s,
                     q_end=np.array(Q[-1], float), park=str(park),
-                    pen=float(pen_ext), paper_modes=[r[1]] if steps else [],
+                    pen=ext_of(pen_ext), paper_modes=[r[1]] if steps else [],
                     paper_vias=int(len(steps) - 1) if steps else 0,
                     fallbacks=0, n_home=0)
 
@@ -1696,7 +1696,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 transit_s=float(transit_s), taxi_s=float(taxi_s),
                 retreat_s=float(retreat_s), aside_s=0.0,
                 q_end=np.array(Q[-1], float),
-                park=str(park), pen=float(pen_ext),
+                park=str(park), pen=ext_of(pen_ext),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
                 paper_modes=[m for mm in modes for m in mm],
                 paper_vias=int(sum(len(b) for b in beats)

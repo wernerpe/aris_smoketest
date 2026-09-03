@@ -271,7 +271,7 @@ def _self_mask(Q, pen_ext, lat):
                             pen_ext=pen_ext, pen_lat=lat)
 
 
-def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
+def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=None,
                boxes=(), pen_lat=None, gate_groups=None,
                gate_margin=GATE_MARGIN, gate_sigma=GATE_SIGMA,
                static_margin=None):
@@ -444,7 +444,7 @@ def solve_cell(x, y, Twb, Twb_inv, spec, cand_sets, pen_ext=PEN_EXT,
 
 
 def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
-              tilt_max_deg=15.0, pen_ext=PEN_EXT, fleet=None, sheet=None,
+              tilt_max_deg=15.0, pen_ext=None, fleet=None, sheet=None,
               pen_lat=None, cone=None):
     """One arm's reachability atlas, swept and stamped. -> (N, len(COLUMNS)).
 

@@ -76,7 +76,7 @@ def _row_time(Q0, Q1, frac, tmin):
     return np.maximum(tmin, (d / (QD_MAX * max(frac, 1e-6))).max(axis=-1))
 
 
-def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+def endpoints(spec, segs, h_inv=H_INV_DEFAULT, pen_ext=None):
     """The two ends of every segment, with their hover poses.
 
     -> dict(q (n,2,7), xy (n,2,2), hover (n,2,7), z (n,2), n)
@@ -191,7 +191,7 @@ def _paper_surcharge(spec, exi_h, ent_h, same, floor, qd_frac, h_inv, pen_ext):
 
 
 def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
-                pen_ext=PEN_EXT):
+                pen_ext=None):
     """Which crossings of this block need routing. -> (cells, tip, chain).
 
     The cheap half of `_paper_surcharge`, exposed because `allocate._ArmMatrix`
@@ -292,7 +292,7 @@ def dive_screen(spec, exi_h, ent_h, same, h_inv=H_INV_DEFAULT,
 
 
 def prewarm(spec, blocks, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
-            pen_ext=PEN_EXT):
+            pen_ext=None):
     """Route every diving crossing of these blocks in ONE dispatch.
 
     THE BATCH IS WHAT MAKES THE POOL WORTH HAVING.  A pair that routes does so on
@@ -483,7 +483,7 @@ def _screen_routes(spec, exi_h, ent_h, tip_floor, chain_floor, floor, qd_frac,
     return out
 
 
-def price_crossings(spec, tasks, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def price_crossings(spec, tasks, pen_ext=None, h_inv=H_INV_DEFAULT,
                     qd_frac=QD_FRAC):
     """Fill the priced-crossing memo for these (key, q0, q1, tip_floor) tasks.
 
@@ -548,7 +548,7 @@ def price_crossings(spec, tasks, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
 # operations in the same order, and `tests/test_sequence.py` pins that a sliced
 # matrix equals the freshly built one cell for cell.
 def node_lift(spec, exi_q, exi_h, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
-              pen_ext=PEN_EXT, paper_safe=True):
+              pen_ext=None, paper_safe=True):
     """Seconds to lift the pen off each node's exit onto its hover. -> (N,)."""
     lift = _row_time(exi_q, exi_h, qd_frac, T_LIFT_F)
     if paper_safe:
@@ -558,7 +558,7 @@ def node_lift(spec, exi_q, exi_h, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
 
 
 def node_lower(spec, ent_h, ent_q, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
-               pen_ext=PEN_EXT, paper_safe=True):
+               pen_ext=None, paper_safe=True):
     """Seconds to lower from each node's hover onto its entry. -> (N,)."""
     lower = _row_time(ent_h, ent_q, qd_frac, T_LOWER_F)
     if paper_safe:
@@ -569,7 +569,7 @@ def node_lower(spec, ent_h, ent_q, qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT,
 
 def leg_costs(spec, exi_h, exi_xy, ent_h, ent_xy, lift, lower, same,
               transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-              h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT, paper_safe=True):
+              h_inv=H_INV_DEFAULT, pen_ext=None, paper_safe=True):
     """The (M, N) block of exit-to-entry transit seconds, paper detours included.
 
     `same[i, j]` marks a pair that no tour may contain (the two nodes are the
@@ -591,7 +591,7 @@ def leg_costs(spec, exi_h, exi_xy, ent_h, ent_xy, lift, lower, same,
 
 
 def depot_legs(spec, ent_h, exi_h, lift, lower, qd_frac=QD_FRAC,
-               h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT, q_start=None,
+               h_inv=H_INV_DEFAULT, pen_ext=None, q_start=None,
                return_home=True, paper_safe=True):
     """(into, outof): the depot's entry legs and its exit legs, per node."""
     N = len(ent_h)
@@ -615,7 +615,7 @@ def depot_legs(spec, ent_h, exi_h, lift, lower, qd_frac=QD_FRAC,
 
 
 def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-                h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT, q_start=None,
+                h_inv=H_INV_DEFAULT, ends=None, pen_ext=None, q_start=None,
                 return_home=True, paper_safe=True):
     """Every transit time an ordering could possibly pay. -> (2n+1, 2n+1).
 
@@ -700,7 +700,7 @@ def cost_matrix(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
 # An arm that cannot fly hover-to-hover through its depot in two straight lines
 # can very often fly home by one shape and out again by another.
 def home_legs(spec, segs, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-              h_inv=H_INV_DEFAULT, ends=None, pen_ext=PEN_EXT, q_start=None,
+              h_inv=H_INV_DEFAULT, ends=None, pen_ext=None, q_start=None,
               return_home=True, paper_safe=True):
     """The two halves of a MID-TOUR trip home, per node. -> (outof, into).
 
@@ -1210,7 +1210,7 @@ W_SURCHARGE = 1.0        # the interior surcharge is SECONDS; see below
 EXACT_MAX_STATES = 20_000_000    # 2^n * nodes before Held-Karp is refused
 
 
-def cluster_endpoints(spec, menus, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+def cluster_endpoints(spec, menus, h_inv=H_INV_DEFAULT, pen_ext=None):
     """Flatten per-segment menus into one node list. -> dict.
 
     Node `base[i] + 2*v + d` is segment i, variant v, drawn forward (d = 0) or
@@ -1276,7 +1276,7 @@ def reconfig_block(exi_q, ent_q, w_reconfig=1e-7):
 
 
 def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
-                        qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+                        qd_frac=QD_FRAC, h_inv=H_INV_DEFAULT, pen_ext=None,
                         q_start=None, return_home=True, ends=None,
                         w_reconfig=W_RECONFIG, w_surcharge=W_SURCHARGE,
                         paper_safe=True):
@@ -1345,7 +1345,7 @@ def cluster_cost_matrix(spec, menus, transit_speed=TRANSIT_SPEED,
 
 
 def cluster_home_legs(spec, menus, transit_speed=TRANSIT_SPEED, qd_frac=QD_FRAC,
-                      h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT, q_start=None,
+                      h_inv=H_INV_DEFAULT, pen_ext=None, q_start=None,
                       return_home=True, ends=None, w_reconfig=W_RECONFIG,
                       w_surcharge=W_SURCHARGE, paper_safe=True):
     """`home_legs` over the (segment, direction, VARIANT) node list. -> (outof, into).

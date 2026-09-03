@@ -198,12 +198,17 @@ def test_activate_tool_roundtrip():
 
 
 def test_check_pose_pen_below_paper_sees_lateral_tip(lateral_active):
-    """The ready-pose pen-below-paper check must measure the LATERAL tip."""
+    """The ready-pose pen-below-paper check must measure the LATERAL tip.
+
+    BOTH HALVES OF IT.  `activate_tool` switched only `PEN_LAT` until
+    2026-09-03, so a lateral run drew the holder's ray out to the INLINE
+    pen's axial 0.110 m; the expected value here is `frames.ext_of()`, which
+    is `PEN_EXT_HOLDER` while the lateral tool is active."""
     rep = validate.check_pose(frames.Q_READY_FLOOR, SPEC)
     T, _ = frames.fk(frames.Q_READY_FLOOR)
     Twb = SPEC.T_world_base()
     tip = Twb[:3, :3] @ (T[:3, 3] + T[:3, :3]
-                         @ np.array([LAT, 0.0, frames.PEN_EXT])) + Twb[:3, 3]
+                         @ np.array([LAT, 0.0, frames.ext_of()])) + Twb[:3, 3]
     assert rep["worst"]["tip_z"] == pytest.approx(float(tip[2]), abs=1e-12)
 
 
@@ -231,7 +236,10 @@ def test_lateral_extends_reach():
         return far
 
     r_in, r_lat = reach(0.0), reach(LAT)
-    assert r_lat >= r_in + 0.05, (r_in, r_lat)
+    # THE GAIN SCALES WITH `pen_lat`, so the bar does too: at the old
+    # 0.110 m offset it was >= 0.05 m; `PEN_LAT_HOLDER` is 0.0588 m since
+    # 2026-09-03 (frames.py) and the measured gain is one 0.03 m grid step.
+    assert r_lat >= r_in + 0.02, (r_in, r_lat)
 
 
 # ==========================================================================
@@ -325,7 +333,10 @@ def test_the_ladder_climbs_and_stops_at_the_first_lean_that_works():
                                             validate=True))
         if r["status"] == "ok" and r["lateral"].get("lean_used"):
             leaned += 1
-            assert r["lean_deg"] in lateral.LEAN_GRID_DEG
+            # `lean_deg` comes back through an arccos, so it is the grid
+            # value to within an ulp or two rather than exactly it
+            assert min(abs(r["lean_deg"] - g)
+                       for g in lateral.LEAN_GRID_DEG) < 1e-9
             assert r["validation"]["ok"]
             # THE LADDER CLIMBS AND STOPS.  Every full plan it attempted was
             # at a lean no larger than the one that won, the attempts are in
@@ -334,7 +345,9 @@ def test_the_ladder_climbs_and_stops_at_the_first_lean_that_works():
             # recorded for them) or planned and refused, never skipped over.
             tried = [a[0] for a in r["lateral"]["lean_tried"]]
             assert tried == sorted(tried)
-            assert max(tried) == r["lean_deg"]
+            # `lean_deg` comes back through an arccos, so max(tried) is
+            # the same grid value to within an ulp rather than `==` it
+            assert abs(max(tried) - r["lean_deg"]) < 1e-9
             assert all(d <= r["lean_deg"] + 1e-9 for d in tried)
         if leaned >= 3:
             break
@@ -383,7 +396,7 @@ def test_densify_fills_a_leaning_stroke_at_the_lean_it_was_planned_at(
         pytest.skip("no leaned plan certified on this stroke")
     qs = np.asarray(r["qs"], float)
     pts = np.asarray(r["pts"], float)
-    kw = dict(h_inv=None, pen_ext=r["pen_ext"] if "pen_ext" in r else 0.11,
+    kw = dict(h_inv=None, pen_ext=r.get("pen_ext") or frames.ext_of(),
               max_dq=0.005, phi=r.get("phi", 0.0))
 
     qd, _u, fb = writing.densify(qs, pts, SPEC, lean=r["lean_vec"], **kw)

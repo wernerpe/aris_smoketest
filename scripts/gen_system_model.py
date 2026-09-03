@@ -77,8 +77,9 @@ for _p in (str(ROOT / "scripts"), str(ROOT)):
 
 from aris_sixarm import frames, layout, mounts, rig_final, selfcoll  # noqa: E402
 from aris_sixarm import system_model as SM                            # noqa: E402
-from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN, PEN_EXT,  # noqa: E402
-                                PEN_LAT_HOLDER, QD_MAX, TAU_MAX)
+from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN,  # noqa: E402
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, QD_MAX,
+                                TAU_MAX)
 from gen_final_rig_urdf import rpy_from_R                              # noqa: E402
 
 # Drake's tinyxml2 matches `drake:*` as a literal string, so the prefix has to
@@ -389,7 +390,7 @@ def decimate_holder(out_dir=None, faces=HOLDER_FACES):
     dst = out_dir / "meshes/penholder"
     dst.mkdir(parents=True, exist_ok=True)
     P = rig_final.PENHOLDER22
-    T_h, T_c, _, _ = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+    T_h, T_c, _, _ = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                   D_HAND_TCP)
     parts = (("housing", HOUSING_STL, T_h), ("cap", CAP_STL, T_c))
     recs, quality = [], []
@@ -850,7 +851,7 @@ def _add_capsule(link, a, b, r):
                   radius=_fmt(r), length=_fmt(L))
 
 
-def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
+def add_tool(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
     """The pen holder and its graphite, welded to the hand.
 
     RED FLAG, and it is still the biggest one in this model.  The 2026.08.19
@@ -867,11 +868,18 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     fingertips seat square in the post's own 18 x 18 x 7 mm sockets, so the
     housing's clocking reaches the hand undivided — and on the build that HAS
     an assembly the file's name-angle IS the lean (10.0000 deg) with the grip
-    centre on the TCP to 0.14 mm.  The transform written here is UNCHANGED and
-    stays the PLANNING assumption, because the planning transform is
-    gate-validated and moving it is a re-certification rather than a render.
-    What it costs is now written down instead of guessed at: see
-    system_model.OPEN_QUESTIONS["penholder_cradle"].
+    centre on the TCP to 0.14 mm.  ...AND 2026-09-03 CLOSED IT THE OTHER WAY.
+    A photo of the real gripper shows NO fingertip fitted — the Fat blades'
+    bare plates clamp the post's end faces — so on the deployed build nothing
+    transmits the clocking, and what sets the lean instead is the hand: the
+    housing's 55.1 mm of barrel behind the grip is inside the manufacturer's
+    own hand collision shell at every lean under 35.17 deg (-11.90 mm at 23,
+    +6.16 at 45).  The 45 deg ray stays, now for a hardware reason.  What DID
+    move is the axial depth: PEN_EXT_HOLDER, 0.0588421 m, the tip ~5 cm below
+    the blades' contact plates.  Neither half was ever gate-validated — only
+    the INLINE pen's 0.110 is.  See
+    system_model.OPEN_QUESTIONS["penholder_cradle"] and
+    docs/SYSTEM_MODEL.md 7e.
 
     ...AND THE HOUSING IS NO LONGER MOUNTED END-FOR-END (2026-09-03).  The
     transform used to point the housing's +X away from the tip, which put the
@@ -1270,9 +1278,9 @@ def manifest(out_dir=None):
                     "was earned against.  assets/proposed_rig/ still carries "
                     "them; this model does not.")),
         tool=dict(
-            transform="rig_final.penholder22_T_hand(PEN_EXT=%.3f, "
-                      "PEN_LAT_HOLDER=%.3f, D_HAND_TCP=%.4f)"
-                      % (PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP),
+            transform="rig_final.penholder22_T_hand(PEN_EXT_HOLDER=%.7f, "
+                      "PEN_LAT_HOLDER=%.7f, D_HAND_TCP=%.4f)"
+                      % (PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP),
             provenance="ASSUMED",
             red_flag="THE PLACEMENT IS INFERRED.  The 2026.08.19 delivery has "
                      "no assembly file.  The housing's own flats clock at "
@@ -1331,7 +1339,7 @@ def manifest(out_dir=None):
                 bodies=[dict(name=n, radius_m=r, length_m=L, note=note)
                         for n, _, (r, L), note
                         in rig_final.penholder22_internals(
-                            PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)])),
+                            PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)])),
         cable_dress=dict(
             provenance="ASSUMED",
             radius_mm=SM.CABLE_R,

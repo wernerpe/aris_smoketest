@@ -57,8 +57,8 @@ DROPPED rather than restated as an FR3 number: no FR3 acceleration source
 exists in this repo.
 
 THE TOOL.  The pen tip stays exactly where `frames` puts it:
-TCP + R @ (PEN_LAT_HOLDER, 0, PEN_EXT), gate-validated, untouched by any of
-this.  What the 2026-08-19 CAD delivery adds is the LOOK: the real 22-deg
+TCP + R @ (PEN_LAT_HOLDER, 0, PEN_EXT_HOLDER) — USER-SPECIFIED, not
+gate-validated (frames.py), and untouched by any of this.  What the 2026-08-19 CAD delivery adds is the LOOK: the real 22-deg
 clutch holder as two decimated hand-frame meshes, placed by
 `rig_final.penholder22_T_hand` — an INFERENCE, because the delivery has no
 assembly file.  Read `rig_final.PENHOLDER22` before trusting the picture: the
@@ -89,7 +89,7 @@ from gen_final_rig_urdf import rpy_from_R  # noqa: E402
 
 from aris_sixarm import mounts, rig_final  # noqa: E402
 from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN,  # noqa: E402
-                                PEN_EXT, PEN_LAT_HOLDER, QD_MAX, TAU_MAX)
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, QD_MAX, TAU_MAX)
 from aris_sixarm.layout import LAYOUT_PROPOSED, FLEET_PROPOSED  # noqa: E402
 from aris_sixarm.rig_final6 import SHEET_FINAL6  # noqa: E402
 
@@ -345,7 +345,7 @@ def _mesh_visual(link, filename, rgba):
     ET.SubElement(m, "color", rgba=" ".join(str(x) for x in rgba))
 
 
-def add_cad_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
+def add_cad_holder(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
     """The REAL 22-deg clutch holder: CAD visual + a conservative primitive
     envelope, welded to the hand at the identity.
 
@@ -390,7 +390,7 @@ def add_cad_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     ET.SubElement(j, "child", link=name)
 
 
-def add_pen_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
+def add_pen_holder(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
     """The tool: the PLANNER's envelope, the CAD holder, and the pen tip.
 
         tcp         = panda_hand + (0, 0, D_HAND_TCP)      [frames.TCP_D]
@@ -507,7 +507,7 @@ def main():
     print(f"  {len(FLEET_PROPOSED)} inverted arms at h={H_INV} m, "
           f"canvas {SHEET_FINAL6[0]} x {SHEET_FINAL6[1]} m, "
           f"boom r={M.boom_r} to the {M.ceiling_z} m grid, "
-          f"pen tip = TCP + R @ ({PEN_LAT_HOLDER}, 0, {PEN_EXT})")
+          f"pen tip = TCP + R @ ({PEN_LAT_HOLDER}, 0, {PEN_EXT_HOLDER})")
 
 
 if __name__ == "__main__":

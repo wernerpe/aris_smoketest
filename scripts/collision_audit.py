@@ -88,7 +88,7 @@ from aris_sixarm import (coordination, ik, layout, metrics,       # noqa: E402
 from aris_sixarm.coordination import (CAPSULES_LAT, LINK_R,       # noqa: E402
                                       seg_seg_dist)
 from aris_sixarm.frames import (DH, D_HAND_TCP, FR3_MAX, FR3_MIN, # noqa: E402
-                                PEN_EXT, PEN_LAT_HOLDER, TCP_D,
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, TCP_D,
                                 fk, fk_many, joint_margin, rotx, rotz,
                                 tool_offset, tool_points_many)
 from aris_sixarm.metrics import GATE_MARGIN, GATE_SIGMA           # noqa: E402
@@ -263,7 +263,7 @@ def arm_parts(gt="union"):
     return parts
 
 
-def tool_parts(pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER, with_lead=True):
+def tool_parts(pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER, with_lead=True):
     """The 22-deg pen holder as RAW CAD in the hand frame -> {name: mesh}.
 
     Raw STLs from the slack dump (mm), placed by `rig_final.penholder22_T_hand`
@@ -414,7 +414,7 @@ def world_chain(qs, spec):
     """(N,7) -> (N,11,3) chain points in WORLD, lateral tool included."""
     qs = np.asarray(qs, float).reshape(-1, 7)
     T, P = fk_many(qs)
-    tool = tool_points_many(T, PEN_EXT, PEN_LAT_HOLDER)
+    tool = tool_points_many(T, PEN_EXT_HOLDER, PEN_LAT_HOLDER)
     P11 = np.concatenate([P] + [t[:, None, :] for t in tool], axis=1)
     Twb = np.asarray(spec.T_world_base(), float)
     return P11 @ Twb[:3, :3].T + Twb[:3, 3]
@@ -777,7 +777,7 @@ def capsule_excess(parts, tools, q, sample=4000, rng=None):
     """
     rng = np.random.default_rng(0) if rng is None else rng
     T, P = fk(q)
-    tp = tool_points_many(T[None], PEN_EXT, PEN_LAT_HOLDER)
+    tp = tool_points_many(T[None], PEN_EXT_HOLDER, PEN_LAT_HOLDER)
     P11 = np.concatenate([P] + [t[0][None] for t in tp], axis=0)
     A, B = P11[CAP_I], P11[CAP_J]
     L = link_transforms(q)
@@ -851,7 +851,7 @@ def capsule_inflation(parts, tools, Q, sample=6000, rng=None, exclude=()):
     grown = np.zeros(len(CAP_R))
     for q in np.asarray(Q, float).reshape(-1, 7):
         T, P = fk(q)
-        tp = tool_points_many(T[None], PEN_EXT, PEN_LAT_HOLDER)
+        tp = tool_points_many(T[None], PEN_EXT_HOLDER, PEN_LAT_HOLDER)
         P11 = np.concatenate([P] + [t[0][None] for t in tp], axis=0)
         A, B = P11[CAP_I], P11[CAP_J]
         L = link_transforms(q)
@@ -1065,7 +1065,7 @@ def part_fidelity(rec, n_pose=220, n_pair=1500, seed=5, jobs=1):
 def _l_capsules():
     """The planner's tool model, in the hand frame -> (A, B, r)."""
     tcp = np.array([0.0, 0.0, D_HAND_TCP])
-    tip = tcp + tool_offset(PEN_EXT, PEN_LAT_HOLDER)
+    tip = tcp + tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)
     corner = tcp + np.array([PEN_LAT_HOLDER, 0.0, 0.0])
     return (np.array([tcp, corner]), np.array([corner, tip]),
             np.array([rig_final.BRACKET_R_LAT, rig_final.PEN_R_LAT]))
@@ -1100,11 +1100,11 @@ def part_tool(rec):
         print("  raw CAD not present — skipped")
         return {}
     A, B, R = _l_capsules()
-    cyl = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
-    reach = float(np.linalg.norm(tool_offset(PEN_EXT, PEN_LAT_HOLDER)))
+    cyl = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
+    reach = float(np.linalg.norm(tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)))
     out = {}
     cases = [("planner 45-deg ray (as built in the URDF)",
-              PEN_EXT, PEN_LAT_HOLDER)]
+              PEN_EXT_HOLDER, PEN_LAT_HOLDER)]
     lean = rig_final.PENHOLDER22["post_clock"]        # 23.00 deg, measured
     cases.append((f"cradle square to the hand ({np.degrees(lean):.1f}-deg lean)",
                   reach * np.cos(lean), reach * np.sin(lean)))
@@ -1299,7 +1299,7 @@ def _cell_job(job):
     steel = [b for o, s in fleet.items() if o != aid
              for b in mounts.arm_mount_boxes(s.mount, s.xy, s.yaw, h,
                                              tag=f"mount:{o}")]
-    off = tool_offset(PEN_EXT, PEN_LAT_HOLDER)
+    off = tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)
     W, H = SHEET_FINAL6
     XS = np.arange(0.0, W + 1e-9, 0.02)
     YS = np.arange(0.0, H + 1e-9, 0.02)
@@ -1343,7 +1343,7 @@ def _cell_job(job):
         if not len(Q):
             continue
         T, P = fk_many(Q)
-        tl = tool_points_many(T, PEN_EXT, PEN_LAT_HOLDER)
+        tl = tool_points_many(T, PEN_EXT_HOLDER, PEN_LAT_HOLDER)
         P11 = np.concatenate([P] + [t[:, None, :] for t in tl], axis=1)
         Pw = P11 @ Twb[:3, :3].T + Twb[:3, 3]
         keep = Pw[:, 1:9, 2].min(1) >= 0.02
@@ -1381,7 +1381,7 @@ def _cell_job(job):
                     continue
                 if t not in sig:
                     sig[t] = metrics.sigma_min(metrics.tip_jacobian(
-                        Q[t], pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER))
+                        Q[t], pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER))
                 if sig[t] >= GATE_SIGMA:
                     ok[nm][k] = True
                     break
@@ -1534,7 +1534,7 @@ def main():
                        collision_dir=str(_coll_dir()),
                        visual_dir=str(VIS_DIR),
                        cad_dir=str(CAD_DIR), margin=MARGIN,
-                       pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER)
+                       pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER)
 
     def save():
         p.write_text(json.dumps(rec, indent=1, default=float))

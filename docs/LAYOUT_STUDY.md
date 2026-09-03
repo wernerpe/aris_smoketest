@@ -436,7 +436,9 @@ most of the rest.
 namespaced Franka arms welded at `layout.FLEET_PROPOSED`'s base transforms
 (inverted, h = 0.85), their base plates and booms, the paper web, and the
 LATERAL pen holder on every hand as fixed links — `tcp` → `pen_bracket`
-(0.110 along hand x) → `pen_body` (0.110 along tool z) → a `pen_tip` frame.
+(`PEN_LAT_HOLDER` along hand x) → `pen_body` (`PEN_EXT_HOLDER` along tool z) →
+a `pen_tip` frame.  Both were 0.110 until 2026-09-03 and are 0.0588421 now
+(docs/SYSTEM_MODEL.md §7e).
 `environment.urdf` is the same file without the arms.
 
 Both are GENERATED, by `scripts/gen_proposed_rig_urdf.py`, from `layout.py`,
@@ -515,11 +517,12 @@ same disagreement with the file's name.
 
 **Two things Pete has to rule on, neither of which this URDF decides:**
 
-1. **23 deg of CAD vs 45 deg of planner.**  `frames`' lateral tool puts the
-   tip at TCP + R @ (0.110, 0, 0.110) — a 45-degree lean.  The transform is
-   gate-validated and stays truth, so the meshes are drawn along the
-   planner's ray and the missing 22 deg is parked in the fingertip cradle,
-   whose geometry is not in the delivery.  If that cradle turns out to be
+1. **23 deg of CAD vs 45 deg of planner — CLOSED 2026-09-03, see the second
+   note below.**  `frames`' lateral tool puts the tip at
+   TCP + R @ (0.0588421, 0, 0.0588421) — a 45-degree lean.  The transform was
+   taken as truth and the meshes drawn along the planner's ray, with the
+   missing 22 deg parked in the fingertip cradle, whose geometry is not in
+   the delivery.  If that cradle turns out to be
    square to the hand, the built tip lands at 23 deg — about **0.047 m
    lateral at this reach, not 0.110** — and either the constant or the
    housing has to move.
@@ -533,13 +536,24 @@ same disagreement with the file's name.
    > is the angle in its own file name, with the grip centre on the TCP to
    > 0.14 mm.  So the "if" above is resolved in favour of 23 deg and the
    > 0.047 m, and it is now **63.3 mm** of tip position rather than a
-   > hypothesis.  Still not changed here: the planning transform is
-   > gate-validated and moving it is a re-certification.  See
-   > `docs/SYSTEM_MODEL.md` §7a for the numbers and the one measurement that
-   > closes it.
-2. **125.6 mm of graphite.**  Grip-to-exit is 30.001 mm — the cap's outer
-   face — and the planning tip is 155.563 mm from the TCP, so the stick has to
-   protrude **125.562 mm** past the cap.
+   > hypothesis.  Still not changed here at the time: the planning transform
+   > was believed gate-validated.
+   >
+   > **2026-09-03: overturned, and the transform moved.**  It was never
+   > gate-validated — only the INLINE pen's axial 0.110 is — and a photo of
+   > the real gripper shows **no fingertip fitted at all**: the Fat blades'
+   > bare plates clamp the post's end faces, so nothing transmits the
+   > clocking.  What then sets the lean is the hand: 55.1 mm of housing
+   > barrel stands behind the grip and there are 37.4 mm to the hand's
+   > underside, so the raw housing STL is INSIDE the manufacturer's own hand
+   > collision shell at every lean below **35.17 deg** (−11.90 mm at 23 deg)
+   > and clears by **6.16 mm** at 45.  The lean stays 45; the DEPTH moved, to
+   > 0.0588421 m each way — the tip ~5 cm below the Fat blades' plates.
+   > `docs/SYSTEM_MODEL.md` §7e.
+2. **53.2 mm of graphite** (125.6 mm until 2026-09-03).  Grip-to-exit is
+   30.001 mm — the cap's outer face — and the planning tip is now 83.215 mm
+   from the TCP, so the stick has to protrude **53.214 mm** past the cap;
+   37.6 mm as a photo along the hand's x axis reads it.
 
    > **2026-09-02: 55.1 mm was the wrong end**, and the real figure is worse.
    > This item used to read "100.5 mm past the nose", measuring from the

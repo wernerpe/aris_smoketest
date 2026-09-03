@@ -14,7 +14,7 @@ that `ARIS_RIG=proposed` actually activates:
   3. every revolute limit == frames.FR3_MIN/MAX/QD_MAX/TAU_MAX (NOT Panda)
   4. drake FK of each arm's PEN TIP == frames FK + the base transform, over
      sampled joint configurations — the cross-check that proves the URDF's
-     tool chain is `frames.tool_offset(PEN_EXT, PEN_LAT_HOLDER)`
+     tool chain is `frames.tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)`
   4b. the 22-deg CAD holder's visual meshes resolve and ride the hand frame,
      and its INFERRED placement aims the bore along the planner's own ray
   5. paper == the merged canvas; mount plates/booms == mounts.arm_mount_boxes
@@ -40,7 +40,7 @@ from pydrake.systems.framework import DiagramBuilder             # noqa: E402
 
 from aris_sixarm import mounts, rig_final                        # noqa: E402
 from aris_sixarm.frames import (D_HAND_TCP, FR3_MAX, FR3_MIN,    # noqa: E402
-                                PEN_EXT, PEN_LAT_HOLDER, QD_MAX, TAU_MAX,
+                                PEN_EXT_HOLDER, PEN_LAT_HOLDER, QD_MAX, TAU_MAX,
                                 fk, tool_offset)
 from aris_sixarm.layout import FLEET_PROPOSED, LAYOUT_PROPOSED   # noqa: E402
 from aris_sixarm.rig_final6 import SHEET_FINAL6                  # noqa: E402
@@ -132,7 +132,7 @@ for aid in FLEET_PROPOSED:
 rng = np.random.default_rng(20260825)
 qs = [np.asarray(next(iter(FLEET_PROPOSED.values())).q_seed, float)]
 qs += list(rng.uniform(FR3_MIN + 0.10, FR3_MAX - 0.10, size=(N_SAMPLES, 7)))
-off = tool_offset(PEN_EXT, PEN_LAT_HOLDER)     # explicit: never the global
+off = tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)     # explicit: never the global
 for aid, spec in FLEET_PROPOSED.items():
     Twb = spec.T_world_base(H_INV)
     e_tip = e_rot = 0.0
@@ -156,7 +156,7 @@ for aid, spec in FLEET_PROPOSED.items():
 # --- 4b. the CAD pen holder ------------------------------------------------
 # The meshes are baked in the panda_hand frame, so drake's own pose for the
 # pen_holder body must BE the hand's, and every visual file must resolve.
-T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                      D_HAND_TCP)
 for mesh in rig_final.PENHOLDER22["visual_meshes"]:
     ok = (URDF_DIR / mesh).is_file()
@@ -173,8 +173,8 @@ for aid in FLEET_PROPOSED:
 print(f"  PASS  the holder rides the hand frame on all "
       f"{len(FLEET_PROPOSED)} arms" if not fails else "  see failures above")
 # the inferred placement must aim the bore at the planning tip
-lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT))
-u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
+lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER))
+u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
 u = u / np.linalg.norm(u)
 # the SENSE as well as the axis: the housing's +X points AT the tip, because
 # the pen leaves through the cap.  Until 2026-09-03 this read [-1, 0, 0] and

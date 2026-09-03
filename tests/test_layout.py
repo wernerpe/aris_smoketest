@@ -152,9 +152,9 @@ def test_the_inward_ready_pose_is_gone_for_the_middle_row():
     fl, _ = fleet.rig("proposed")
     for aid in (31, 71):
         with pytest.raises(RuntimeError, match="no certified ready pose"):
-            layout.certified_ready_pose(fl[aid], pen_lat=LAT)
+            layout.certified_ready_pose(fl[aid], pen_lat=LAT, pen_ext=EXT)
     for aid in (13, 17, 2, 97):                 # the outer rows still can
-        layout.certified_ready_pose(fl[aid], pen_lat=LAT)
+        layout.certified_ready_pose(fl[aid], pen_lat=LAT, pen_ext=EXT)
     assert frames.ACTIVE_TOOL == "inline" and frames.PEN_LAT == 0.0
 
 
@@ -175,7 +175,7 @@ def test_every_proposed_park_pose_clears_every_other_mount():
     h = layout.LAYOUT_PROPOSED["h"]
     for aid, spec in sorted(fl.items()):
         q = np.asarray(layout.Q_PARK_PROPOSED[aid], float)
-        rep = validate.check_pose(q, spec, pen_lat=LAT)
+        rep = validate.check_pose(q, spec, pen_ext=EXT, pen_lat=LAT)
         assert rep["ok"] and rep["worst"]["tip_z"] > 0.0
         T, pts = frames.fk(q)
         tool = frames.tool_points_many(T[None], pen_lat=frames.PEN_LAT_HOLDER)
@@ -289,6 +289,11 @@ def test_every_swept_height_reproduces_the_legacy_transform_exactly():
 # the mount default and cannot aim all six at the canvas centre; these pin both
 # refusals with the numbers that motivate them.
 LAT = frames.PEN_LAT_HOLDER
+# BOTH HALVES OF THE HOLDER'S TOOL.  Passing only `pen_lat` used to be
+# enough because the axial half was the inline pen's 0.110 too; since
+# 2026-09-03 it is `PEN_EXT_HOLDER` (frames.py), and a bare `pen_lat=LAT`
+# asks about a tool that exists nowhere.
+EXT = frames.PEN_EXT_HOLDER
 
 
 def _park_clearance(poses, fl):
@@ -319,23 +324,28 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
     about the height.
 
     At h = 0.850 it hung 61.6 mm UNDER the paper.  Raising the rig to 0.940
-    lifts the same joints 90 mm and the tip now clears by 28 mm, so that
+    lifts the same joints 90 mm and the tip now clears by 70 mm, so that
     particular refusal is gone; what is left is the reason it was never a
     depot anyway, which no height fixes: 0.184 of joint margin against the
     0.30 gate.  The tip clearance is asserted as a height-derived quantity
     rather than a constant, so this test says something true at any h.
+
+    THE DEPTH BELOW THE BASE MOVED ON 2026-09-03, from 0.9116 m to 0.8698,
+    because the holder's tool did: `PEN_EXT_HOLDER` is 0.0588421 m where the
+    pair used to be the inline pen's 0.110 (frames.py), so the same joints
+    hold the tip 41.8 mm higher.  The pose is no better a depot for it.
     """
     bad = frames.Q_READY_INV
     spec = layout.FLEET_PROPOSED[31]
     h = float(layout.LAYOUT_PROPOSED["h"])
-    rep = validate.check_pose(bad, spec, pen_lat=LAT)
-    assert rep["worst"]["tip_z"] == pytest.approx(h - 0.9116, abs=2e-3)
+    rep = validate.check_pose(bad, spec, pen_ext=EXT, pen_lat=LAT)
+    assert rep["worst"]["tip_z"] == pytest.approx(h - 0.8698, abs=2e-3)
     assert frames.joint_margin(bad) < 0.30, "and THAT is why it is not a depot"
 
     for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
         q = spec.q_seed                            # what the pipeline reads
         assert np.array_equal(q, np.asarray(layout.Q_PARK_PROPOSED[aid], float))
-        rep = validate.check_pose(q, spec, pen_lat=LAT)
+        rep = validate.check_pose(q, spec, pen_ext=EXT, pen_lat=LAT)
         assert rep["ok"], (aid, rep)
         assert rep["worst"]["tip_z"] >= 0.09, aid          # hovering, not down
         assert frames.joint_margin(q) >= 0.30, aid
@@ -367,29 +377,36 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     from aris_sixarm.coordination import SAFETY_M, CALIB_M
     assert _park_clearance(layout.Q_PARK_PROPOSED, fl) >= SAFETY_M + CALIB_M
 
-    # THE INWARD CONTROL IS NOW EVEN STARKER.  Before the capsules were
+    # THE INWARD CONTROL IS NOW A REFUSAL.  Before the capsules were
     # corrected, aiming every arm at the canvas centre certified six poses
     # that then overlapped by 95.6 mm.  At the true widths the middle row
     # cannot certify an inward pose AT ALL, so the control is a refusal
-    # rather than an interpenetration.
+    # rather than an interpenetration — and THAT half is the substantive one.
+    # The four arms that can still certify inward used to stand 4 mm under
+    # the conductor's 80 mm; with the holder's own shorter tool
+    # (frames.PEN_EXT_HOLDER, 2026-09-03) they land 0.4 mm OVER it, which is
+    # a near miss and not a clearance, so the bar is stated as such.
     with pytest.raises(RuntimeError, match="no certified ready pose"):
-        {aid: layout.certified_ready_pose(s, pen_lat=LAT)[0]
+        {aid: layout.certified_ready_pose(s, pen_lat=LAT, pen_ext=EXT)[0]
          for aid, s in sorted(fl.items())}
     outer = [13, 17, 2, 97]
-    inward = {aid: layout.certified_ready_pose(fl[aid], pen_lat=LAT)[0]
+    inward = {aid: layout.certified_ready_pose(fl[aid], pen_lat=LAT, pen_ext=EXT)[0]
               for aid in outer}
     assert _park_clearance(inward, {a: fl[a] for a in outer}) \
-        < SAFETY_M + CALIB_M                       # still too close
+        < SAFETY_M + CALIB_M + 0.005               # still a near miss
 
     # ...and the function still refuses a fleet that parks inside itself.
-    # The 0.20 m hover that used to be the near miss (six gated poses, 4 mm
-    # apart) no longer is: with the corrected capsules the SEARCH lands
-    # elsewhere and that fleet clears.  So the refusal is pinned on a
-    # constructed one instead — the gate, not one historical instance of it.
+    # The 0.20 m hover was the historical near miss (six gated poses, 4 mm
+    # apart), then the corrected capsules moved the SEARCH and it cleared,
+    # and at the holder's own shorter tool (2026-09-03) it is a refusal
+    # again — arms 2 and 97 overlap by 77.8 mm.  A historical instance is not
+    # what this pins; the GATE is, twice over.
     bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
-    layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT)   # no longer
     with pytest.raises(RuntimeError, match="park .* mm apart"):
-        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT, clear=0.60)
+        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT, pen_ext=EXT)
+    with pytest.raises(RuntimeError, match="park .* mm apart"):
+        layout.certified_park_poses(bare, hover=0.20, pen_lat=LAT, pen_ext=EXT,
+                                    clear=0.60)
 
 
 def test_no_shipped_park_pose_stands_in_another_arms_certified_ink():
@@ -429,7 +446,7 @@ def test_no_shipped_park_pose_stands_in_another_arms_certified_ink():
         """World chain with the LATERAL tool, whatever the process global is
         (`frames.PEN_LAT` is not set in a bare test run)."""
         T, P = frames.fk_many(np.asarray(Q, float).reshape(-1, 7))
-        tl = frames.tool_points_many(T, frames.PEN_EXT, LAT)
+        tl = frames.tool_points_many(T, EXT, LAT)
         P = np.concatenate([P] + [t[:, None, :] for t in tl], axis=1)
         Twb = np.asarray(spec.T_world_base(), float)
         return P @ Twb[:3, :3].T + Twb[:3, 3]
@@ -479,12 +496,24 @@ def test_baked_park_poses_are_that_functions_own_output():
     a quarter of an hour, and it needs an atlas out of gitignored `out/`.  The
     grid's scores are recorded where it is defined; what is pinned here is
     that the six poses are what that grid produces.
+
+    AND IT IS RE-RUN AT THE TOOL THEY WERE MADE WITH, WHICH IS NO LONGER THE
+    HOLDER'S.  `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` moved from 0.110 / 0.110 to
+    0.0588421 / 0.0588421 on 2026-09-03 (frames.py, docs/SYSTEM_MODEL.md 7e),
+    so `Q_PARK_PROPOSED` is a STALE certificate: run at the new pair the same
+    grid parks arms 13 and 17 53.7 mm apart, under the conductor's 80 mm, and
+    the fix is a fresh (radius, hover, bearing) SEARCH — the quarter-hour
+    atlas job above — not a different assertion here.  Re-deriving it is a
+    re-certification with its own gate and it is queued, not done.  The baked
+    poses are still SAFE at the new tool (every one passes `check_pose`, the
+    fleet holds 250 mm, and the shorter pen only lifts each tip ~70 mm); they
+    are simply no longer that function's output.
     """
     bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
     assert all(np.array_equal(s.q_seed, frames.Q_READY_INV)
                for s in bare.values()), "derive from the LEGACY seed"
     made = layout.certified_park_poses(bare, layout.PARK_GRID_PROPOSED,
-                                       pen_lat=LAT)
+                                       pen_lat=0.110, pen_ext=0.110)
     assert sorted(made) == sorted(layout.Q_PARK_PROPOSED)
     for aid, q in made.items():
         assert np.allclose(q, layout.Q_PARK_PROPOSED[aid], atol=5e-5), aid
@@ -498,7 +527,9 @@ def test_baked_park_poses_are_that_functions_own_output():
     for aid, q in layout.Q_PARK_PROPOSED.items():
         r, hv, bdeg = layout.PARK_GRID_PROPOSED[aid]
         T = frames.fk(np.asarray(q, float))[0]
-        tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(pen_lat=LAT)
+        # the OLD 0.110 / 0.110 pair, because these hovers were recorded
+        # with it — see this test's own docstring on the stale certificate
+        tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(0.110, 0.110)
         Twb = layout.FLEET_PROPOSED[aid].T_world_base()
         w = Twb[:3, :3] @ tip + Twb[:3, 3]
         assert np.allclose(w[:2], layout.PARK_HOVER_PROPOSED[aid], atol=1e-3)
@@ -516,7 +547,7 @@ def test_baked_park_poses_are_that_functions_own_output():
     # a two-number grid entry is still the old outward recipe, unchanged
     two = layout.certified_park_poses(
         bare, {a: v[:2] for a, v in layout.PARK_GRID_PROPOSED.items()},
-        pen_lat=LAT)
+        pen_lat=0.110, pen_ext=0.110)
     assert sorted(two) == sorted(made)
     assert any(not np.allclose(two[a], made[a], atol=1e-6) for a in made), \
         "the bearing must actually be doing something"
@@ -575,7 +606,7 @@ def test_region_aware_parking_moves_the_arm_that_is_stood_over(lateral):
     worst, _pair = layout.fleet_park_clearance(parks, fl)
     assert worst >= SAFETY_M + CALIB_M
     # and the pose itself is gated exactly as a shipped park is
-    rep = validate.check_pose(parks[71], fl[71], pen_lat=LAT)
+    rep = validate.check_pose(parks[71], fl[71], pen_ext=EXT, pen_lat=LAT)
     assert rep["ok"], rep
     assert rep["worst"]["tip_z"] > 0.0
 
@@ -681,7 +712,7 @@ def test_a_parked_arm_flies_to_its_aside_park_rather_than_appearing_there(latera
     # the phase's collision images will find it
     for q in moved["q"]:
         assert frames.joint_margin(q) >= 0.0
-    assert validate.check_pose(moved["q"][-1], spec, pen_lat=LAT)["ok"]
+    assert validate.check_pose(moved["q"][-1], spec, pen_ext=EXT, pen_lat=LAT)["ok"]
 
     # an aside pose the arm cannot fly to is REFUSED, not flown
     with pytest.raises(writing.PaperRefused):

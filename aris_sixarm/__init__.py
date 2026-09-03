@@ -29,8 +29,10 @@ del _rig
 # ---------------------------------------------------------------------------
 # The pen holder model: "inline" (the legacy tip = TCP + 0.110 along tool z,
 # the DEFAULT so every published number reproduces) or "lateral" (the real
-# holder: tip = TCP + R @ (0.110, 0, 0.110), the pen 11 cm off the wrist axis
-# along hand x).  See frames.activate_tool / frames.PEN_LAT.
+# holder: tip = TCP + R @ (PEN_LAT_HOLDER, 0, PEN_EXT_HOLDER), the pen off the
+# wrist axis along hand x at a 45 deg lean).  BOTH halves switch: until
+# 2026-09-03 only the lateral one did, and a lateral run silently kept the
+# inline pen's axial 0.110.  See frames.activate_tool / frames.PEN_LAT.
 #
 #     ARIS_TOOL=lateral python3 scripts/whatever.py
 _tool = _os.environ.get("ARIS_TOOL", "").strip()

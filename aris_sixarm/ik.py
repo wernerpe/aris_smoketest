@@ -172,7 +172,7 @@ def fk_batch(qs, tcp=TCP_D):
     return fk_many(qs, tcp)
 
 
-def tip_jacobian_batch(qs, pen_ext=PEN_EXT, pen_lat=None):
+def tip_jacobian_batch(qs, pen_ext=None, pen_lat=None):
     """Pen-tip position Jacobians for a whole array. (N,7) -> (N,3,7).
 
     The C++ path is the ANALYTIC geometric Jacobian, z_i x (p_tip - p_i); the

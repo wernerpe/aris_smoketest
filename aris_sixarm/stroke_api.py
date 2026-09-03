@@ -46,14 +46,14 @@ import traceback
 import numpy as np
 
 from . import fleet, pacing, planner, pwl, smooth
-from .frames import PEN_EXT
+from .frames import PEN_EXT, ext_of
 from .validate import validate_plan
 
 DEFAULTS = dict(
     ds_lattice=0.010,      # m, arc-length step of the (s x q7 x branch) lattice
     ds_dense=0.005,        # m, execution/back-out resolution
     n_q7=planner.N_Q7,     # q7 samples across the FR3 range
-    pen_ext=PEN_EXT,
+    pen_ext=None,          # axial tip depth; None -> the ACTIVE tool
     h_inv=None,            # inverted-mount height (None -> fleet default)
     clip_to_sheet=True,    # keep the longest in-sheet run before planning
     smooth_frac=smooth.ROUND_FRAC,
@@ -207,6 +207,13 @@ def plan_stroke(pts_xy, spec, opts=None, _depth=0):
     """Plan one stroke for one arm.  Never raises; see the module docstring."""
     o = dict(DEFAULTS)
     o.update(opts or {})
+    # RESOLVE THE TOOL'S AXIAL DEPTH ONCE, HERE.  `DEFAULTS["pen_ext"]` is
+    # None — the ACTIVE tool — and a plan that RECORDS None is a plan nobody
+    # can re-validate later; the whole point of writing the tool into the
+    # result is that it says which tool.  (It was the constant `PEN_EXT` until
+    # 2026-09-03, which meant a lateral run planned with the inline pen's
+    # axial depth.  See frames.ext_of.)
+    o["pen_ext"] = ext_of(o.get("pen_ext"))
     try:
         from .frames import lat_of as _lat_of
         if _lat_of(o.get("pen_lat")) != 0.0 and o.get("phi") is None \
@@ -450,6 +457,10 @@ def plan_from_ctx(ctx, spec, o, depth=0):
                lean_vec=lat.get("tilt"), tilt_max_deg=float(cone),
                lean_deg=float(cone),
                pen_lat=float(lat.get("pen_lat", 0.0)),
+               # ...and the AXIAL half too, since 2026-09-03: the two are no
+               # longer the same number for the holder, so a plan that named
+               # only one of them did not name its tool
+               pen_ext=float(lat.get("pen_ext", o["pen_ext"])),
                knots=knots, qs=qs, pts=dense_pts,
                times=pc["t"], s=sm["s"], q7=sm["q7"], sigmas=sm["sigmas"],
                margins=sm["margins"], min_sigma=float(sm["min_sigma"]),
@@ -635,6 +646,7 @@ def reverse_plan(plan, spec=None, opts=None, validate=True):
                          f"{plan.get('status')!r}")
     o = dict(DEFAULTS)
     o.update(opts or {})
+    o["pen_ext"] = ext_of(o.get("pen_ext"))
     out = dict(plan)
     # `tilt` and `lean` are PER-SAMPLE fields of a tilted plan (n_dense x 2 and
     # n_dense) and reverse with the samples they belong to.  Leaving them out

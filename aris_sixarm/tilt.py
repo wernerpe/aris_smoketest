@@ -63,7 +63,7 @@ disc to its single centre point and reproduces the flat lattice node for node.
 import numpy as np
 
 from . import ik, planner, rig_final
-from .frames import FR3_MIN, FR3_MAX, PEN_EXT, rotx
+from .frames import FR3_MIN, FR3_MAX, PEN_EXT, ext_of, rotx
 from .pwl import MARGIN_GATE, SIGMA_GATE
 
 OBJECTIVE = "min_travel"         # default band objective; see `plan_lattice`
@@ -281,10 +281,11 @@ def _setup(spec, h_inv, n_q7):
             np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, n_q7))
 
 
-def empty_lattice(pts_xy, spec, disc, h_inv=None, pen_ext=PEN_EXT,
+def empty_lattice(pts_xy, spec, disc, h_inv=None, pen_ext=None,
                   n_q7=planner.N_Q7):
     """An all-invalid (s x q7 x tilt x branch) lattice, ready to be filled."""
     Twb, Twb_inv, q7s = _setup(spec, h_inv, n_q7)
+    pen_ext = ext_of(pen_ext)     # None -> the ACTIVE tool's axial depth
     pts = np.asarray(pts_xy, float)
     Ns, Nt, Nb = len(pts), len(disc["tilt"]), planner.N_BRANCH
     shape = (Ns, n_q7, Nt, Nb)
@@ -455,7 +456,7 @@ def _frame_clear(P10, boxes, margin=None):
 
 
 def build_lattice(pts_xy, spec, tilt_max_deg=0.0, n_ring=N_RING, h_inv=None,
-                  pen_ext=PEN_EXT, n_q7=planner.N_Q7, clearance=True,
+                  pen_ext=None, n_q7=planner.N_Q7, clearance=True,
                   cells=None, disc=None):
     """THE ORACLE: the whole (s x q7 x tilt x branch) lattice in one solve.
 
@@ -689,8 +690,8 @@ def chase(stroke_pts, spec, knots, q_seed, ds=0.005, lat=None, pen_ext=None,
     from . import pwl
     Twb = lat["Twb"] if lat is not None else spec.T_world_base() if h_inv is None \
         else spec.T_world_base(h_inv)
-    pen_ext = (lat["pen_ext"] if lat is not None else PEN_EXT) \
-        if pen_ext is None else pen_ext
+    pen_ext = (lat["pen_ext"] if lat is not None else ext_of()) \
+        if pen_ext is None else float(pen_ext)
     pts, s = planner.resample(stroke_pts, ds)
     q7, tl = _interp_plan(knots, s)
     poses = pen_poses(pts, tl, np.linalg.inv(Twb), pen_ext)

@@ -108,6 +108,17 @@ VIEWS = (
     # the same shot puts the fat end below the fingers instead, which is why it
     # is worth its own camera.
     ("holder_side", None, None, 30),
+    # THE PHOTO'S OWN VIEWPOINT (2026-09-03, docs/SYSTEM_MODEL.md 7e).  Pete's
+    # photograph of the real gripper is an oblique from slightly BELOW the
+    # hand, looking roughly along the hand's x axis, so the jaw axis lies
+    # left-to-right in the frame.  That is the shot in which the Fat blades
+    # read as a V — feet apart at the carriages, plates together at the
+    # paper — and in which the pencil's tail is seen standing out of the back
+    # of the housing toward the wrist.  Rendering the model from the same
+    # place is how "does the model agree with the photograph" stops being a
+    # matter of opinion.  From the -x side, where the barrel and the tail
+    # lean; "below" means further along +z_hand, which is toward the paper.
+    ("photo", None, None, 34),
 )
 
 LIGHTS = [
@@ -193,6 +204,13 @@ def stills(out_dir, width, height, views=None):
             # front of both of them and the shot proves nothing.
             ctr = hand + R_hand @ np.array([0.0, 0.0, 0.110])
             eye = ctr - 0.50 * R_hand[:, 0]
+            target, up = ctr, -R_hand[:, 2]
+        elif name == "photo":
+            # the grip centre, seen from -x and from below (+z_hand), the way
+            # the photograph was taken.  `up` is -z_hand as in holder_side, so
+            # the wrist is at the top of the frame and the paper at the bottom.
+            ctr = hand + R_hand @ np.array([0.004, 0.0, 0.100])
+            eye = ctr + R_hand @ np.array([-0.245, 0.035, 0.115])
             target, up = ctr, -R_hand[:, 2]
         w, h = (width, height)
         cc, dc = camera(w, h, fov)

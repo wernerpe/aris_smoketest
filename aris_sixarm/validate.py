@@ -80,9 +80,9 @@ def _self_pairs(caps):
             if abs(pos[body[j]] - pos[body[i]]) >= SELF_CHAIN_D]
 
 
-def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
+def self_clearance(qs, pen_ext=None, pen_lat=None):
     """Worst gap between two bodies of one arm, own derivation. (N,7) -> (N,)"""
-    from .frames import D_HAND_TCP, link_frames_many
+    from .frames import D_HAND_TCP, ext_of, link_frames_many
     from .selfcoll import BODY_CAPSULES, TOOL_R_INLINE, TOOL_R_LAT
     qs = np.asarray(qs, float).reshape(-1, 7)
     if not len(qs):
@@ -99,7 +99,7 @@ def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
     rt = TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE
     tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
     cor = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf
-    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + float(pen_ext)]) + tf
+    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + ext_of(pen_ext)]) + tf
     A += [tcp, cor]
     B += [cor, tip]
     R += [rt, rt]
@@ -162,7 +162,7 @@ def _pen_lean_deg(T, Rwb):
                                  -axis_w[:, 2]))
 
 
-def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
+def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=None,
                   tip_tol=TIP_TOL, margin_gate=MARGIN_GATE,
                   sigma_gate=SIGMA_GATE, jump=JUMP_GATE, qd_max=QD_MAX,
                   clearance=True, eps=EPS, tilt_max_deg=CONE_GATE,
@@ -358,7 +358,7 @@ def validate_plan(pts_xy, spec, qs, times=None, h_inv=None, pen_ext=PEN_EXT,
     return dict(ok=not V, n=int(len(qs)), violations=V, worst=worst, notes=notes)
 
 
-def check_pose(q, spec, h_inv=None, pen_ext=PEN_EXT, margin_gate=MARGIN_GATE,
+def check_pose(q, spec, h_inv=None, pen_ext=None, margin_gate=MARGIN_GATE,
                z_clear=Z_CLEAR, eps=EPS, pen_lat=None):
     """The single-configuration half of `validate_plan`. -> dict(ok, ...).
 

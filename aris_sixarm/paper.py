@@ -65,7 +65,7 @@ import numpy as np
 from . import rig_final
 from . import frames as _frames
 from .fleet import H_INV_DEFAULT
-from .frames import PEN_EXT, fk_many, tip_pos_many, tool_points_many
+from .frames import PEN_EXT, ext_of, fk_many, tip_pos_many, tool_points_many
 from .validate import Z_CLEAR
 
 CHAIN_CLEAR = Z_CLEAR      # m, every chain point above the paper (= 0.02)
@@ -228,7 +228,7 @@ def clear_cache():
         fn()
 
 
-def route_key(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def route_key(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
               tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR):
     """The memo key `route` would file this question under. -> hashable.
 
@@ -297,13 +297,13 @@ def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True,
     # planner, a path with it — and a run that turned it off must not read the
     # run that left it on.  The probe, when there is one, rides along: it is a
     # fourth obstacle and a route certified without it is not the same route.
-    return (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
+    return (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv),
             _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
             bool(STATIC_SAFE), bool(q_home), bool(SELF_SAFE), _rrt_key(rrt))
 
 
-def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+def key_maker(spec, q_rows, q_cols, pen_ext=None, h_inv=H_INV_DEFAULT):
     """`_key` for a whole BLOCK of pose pairs, with each pose hashed once.
 
     A cost matrix asks about tens of thousands of pairs drawn from a few
@@ -313,7 +313,7 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     """
     rb = [_pose_bytes(q) for q in q_rows]
     cb = [_pose_bytes(q) for q in q_cols]
-    base = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv))
+    base = (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv))
 
     def key(a, b, tip_floor, chain_floor):
         # `True` for the depot, because every caller of the BLOCK form is the
@@ -328,7 +328,7 @@ def key_maker(spec, q_rows, q_cols, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
 # --------------------------------------------------------------------------
 # measurement
 # --------------------------------------------------------------------------
-def chain_tip_z(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+def chain_tip_z(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT):
     """World z of the lowest chain point and of the pen tip. -> (M,), (M,).
 
     The chain minimum skips point 0 (the base origin, bolted to its mount) for
@@ -350,7 +350,7 @@ def chain_tip_z(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
     return chain_z, tip_z
 
 
-def world_chain(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+def world_chain(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT):
     """(M,7) -> (M,K,3) world chain points, tool points included.
 
     The 10- or 11-point chain every gate in this package measures: `frames.fk`'s
@@ -423,7 +423,7 @@ def near_boxes(P, boxes, slack=NEAR_SLACK):
     return [b for b, k in zip(boxes, keep) if k]
 
 
-def leg_static_lb(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def leg_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                   boxes=None, n=SAMPLES, floor=None):
     """A LOWER BOUND on the static clearance over the whole straight move.
 
@@ -578,7 +578,7 @@ RRT_SAFE = True            # offer the C-space planner when the ladder is out
 RRT_PROBE = None
 
 
-def self_floor(spec, q0, q1, pen_ext=PEN_EXT):
+def self_floor(spec, q0, q1, pen_ext=None):
     """The self-clearance floor a move can actually be held to. -> metres.
 
     `effective_static_floor`'s argument for the third obstacle, and it is here
@@ -601,7 +601,7 @@ def self_floor(spec, q0, q1, pen_ext=PEN_EXT):
     return float(min(selfcoll.SELF_PLAN_MARGIN, lo))
 
 
-def leg_self_lb(spec, q0, q1, pen_ext=PEN_EXT, n=SAMPLES, floor=None):
+def leg_self_lb(spec, q0, q1, pen_ext=None, n=SAMPLES, floor=None):
     """A LOWER BOUND on the arm's self-clearance over the whole straight move.
 
     -> metres.  Same shape as `leg_static_lb` — sampled, residual-corrected,
@@ -643,7 +643,7 @@ def leg_self_lb(spec, q0, q1, pen_ext=PEN_EXT, n=SAMPLES, floor=None):
         k = min(nxt, cap)
 
 
-def block_self_lb(L, pen_ext=PEN_EXT, floor=None, k=SWEEP_K):
+def block_self_lb(L, pen_ext=None, floor=None, k=SWEEP_K):
     """`leg_self_lb`'s coarse half for a whole BLOCK of sampled lines.
 
     -> (min (R,N), residual (R,N)), and the two come back APART for the reason
@@ -677,7 +677,7 @@ def block_self_lb(L, pen_ext=PEN_EXT, floor=None, k=SWEEP_K):
     return d.min(axis=2), res
 
 
-def leg_bounds(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
                n=SAMPLES, floor=None):
     """Every gate's question about one straight move, off ONE FK pass.
 
@@ -712,7 +712,7 @@ def leg_bounds(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
     return cz, tz, m - res
 
 
-def path_static_lb(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
+def path_static_lb(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
                    n=SAMPLES, floor=None):
     """`leg_static_lb` along every straight leg of a polyline. -> metres.
 
@@ -734,7 +734,7 @@ def path_static_lb(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None,
     return float(out)
 
 
-def chain_screen(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     """`chain_tip_z` and `chain_static` off ONE forward-kinematics pass.
 
     -> (chain_z (M,), tip_z (M,), static (M,)).  The cost-matrix screens sample
@@ -755,7 +755,7 @@ def chain_screen(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
     return chain_z, tip_z, rig_final.chain_static_clearance(P, boxes)
 
 
-def block_screen(L, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     """A whole block of sampled lines. -> (chain_z, tip_z, static, residual).
 
     `L` is (R, N, K, 7): R x N straight moves, each sampled at K points.  One
@@ -791,14 +791,14 @@ def line_samples(q0, q1, n=SAMPLES):
         + np.asarray(q1, float).reshape(1, 7) * f
 
 
-def line_clearance(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def line_clearance(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                    n=SAMPLES):
     """Worst chain and tip height along one straight move. -> (chain, tip)."""
     cz, tz = chain_tip_z(line_samples(q0, q1, n), spec, pen_ext, h_inv)
     return float(cz.min()), float(tz.min())
 
 
-def effective_floors(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def effective_floors(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                      tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR):
     """The floors a move can actually be held to. -> (tip, chain).
 
@@ -823,7 +823,7 @@ def effective_floors(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     return (float(min(tip_floor, tz.min())), float(min(chain_floor, cz.min())))
 
 
-def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def move_ok(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
             tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, n=SAMPLES):
     """Does the straight move keep its floors? -> (ok, chain, tip).
 
@@ -856,7 +856,7 @@ def move_ok(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     return ok, cz, tz
 
 
-def path_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, n=SAMPLES):
+def path_clearance(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT, n=SAMPLES):
     """Worst chain and tip height along a polyline of configurations."""
     qs = [np.asarray(q, float).reshape(7) for q in qs]
     cz, tz = np.inf, np.inf
@@ -877,7 +877,7 @@ def static_boxes(spec):
     return spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
 
 
-def chain_static(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     """Per-configuration clearance to the static set. -> (M,).
 
     The PER-POSE form, which `frame_clearance` then minimises over.  It is the
@@ -897,7 +897,7 @@ def chain_static(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
     return rig_final.chain_static_clearance(P10, boxes)
 
 
-def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
+def frame_clearance(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     """Worst clearance from the chain (pen tip included) to the static set.
 
     A VIA THAT TRADES A PAPER HIT FOR A FRAME HIT IS NOT A FIX, and the two
@@ -916,7 +916,7 @@ def frame_clearance(qs, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT, boxes=None):
     return float(chain_static(qs, spec, pen_ext, h_inv, boxes).min())
 
 
-def pose_static_ok(q, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def pose_static_ok(q, spec, pen_ext=None, h_inv=H_INV_DEFAULT,
                    floor=FRAME_FLOOR, boxes=None):
     """May the arm STAND here, as far as the static set is concerned? -> bool.
 
@@ -932,7 +932,7 @@ def pose_static_ok(q, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
                              h_inv, boxes)[0] >= float(floor) - EPS)
 
 
-def effective_static_floor(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def effective_static_floor(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                            floor=FRAME_FLOOR, boxes=None):
     """The static floor a move can actually be held to. -> metres.
 
@@ -959,7 +959,7 @@ def effective_static_floor(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
                                                       h_inv, boxes).min())))
 
 
-def path_frame_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def path_frame_clearance(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT,
                          n=SAMPLES, boxes=None):
     """`frame_clearance` along every straight leg of a polyline of configs."""
     if boxes is None:
@@ -974,7 +974,7 @@ def path_frame_clearance(spec, qs, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
     return float(out)
 
 
-def tip_xy(q, spec, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT):
+def tip_xy(q, spec, pen_ext=None, h_inv=H_INV_DEFAULT):
     """Where this configuration's pen tip is on the paper. -> (2,)."""
     Twb = spec.T_world_base(h_inv)
     return (Twb[:3, :3] @ tip_pos_many(np.asarray(q, float).reshape(1, 7),
@@ -1122,7 +1122,7 @@ def _traverse(spec, q_from, xy0, xy1, z, pen_ext, h_inv, mm, step, lift,
     return out
 
 
-def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
+def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
           tip_floor=TIP_CLEAR, chain_floor=CHAIN_CLEAR, heights=VIA_HEIGHTS,
           n=SAMPLES, margin_min=None, cache=True, q_home=None,
           steps=TRAVERSE_STEPS, rrt=True):
@@ -1196,7 +1196,7 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         the cluster profile costing seconds and costing minutes.  Nothing about
         the answer changes; a test pins the memo against the direct call.
         """
-        k = (id(sp), float(pe), float(_frames.PEN_LAT), float(hi), float(z),
+        k = (id(sp), ext_of(pe), float(_frames.PEN_LAT), float(hi), float(z),
              round(float(margin), 9), gate is not None,
              np.round(np.asarray(ref, float), 9).tobytes(),
              np.round(np.asarray(xy, float), 9).tobytes())
@@ -1223,14 +1223,14 @@ def route(spec, q0, q1, pen_ext=PEN_EXT, h_inv=H_INV_DEFAULT,
         return _CACHE[ck]
 
     gate_floor = static_floor if STATIC_SAFE else FRAME_FLOOR
-    lk = (id(spec), float(pen_ext), float(_frames.PEN_LAT), float(h_inv),
+    lk = (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv),
           round(float(gate_floor), 9), int(n))
     # THE SELF MEMO IS NOT KEYED ON THE ARM, and that is a property of the
     # question rather than an optimisation: self-collision is one arm against
     # its own metal in its own base frame, so two arms holding the same joints
     # have the same answer and `id(spec)`/`h_inv` have nothing to say about it.
     self_fl = self_floor(spec, q0, q1, pen_ext)
-    sk = (float(pen_ext), float(_frames.PEN_LAT), round(float(self_fl), 9),
+    sk = (ext_of(pen_ext), float(_frames.PEN_LAT), round(float(self_fl), 9),
           int(n))
 
     def leg(a, b):

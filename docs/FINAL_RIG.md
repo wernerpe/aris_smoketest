@@ -154,11 +154,13 @@ convention), the fingertips are custom/drilled, finger half-width **28.5 mm**
 | **23° clutch** (newest parts, no assembly file) | protrusion ADJUSTABLE — tip **not determined by CAD** | at the 10° build's 21 mm protrusion: (−18.0, 0, 145.7) mm; to reach the upstream 0.209 m: ~90 mm protrusion → **(−44.9, 0, 209.0) mm, 45 mm off-axis** | tilted 23.0° (file says "22 deg" — flagged) |
 
 **Neither build reproduces the scalar tool model** (`PEN_EXT` = 0.110 below
-TCP = 213.4 mm from the flange, on-axis). The planning default REMAINS the
-gate-validated real-touchdown value — a measurement outranks a CAD whose
+TCP = 213.4 mm from the flange, on-axis). The INLINE planning default REMAINS
+the gate-validated real-touchdown value — a measurement outranks a CAD whose
 deployed configuration is unconfirmed — and the CAD's own numbers are pinned
 alongside it in `frames.py` (`TIP_HAND_HOLDER10`, `PEN_TILT_HOLDER10`,
-`PEN_EXT_HOLDER10`).
+`PEN_EXT_HOLDER10`).  The LATERAL holder's own pair moved on 2026-09-03 to
+`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = 0.0588421 m from a photo of the real
+gripper; that pair never was gate-validated (docs/SYSTEM_MODEL.md §7e).
 
 Collision: the final-rig pen capsule and the URDF tool cylinder use the
 **union envelope of both builds** — r = 0.05 m, z −0.033…+0.210 in the hand

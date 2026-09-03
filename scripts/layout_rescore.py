@@ -91,15 +91,18 @@ from aris_sixarm import ik, layout, metrics, mounts, rig_final  # noqa: E402
 from aris_sixarm.coordination import (ArmPath, CAPSULES_LAT,    # noqa: E402
                                       LINK_R, cap_endpoints,
                                       clearance_matrix, seg_seg_dist)
-from aris_sixarm.frames import (PEN_LAT_HOLDER, fk_many,        # noqa: E402
-                                joint_margin, rotx, rotz,
+from aris_sixarm.frames import (PEN_EXT_HOLDER, PEN_LAT_HOLDER,  # noqa: E402
+                                fk_many, joint_margin, rotx, rotz,
                                 tool_offset, tool_points_many)
 from aris_sixarm.metrics import GATE_MARGIN, GATE_SIGMA         # noqa: E402
 from aris_sixarm.rig_final6 import SHEET_FINAL6                 # noqa: E402
 
 W, H = SHEET_FINAL6
 GRID = 0.02
-PEN = 0.110                      # axial pen extension
+PEN = PEN_EXT_HOLDER             # the HOLDER's axial pen extension.  It was
+                                 # the literal 0.110 — the inline pen's — while
+                                 # the two agreed; the holder's own is
+                                 # 0.0588421 since 2026-09-03 (frames.py).
 RMAX = 1.05 + PEN_LAT_HOLDER     # the reach the atlas sweeps, lateral tool
 MARGIN = 0.08                    # coordination.SAFETY_M + CALIB_M
 NEAR_BASE = 0.35                 # m, the handoff annulus the report reads

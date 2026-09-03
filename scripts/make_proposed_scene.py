@@ -133,7 +133,7 @@ def main():
                               pen_color=col)
         T, pts = frames.fk(q)
         P = np.vstack([pts] + list(frames.tool_points_many(
-            T[None], pen_lat=frames.PEN_LAT_HOLDER)))
+            T[None], frames.PEN_EXT_HOLDER, frames.PEN_LAT_HOLDER)))
         Pw = (Twb[:3, :3] @ P.T).T + Twb[:3, 3]
         cl = float(rig_final.chain_static_clearance(
             Pw, spec.static_obstacles())[0])

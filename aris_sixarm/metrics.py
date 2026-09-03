@@ -13,13 +13,13 @@ guarantee at the last Nm.
 import numpy as np
 
 from .frames import (TAU_MAX, tip_pos, tool_offset, joint_axes_many, lat_of,
-                     PEN_EXT)
+                     ext_of, PEN_EXT)
 
 GATE_MARGIN = 0.30   # rad, strict joint-limit comfort (IKA)
 GATE_SIGMA = 0.14    # sigma_min force-sensing floor (ika_plan dual mask)
 
 
-def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT, pen_lat=None):
+def tip_jacobian(q, eps=1e-5, pen_ext=None, pen_lat=None):
     """3x7 position Jacobian of the pen tip (central finite differences)."""
     J = np.zeros((3, 7))
     for j in range(7):
@@ -30,7 +30,7 @@ def tip_jacobian(q, eps=1e-5, pen_ext=PEN_EXT, pen_lat=None):
     return J
 
 
-def tip_jacobian_many(qs, pen_ext=PEN_EXT, pen_lat=None):
+def tip_jacobian_many(qs, pen_ext=None, pen_lat=None):
     """`tip_jacobian` for a whole array. (N,7) -> (N,3,7).
 
     INLINE PEN (pen_lat == 0): where the extension has the batch entry points
@@ -57,7 +57,7 @@ def tip_jacobian_many(qs, pen_ext=PEN_EXT, pen_lat=None):
         return np.cross(zs, tip[:, None, :] - ps).transpose(0, 2, 1)
     from . import ik                       # lazy: ik imports frames, not metrics
     if ik.has_batch():
-        return ik._IK.tip_jacobian_batch(qs, float(pen_ext))
+        return ik._IK.tip_jacobian_batch(qs, ext_of(pen_ext))
     return np.array([tip_jacobian(q, pen_ext=pen_ext) for q in qs])
 
 

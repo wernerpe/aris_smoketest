@@ -98,13 +98,17 @@ import numpy as np                                                  # noqa: E402
 import collision_audit as CA                                        # noqa: E402
 from aris_sixarm import atlas, coordination                         # noqa: E402
 from aris_sixarm.fleet import FLEET                                 # noqa: E402
+from aris_sixarm import frames as _F                                # noqa: E402
 from aris_sixarm.frames import (FR3_MAX, FR3_MIN, fk_many,          # noqa: E402
                                 tool_points_many)
 
 OUT = ROOT / "out"
 CAPS = coordination.CAPSULES_LAT
 NB = coordination.N_BASE
-PEN_EXT, PEN_LAT = 0.110, 0.110
+# the HOLDER's own pair (frames.PEN_EXT_HOLDER / PEN_LAT_HOLDER), not the
+# inline pen's: both were 0.110 until 2026-09-03 and are 0.0588421 now, so an
+# audit recorded before that date was run against a longer tool.
+PEN_EXT, PEN_LAT = _F.PEN_EXT_HOLDER, _F.PEN_LAT_HOLDER
 ATLAS_DIR = "atlas_proposed_h0940_gated"
 
 # The BODIES of the self model: the rigid groups of an arm.  `hand` folds in

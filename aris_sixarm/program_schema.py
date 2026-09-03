@@ -718,7 +718,7 @@ def export_scene(out_path, h_inv=None):
             arm=int(aid), name=spec.name, mount=spec.mount,
             active=bool(spec.active), color_hex=_hex(spec.color),
             xy=[float(x) for x in spec.xy],
-            pen_ext_m=float(spec.pen or frames_mod.PEN_EXT),
+            pen_ext_m=float(spec.pen or frames_mod.ext_of()),
             pen_lat_m=float(frames_mod.PEN_LAT),
             q_seed=[float(x) for x in np.asarray(spec.q_seed, float)],
             T_world_base=[float(x) for x in
@@ -763,7 +763,7 @@ def export_scene(out_path, h_inv=None):
         dh=[[float(x) for x in row] for row in frames_mod.DH],
         tcp_d=float(frames_mod.TCP_D),
         d_hand_tcp=float(frames_mod.D_HAND_TCP),
-        pen_ext_m=float(frames_mod.PEN_EXT),
+        pen_ext_m=float(frames_mod.ext_of()),
         pen_lat_m=float(frames_mod.PEN_LAT),
         fr3_min=[float(x) for x in frames_mod.FR3_MIN],
         fr3_max=[float(x) for x in frames_mod.FR3_MAX],

@@ -350,7 +350,8 @@ READY_RADII = (0.55, 0.62, 0.48, 0.70, 0.40)
 
 
 def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
-                         pen_lat=None, bearing=None, radii=None):
+                         pen_lat=None, bearing=None, radii=None,
+                         pen_ext=None):
     """A gated READY pose for one study arm with the LATERAL tool.
 
     `h_inv` IS NO LONGER WHAT DECIDES THE HEIGHT — `study_spec` writes the base
@@ -361,10 +362,18 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
     stops being so quietly enough to hide a fifteen-centimetre error.  To ask
     about another height, build the spec at that height.
 
-    `pen_lat` defaults to the lateral holder EXPLICITLY rather than to the
-    process-global ACTIVE tool: this is a study function, the study's tool is
-    settled, and a caller must not have to mutate `frames.PEN_LAT` (a global
-    that leaks into every other module) just to ask for a ready pose.
+    `pen_lat` and `pen_ext` default to the lateral holder EXPLICITLY rather
+    than to the process-global ACTIVE tool: this is a study function, the
+    study's tool is settled, and a caller must not have to mutate
+    `frames.PEN_LAT` (a global that leaks into every other module) just to ask
+    for a ready pose.
+
+    BOTH HALVES OF THE TOOL, since 2026-09-03.  This took `pen_lat` explicitly
+    and let the AXIAL depth fall through to the process global, so it hovered
+    the holder's lateral offset out to the INLINE pen's 0.110 m — a tool that
+    exists nowhere.  It did not matter while the two numbers were both 0.110;
+    `PEN_EXT_HOLDER` is 0.0588421 m now (frames.py) and the mixed pair does not
+    even certify a pose for arm 71.
 
     Hover `hover` m over a comfortable point of the arm's own annulus, on the
     ray towards the canvas centre — or along `bearing`, a fixed (dx, dy)
@@ -384,8 +393,8 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
     poses): one implementation, two callers.
     """
     from . import ik, metrics
-    from .frames import (joint_margin, PEN_LAT_HOLDER, rotx, rotz,
-                         tool_offset)
+    from .frames import (joint_margin, PEN_EXT_HOLDER, PEN_LAT_HOLDER,
+                         rotx, rotz, tool_offset)
     from .validate import check_pose
 
     if h_inv is not None and abs(float(h_inv) - float(spec.z)) > 1e-12:
@@ -395,13 +404,14 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
             "different height means a different spec, not a different "
             "argument")
     lat = PEN_LAT_HOLDER if pen_lat is None else float(pen_lat)
+    ext = PEN_EXT_HOLDER if pen_ext is None else float(pen_ext)
     W, H = sheet
     b = np.asarray(spec.xy, float)
     u = (np.array([W / 2, H / 2]) - b if bearing is None
          else np.asarray(bearing, float).reshape(2))
     u = u / max(float(np.linalg.norm(u)), 1e-9)
     Twb_inv = np.linalg.inv(spec.T_world_base(h_inv))
-    off = tool_offset(pen_lat=lat)
+    off = tool_offset(ext, lat)
     for r in READY_RADII if radii is None else tuple(np.atleast_1d(radii)):
         xy = np.clip(b + r * u, [0.05, 0.05], [W - 0.05, H - 0.05])
         best = None
@@ -415,7 +425,8 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
                     m = joint_margin(q)
                     if m < 0.30:
                         continue
-                    rep = check_pose(q, spec, h_inv=h_inv, pen_lat=lat)
+                    rep = check_pose(q, spec, h_inv=h_inv, pen_ext=ext,
+                                     pen_lat=lat)
                     if not rep["ok"] or rep["worst"]["tip_z"] <= 0.0:
                         continue
                     # `pen_lat=lat`, NOT the process global.  This is the
@@ -425,7 +436,7 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
                     # picked a different pose for arm 31 depending on whether
                     # ARIS_TOOL happened to be set.
                     key = min(m, 2.5 * metrics.sigma_min(
-                        metrics.tip_jacobian(q, pen_lat=lat)))
+                        metrics.tip_jacobian(q, pen_ext=ext, pen_lat=lat)))
                     if best is None or key > best[0]:
                         best = (key, q, xy, rep)
         if best is not None:
@@ -434,7 +445,7 @@ def certified_ready_pose(spec, h_inv=None, hover=0.10, sheet=SHEET_FINAL6,
 
 
 def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
-                         pen_lat=None, clear=None):
+                         pen_lat=None, clear=None, pen_ext=None):
     """Where the six arms WAIT. -> {arm_id: q (7,)}, one certified pose each.
 
     THE PARK POSE IS NOT DECORATION AND IT IS NOT INHERITED.  `spec.q_seed` is
@@ -507,7 +518,7 @@ def certified_park_poses(fleet, grid=None, hover=0.10, sheet=SHEET_FINAL6,
                 np.array([np.cos(np.deg2rad(got[2])),
                           np.sin(np.deg2rad(got[2]))]))
         out[aid] = certified_ready_pose(
-            spec, hover=hv, sheet=sheet, pen_lat=pen_lat,
+            spec, hover=hv, sheet=sheet, pen_lat=pen_lat, pen_ext=pen_ext,
             radii=None if r is None else (float(r),), bearing=bear)[0]
     worst, pair = fleet_park_clearance(out, fleet)
     if worst < clear:
@@ -623,8 +634,9 @@ def corridor_clearance(q, spec, target_xy, h_inv=None, pen_ext=None,
                                CAPSULES, CAPSULES_LAT, N_BASE)
     q = np.asarray(q, float).reshape(1, 7)
     h_inv = float(spec.z) if h_inv is None else float(h_inv)
-    pen_ext = float(getattr(spec, "pen", 0.110)) if pen_ext is None \
-        else float(pen_ext)
+    from .frames import ext_of
+    pen_ext = float(getattr(spec, "pen", None) or ext_of()) \
+        if pen_ext is None else float(pen_ext)
     P = chain_world(q, spec, h_inv, pen_ext)
     tab = CAPSULES_LAT if P.shape[1] >= 11 else CAPSULES
     A, B = cap_endpoints(P, tab)
@@ -869,8 +881,9 @@ def repark_route(spec, q_from, q_to, h_inv=None, pen_ext=None, q_home=None):
     """
     from . import paper
     h_inv = float(spec.z) if h_inv is None else float(h_inv)
-    pen_ext = float(getattr(spec, "pen", 0.110)) if pen_ext is None \
-        else float(pen_ext)
+    from .frames import ext_of
+    pen_ext = float(getattr(spec, "pen", None) or ext_of()) \
+        if pen_ext is None else float(pen_ext)
     return paper.route(spec, np.asarray(q_from, float).reshape(7),
                        np.asarray(q_to, float).reshape(7),
                        pen_ext=pen_ext, h_inv=h_inv,
@@ -1078,6 +1091,21 @@ PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
 #
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
+#
+# STALE SINCE 2026-09-03, AND SAID OUT LOUD.  These six were certified for the
+# tool of the day — `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` both 0.110 m.  The
+# photo of the real gripper moved both to 0.0588421 (frames.py,
+# docs/SYSTEM_MODEL.md 7e), and re-running `certified_park_poses` on the SAME
+# grid at the new pair parks arms 13 and 17 **53.7 mm** apart, under the
+# conductor's 80 mm.  The fix is a fresh (radius, hover, bearing) SEARCH —
+# 6 radii x 3 hovers x 24 cells x two directions of `paper.route` per arm,
+# against an atlas out of gitignored `out/` — which is a re-certification with
+# its own gate and is QUEUED, not done.  What is true meanwhile: the six poses
+# as they stand still pass `validate.check_pose` at the new tool, the fleet
+# holds 250 mm between its nearest pair, and the shorter pen only lifts each
+# tip about 70 mm — so they are safe, they are simply no longer that
+# function's own output, and `PARK_HOVER_PROPOSED` below is the OLD tool's
+# hover.  `tests/test_layout.py` re-derives them at 0.110 / 0.110 and says so.
 Q_PARK_PROPOSED = {
     2:  (-0.1933, 1.2642, 1.2767, -2.0492, 1.7237, 1.1764, -1.7795),
     13: (0.6776, 1.0744, -1.5633, -2.1141, -2.0017, 1.3162, 0.5932),

@@ -568,8 +568,10 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
       3. the bore points along the PLANNER's ray from the TCP to the pen tip,
          normalize(pen_lat, 0, pen_ext), rather than along the housing's own
          23 deg clocking.  Assumption 3 is what makes the drawing consistent
-         with the gate-validated tool transform; see PENHOLDER22's docstring
-         for what it costs.
+         with the tool transform — and since 2026-09-03 it is also the only
+         lean the hand admits: 55.1 mm of barrel behind the grip is inside the
+         manufacturer's own hand shell at anything under 35.17 deg.  See
+         PENHOLDER22's docstring.
 
     ...AND THE HOUSING'S +X POINTS AT THE TIP, WHICH IT DID NOT UNTIL
     2026-09-03.  This function used to set `Xh = -u`, i.e. it mounted the
@@ -787,18 +789,24 @@ def penholder22_tail():
     until 2026-09-03 nothing in this model had it anywhere.
 
     MEASURED vs ASSUMED, precisely.  72.514 mm is MEASURED, off the assembly.
-    That this build shows the SAME overhang is ASSUMED — and the assumption
-    has a price worth writing down: with the gate-validated tip 155.563 mm
-    from the TCP, a stick that still shows 72.514 mm of tail is
-    72.514 + 55.099 + 155.563 = 283.176 mm long, which no 7 mm graphite stick
-    is (a Cretacolor Monolith is 175 mm).  Take the assembly's PENCIL LENGTH
-    instead of its overhang and the arithmetic runs the other way: 174.614 mm
-    pushed out to that tip ends 36.049 mm INSIDE the barrel and there is no
-    tail at all.  The model draws the tail because a body that might be there
-    and reaches at the wrist is the conservative half of that pair — and
-    because the two readings together are one more way of saying what 7c
-    already says, that the planner's 155.563 mm tip is not this housing with a
-    short stick in it.
+    That this build shows the SAME overhang is ASSUMED — and 2026-09-03 made
+    the assumption cheap.  A stick showing 72.514 mm of tail with the tip at
+    the CURRENT `PEN_EXT_HOLDER` is 72.514 + 85.100 + 53.214 = 210.8 mm long,
+    which a 7 mm graphite stick can be (a Cretacolor Monolith is 175 mm, so a
+    175 mm stick shows 36.7 mm of tail rather than 72.5).  At the OLD
+    155.563 mm tip the same arithmetic asked for 283.2 mm and no stick was
+    that long — which is one of the several ways that tip did not add up.  The
+    model keeps 72.514 mm because a body that might be there and reaches at
+    the wrist is the conservative reading, and because the photo shows a real
+    tail of roughly that order standing out at the wrist.
+
+    AND IT IS THE TAIL THAT NEARLY TOUCHES THE HAND, WHICH THE PHOTO SHOWS.
+    At the 45 deg lean this body's closest approach to the manufacturer's hand
+    shell is 18.36 mm — at its START, by the housing's tail face, not at its
+    far end, which swings out in hand x and clears by 59.04 mm.  The housing's
+    own tail face sits 1.52 mm below the hand's underside plane.  In a photo
+    taken along the hand's x axis the tail is foreshortened onto the hand and
+    reads as "almost touching", which is exactly what the photo says.
     """
     P = PENHOLDER22
     return dict(name="graphite_tail", x0=-P["tail_len"], x1=P["tail_x"],
@@ -936,11 +944,33 @@ def penholder22_internals_escape(spacer=None):
 # check: the plate's z centre lands at panda_hand z = 103.242 mm against the
 # 10-deg assembly's own grip centre of 103.26 and the stock TCP's 103.4.
 #
+# THE MOUNTING SENSE IS THE ONE THE PHOTO SHOWS, AND IT IS THE ONLY ONE THERE
+# IS (checked 2026-09-03 against a photo of the real gripper).  The photo shows
+# each blade's FOOT outboard against the carriage, the web slanting DOWN AND
+# INWARD, the plate INBOARD of the foot, and the two blades converging toward
+# the paper.  That is this placement exactly: in `panda_hand`, at
+# `FAT_FINGER_FIX`, the two feet stand 70.867 mm apart over z 62.24..76.24 and
+# the two plates 55.168 mm apart over z 94.24..112.24 — a V, closing toward
+# the paper by 15.7 mm over 50 mm of finger.
+#
+# AND THE MIRROR IS IMPOSSIBLE, not merely unphotographed.  The only other way
+# to bolt a foot to the carriage flat is on its INNER face, which runs the web
+# outward and puts the contact plate at link y = 34.350 instead of 10.650 —
+# two plates 68.700 mm apart at q = 0, so closing them on a 50 mm post would
+# need q = -9.350 mm.  The blade cannot grip this holder mounted that way
+# round, at any joint value.  What CANNOT be settled from either the CAD or
+# the photo is the 8 mm question one step in from that: whether the foot's
+# outer face lands on the finger's own back face (this model, and the fit that
+# lands there to 0.097 mm) or 8 mm further in on some inner carriage flat.
+# That is worth 16 mm of `width`, and `width` is what settles it — see
+# `fatfinger_widths` and docs/SYSTEM_MODEL.md 7e.
+#
 # WHAT IT MEANS FOR THE GRIP — see docs/SYSTEM_MODEL.md 7d.  The contact face
 # sits 10.6502 mm OUTBOARD of the stock grip plane and the rib 8.0663, so the
 # gap between two of these is `2 q + 21.3004` at the plates and `2 q + 16.1326`
 # at the ribs, where q is the finger joint and 2 q is what libfranka reports as
-# `width`.  TWO READINGS OF THE PLATE, and this module does not choose:
+# `width`.  TWO READINGS OF THE PLATE, and the photo settles which — B is out,
+# because no fingertip is fitted on the real gripper:
 #
 #   A  THE PLATE GRIPS.  Then it never reaches the post: closing on the 50 mm
 #      post ends, the RIB lands first, at q = 16.9337 mm (25.000 post half-
@@ -948,8 +978,10 @@ def penholder22_internals_escape(spacer=None):
 #      Measured, not argued: bisecting q against the committed holder meshes
 #      gives 16.9337 mm and names the rib crest as the touching vertex.
 #      libfranka width 0.0339.
-#   B  THE PLATE CARRIES THE STOCK FINGERTIP, and four measurements point at
-#      it.  The flat band between the rib and the plate's far edge is 18.000
+#   B  THE PLATE CARRIES THE STOCK FINGERTIP — RULED OUT BY THE PHOTO, which
+#      shows no fingertips on the real gripper at all.  Four measurements
+#      still point at the plate being a SEAT for one, and they are why the
+#      transform is fixed at all, so they stay written down:  The flat band between the rib and the plate's far edge is 18.000
 #      mm and the FR3 fingertip is an 18.1156 mm square.  The 6.000 mm hole is
 #      centred in that band on the fingertip's own brass-insert axis, 0.0002
 #      mm out.  The plate face is 0.1502 mm outboard of the fingertip's back
@@ -1039,7 +1071,13 @@ FATFINGER = dict(
                      "axis hit solid material at z = 5.426 and 44.574).  The "
                      "clocking about the jaw axis is FREE unless a FINGERTIP "
                      "is fitted and seated in the housing's own 18 x 18 mm "
-                     "socket, which is a decision made by hand.",
+                     "socket, which is a decision made by hand — and the "
+                     "2026-09-03 photo of the real gripper shows NO fingertip "
+                     "fitted and the bare plates on the post's end faces, so "
+                     "on the deployed build the clocking IS free and the lean "
+                     "is whatever the assembler set.  What then sets it is "
+                     "the hand: 55.1 mm of barrel behind the grip is inside "
+                     "the manufacturer's hand shell below 35.17 deg.",
 )
 
 
@@ -1047,9 +1085,21 @@ def fatfinger_widths():
     """The `width` libfranka would report, per grasp hypothesis -> dict.
 
     One number off the running robot settles which build is on the arms, and
-    these are the five it has to choose between.  `width` is 2 q, the STOCK
+    these are the six it has to choose between.  `width` is 2 q, the STOCK
     grip plane's opening; each row adds back how far that build's real contact
     face sits outboard of it.
+
+    THE PHOTO (2026-09-03) CUTS THIS TO TWO.  No fingertip is fitted on the
+    real gripper and the bare plates clamp the post's END faces, so every row
+    that seats a tip is out and the answer is one of the first two: 0.0339 if
+    the rib lands (which it does, unless the post is pushed distal of it) or
+    0.0287 if the plates reach the post flat.  BOTH FAIL the running GUI's
+    `grasp(0.0432, epsilon_inner=0.0)`, which is not a contradiction — that
+    menu path falls back to `open_gripper` when a grasp reports failure, so a
+    failing grasp still ends up holding the pen — but it IS the open item.
+    Read against the inverse, a `width` of w puts the contact face
+    (50 - 1000 w) / 2 mm outboard of the stock grip plane: 10.650 mm at
+    0.0287, 8.050 at 0.0339, 3.400 at 0.0432, 0.150 at 0.0497, 0.000 at 0.0500.
     """
     F = FATFINGER
     post = PENHOLDER22["post_z"][1] - PENHOLDER22["post_z"][0]      # 0.050

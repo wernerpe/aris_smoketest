@@ -86,7 +86,7 @@ from collections import OrderedDict
 
 import numpy as np
 
-from .frames import PEN_EXT, fk_many
+from .frames import PEN_EXT, ext_of, fk_many
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import PEN_R_FINAL
 
@@ -233,7 +233,7 @@ NCAP = max(len(CAPSULES), len(CAPSULES_LAT))   # the widest table in play
 # ==========================================================================
 # geometry
 # ==========================================================================
-def chain_world(qs, spec, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT):
+def chain_world(qs, spec, h_inv=H_INV_DEFAULT, pen_ext=None):
     """(N,7) joints -> (N,10|11,3) chain points in WORLD, tool included.
 
     10 points for the inline pen; with the lateral holder ACTIVE
@@ -302,7 +302,7 @@ def _box_of(p, r0, r1):
 class ArmPath:
     """One arm's frozen path, pre-chewed for the collision image."""
 
-    def __init__(self, arm_id, q, dt, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+    def __init__(self, arm_id, q, dt, h_inv=H_INV_DEFAULT, pen_ext=None,
                  spec=None):
         spec = FLEET[arm_id] if spec is None else spec
         self.arm, self.dt = arm_id, float(dt)
@@ -410,11 +410,11 @@ def arm_paths(q_by_arm, dt, h_inv=H_INV_DEFAULT, pens=None, fleet=None):
     bookkeeping: conducting a fleet in which arm 31 carries 300 mm against a
     110 mm capsule would schedule 19 cm of the arm out of the collision image
     entirely.  `pens` is {arm_id: metres}; an arm it does not name keeps
-    `frames.PEN_EXT`.
+    the ACTIVE tool's own depth (`frames.ext_of`).
     """
     pens = pens or {}
     fl = FLEET if fleet is None else fleet
-    return {a: ArmPath(a, q, dt, h_inv, float(pens.get(a, PEN_EXT)), fl[a])
+    return {a: ArmPath(a, q, dt, h_inv, ext_of(pens.get(a)), fl[a])
             for a, q in q_by_arm.items()}
 
 

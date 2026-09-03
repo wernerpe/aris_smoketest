@@ -38,7 +38,7 @@ import numpy as np
 from . import mounts
 from . import rig_final
 from .frames import (Q_READY_FLOOR, Q_READY_INV, Q_READY_INV_FINAL,
-                     Q_READY_WALL, PEN_EXT, rotz, roty)
+                     Q_READY_WALL, PEN_EXT, ext_of, rotz, roty)
 
 SHEET_SIXARM = (3.607, 1.961)   # legacy paper, metres (six-arm planner preset)
 SHEET_FINAL = rig_final.SHEET_FINAL     # (1.8034, 1.700) from the drawing
@@ -58,7 +58,7 @@ class ArmSpec:
     rig: str = "sixarm"             # "sixarm" (legacy) | "final"
     z: float = None                 # explicit base height; None -> legacy rules
     R: tuple = None                 # explicit base rotation (9-tuple, row-major)
-    pen_ext: float = None           # tool config; None -> frames.PEN_EXT
+    pen_ext: float = None           # tool config; None -> the ACTIVE tool
     q_ready: tuple = None           # explicit ready pose; None -> mount rule
     # the OTHER arms' pose-invariant base columns, written in by
     # `mounts.attach_body_columns` once the registry exists (see there).
@@ -73,7 +73,13 @@ class ArmSpec:
 
     @property
     def pen(self):
-        return PEN_EXT if self.pen_ext is None else self.pen_ext
+        """This arm's axial pen depth; unset -> the ACTIVE tool's own.
+
+        Unset used to mean the INLINE pen's `PEN_EXT` even under
+        `ARIS_TOOL=lateral`; it now means `frames.ext_of()`, which is the
+        holder's `PEN_EXT_HOLDER` when the lateral tool is active.
+        """
+        return ext_of(self.pen_ext)
 
     def T_world_base(self, h_inv=H_INV_DEFAULT):
         T = np.eye(4)

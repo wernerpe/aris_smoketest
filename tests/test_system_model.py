@@ -31,7 +31,7 @@ import pytest
 
 from aris_sixarm import frames, layout, mounts, rig_final, selfcoll
 from aris_sixarm import system_model as SM
-from aris_sixarm.frames import D_HAND_TCP, PEN_EXT, PEN_LAT_HOLDER, fk
+from aris_sixarm.frames import D_HAND_TCP, PEN_EXT_HOLDER, PEN_LAT_HOLDER, fk
 
 ROOT = Path(__file__).resolve().parents[1]
 DIR = ROOT / "assets/system_model"
@@ -478,7 +478,7 @@ def test_pen_tip_fk_matches_frames(root):
     qs = [np.asarray(next(iter(layout.FLEET_PROPOSED.values())).q_seed, float)]
     qs += list(rng.uniform(frames.FR3_MIN + 0.1, frames.FR3_MAX - 0.1,
                            size=(8, 7)))
-    off = frames.tool_offset(PEN_EXT, PEN_LAT_HOLDER)   # explicit, never global
+    off = frames.tool_offset(PEN_EXT_HOLDER, PEN_LAT_HOLDER)   # explicit, never global
     worst = 0.0
     for q in qs:
         qmap = {}
@@ -651,7 +651,7 @@ def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
     assert j.find("parent").get("link") == "arm13_panda_hand"
     xyz, rpy = _origin_of(j)
     assert np.allclose(xyz, 0) and np.allclose(rpy, 0)
-    want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+    want = rig_final.penholder22_collision(PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
     cols = links["arm13_pen_holder"].findall("collision")
     # FOUR since 2026-09-03: the three the housing and cap were fitted to,
     # plus the pencil tail's own (docs/SYSTEM_MODEL.md 7c)
@@ -737,8 +737,8 @@ def test_the_housing_is_not_mounted_end_for_end():
     """
     P = rig_final.PENHOLDER22
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
-        PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
+        PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
+    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
     u = u / np.linalg.norm(u)
     # the SENSE: +X_housing points AT the tip, not away from it
     assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)
@@ -757,8 +757,12 @@ def test_the_housing_is_not_mounted_end_for_end():
     assert P["post_xy"][0] == pytest.approx(0.055099, abs=1e-6)
     # the cap sits in FRONT of the TCP along the bore (it used to be behind)
     assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
-    # what the fixed tip therefore asks of the graphite
-    assert (reach - exit_x) == pytest.approx(0.125562, abs=1e-6)
+    # what the fixed tip therefore asks of the graphite.  53.2 mm since
+    # 2026-09-03, when the photo put the tip 5 cm below the Fat blades'
+    # plates instead of 155.6 mm from the TCP (frames.PEN_EXT_HOLDER); it
+    # was 125.562 mm at the old 0.110 / 0.110 pair, which is more graphite
+    # than a 175 mm stick has left after 55.1 mm of barrel behind the grip.
+    assert (reach - exit_x) == pytest.approx(0.053214, abs=1e-6)
 
 
 def test_the_pencil_tail_is_the_assemblys_own_overhang():
@@ -776,16 +780,23 @@ def test_the_pencil_tail_is_the_assemblys_own_overhang():
     assert hull[3] == P["tail_cylinder"]
 
 
-def test_the_flip_did_not_move_the_pen_tip(root):
-    """THE PROOF THAT THE RE-CERTIFICATION IS ONLY ABOUT THE BODY.
+def test_the_urdf_tip_is_the_tool_transform_and_nothing_else(root):
+    """THE PEN TIP IS AN INPUT TO THE HOLDER PLACEMENT, NEVER AN OUTPUT.
 
-    `frames.PEN_LAT_HOLDER` is gate-validated against a real touchdown and the
-    holder correction was not allowed to touch it.  So: the URDF's own pen_tip
-    link, walked through its joint tree, must land on TCP + R @ (lat, 0, ext)
-    EXACTLY — the same 0.110 / 0.110 the planner uses — and it must not depend
-    on the holder placement at all, which is checked by asking
-    `penholder22_T_hand` for a housing pointing the other way and getting the
-    same tip back.
+    The URDF's own `pen_tip` link, walked through its joint tree, must land on
+    TCP + R @ (PEN_LAT_HOLDER, 0, PEN_EXT_HOLDER) exactly — whatever those two
+    numbers currently are — and must not depend on where the housing sits.
+
+    THE PAIR MOVED ON 2026-09-03 and this test moved with it.  It used to pin
+    0.110 / 0.110 and call them gate-validated; only the INLINE pen's
+    `PEN_EXT = 0.110` ever was (gate B, MZ 0.924).  The holder's pair was
+    USER-SPECIFIED — an estimate on 2026-08-25, and now the photo of the real
+    gripper: the tip sits ~5 cm below the bottom edge of the Fat blades'
+    contact plates, which is `panda_hand` z 0.1622421 and so 0.0588421 m of
+    axial depth below the TCP, at the 45 deg lean the hand itself forces (the
+    housing's 55.1 mm of barrel behind the grip is inside the hand's own
+    collision shell at any lean under 35.17 deg).  See frames.py and
+    docs/SYSTEM_MODEL.md 7e.
     """
     qmap = {f"arm{aid}_panda_joint{i + 1}": 0.0
             for aid in layout.FLEET_PROPOSED for i in range(7)}
@@ -793,17 +804,23 @@ def test_the_flip_did_not_move_the_pen_tip(root):
     for aid in layout.FLEET_PROPOSED:
         hand = T[f"arm{aid}_panda_hand"]
         want = hand[:3, :3] @ (np.array([0.0, 0.0, D_HAND_TCP])
-                               + frames.tool_offset(PEN_EXT,
+                               + frames.tool_offset(PEN_EXT_HOLDER,
                                                     PEN_LAT_HOLDER)) \
             + hand[:3, 3]
         got = T[f"arm{aid}_pen_tip"][:3, 3]
         assert np.max(np.abs(got - want)) < 1e-12, aid
     # the tip is an INPUT to the placement, never an output of it
-    _, _, _, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+    _, _, _, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                   D_HAND_TCP)
-    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT),
+    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT_HOLDER),
                                   abs=1e-15)
-    assert frames.PEN_LAT_HOLDER == 0.110 and PEN_EXT == 0.110
+    # the tip sits 50.000 mm below the Fat blades' plate edge, on the hand's
+    # own z — which is the whole derivation, in one line
+    plate_bottom = rig_final.FATFINGER["plate_link_z"][1] + 0.0584
+    assert D_HAND_TCP + PEN_EXT_HOLDER - plate_bottom == \
+        pytest.approx(0.050, abs=1e-9)
+    # and the INLINE pen, the one that IS gate-validated, did not move
+    assert frames.PEN_EXT == 0.110
 
 
 def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
@@ -813,7 +830,7 @@ def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
     A cylinder that quietly became a collision element would change every
     certified clearance in the repo without changing a single number in it.
     """
-    want = rig_final.penholder22_internals(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+    want = rig_final.penholder22_internals(PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
     # spring, sleeve, clutch, buried graphite, the pencil TAIL — plus a shim
     # if one is fitted
     assert len(want) == 5 + bool(rig_final.PENHOLDER22["spacer_fitted"])
@@ -867,7 +884,7 @@ def test_the_holder_meshes_exist_and_stay_within_budget():
 def test_the_holder_envelope_still_encloses_the_committed_meshes():
     trimesh = pytest.importorskip("trimesh")
     P = rig_final.PENHOLDER22
-    T_h, _, _, _ = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+    T_h, _, _, _ = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                 D_HAND_TCP)
     Ti = np.linalg.inv(T_h)
     by, bz = P["bore_yz"]
@@ -949,6 +966,62 @@ def test_the_fat_finger_lands_on_the_fingertips_own_frame():
     assert z_mid == pytest.approx(0.10326, abs=2e-5)
 
 
+def test_the_blades_converge_toward_the_paper_and_the_mirror_cannot_grip():
+    """THE MOUNTING SENSE, AGAINST THE PHOTOGRAPH OF THE REAL GRIPPER.
+
+    Pete photographed the mounted gripper on 2026-09-03.  What it shows: each
+    blade's mounting FOOT outboard, up against the hand at the carriage; the
+    slanted WEB running down and inward from it; the flat contact PLATE
+    inboard of the foot; and the two blades forming a V that converges toward
+    the paper.  No fingertips, and the bare plates clamping the holder post's
+    end faces.
+
+    This pins that the model says the same thing, in `panda_hand` and at the
+    joint value the URDF draws — feet 70.867 mm apart up at the carriages,
+    plates 55.168 mm apart down at the paper — and, separately, that there was
+    never another option: the only other way to bolt a foot to the carriage
+    flat is on the foot's INNER face, which runs the web outward and puts the
+    contact plate 34.350 mm out instead of 10.650.  Two of those are 68.700 mm
+    apart at q = 0, so closing them on a 50 mm post needs a NEGATIVE joint
+    value.  The blade cannot grip this holder mounted the other way round.
+
+    (The 10.650 mm is "outboard" only of the STOCK GRIP PLANE, which is a
+    different datum from the foot: the blade is 15.850 mm thick from carriage
+    face to contact face where the stock finger is 26.4 mm from carriage face
+    to grip plane, and that difference is the whole of it.)
+    """
+    F = rig_final.FATFINGER
+    gen = _gen()
+    q = gen.FAT_FINGER_FIX
+    JZ = 0.0584                       # panda_finger_joint origin, panda_hand z
+
+    # the V: outboard and proximal at the foot, inboard and distal at the plate
+    foot_y0, foot_y1 = F["foot_link_y"]
+    plate_y0 = F["plate_offset"]
+    assert foot_y0 > plate_y0                      # plate INBOARD of the foot
+    foot_z = (0.003842, 0.017842)
+    plate_z = F["plate_link_z"]
+    assert foot_z[1] < plate_z[0]                  # foot PROXIMAL of the plate
+    assert 2 * (q + foot_y0) == pytest.approx(0.070867, abs=1e-6)
+    assert 2 * (q + plate_y0) == pytest.approx(0.055168, abs=1e-6)
+    # ...and in panda_hand the bands sit where the photo puts them
+    assert (foot_z[0] + JZ, foot_z[1] + JZ) == pytest.approx(
+        (0.062242, 0.076242), abs=1e-6)
+    assert (plate_z[0] + JZ, plate_z[1] + JZ) == pytest.approx(
+        (0.094242, 0.112242), abs=1e-6)
+    # the rib is what actually lands, 2.5839 mm short of the plate
+    assert 2 * (q + F["rib_offset"]) == pytest.approx(0.050, abs=1e-9)
+
+    # THE MIRROR: foot's inner face on the carriage instead of its outer one
+    carriage = F["foot_link_y"][1]                 # 0.0265, the carriage flat
+    mirrored = F["plate_x"][1] - F["foot_x"][1] + carriage
+    assert mirrored == pytest.approx(0.034350, abs=1e-6)
+    post = (rig_final.PENHOLDER22["post_z"][1]
+            - rig_final.PENHOLDER22["post_z"][0])
+    assert 2 * mirrored > post                     # already wider than the post
+    assert 0.5 * post - mirrored < 0.0             # so q would have to be < 0
+
+
 def test_the_fat_fingers_box_envelope_still_contains_it():
     """Four boxes, measured off this very file, and nothing escapes them."""
     trimesh = pytest.importorskip("trimesh")
@@ -964,7 +1037,13 @@ def test_the_fat_fingers_box_envelope_still_contains_it():
 
 
 def test_the_fat_finger_is_recorded_with_its_provenance(manifest):
-    """Vendored, hashed, and the six grasp hypotheses are in the manifest."""
+    """Vendored, hashed, and the six grasp hypotheses are in the manifest.
+
+    The 2026-09-03 photo cuts the six to TWO — no fingertip is fitted, so
+    every row that seats one is out — and both survivors are under the running
+    GUI's 0.0432.  That is the open item, not a contradiction: the GUI's menu
+    path falls back to a move-close when a grasp reports failure.
+    """
     rec = [f for f in manifest["meshes"]["files"]
            if f["file"].startswith("meshes/fatfinger/")]
     assert len(rec) == 1, rec
@@ -984,6 +1063,10 @@ def test_the_fat_finger_is_recorded_with_its_provenance(manifest):
     assert sorted(round(v, 4) for v in w.values()) == \
         [0.0287, 0.0339, 0.0357, 0.036, 0.0497, 0.05]
     assert sum(1 for v in w.values() if v > 0.0432) == 2
+    # the two the photo leaves standing, and neither of them clears 0.0432
+    bare = [v for k, v in w.items() if "fingertip" not in k and "stock" not in k]
+    assert sorted(round(v, 4) for v in bare) == [0.0287, 0.0339]
+    assert max(bare) < 0.0432
 
 
 def test_the_fat_variant_urdf_carries_the_blade_on_both_fingers():

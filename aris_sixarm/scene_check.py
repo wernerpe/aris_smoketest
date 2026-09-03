@@ -40,7 +40,7 @@ import numpy as np
 
 from . import paper
 from . import frames as _frames
-from .frames import FR3_MAX, FR3_MIN, PEN_EXT, fk, tool_offset
+from .frames import FR3_MAX, FR3_MIN, PEN_EXT, ext_of, fk, tool_offset
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import STATIC_MARGIN
 from .validate import check_pose as validate_pose, validate_plan
@@ -275,7 +275,7 @@ _CHAIN_POS = dict(link0=0, link1=1, link2=2, link3=3, link4=4, link5=5,
                   link6=6, link7=7, hand=8, tool=8)
 
 
-def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
+def self_clearance(qs, pen_ext=None, pen_lat=None):
     """Worst gap between two bodies of ONE arm. (N,7) -> (N,).  Own derivation.
 
     Base frame throughout: a rigid motion of the whole arm cannot change the
@@ -299,7 +299,7 @@ def self_clearance(qs, pen_ext=PEN_EXT, pen_lat=None):
     Rf, tf = T[:, 9, :3, :3], T[:, 9, :3, 3]
     tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
     cor = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf
-    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + float(pen_ext)]) + tf
+    tip = Rf @ np.array([lat, 0.0, D_HAND_TCP + ext_of(pen_ext)]) + tf
     rt = TOOL_R_LAT if lat != 0.0 else TOOL_R_INLINE
     A += [tcp, cor]
     B += [cor, tip]
@@ -422,11 +422,11 @@ def neighbour_columns(fleet_dict, arm, present):
 def pen_len(pen_ext, arm):
     """This arm's pen, whether `pen_ext` is one length or {arm_id: length}."""
     if isinstance(pen_ext, dict):
-        return float(pen_ext.get(arm, PEN_EXT))
-    return float(pen_ext)
+        return ext_of(pen_ext.get(arm))
+    return ext_of(pen_ext)
 
 
-def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
+def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=None,
                  verbose=True, fleet=None):
     """A whole fleet standing still, all at once. -> report dict.
 
@@ -505,7 +505,7 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=PEN_EXT,
 
 
 def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
-                   pen_ext=PEN_EXT, sub=2, progress=None, verbose=True,
+                   pen_ext=None, sub=2, progress=None, verbose=True,
                    fleet=None, drawing=None):
     """Verify a merged timeline. -> report dict (`ok` gates the animation).
 
