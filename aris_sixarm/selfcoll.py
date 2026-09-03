@@ -99,8 +99,13 @@ finds it by placing a CAD delivery that arrived with no assembly file, and
 `rig_final` is explicit that "the inference in that placement is the residual
 risk, not the radius".  A safety gate does not get to depend on an inference,
 so the tool here is the same L that `rig_final.STATIC_CAPSULES_LAT` ships
-(TCP -> bracket corner -> tip, both at 0.05, both CAD-validated as CONTAINING
-the holder), and the inline pen is its 0.03.
+(TCP -> bracket corner -> tip, both at 0.05), and the inline pen is its 0.03.
+Those two were CAD-validated as containing the holder in 2026-08-26 and the
+2026-09-03 housing correction took that back: the holder was measured on
+backwards, and the right way round it escapes them by 6.546 mm (its pencil
+tail by 77.661).  They have not moved — see `rig_final.BRACKET_R_LAT` for why
+and docs/SYSTEM_MODEL.md 7c for what moving them would cost — but the sentence
+above is now an argument about provenance, not about containment.
 
 WHAT THE MARGIN IS.  `SELF_MARGIN` is 0.02 m — the operating clearance this
 repo demands against a static surface it knows exactly (`rig_final.Z_STATIC`,
@@ -265,10 +270,11 @@ def capsule_ends(qs, pen_ext=PEN_EXT, pen_lat=None):
     # assembly file, and `rig_final` is explicit that "the inference in that
     # placement is the residual risk, not the radius".  A safety gate does not
     # get to rest on an inference, so the tool here is the same L the package
-    # already ships: TCP -> bracket corner -> tip, both at 0.05 and both
-    # CAD-validated as CONTAINING the holder.  With the inline pen the corner
-    # IS the TCP, so the bracket degenerates to a point inside the pen capsule
-    # and changes no answer.
+    # already ships: TCP -> bracket corner -> tip, both at 0.05.  (They were
+    # CAD-validated as CONTAINING the holder; the 2026-09-03 correction to the
+    # housing's sense withdrew that — see `rig_final.BRACKET_R_LAT`.)  With
+    # the inline pen the corner IS the TCP, so the bracket degenerates to a
+    # point inside the pen capsule and changes no answer.
     Rf, tf = T[:, 9, :3, :3], T[:, 9, :3, 3]
     tcp = Rf @ np.array([0.0, 0.0, D_HAND_TCP]) + tf
     corner = Rf @ np.array([lat, 0.0, D_HAND_TCP]) + tf

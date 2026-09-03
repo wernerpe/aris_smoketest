@@ -313,9 +313,28 @@ STATIC_CAPSULES = ((1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
 # AUDITED AND KEPT (2026-08-26).  The 22-deg CAD landed after these two were
 # chosen, and `scripts/collision_audit.py` measured the assembled holder
 # (housing + cap + clutch, placed by `penholder22_T_hand`) against them: both
-# capsules CONTAIN it, so unlike every arm capsule they did not have to move.
-# The inference in that placement is the residual risk, not the radius.
-BRACKET_R_LAT = 0.05  # bracket capsule radius (CAD-validated envelope)
+# capsules CONTAINED it by 1.720 mm, so unlike every arm capsule they did not
+# have to move.  The inference in that placement is the residual risk, not the
+# radius.
+#
+# ...AND THAT AUDIT WAS RUN ON A HOUSING MOUNTED END-FOR-END (2026-09-03).
+# `penholder22_T_hand` had the housing's +X pointing away from the tip; with it
+# the right way round the 55.099 mm of barrel that used to reach toward the
+# paper reaches BEHIND the grip instead, and the same measurement now says:
+#
+#     housing + cap                +6.546 mm out  (bracket r 0.0565 needed)
+#     + the pencil tail (7c)      +77.661 mm out  (bracket r 0.1277 needed)
+#
+# SO THESE TWO CAPSULES DO NOT CONTAIN THE HOLDER ANY MORE.  They are kept at
+# 0.05 all the same: they are what every certified number in this repo was
+# earned against, and re-deriving them is a re-certification with its own
+# gate, not a constant edit.  What it would cost is measured rather than
+# guessed — at r = 0.0565 the 100 % programme's inter-arm minimum falls from
+# 80.73 mm to 79.12 and fails the 80 mm gate; at 0.1277 it falls to -18.21.
+# docs/SYSTEM_MODEL.md 7c.  THIS IS THE REPO'S LARGEST OPEN RE-CERT ITEM ON
+# THE TOOL, and it is the pencil tail that makes it expensive.
+BRACKET_R_LAT = 0.05  # bracket capsule radius (see the note above: it no
+                      # longer contains the holder, and it has not moved)
 PEN_R_LAT = 0.05      # pen capsule radius on the lateral holder
 STATIC_CAPSULES_LAT = ((1, 3, 0.130), (3, 4, 0.117), (4, 5, 0.131),
                        (5, 7, 0.091), (7, 8, 0.104),

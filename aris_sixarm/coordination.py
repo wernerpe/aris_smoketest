@@ -127,10 +127,18 @@ from .rig_final import PEN_R_FINAL
 #
 # THE TOOL CAPSULES DID NOT MOVE.  The lateral holder's two 0.05 capsules were
 # audited against the 22-deg CAD (housing + cap + clutch, placed by
-# `rig_final.penholder22_T_hand`) and CONTAIN it with room to spare, so they
-# are carried unchanged — see `rig_final.BRACKET_R_LAT` / `PEN_R_LAT`.  The
+# `rig_final.penholder22_T_hand`) and CONTAINED it by 1.720 mm, so they are
+# carried unchanged — see `rig_final.BRACKET_R_LAT` / `PEN_R_LAT`.  The
 # inline pen's 0.03 (`PEN_R`, legacy three-arm rig) was NOT audited: that tool
 # is not built, and no rig this repo ships still flies it.
+#
+# ...AND THE HOLDER THAT AUDIT MEASURED WAS ON BACKWARDS (2026-09-03).  The
+# housing was mounted END-FOR-END; corrected, it escapes these capsules by
+# 6.546 mm and its pencil tail by 77.661 mm.  THEY STILL DO NOT MOVE — they
+# are what the certified programme was conducted against, and widening them
+# re-opens every number earned with them — but they are no longer a proven
+# envelope of the tool.  `rig_final.BRACKET_R_LAT` carries the measurement and
+# docs/SYSTEM_MODEL.md 7c what re-deriving them would cost.
 #
 # ...AND THE BASE COLUMN IS FOUR BANDS, NOT ONE CAPSULE (2026-08-26, later).
 # `LINK_R` below is still the widest radius the casting proper reaches, and it
