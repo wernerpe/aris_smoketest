@@ -268,13 +268,14 @@ def tool_parts(pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER, with_lead=True):
 
     Raw STLs from the slack dump (mm), placed by `rig_final.penholder22_T_hand`
     — the same inference the URDF's visual meshes were baked with, but WITHOUT
-    the 5 k-face decimation those went through.  Plus the graphite stick, the
-    only part of the tool that reaches the paper.
+    the 5 k-face decimation those went through.  Plus the graphite stick: the
+    `lead`, the only part of the tool that reaches the paper, and the `tail`,
+    the only part that reaches back at the wrist (docs/SYSTEM_MODEL.md 7c).
     """
     if not CAD_DIR.exists():
         return {}
-    T_h, T_c, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
-                                                         D_HAND_TCP)
+    T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
+                                                           D_HAND_TCP)
     out = {}
     for nm, fn, T in (("housing", HOUSING_STL, T_h), ("cap", CAP_STL, T_c)):
         m = trimesh.load(CAD_DIR / fn, force="mesh", process=False)
@@ -283,12 +284,15 @@ def tool_parts(pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER, with_lead=True):
     if with_lead:
         P = rig_final.PENHOLDER22
         by, bz = P["bore_yz"]
-        lead = trimesh.creation.cylinder(radius=P["lead_r"], sections=32,
-                                         height=reach - nose)
-        T = np.eye(4)
-        T[:3, :3] = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
-        T[:3, 3] = (P["nose_x"] - 0.5 * (reach - nose), by, bz)
-        out["lead"] = lead.apply_transform(T_h @ T)
+        for nm, x0, x1 in (("lead", P["cap_end_x"],
+                            P["post_xy"][0] + reach),
+                           ("tail", -P["tail_len"], P["tail_x"])):
+            cyl = trimesh.creation.cylinder(radius=P["lead_r"], sections=32,
+                                            height=x1 - x0)
+            T = np.eye(4)
+            T[:3, :3] = np.array([[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]])
+            T[:3, 3] = (0.5 * (x0 + x1), by, bz)
+            out[nm] = cyl.apply_transform(T_h @ T)
     return out
 
 
@@ -1140,6 +1144,24 @@ def part_tool(rec):
                              needed_r=need)
         print(f"     the L-capsules would need r = {need[0]:.4f} / "
               f"{need[1]:.4f} (they carry {R[0]:.3f} / {R[1]:.3f})")
+        # ...AND WITH THE PENCIL TAIL, which is a body of the assembled tool
+        # and reaches back at the wrist (docs/SYSTEM_MODEL.md 7c).  Reported
+        # separately so the housing's own escape stays readable next to it.
+        if "tail" in tools:
+            wt = np.concatenate([body, np.asarray(tools["tail"].vertices,
+                                                  float)])
+            ex2 = (_pt_seg_dist(wt, A, B) - R[None]).min(axis=1)
+            own2 = (_pt_seg_dist(wt, A, B) - R[None]).argmin(axis=1)
+            need2 = []
+            for k in range(2):
+                dk = _pt_seg_dist(wt, A[k:k + 1], B[k:k + 1])[:, 0]
+                need2.append(float(dk[own2 == k].max()) if (own2 == k).any()
+                             else float(R[k]))
+            rows["_body_with_tail"] = dict(
+                l_capsule_max_mm=float(1000 * ex2.max()), needed_r=need2)
+            print(f"     + the pencil tail: L-capsules "
+                  f"{1000 * ex2.max():+.2f} mm, they would need r = "
+                  f"{need2[0]:.4f} / {need2[1]:.4f}")
         out[label] = rows
     rec["tool"] = out
     return out

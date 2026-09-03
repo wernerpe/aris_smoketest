@@ -1800,7 +1800,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -1851,26 +1851,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -1880,7 +1886,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -1890,7 +1896,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -1898,14 +1904,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm13_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm13_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -1916,18 +1932,18 @@
   </joint>
   <link name="arm13_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm13_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -1960,7 +1976,7 @@
   <link name="arm13_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>
@@ -2295,7 +2311,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -2346,26 +2362,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -2375,7 +2397,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -2385,7 +2407,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -2393,14 +2415,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm17_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm17_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -2411,18 +2443,18 @@
   </joint>
   <link name="arm17_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm17_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -2455,7 +2487,7 @@
   <link name="arm17_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>
@@ -2790,7 +2822,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -2841,26 +2873,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -2870,7 +2908,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -2880,7 +2918,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -2888,14 +2926,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm31_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm31_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -2906,18 +2954,18 @@
   </joint>
   <link name="arm31_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm31_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -2950,7 +2998,7 @@
   <link name="arm31_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>
@@ -3285,7 +3333,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -3336,26 +3384,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -3365,7 +3419,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -3375,7 +3429,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -3383,14 +3437,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm71_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm71_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -3401,18 +3465,18 @@
   </joint>
   <link name="arm71_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm71_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -3445,7 +3509,7 @@
   <link name="arm71_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>
@@ -3780,7 +3844,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -3831,26 +3895,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -3860,7 +3930,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -3870,7 +3940,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -3878,14 +3948,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm2_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm2_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -3896,18 +3976,18 @@
   </joint>
   <link name="arm2_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm2_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -3940,7 +4020,7 @@
   <link name="arm2_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>
@@ -4275,7 +4355,7 @@
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.141592653589586" />
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 -3.1415926535895866" />
       <geometry>
         <mesh filename="meshes/collision/finger.obj" />
       </geometry>
@@ -4326,26 +4406,32 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.027289372006332423 0.0 0.13069785728770666" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02728937200633243 0.0 0.07610214271229335" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.0007728677118368915 0.0 0.10418135299321114" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.0007728677118368985 0.0 0.10261864700678887" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0301" length="0.039999999999999994" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.017435131903716705 0.0 0.08597335337765755" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.017435131903716698 0.0 0.12082664662234247" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0181" length="0.01150000000000001" />
       </geometry>
     </collision>
+    <collision>
+      <origin xyz="-0.0649477578519844 0.0 0.038443756866641386" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.005" length="0.073514" />
+      </geometry>
+    </collision>
     <!-- spring: 9657K26_Compression Spring, free 0.05081 m, squeezed to 0.039675 (preload 0.011135 m, 0.011175 m left to solid). DRAWN AS ITS OUTER ENVELOPE, not as a coil. -->
     <visual>
-      <origin xyz="0.022567666474959253 0.0 0.1259761517563335" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.02256766647495926 0.0 0.08082384824366651" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.009525" length="0.039674999999999995" />
       </geometry>
@@ -4355,7 +4441,7 @@
     </visual>
     <!-- sleeve: pen holder for clutches v1.00, 0.0401 m, seated on the cap's 16.0 mm shoulder -->
     <visual>
-      <origin xyz="-0.005637055259619161 0.0 0.09777143002175509" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.0056370552596191545 0.0 0.10902856997824492" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.0105" length="0.0401" />
       </geometry>
@@ -4365,7 +4451,7 @@
     </visual>
     <!-- clutch: pen clutch - Creatcolor monolith graphite v1.01, inside the sleeve, collet at the sleeve's 13.0 mm land -->
     <visual>
-      <origin xyz="-0.007440177551644847 0.0 0.09596830772972939" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="0.007440177551644847 0.0 0.11083169227027062" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
         <cylinder radius="0.008533" length="0.035" />
       </geometry>
@@ -4373,14 +4459,24 @@
         <color rgba="0.55 0.57 0.6 1.0" />
       </material>
     </visual>
-    <!-- graphite_buried: the 7.0 mm stick from the clutch's grip out through the nose; what shows PAST the nose is `pen_lead` -->
+    <!-- graphite_buried: the 7.0 mm stick inside the barrel, tail face to cap face: it runs right THROUGH the holder — the clutch, the sleeve's 13.0 mm land, the spring's 14.97 mm bore and the 17.00 mm tail land, none of which a 7 mm stick touches.  What shows past the cap is `pen_lead`; what shows past the tail face is `penholder22_tail` -->
     <visual>
-      <origin xyz="0.021945412507515097 0.0 0.12535389778888933" rpy="2.356194490192345 -0.0 -1.5707963267948966" />
+      <origin xyz="-0.00886924035642287 0.0 0.0945222743622029" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
       <geometry>
-        <cylinder radius="0.0035" length="0.04811499999999999" />
+        <cylinder radius="0.0035" length="0.0851" />
       </geometry>
       <material name="arm97_pen_graphite_buried_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
+      </material>
+    </visual>
+    <!-- graphite_tail: 72.514 mm of stick past the tail face, MEASURED off the 10-deg assembly (its pencil stands 72.514 mm proud of the housing's tail face and 17.000 mm proud of the cap).  Points at the WRIST; see `penholder22_tail` for what its length assumes -->
+    <visual>
+      <origin xyz="-0.06459420446139111 0.0 0.03879731025723466" rpy="-0.7853981633974483 -0.0 -1.5707963267948966" />
+      <geometry>
+        <cylinder radius="0.0035" length="0.072514" />
+      </geometry>
+      <material name="arm97_pen_graphite_tail_mat">
+        <color rgba="0.34 0.24 0.16 1.0" />
       </material>
     </visual>
   </link>
@@ -4391,18 +4487,18 @@
   </joint>
   <link name="arm97_pen_lead">
     <visual>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.0035" length="0.10046449186104045" />
+        <cylinder radius="0.0035" length="0.12556249186104046" />
       </geometry>
       <material name="arm97_pen_lead_mat">
         <color rgba="0.16 0.16 0.17 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.0744804382682988 0.0 0.0744804382682988" rpy="0.0 0.7853981633974483 0.0" />
+      <origin xyz="0.0656069552711888 0.0 0.06560695527118882" rpy="0.0 0.7853981633974483 0.0" />
       <geometry>
-        <cylinder radius="0.005" length="0.10046449186104045" />
+        <cylinder radius="0.005" length="0.12556249186104046" />
       </geometry>
     </collision>
   </link>
@@ -4435,7 +4531,7 @@
   <link name="arm97_cable_dress_0">
     <!-- ESTIMATED: forearm service loop -->
     <visual>
-      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673095 -0.0 2.539305307454829" />
+      <origin xyz="-0.0475 0.060000000000000005 0.042499999999999996" rpy="1.3187591049673097 -0.0 2.5393053074548293" />
       <geometry>
         <cylinder radius="0.03" length="0.10024968827881711" />
       </geometry>

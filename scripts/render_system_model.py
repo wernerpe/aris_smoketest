@@ -12,6 +12,11 @@ Writes to `out/` (gitignored — these are a look, not an artefact):
     system_model_drop_cluster.png    one drop cluster: posts, plate, clamp
                                      stack, gussets, the arm and its holder
     system_model_holder.png          the pen holder alone, on the hand
+    system_model_holder_side.png     the same, straight down the hand's x axis:
+                                     fingers left and right, the barrel above
+                                     the grip and the graphite below it, which
+                                     is the shot that says which way round the
+                                     housing is (docs/SYSTEM_MODEL.md 7c)
     system_model.html                a static meshcat scene of everything
 
 The arms are posed at `Q_PARK_PROPOSED` — the certified park poses, which is
@@ -91,6 +96,18 @@ VIEWS = (
     # OUTSIDE the frame — from inside, the gussets fill the picture.
     ("drop_cluster", (-1.55, 0.62, 2.05), (0.62, 1.78, 1.12), 30),
     ("holder", None, None, 33),      # framed on the arm's own hand, below
+    # THE ONE VIEW THAT SETTLES WHICH WAY ROUND THE HOLDER IS.  Straight down
+    # the hand's own x axis, so the finger-travel axis (hand y) lies across the
+    # image and the approach axis (hand z) runs down it: the two fingers left
+    # and right, the mount post between them, and the barrel and the graphite
+    # separated top from bottom.  The bore is in the hand's x-z plane, so this
+    # projection foreshortens it by cos 45 deg and NOTHING ELSE — the 55.1 mm
+    # of barrel behind the grip reads as 39 mm of barrel ABOVE the fingers,
+    # with the cap, the graphite and the pen tip below them.  Mounted
+    # end-for-end (as this model was until 2026-09-03, docs/SYSTEM_MODEL.md 7c)
+    # the same shot puts the fat end below the fingers instead, which is why it
+    # is worth its own camera.
+    ("holder_side", None, None, 30),
 )
 
 LIGHTS = [
@@ -143,8 +160,10 @@ def stills(out_dir, width, height, views=None):
     probe = b.Build().CreateDefaultContext()
     pctx = plant.GetMyContextFromRoot(probe)
     pose_fleet(plant, pctx)
-    hand = plant.EvalBodyPoseInWorld(
-        pctx, plant.GetBodyByName("arm31_panda_hand")).translation()
+    X_hand = plant.EvalBodyPoseInWorld(pctx,
+                                       plant.GetBodyByName("arm31_panda_hand"))
+    hand = X_hand.translation()
+    R_hand = X_hand.rotation().matrix()
     tip = plant.EvalBodyPoseInWorld(
         pctx, plant.GetBodyByName("arm31_pen_tip")).translation()
 
@@ -153,6 +172,7 @@ def stills(out_dir, width, height, views=None):
     for name, eye, target, fov in VIEWS:
         if want is not None and name not in want:
             continue
+        up = (0.0, 0.0, 1.0)
         if name == "holder":
             # Frame the hand-plus-holder-plus-graphite, about 0.19 m of
             # subject.  Hold the EYE at a fixed 0.50 m from the subject centre
@@ -162,10 +182,22 @@ def stills(out_dir, width, height, views=None):
             d = np.array([0.30, -0.26, 0.14])
             eye = ctr + 0.50 * d / np.linalg.norm(d)
             target = ctr
+        elif name == "holder_side":
+            # Down the hand's OWN x axis, from the side the pen leans toward.
+            # `up` is -z_hand, which puts the wrist at the top of the frame and
+            # the paper at the bottom whatever the arm is doing — and it is
+            # perpendicular to the view ray by construction, so `look_at`'s
+            # parallel-up rule cannot be tripped by a park pose changing.
+            # ...and from the -x side, which is the side the barrel and the
+            # pencil tail lean to.  From +x the hand's own body stands in
+            # front of both of them and the shot proves nothing.
+            ctr = hand + R_hand @ np.array([0.0, 0.0, 0.110])
+            eye = ctr - 0.50 * R_hand[:, 0]
+            target, up = ctr, -R_hand[:, 2]
         w, h = (width, height)
         cc, dc = camera(w, h, fov)
         s = b.AddSystem(RgbdSensor(sg.world_frame_id(),
-                                   look_at(eye, target), cc, dc))
+                                   look_at(eye, target, up), cc, dc))
         b.Connect(sg.get_query_output_port(), s.query_object_input_port())
         sensors[name] = s
     dia = b.Build()

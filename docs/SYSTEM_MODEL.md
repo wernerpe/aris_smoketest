@@ -133,7 +133,8 @@ Plus, per arm × 6:
 - **collision** — the manufacturer's own collision shells (`installation.urdf`)
   or the audited capsule set (`installation_capsules.urdf`). §5.
 - **pen holder** — housing + cap, re-decimated from the raw CAD, with the
-  proven 3-cylinder envelope as collision. §7.
+  proven 3-cylinder envelope as collision, plus the pencil tail's own fourth
+  cylinder. §7.
 - **cable dress** — two translucent conduit loops, **ESTIMATED**, visual only.
 
 ### Cage details worth knowing
@@ -283,13 +284,20 @@ printed parts as STL + SLDPRT pairs with **no assembly file**.
 `rig_final.penholder22_T_hand` puts the grip centre on the hand TCP and aims
 the bore along the **planner's** TCP-to-tip ray.
 
+One thing that used to be wrong here is now right: the housing was mounted
+**end-for-end** until 2026-09-03 — the pen left the model at the tail land
+instead of through the cap. **§7c is that correction, and its
+re-certification.** The grip centre, the post axis, the bore direction and the
+pen tip are all unchanged by it; the housing body, the cap, the graphite and
+the collision cylinders all moved.
+
 The housing's own machined flats clock at **23.0°** (measured off the STL).
 The planner's ray leans **45.0°**. Those are different numbers and only one of
 them can be right about the real part. This model still uses the planner's
 ray, which is the assumption that makes the geometry consistent with the
-gate-validated tool transform — and the 3-cylinder envelope is only proven
-conservative *for that placement* (under the 23° hypothesis 211 696 housing
-vertices escape it, worst +19.43 mm).
+gate-validated tool transform — and the 3-cylinder housing envelope is only
+proven conservative *for that placement* (under the 23° hypothesis 211 696
+housing vertices escape it, worst +19.43 mm).
 
 ### 7a. The assembly was found, and it changes the answer
 
@@ -344,7 +352,8 @@ what ships:
 | | planner (45°) | CAD (23°), same axial depth |
 |---|---:|---:|
 | lateral offset from TCP | 0.110 m | **0.0467 m** |
-| graphite past the cap (see §7c) | 130.5 mm | **94.5 mm** |
+| graphite past the cap's outer face (§7c) | 125.6 mm | **89.5 mm** |
+| …measured to the housing's own end face instead | 130.6 mm | 94.5 mm |
 
 **63.3 mm of tip position.** Nothing here changes `frames.PEN_LAT_HOLDER`:
 the planning transform is gate-validated against a real touchdown and moving
@@ -433,62 +442,185 @@ sectors, at four sampled stations, and a closed wall at x = 8 and x = 30). The
 spring is 3.34…43.0 mm along the bore, so it is exactly what you would see
 through them.
 
-**Collision: unchanged, and re-proved.** Every internal body is inside the
-21.148 mm bore, so the shipped hull is still the same three coaxial cylinders
-`PENHOLDER22["env_cylinders"]` that the housing and cap were fitted to.
-`rig_final.penholder22_internals_escape()` measures the complete stack against
+**Collision: one cylinder more since §7c, and re-proved.** Every body *in the
+bore* is inside the 21.148 mm bore, so the three coaxial cylinders
+`PENHOLDER22["env_cylinders"]` that the housing and cap were fitted to still
+cover them. The graphite does not stop at the bore, though — it runs right
+through and out the back — so `tail_cylinder` joins them and the shipped hull
+(`rig_final.penholder22_hull`) is **four**.
+`rig_final.penholder22_internals_escape()` measures every drawn body against
 that hull on every generator run and the generator refuses to write a URDF if
 it is not **0.0 m**. It is 0.0 m, for all three shim settings.
 
-### 7c. The housing is modelled end-for-end — REPORTED, NOT FIXED
+### 7c. The housing was modelled end-for-end — FIXED, 2026-09-03
 
-`PENHOLDER22["nose_x"] = 0.0` says the pen leaves the housing at x = 0. **It
-leaves through the cap at the other end**, and four independent things say so:
+`PENHOLDER22["nose_x"] = 0.0` said the pen left the housing at x = 0. **It
+leaves through the cap at the other end.** The model now says so, and this
+section is the re-certification rather than the report.
 
-1. **The preview.** The assembly's own render shows the **sharpened point
-   through the cap**, with 72.5 mm of blunt, flat-cut pencil tail out the far
-   end. (`scripts/read_solidworks.py dump … PreviewPNG`.)
-2. **The 17.0 mm land is the SPRING's stop, not the pen's.** 17.00 will not
+Four independent things fix the sense, and every one of them is re-derived
+here from `Natural hold assembly - closed.SLDASM` itself rather than from the
+prose that used to stand in this section (`scripts/read_solidworks.py asm`,
+the commands in §7a):
+
+1. **The parts' own order along the bore.** Resolved, the assembly places, in
+   its own millimetres: cap 1017.121 … 1028.558, sleeve 1020.121 … 1060.221,
+   **spring 1060.121 … 1098.919**, housing 1020.855 … 1102.221. The spring is
+   at the end **away from the cap**, so it pushes the pen assembly **toward**
+   the cap and paper force compresses it. **That is the tool's compliance.**
+   Modelled the other way round the spring pushes the pen into a rigid cap and
+   there is none.
+2. **The pencil, and the preview.** The Conté pencil spans 1000.121 …
+   1174.735 — 174.614 mm of it, in an 85.100 mm barrel. It goes straight
+   through: **17.000 mm of sharpened point past the cap's outer face** and
+   **72.514 mm of blunt, flat-cut tail past the housing's tail face**. The
+   assembly's own render shows exactly that (`read_solidworks.py dump …
+   PreviewPNG`).
+3. **The 17.0 mm land is the SPRING's stop, not the pen's.** 17.00 will not
    pass a 19.05 mm spring — that is the only thing in the holder it stops, and
    it is cut 2.15 mm long to do exactly that. A ⌀7 graphite or a ⌀8.5 pencil
-   walks straight through it.
-3. **The spring only works this way round.** The spring sits between that land
-   and the sleeve, so it pushes the sleeve **toward the cap**. Paper force on
-   the graphite then compresses it — compliance. Modelled the other way round
-   the spring pushes the pen assembly into a rigid cap and the tool has no
-   compliance at all.
-4. **The grip is 25 mm from the cap and 55 mm from the far end.** A robot pen
-   grips close to its tip, and `docs/FINAL_RIG.md`'s independent extraction
-   read the same 25 mm — which is why its 46.0 mm flange-to-tip reproduces the
-   assembly's own 46.096 exactly, and this model's 55.1 mm grip-to-nose does
-   not reproduce anything.
+   walks straight through it without touching it.
+4. **The grip is 25.001 mm from the housing's cap end and 55.099 mm from its
+   tail.** A robot pen grips close to its tip, and `docs/FINAL_RIG.md`'s
+   independent extraction read the same 25 mm — which is why its 46.0 mm
+   flange-to-tip reproduces the assembly's own 46.096 exactly, and the old
+   55.1 mm grip-to-nose reproduced nothing.
 
-**What the correction is.** `penholder22_T_hand` points the housing's +X
-*away* from the tip; it should point *toward* it — a 180° flip about the post
-axis. Grip-to-writing-end becomes **25.0 mm, not 55.1**. Consequences:
+**What changed.** `penholder22_T_hand` set `Xh = -u`, pointing the housing's
++X *away* from the tip; it now sets `Xh = u`. That is a **180° rotation about
+the post axis and nothing else**: the post axis is still hand y, the grip
+centre is still the hand TCP, the bore is still the planner's 45° ray, and
+**the pen tip does not move by a picometre** (`check_system_model.py` reports
+the same worst 5.259e-12 m over 25 configs × 6 arms as before the change, and
+`test_the_flip_did_not_move_the_pen_tip` pins it).
 
-| | as modelled | corrected |
+| | end-for-end | **corrected** |
 |---|---:|---:|
-| grip → where the pen leaves | 55.1 mm | **25.0 mm** |
-| barrel toward the paper | 55.1 mm | **25.0 mm** |
-| barrel back toward the wrist | 25.0 mm | **55.1 mm** |
-| graphite past the exit for the planner's 155.6 mm tip | 100.5 mm | **130.5 mm** |
+| grip → the cap's outer face, where the pen leaves | −30.001 mm (behind) | **+30.001 mm** |
+| grip → the housing's own end face | −25.001 mm | **+25.001 mm** |
+| grip → the tail face | +55.099 mm | **−55.099 mm** (behind) |
+| graphite past the exit, planner's 155.563 mm tip | 100.464 mm | **125.562 mm** |
+| the pencil tail, past the tail face | not modelled | **72.514 mm, at the wrist** |
 
-**Why it is not applied here.** The flip moves the three collision cylinders
-30 mm along the bore and re-bakes the hand-frame meshes, and
-`penholder22_T_hand` is shared with `assets/proposed_rig/` — the tree this repo
-declares untouched because every certified number was checked against it. That
-is a re-certification with its own gate, not a render, and it is the same rule
-that keeps the 45° planning transform in place two sections up. The stack in
-§7b is unaffected: its x positions are measured from the housing's own datum
-and do not move.
+Note which face the graphite numbers are measured to. §7a and the old §7c
+quoted **130.5 / 94.5 mm**; those are measured to the **housing's own end
+face** at x = 80.100. The cap stands **5.000 mm** proud of it and the pen
+leaves through the cap's outer face at x = 85.100, so past the real exit the
+numbers are **125.562 mm** (planner's 45° ray) and **89.499 mm** (the CAD's
+23° lean, whose bore reach is 119.500 mm). Both are still true statements;
+this section now says which is which.
 
-**It makes the tip disagreement worse, not better.** At the corrected 25.0 mm,
-the gate-validated tip (110 mm below the TCP, i.e. 119.5 mm along a 23° bore)
-needs **94.5 mm** of ⌀7 graphite past the cap, and the planner's 45° ray needs
-**130.5 mm**. The 10° build's own answer is 20.7 mm. Whatever is really on the
-arms, it is not this housing with a short stick — which is one more reason the
-measurement in §7a is worth taking.
+The 10° assembly's own answer is **17.000 mm** past its cap's outer face,
+measured above — and `docs/FINAL_RIG.md`'s **20.7 mm** is the same measurement
+to the *housing's* end face, since that build's cap stands 3.734 mm proud
+(46.096 − 25.361 = 20.735, and 46.096 − 17.000 = 29.096 puts its cap face
+29.1 mm from the grip against this build's 30.0). The two numbers agree; the
+face they are measured to does not. Whatever is really on the arms, it is not
+this housing with a short stick.
+
+**The pencil tail is now a body.** It was in the assembly and in the preview
+and nowhere in this model. `rig_final.penholder22_tail()` places it: a ⌀7
+cylinder (this build's clutch bore, not the Conté's ⌀9.74) from the housing's
+tail face back **72.514 mm toward the wrist**, with its own envelope cylinder
+`tail_cylinder` fitted the way `env_cylinders` are — radius `lead_r_coll`,
+1 mm of axial lead-in, escape proved at 0.0 m on every generator run by
+`penholder22_internals_escape`. The holder's collision model is therefore
+**four** cylinders now, not three.
+
+What is MEASURED about the tail is the 72.514 mm overhang. What is **ASSUMED**
+is that this build shows the same one, and the assumption is priced: with the
+gate-validated tip 155.563 mm from the TCP, a stick still showing 72.514 mm of
+tail is 72.514 + 55.099 + 155.563 = **283.176 mm** long, which no ⌀7 graphite
+stick is (a Cretacolor Monolith is 175 mm). Take the assembly's pencil
+*length* instead of its overhang and it runs the other way: 174.614 mm pushed
+out to that tip ends **36.049 mm inside** the barrel and there is no tail at
+all. The model draws the tail because a body that might be there and reaches
+at the wrist is the conservative half of that pair — and because the two
+readings are one more way of saying what this section already says about a
+155.563 mm tip.
+
+#### What the re-certification cost
+
+**No gate on the certified programme flipped, and no constant moved.** Both
+statements need the same paragraph, because the second is why the first is
+worth reading twice.
+
+`scene_check`, `validate`, `coordination` and `selfcoll` do not plan against
+the holder's CAD at all: the tool is the two-capsule L of
+`rig_final.STATIC_CAPSULES_LAT` — TCP → bracket corner → tip, both at
+r = 0.050 — and that is unchanged. Re-run on the 100 % programme
+`out/csail_schedule_h094_v14.*`, `scene_check` returns **exactly** what it
+returned before the flip:
+
+| | before | after |
+|---|---:|---:|
+| min inter-arm clearance (margin 80 mm) | 80.73 mm, arms 13↔17 | **80.73 mm, arms 13↔17** |
+| self-collision (margin 20 mm) | 26.1 mm | **26.1 mm** |
+| frame clearance (margin 50 mm) | 54.1 mm | **54.1 mm** |
+| neighbour base column (margin 80 mm) | 136.4 mm | **136.4 mm** |
+| verdict | PASS | **PASS** |
+
+**But the L-capsules no longer contain the holder, and that is the bill.**
+`scripts/collision_audit.py --part tool` measures the raw CAD against them:
+
+| | worst escape | bracket radius it would need |
+|---|---:|---:|
+| housing + cap, mounted end-for-end | −1.720 mm (contained) | 0.0483 |
+| housing + cap, **mounted correctly** | **+6.546 mm** | **0.0565** |
+| **+ the pencil tail** | **+77.661 mm** | **0.1277** |
+
+The tool capsule was CAD-validated as containing the holder in 2026-08-26
+(`rig_final.STATIC_CAPSULES_LAT`, `coordination.py`); it was validated against
+a holder that was on backwards. Grow the bracket capsule to the radius that
+would contain the corrected body and re-run the same programme, and the gate
+does flip:
+
+| bracket r | min inter-arm | verdict |
+|---|---:|---|
+| 0.0500 (shipped) | 80.73 mm, arms 13↔17 | PASS |
+| 0.0565 (housing + cap) | **79.12 mm**, arms 2↔31 | **FAIL** by 0.88 mm |
+| 0.1277 (with the tail) | **−18.21 mm**, arms 31↔97 | **FAIL**, and the 50 mm frame gate fails too (13.4 mm) |
+
+Six of the fifteen arm pairs sit within 3 mm of the 80 mm margin, so there was
+never much room: the programme was conducted at 80.7 mm against an 80 mm bar.
+**Nothing here widens a capsule.** `BRACKET_R_LAT` and `PEN_R_LAT` are what
+the certified programme was gated at, and re-deriving them is a
+re-certification with its own gate — the same rule that keeps the 45° planning
+transform in place two sections up. The escape is reported, in the manifest
+(`tool.end_for_end_fixed`), by the audit on every run, and here.
+
+**And it is the tail that makes it expensive.** Say it precisely: the housing
+alone breaks the 80 mm inter-arm gate by 0.88 mm; the tail breaks it by
+98.2 mm. If the tail is real, the tool capsule is not a 5 cm sausage and the
+programme has to be re-conducted, not re-labelled. That is the strongest
+argument yet for taking §7a's ruler measurement — and for one more: **how much
+stick is actually loaded, and does any of it stand out of the back.**
+
+#### Self-collision at the parks
+
+Both bodies are welded to the hand, so tool-vs-hand and tool-vs-link7 are
+**pose-invariant** — the same at a park pose as anywhere else. Measured
+(scratch geometry, the same capsule table `selfcoll` ships):
+
+| | housing, before | housing, after | **the tail** |
+|---|---:|---:|---:|
+| nearest `hand.*` capsule (r 0.040–0.050) | inside | inside | **+3.36 mm** |
+| nearest `link7.*` capsule, six parks | +50.22 mm | +34.02 mm | **+12.83 mm** |
+| manufacturer's hand shell | 69.16 mm | 49.21 mm | **43.02 mm** |
+| manufacturer's link7 shell | 79.75 mm | 55.35 mm | **45.88 mm** |
+| stock fingers at `FINGER_FIX` | 1.23 mm | 0.08 mm (the grip) | 32.56 mm |
+
+**No gate flips, and the reason is structural rather than lucky.**
+`selfcoll.SELF_PAIRS` watches a pair only when the two bodies are at least
+`WATCH_CHAIN_D = 4` joints apart, and the tool and the hand are 0 apart and
+the tool and link7 are 1 — pairs the module deliberately does not watch,
+because "the hand is a fixed flange on link7 … what keeps them out of each
+other is the FR3's own joint limits and the casting geometry". So the
++3.36 mm and +12.83 mm are **under** `SELF_PLAN_MARGIN` (23 mm) and nothing
+asks about them. Against the metal itself there is no issue at all: the tail
+misses the hand shell by 43.0 mm, link7's by 45.9 mm and the fingers by
+32.6 mm. It is a thin **modelling** margin against conservative capsules, not
+a thin clearance.
 
 **And the fingers moved.** `gen_system_model.FINGER_FIX` was 0.0285; it is now
 **0.018**. 50 mm of post less 2 × 7.000 mm of socket is 36.000, and the
@@ -507,8 +639,9 @@ part:
 | housing | 174 772 | 8 000 | **0.1122 mm** |
 | cap | 30 770 | 8 000 | **0.0048 mm** |
 
-The 3-cylinder envelope is re-proved against the result on every run: worst
-escape **+0.109 µm**, against a 10 µm bar. (Not zero: the envelope's radii
+The 3-cylinder housing envelope is re-proved against the result on every run —
+the housing's own three, never the tail's fourth: worst escape **+0.109 µm**,
+against a 10 µm bar. (Not zero: the envelope's radii
 were fitted to a coarser 5000-face decimation where every vertex sat inside;
 a finer mesh follows the true barrel more closely and pokes a tenth of a
 printer layer proud of one band. It is reported, not hidden —
@@ -816,19 +949,25 @@ AUDIT**; the tool **geometry** is AUDIT and its **placement** is ASSUMED.
 | URDF regeneration | byte-stable, twice — see the note below |
 | **clean-room rebuild** | `gen_system_model.py all` into an empty directory reproduces textures, glTFs, shells, the re-decimated holder, the Fat finger, the URDFs and the manifest |
 | fat-finger variant (§7d) | parses, 186 bodies / 42 DOF, joints at the derived value, 4 measured boxes per finger, envelope escape **0.000000 mm** |
+| holder envelope after the §7c flip | 4 cylinders; internals escape **0.0 m** at every shim, housing meshes escape the housing's own three by **+0.109 µm** |
+| **the pen tip after the §7c flip** | **unmoved: the same worst 5.259e-12 m**, digit for digit, as before it |
 
-**A note on "equal to what is committed".** As of 2026-09-02 the committed
-`installation.urdf` and `installation_capsules.urdf` **do not** reproduce byte
-for byte on this station, and it is not a code change: 48 and 150 lines
-respectively differ, every one of them a rotation written by `_rpy_checked`,
-and the worst difference is **4.44e-16** — two ULP on π, i.e. sub-attometre at
+**A note on "equal to what is committed".** From 2026-09-02 the committed
+`installation.urdf` and `installation_capsules.urdf` did **not** reproduce byte
+for byte on this station, and it was not a code change: 48 and 150 lines
+respectively differed, every one of them a rotation written by `_rpy_checked`,
+and the worst difference was **4.44e-16** — two ULP on π, i.e. sub-attometre at
 the tip. Both this repo's venv (numpy 2.5.2) and the station's (numpy 2.2.6)
-produce the *same* new bytes, so the committed files were written by a third
-environment whose matmul rounded one bit the other way.
-`test_regeneration_is_byte_stable` fails on that and was already failing before
-§7d was added. **The two files are left as committed** — regenerating them
-would churn 198 lines of a certified-adjacent asset for two ULP — and this row
-is here so nobody re-derives the finding from scratch.
+produced the *same* new bytes, so the committed files had been written by a
+third environment whose matmul rounded one bit the other way. They were left
+as committed rather than churned for two ULP.
+
+**RESOLVED 2026-09-03, as a side effect and not by a hand edit.** §7c re-wrote
+both files anyway. Before regenerating, the pre-existing churn was re-measured
+in this environment against the old code — **48 and 150 lines exactly**, so it
+reproduces and nothing was slipped into the larger diff. The flip's own share
+is 126 changed lines plus 6 added per file (one collision cylinder and one
+visual per arm). `test_regeneration_is_byte_stable` is green again.
 | **arm inside the steel at a park pose** | **none**, in either collision variant |
 | **static bodies interpenetrating** | **none** — all 77 checked pairwise |
 
@@ -847,6 +986,14 @@ whole phases:
 
 **Nothing interpenetrates.** The overall minimum, 196.5 mm, is the pen's own
 graphite over the paper — that is the park hover, and it is meant to be small.
+
+**The §7c flip changed none of these four numbers.** It moved the holder body
+and lengthened `pen_lead` at the far end from the paper, so what the closest
+approaches are made of did not move: all four minima are the same to 0.1 mm
+before and after. The only difference in the printed table is which arm's
+`pen_lead` is *named* on the table row — arm 13 before, arm 97 after, at the
+identical 198.5 mm, because six arms park at the same hover and the tie is
+broken by iteration order.
 
 **The tightest steel approach in the whole rig is an arm to its neighbour's
 drop post** (arm 71's link2 to arm 31's post, 316.1 mm under the audited
@@ -874,24 +1021,45 @@ here is picometres rather than nanometres.
 
 `scripts/render_system_model.py` → `out/` (gitignored):
 `system_model_three_quarter.png`, `_elevation.png`, `_plan.png`,
-`_drop_cluster.png`, `_holder.png` (2400 px, PBR, shadows) and
-`system_model.html` (static meshcat, 32.6 MB). Arms are posed at
+`_drop_cluster.png`, `_holder.png`, `_holder_side.png` (2400 px, PBR, shadows)
+and `system_model.html` (static meshcat, 32.6 MB). Arms are posed at
 `Q_PARK_PROPOSED`.
 
+**`_holder_side` is the shot that says which way round the housing is** (§7c),
+and it was added because the error was visible in `_holder.png` for a day
+before anybody read it. The camera looks straight down the hand's own **x**
+axis, from the side the pen leans toward, with `up = -z_hand`: finger travel
+lies across the image, the approach axis runs down it, and the bore — which
+lives in the hand's x–z plane — is foreshortened by cos 45° and nothing else.
+So the barrel and the pencil tail read as the part **above** the fingers and
+the cap, the graphite and the tip as the part **below** them. Mounted
+end-for-end the same shot puts the fat end below the fingers, which is why it
+is worth its own camera rather than a note.
+
 `--urdf`, `--tag` and `--views` render a second scene without overwriting the
-first — the fat-finger close-up of §7d is
+first — the fat-finger close-ups of §7d are
 
 ```
 <station venv>/bin/python scripts/render_system_model.py \
     --urdf assets/system_model/installation_fatfingers.urdf \
-    --tag fatfingers_ --views holder --no-html
+    --tag fatfingers_ --views holder,holder_side --no-html
 ```
 
-→ `out/system_model_fatfingers_holder.png`.
+→ `out/system_model_fatfingers_holder.png`,
+`out/system_model_fatfingers_holder_side.png`.
 
 ## 12. Relationship to `assets/proposed_rig/`
 
-`assets/proposed_rig/` is **untouched and still current** for what it is: the
-asset every certified number was checked against, and the one
-`scripts/collision_audit.py` reads. This is an addition. See
+`assets/proposed_rig/` is **still current** for what it is: the asset every
+certified number was checked against, and the one `scripts/collision_audit.py`
+reads. This model is an addition to it, not a replacement. See
 `assets/proposed_rig/README.md` for which to reach for.
+
+It is no longer *untouched*, and the exception is worth naming. On 2026-09-03
+the §7c housing correction re-baked its two hand-frame holder meshes and moved
+the holder's collision cylinders in its `installation.urdf`, because
+`rig_final.penholder22_T_hand` is shared and leaving a body in the certified
+tree that is known to be on backwards is worse than the churn. **Nothing else
+in that tree moved**: no capsule radius, no arm collision geometry, no base
+pose, no layout number, and the pen tip is unchanged to the picometre. §7c has
+the measured cost.

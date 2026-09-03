@@ -316,12 +316,12 @@ def test_the_committed_holder_meshes_exist_and_are_within_budget():
 
 def test_the_holder_collision_envelope_is_the_shared_one(links):
     """The URDF's collision primitives ARE `penholder22_collision` — one
-    source, three cylinders coaxial with the bore, radii measured not fitted
-    by eye."""
+    source, four cylinders coaxial with the bore (three for the housing and
+    cap, one for the pencil tail), radii measured not fitted by eye."""
     want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
     for aid in FLEET_PROPOSED:
         cols = links[f"arm{aid}_pen_holder"].findall("collision")
-        assert len(cols) == len(want) == 3
+        assert len(cols) == len(want) == 4
         for c, (kind, T, par) in zip(cols, want):
             assert kind == "cylinder"
             assert np.allclose(_origin_of(c), T, atol=1e-9)
@@ -334,8 +334,10 @@ def test_the_holder_envelope_encloses_the_committed_meshes():
     """CONSERVATISM.  Rule for a collision proxy: it may be fat, it may not be
     thin.  Every vertex of both committed meshes is inside the union."""
     trimesh = pytest.importorskip("trimesh")
+    # the HOUSING's own three, not the tail's fourth: a hull that was not
+    # fitted to these meshes has no business rescuing a vertex of them
     prims = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER,
-                                            D_HAND_TCP)
+                                            D_HAND_TCP)[:3]
     for mesh in rig_final.PENHOLDER22["visual_meshes"]:
         V = np.asarray(trimesh.load(URDF_DIR / mesh, force="mesh").vertices)
         worst = np.full(len(V), np.inf)
@@ -350,31 +352,44 @@ def test_the_holder_placement_aims_at_the_planning_tip():
     """The delivery has no assembly file, so the placement is INFERRED — but
     it is inferred to satisfy the gate-validated tool transform, and that is
     checkable: the bore points along the TCP->tip ray, the mount post's axis
-    is the finger-travel axis, and the grip centre is the TCP."""
-    T_h, T_c, nose, reach = rig_final.penholder22_T_hand(
+    is the finger-travel axis, and the grip centre is the TCP.
+
+    THE SENSE IS PART OF THE CLAIM.  This asserted `[-1, 0, 0]` until
+    2026-09-03, which is the housing mounted END-FOR-END: an axis-only check
+    passes either way round, which is how the error survived.  The pen leaves
+    through the CAP — the 10-deg assembly puts its spring at the end away from
+    the cap, its pencil 17.000 mm proud of the cap and 72.514 mm proud of the
+    tail face, and its preview draws exactly that — so +X_housing points at
+    the tip.  docs/SYSTEM_MODEL.md 7c."""
+    T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
         PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
     u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
     u = u / np.linalg.norm(u)
-    assert np.allclose(T_h[:3, :3] @ [-1, 0, 0], u, atol=1e-12)   # bore
+    assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)    # bore
     assert np.allclose(T_h[:3, :3] @ [0, 0, 1], [0, 1, 0], atol=1e-12)  # post
     P = rig_final.PENHOLDER22
     grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
     assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3],
                        [0, 0, D_HAND_TCP], atol=1e-12)
     assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT), abs=1e-12)
-    # the cap screws onto the far end, i.e. BEHIND the TCP along the bore
-    assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u < 0
+    # the cap is the end the pen leaves by, i.e. IN FRONT of the TCP
+    assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
     # ...and the numbers Pete has to rule on
     assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=0.01)
     assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT)) == \
         pytest.approx(45.0, abs=1e-9)
-    assert (reach - nose) == pytest.approx(0.1005, abs=5e-4)   # graphite
+    # grip -> the cap's outer face is 30.001 mm, so the graphite past it is
+    # 125.6 mm, not the 100.5 the end-for-end model asked for
+    assert exit_x == pytest.approx(0.030001, abs=1e-6)
+    assert (reach - exit_x) == pytest.approx(0.12556, abs=5e-4)  # graphite
 
 
-def test_the_graphite_runs_from_the_nose_to_the_tip(links, joints):
+def test_the_graphite_runs_from_the_cap_to_the_tip(links, joints):
     """`pen_lead` is the one part that is NOT in the CAD (a consumable with an
-    adjustable protrusion).  It must start at the housing nose and end on the
-    planning tip, or the picture and the transform disagree."""
+    adjustable protrusion).  It must start at the CAP'S OUTER FACE — where the
+    pen leaves — and end on the planning tip, or the picture and the transform
+    disagree.  It started at the housing's TAIL face until 2026-09-03; see
+    docs/SYSTEM_MODEL.md 7c."""
     _, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
                                                      D_HAND_TCP)
     u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])

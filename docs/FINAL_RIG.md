@@ -195,15 +195,27 @@ shorter.
   plus **20.7 mm** of pencil past it, i.e. the "21 mm protrusion" above,
   measured. `PEN_TILT_HOLDER10` = 10° is exact: **10.0000°**.
 
-**But the 23° model in `rig_final.PENHOLDER22` has the housing end-for-end.**
-This table's 25 mm grip-to-nose is right and `PENHOLDER22["nose_x"] = 0.0` is
-not: the pen leaves through the **cap**, and x = 0 is the far end. The 17.0 mm
-land there is the **spring's** stop — 17.0 will not pass a 19.05 mm spring,
-which is exactly what it is cut to do — and the preview shows the sharpened
-point through the cap with 72.5 mm of blunt pencil tail out the other end.
+**The 23° model in `rig_final.PENHOLDER22` had the housing end-for-end, and
+that is FIXED (2026-09-03).** This table's 25 mm grip-to-cap-end was right and
+`PENHOLDER22["nose_x"] = 0.0` was not: the pen leaves through the **cap**, and
+x = 0 is the far end. The 17.0 mm land there is the **spring's** stop — 17.0
+will not pass a 19.05 mm spring, which is exactly what it is cut to do — the
+assembly's parts run cap → sleeve → spring → tail face along its bore, and the
+preview shows the sharpened point through the cap with 72.5 mm of blunt pencil
+tail out the other end. `penholder22_T_hand` now points the housing's +X at
+the tip.
+
+One book-keeping note, because two of this page's own numbers look like they
+disagree with §7c and do not. The **20.7 mm** above is measured to the
+*housing's* end face; this build's cap stands **3.734 mm** proud of it, so
+past the cap's own outer face the pencil shows **17.000 mm** — which is what
+the assembly's bounding boxes give directly, and it puts that grip 29.096 mm
+from the cap face against the 23° build's 30.001.
+
 `assets/final_rig/` is unaffected (it carries the CAD-extracted mesh, already
 in hand coordinates). See `docs/SYSTEM_MODEL.md` §7c for what the correction
-costs and why it has not been applied here.
+cost — no gate on the certified programme flipped, but the r = 0.050 tool
+capsules no longer contain the holder.
 
 The collision union is unaffected: it was sized on the housing's 30 mm max
 radius and a 0.209 m reach, both of which still bound these numbers.

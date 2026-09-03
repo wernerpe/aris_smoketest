@@ -480,8 +480,8 @@ in `rig_final.PENHOLDER22` from the CAD on each run and fails if the two ever
 part company.
 
 What the housing is, measured: a barrel with a 21.1 mm through bore (necking
-to 17.0 mm at the nose, exactly the clutch's OD, so the pen leaves at the
-nose), an external thread at the far end for the cap, and a **26 x 26 x 50 mm
+to 17.0 mm at the TAIL, which is the spring's stop; the pen leaves through the
+CAP at the other end), an external thread at that end for the cap, and a **26 x 26 x 50 mm
 square mount post across the barrel with an 18 x 18 x 7 mm socket in each
 end**.  The post is what the fingers hold and its axis is y_hand.
 
@@ -493,8 +493,18 @@ end**.  The post is what the fingers hold and its axis is y_hand.
 > 36.0008 mm apart.  57 mm is 7 mm wider than the post is long and would hold
 > nothing.  Also corrected: the 17.0 mm nose is **not** "exactly the clutch's
 > OD, so the pen leaves at the nose" — 17.07 does not enter 17.00, and the
-> clutch lives 45 mm further back inside the sleeve.  The pen does leave at
-> the nose; it is the ⌀7 graphite that goes through, not the clutch.
+> clutch lives 45 mm further back inside the sleeve.  It is the ⌀7 graphite
+> that goes through the 17.0 land, not the clutch.
+>
+> **Corrected again 2026-09-03, and this time the model moved.**  "The pen
+> does leave at the nose" was wrong too: x = 0 is the TAIL and the pen leaves
+> through the **cap**.  The 10-degree assembly settles it four ways — its
+> parts run cap, sleeve, SPRING, tail face along the bore; its pencil shows
+> 17.000 mm of point past the cap and 72.514 mm of blunt tail past the tail
+> face; 17.00 will not pass a 19.05 spring; and the grip is 25.001 mm from the
+> cap end against 55.099 from the tail.  `penholder22_T_hand` now points the
+> housing's +X at the tip.  `docs/SYSTEM_MODEL.md` 7c has the correction and
+> what re-certifying it cost.
 
 **The "22 deg" verdict.**  It is a CLOCKING, not a tilt, and it measures
 **23.00 degrees**: the post's flats and sockets are rotated 23.00 deg about
@@ -527,15 +537,21 @@ same disagreement with the file's name.
    > gate-validated and moving it is a re-certification.  See
    > `docs/SYSTEM_MODEL.md` §7a for the numbers and the one measurement that
    > closes it.
-2. **100.5 mm of graphite.**  Grip-to-nose is 55.1 mm and the planning tip is
-   155.6 mm from the TCP, so the stick has to protrude 100.5 mm past the
-   nose.
+2. **125.6 mm of graphite.**  Grip-to-exit is 30.001 mm — the cap's outer
+   face — and the planning tip is 155.563 mm from the TCP, so the stick has to
+   protrude **125.562 mm** past the cap.
 
-   > **2026-09-02: 55.1 mm is the wrong end**, and the real figure is worse.
-   > The pen leaves through the CAP, 25.0 mm from the grip — so the planner's
-   > ray needs **130.5 mm** past it, and 23 deg needs 94.5.  The 10-deg build's
-   > own protrusion, measured off its assembly, is **20.7 mm**.
-   > `docs/SYSTEM_MODEL.md` 7c.  (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
+   > **2026-09-02: 55.1 mm was the wrong end**, and the real figure is worse.
+   > This item used to read "100.5 mm past the nose", measuring from the
+   > housing's tail land.  The pen leaves through the CAP.
+   >
+   > **2026-09-03: fixed in the model, and the arithmetic tightened.**  Past
+   > the cap's own outer face the planner's ray needs **125.6 mm** and 23 deg
+   > needs **89.5** (130.6 / 94.5 measured to the housing's end face, 5.000 mm
+   > inside the cap).  The 10-deg build's own protrusion is **17.0 mm** past
+   > its cap face (the 20.7 in `docs/FINAL_RIG.md` is the same measurement to
+   > its housing end face).  `docs/SYSTEM_MODEL.md` 7c.
+   > (docs/FINAL_RIG.md already estimated ~90 mm for the older 0.209 m
    reading, so this is not new — but it is a lot of unsupported 7 mm
    graphite.)
 
@@ -543,7 +559,11 @@ Collision for the holder is NOT the mesh: three cylinders coaxial with the
 bore (`rig_final.penholder22_collision`), whose radii are the largest distance
 any vertex of either mesh reaches from that axis inside its band, so the union
 encloses the visual by construction — 0 of 6 202 vertices outside, checked on
-every extractor run and again in `tests/test_proposed_rig_urdf.py`.  A tighter
+every extractor run and again in `tests/test_proposed_rig_urdf.py`.  Since
+2026-09-03 a **fourth** cylinder rides with them for the pencil tail, the
+72.514 mm of stick that stands out of the housing's tail face toward the
+wrist; the housing's own three are still proved against the housing's own
+meshes and nothing else.  A tighter
 rotated box for the post was tried and rejected: a rotated square's x-extent
 grows with its side, so enlarging it to swallow the reinforcing gussets only
 drags in more bare barrel.  The study's own L-shaped two-capsule envelope

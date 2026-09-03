@@ -171,8 +171,8 @@ ok(f"every pen tip within {TOL:.0e} m of frames over {len(qs)} configs "
 
 # --- 4. the tool -----------------------------------------------------------
 print("\n4. the pen holder")
-T_h, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
-                                                   D_HAND_TCP)
+T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+                                                     D_HAND_TCP)
 for aid in FLEET_PROPOSED:
     Xh = plant.EvalBodyPoseInWorld(ctx,
                                    plant.GetBodyByName(f"arm{aid}_panda_hand"))
@@ -183,13 +183,20 @@ for aid in FLEET_PROPOSED:
 ok("the holder link frame IS the hand frame on every arm",
    not [f for f in fails if "rides the hand" in f[0]])
 u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT]) / reach
-check("holder bore points along the planner's TCP->tip ray",
-      T_h[:3, :3] @ np.array([-1.0, 0.0, 0.0]), u)
+# THE SENSE, NOT ONLY THE AXIS.  The housing's +X points AT the tip: the pen
+# leaves through the cap.  Until 2026-09-03 this line read [-1, 0, 0] and the
+# model had the housing end-for-end (docs/SYSTEM_MODEL.md 7c) — an axis-only
+# check would have passed either way, which is exactly how it survived.
+check("holder bore points along the planner's TCP->tip ray, cap first",
+      T_h[:3, :3] @ np.array([1.0, 0.0, 0.0]), u)
+check("the pen leaves 30.001 mm in front of the grip, not 55.099 behind it",
+      exit_x, rig_final.PENHOLDER22["cap_end_x"]
+      - rig_final.PENHOLDER22["post_xy"][0])
 want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
 lk = {ln.get("name"): ln for ln in xroot.findall("link")}
 cols = lk["arm13_pen_holder"].findall("collision")
-ok("the holder collision is the 3-cylinder envelope",
-   len(cols) == len(want) == 3, f"{len(cols)} cylinders")
+ok("the holder collision is the 4-cylinder envelope (3 housing + the tail)",
+   len(cols) == len(want) == 4, f"{len(cols)} cylinders")
 for c, (_, T, (r, L)) in zip(cols, want):
     g = c.find("geometry/cylinder")
     check("holder envelope cylinder", [float(g.get("radius")),

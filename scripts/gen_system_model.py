@@ -163,7 +163,10 @@ INTERNAL_RGBA = dict(spring=(0.72, 0.74, 0.78, 1.0),
                      spacer=(0.30, 0.31, 0.34, 1.0),
                      sleeve=(0.20, 0.21, 0.24, 1.0),
                      clutch=(0.55, 0.57, 0.60, 1.0),
-                     graphite_buried=(0.16, 0.16, 0.17, 1.0))
+                     graphite_buried=(0.16, 0.16, 0.17, 1.0),
+                     # the tail is the same stick, drawn a shade lighter so
+                     # the render says which end of it is which
+                     graphite_tail=(0.34, 0.24, 0.16, 1.0))
 
 # Where the arm's collision shells attach.  The vendored URDF's link8 and the
 # two fingers carry no shell of their own: link8 is a pure frame, and the
@@ -870,14 +873,23 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     What it costs is now written down instead of guessed at: see
     system_model.OPEN_QUESTIONS["penholder_cradle"].
 
+    ...AND THE HOUSING IS NO LONGER MOUNTED END-FOR-END (2026-09-03).  The
+    transform used to point the housing's +X away from the tip, which put the
+    17.00 mm tail land toward the paper and the cap toward the wrist.  The pen
+    leaves through the CAP — the assembly's preview, the spring's direction,
+    what the 17.00 land will and will not pass, and the 25 mm grip-to-cap all
+    say so — and the model now says so too.  It is a 180 deg rotation about
+    the post axis; the tip does not move.  docs/SYSTEM_MODEL.md 7c.
+
     The INTERNALS are drawn as primitives from `penholder22_internals` and are
-    VISUAL ONLY: every one of them is inside the 21.148 mm bore, and
-    `penholder22_internals_escape` re-proves on every run that the 3-cylinder
-    hull the housing and cap were fitted to still contains them.
+    VISUAL ONLY: every bore body is inside the 21.148 mm bore and the pencil
+    tail is inside its own envelope cylinder, and
+    `penholder22_internals_escape` re-proves on every run that the hull the
+    collision model ships still contains all of them.
     """
     P = rig_final.PENHOLDER22
-    _, _, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
-                                                     D_HAND_TCP)
+    _, _, exit_x, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
+                                                       D_HAND_TCP)
     # --- the holder: mesh visual, primitive collision --------------------
     link = ET.SubElement(robot, "link", name=f"{pfx}pen_holder")
     for mesh, rgba in ((f"meshes/penholder/{Path(P['visual_meshes'][0]).name}",
@@ -920,15 +932,15 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
     ET.SubElement(j, "child", link=f"{pfx}pen_holder")
     _origin(j, (0, 0, 0))
 
-    # --- the graphite, nose to tip along the bore ------------------------
+    # --- the graphite, the CAP's outer face to the tip, along the bore ----
     lean = float(np.arctan2(pen_lat, pen_ext))
     link = ET.SubElement(robot, "link", name=f"{pfx}pen_lead")
     for role, r in (("visual", P["lead_r"]), ("collision", P["lead_r_coll"])):
         el = ET.SubElement(link, role)
-        _origin(el, (np.sin(lean) * (nose + reach) / 2, 0.0,
-                     np.cos(lean) * (nose + reach) / 2), (0.0, lean, 0.0))
+        _origin(el, (np.sin(lean) * (exit_x + reach) / 2, 0.0,
+                     np.cos(lean) * (exit_x + reach) / 2), (0.0, lean, 0.0))
         ET.SubElement(ET.SubElement(el, "geometry"), "cylinder",
-                      radius=_fmt(r), length=_fmt(reach - nose))
+                      radius=_fmt(r), length=_fmt(reach - exit_x))
         if role == "visual":
             mat = ET.SubElement(el, "material", name=f"{pfx}pen_lead_mat")
             ET.SubElement(mat, "color", rgba="0.16 0.16 0.17 1.0")
@@ -1273,10 +1285,28 @@ def manifest(out_dir=None):
                      "lean to 4 decimals with the grip centre on the TCP to "
                      "0.14 mm.  PENDING one measurement on the mounted "
                      "holder — see open_questions.penholder_cradle.",
-            collision="the 3-cylinder envelope, re-proved on every mesh "
-                      "regeneration to contain every visual vertex",
+            end_for_end_fixed="2026-09-03.  The housing used to be mounted "
+                              "END-FOR-END: penholder22_T_hand pointed its "
+                              "+X away from the tip, so the model put the "
+                              "17.00 mm tail land 55.099 mm toward the paper "
+                              "and the cap 30.001 mm back toward the wrist.  "
+                              "The pen leaves through the CAP and the model "
+                              "now does too — a 180 deg rotation about the "
+                              "post axis, the grip centre and the pen tip "
+                              "unmoved.  COST, measured, not absorbed: the "
+                              "two lateral tool capsules "
+                              "(rig_final.STATIC_CAPSULES_LAT, r 0.050) "
+                              "CONTAINED the old placement by 1.720 mm and do "
+                              "NOT contain this one — housing+cap escape by "
+                              "6.546 mm (bracket r 0.0565 needed) and the "
+                              "pencil tail by 77.661 mm (r 0.1277).  No "
+                              "capsule radius was widened; see "
+                              "docs/SYSTEM_MODEL.md 7c.",
+            collision="four cylinders: the 3-cylinder housing envelope, "
+                      "re-proved on every mesh regeneration to contain every "
+                      "visual vertex, plus the pencil tail's own",
             envelope_cylinders=[list(c) for c in
-                                rig_final.PENHOLDER22["env_cylinders"]],
+                                rig_final.penholder22_hull()],
             finger_half_width_m=FINGER_FIX,
             finger_half_width_source="AUDIT: post 50 mm less 2 x 7.000 mm of "
                                      "socket = 36.0008 mm of jaw in the "
@@ -1285,8 +1315,11 @@ def manifest(out_dir=None):
             fat_finger=_fat_finger_manifest(meshes),
             internals=dict(
                 provenance="AUDIT",
-                order="nose shoulder -> spring -> [shim] -> sleeve (clutch "
-                      "inside it) -> cap shoulder",
+                order="tail shoulder -> spring -> [shim] -> sleeve (clutch "
+                      "inside it) -> cap shoulder -> THE PEN LEAVES.  The "
+                      "graphite runs right through the barrel and out both "
+                      "ends: pen_lead past the cap, graphite_tail past the "
+                      "tail face (72.514 mm, measured off the assembly)",
                 order_source='the resolved component transforms of "Natural '
                              'hold assembly - closed.SLDASM" (10-deg build, '
                              "same architecture); every interface then "

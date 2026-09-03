@@ -356,17 +356,19 @@ TOOL = dict(
 #
 #   * a BARREL along its own +X with a through bore: OD 27.2 mm, bore
 #     21.148 mm the whole way to the threaded end, necking to a 17.00 mm land
-#     over x in [0.00055, 0.0027] at the nose, and THE PEN LEAVES AT x = 0.
-#     The step between them is a chamfer bottoming at x = 0.00315 and reaching
-#     full bore at x = 0.0036; a flat 21.0 mm face lands on it at
-#     x = 0.003340, which is `stack_front_x` and the TAIL STOP of everything
-#     inside.  x = 0 is the TAIL, not the nose: the 17.00 land is the SPRING's
-#     stop (17.00 will not pass a 19.05 spring, which is what it is cut for)
-#     and the pen leaves through the CAP at the other end.  See
-#     `penholder22_stack` and docs/SYSTEM_MODEL.md 7c.  (An earlier reading
-#     called that 17.0 "exactly the clutch's 17.07 OD, so the clutch seats in
-#     the nose".  It does not: 17.07 does not enter 17.00, the assembly puts
-#     the clutch 45 mm further back, and the pen leaves at the OTHER end.)
+#     over x in [0.00055, 0.0027] at the TAIL.  The step between them is a
+#     chamfer bottoming at x = 0.00315 and reaching full bore at x = 0.0036; a
+#     flat 21.0 mm face lands on it at x = 0.003340, which is
+#     `stack_front_x` and the TAIL STOP of everything inside.  x = 0 is the
+#     TAIL, not the nose: the 17.00 land is the SPRING's stop (17.00 will not
+#     pass a 19.05 spring, which is what it is cut for) and THE PEN LEAVES
+#     THROUGH THE CAP, at x = `cap_end_x` = 0.0851.  See `penholder22_stack`
+#     and docs/SYSTEM_MODEL.md 7c.  (An earlier reading called that 17.0
+#     "exactly the clutch's 17.07 OD, so the clutch seats in the nose".  It
+#     does not: 17.07 does not enter 17.00, the assembly puts the clutch 45 mm
+#     further back, and the pen leaves at the OTHER end.  A second earlier
+#     reading kept the right verdict in prose and still mounted the housing
+#     end-for-end; that is FIXED, 2026-09-03 — see `penholder22_T_hand`.)
 #   * an external THREAD at the far end, x in [0.072, 0.0801], OD 28.5 mm,
 #     onto which "pen holder cap v20250903" screws (its threaded recess is
 #     6 mm deep, matching);
@@ -418,24 +420,42 @@ TOOL = dict(
 # docs/SYSTEM_MODEL.md 7:
 #   1. at 23 deg and the gate-validated 0.110 m of axial depth the tip is
 #      0.0467 m lateral, not 0.110 — 63.3 mm of tip position;
-#   2. the grip-to-exit length is 25.00 mm — NOT the 55.10 this module places
-#      the housing on, which is the tail; see docs/SYSTEM_MODEL.md 7c — so
-#      reaching 155.56 mm needs 130.5 mm of graphite past the cap, against
-#      94.5 mm at 23 deg and the 10-deg build's own measured 20.7;
+#   2. the grip-to-exit length is 30.001 mm — grip to the CAP'S OUTER FACE,
+#      which is where the pen leaves (25.001 mm to the housing's own end face,
+#      plus the 5.000 mm the cap stands proud of it).  Reaching 155.563 mm
+#      therefore needs 125.562 mm of graphite past the cap, against 89.499 mm
+#      at 23 deg and the 10-deg assembly's own measured 17.000;
 #   3. the SIGN of the lateral offset is a mounting choice, not a CAD fact:
 #      the post is square, so the holder seats in the sockets either way up
 #      and the lean is +/-23 deg.
+#
+# THE HOUSING USED TO BE MOUNTED END-FOR-END, AND IS NOT ANY MORE (2026-09-03).
+# `penholder22_T_hand` pointed the housing's +X AWAY from the tip, which put
+# the tail land 55.099 mm toward the paper and the cap 30.001 mm back toward
+# the wrist.  It is the other way round: the 55.099 mm of barrel is BEHIND the
+# grip and the pen leaves through the cap 30.001 mm in FRONT of it.  What that
+# costs is a re-certification and it is written down rather than absorbed —
+# docs/SYSTEM_MODEL.md 7c.
+
+# the pencil tail's own length, named because `tail_cylinder` is derived from
+# it and a dict literal cannot refer to itself.  See PENHOLDER22["tail_len"].
+_TAIL_LEN = 0.072514
+
 PENHOLDER22 = dict(
     parent="panda_hand",
     source='raw_slack_file_dump/"Pen holder all parts 2026.08.19"/ '
            '(STL, mm, no SLDASM — placement inferred; see docstring above)',
     # --- housing, in its own frame (metres) ---
     bore_yz=(0.016900, 0.025000),     # bore axis, housing (y, z)
-    nose_x=0.0,                       # the pen leaves the housing here
+    tail_x=0.0,                       # the housing's TAIL face: the 17.0 mm
+                                      # land that stops the spring, and where
+                                      # the pencil's tail leaves (7c).  The
+                                      # pen leaves at the OTHER end, cap_end_x
     thread_x=(0.072000, 0.080100),    # external thread for the cap
     barrel_r=0.013585,                # measured max OD/2 over x in [0, 0.036]
     thread_r=0.014272,                # measured max OD/2 over the thread
-    cap_end_x=0.085100,               # the cap's closed face, along the bore
+    cap_end_x=0.085100,               # the cap's outer face, along the bore —
+                                      # AND THIS IS WHERE THE PEN LEAVES (7c)
     post_xy=(0.055099, 0.016894),     # post axis, housing (x, y)
     post_z=(0.0, 0.050000),           # post extent along the housing's +Z
     post_side=0.026000,               # square section
@@ -459,6 +479,26 @@ PENHOLDER22 = dict(
                 length=0.035000, od=0.017066, bore=0.007000),
     spacers=(0.005100, 0.010100),     # the shim set: 5 mm and 10 mm, 21.0 OD
     spacer_fitted=0.0,                # WHICH ONE IS IN.  ASSUMED: none.
+    # --- THE PENCIL TAIL.  The pen does not stop at the tail land: it goes
+    # STRAIGHT THROUGH and out the back, and the 10-deg assembly measures how
+    # far.  Resolved (scripts/read_solidworks.py asm), its Conte pencil spans
+    # assembly z 1000.121 .. 1174.735 mm, the cap's outer face is at 1017.121
+    # and the housing's tail face at 1102.221 — so 17.000 mm of sharpened
+    # point stands proud of the cap and 72.514 mm of blunt, flat-cut tail
+    # stands proud of the tail face.  (Housing + cap measure 85.100 mm on that
+    # build and 85.100 mm on this one, so the two barrels are the same length
+    # and the overhang transfers part-for-part.)  MEASURED off the assembly;
+    # what is ASSUMED is that this build's stick is long enough to show the
+    # same overhang — see `penholder22_tail` for the arithmetic that implies.
+    tail_len=_TAIL_LEN,               # how far the tail stands proud of x = 0
+    # its own primitive envelope, fitted the way `env_cylinders` are: an
+    # (x0, x1, r) coaxial with the bore whose radius is the largest distance
+    # the body reaches off that axis, with the same 1 mm of axial lead-in the
+    # first band carries at this end.  The body is itself a cylinder of radius
+    # `lead_r`, so `lead_r_coll` is the same conservative envelope `pen_lead`
+    # already carries and the escape is negative by construction — proved, not
+    # asserted, in `penholder22_internals_escape`.
+    tail_cylinder=(-_TAIL_LEN - 0.001, 0.0, 0.005),
     # --- the cap, in its own frame ---
     cap_xy=(0.018000, 0.018000),      # bore axis in the cap's own (x, y)
     cap_seat_z=0.005000,              # recess bottom: meets the housing end
@@ -496,10 +536,10 @@ PENHOLDER22 = dict(
 def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
     """(4,4) panda_hand <- housing placement, and the same for the cap.
 
-    -> (T_hand_housing, T_hand_cap, nose_along_bore, tip_along_bore).
+    -> (T_hand_housing, T_hand_cap, exit_along_bore, tip_along_bore).
 
-    THE PLACEMENT IS INFERRED (no assembly file).  Three assumptions, each of
-    them the only one the parts support:
+    THE PLACEMENT IS INFERRED (no assembly file for THIS build).  Three
+    assumptions, each of them the only one the parts support:
 
       1. the mount post's axis is y_hand — the fingers plug into its two end
          sockets, and 50 mm of post + 2 x 3.5 mm engagement is exactly the
@@ -511,12 +551,39 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
          23 deg clocking.  Assumption 3 is what makes the drawing consistent
          with the gate-validated tool transform; see PENHOLDER22's docstring
          for what it costs.
+
+    ...AND THE HOUSING'S +X POINTS AT THE TIP, WHICH IT DID NOT UNTIL
+    2026-09-03.  This function used to set `Xh = -u`, i.e. it mounted the
+    housing END-FOR-END: the 17.00 mm tail land 55.099 mm toward the paper
+    and the cap 30.001 mm back toward the wrist.  Four things say the pen
+    leaves through the CAP and the model is now the way they say (each one
+    re-derived from `Natural hold assembly - closed.SLDASM` itself, not from
+    prose — docs/SYSTEM_MODEL.md 7c):
+
+      * the assembly's own preview shows the sharpened point out of the cap
+        and 72.514 mm of blunt tail out the far end (`tail_len`);
+      * resolved, the assembly's parts run cap -> sleeve -> SPRING -> tail
+        face along its bore, so the spring pushes the pen assembly TOWARD the
+        cap and paper force compresses it.  Mounted the other way round the
+        tool has no compliance at all;
+      * the 17.00 mm land will not pass the 19.05 mm spring and passes a 7 mm
+        stick without touching it: it is the spring's stop, not the pen's;
+      * the grip sits 25.001 mm from the housing's cap end and 55.099 mm from
+        its tail, and `docs/FINAL_RIG.md`'s independent extraction read the
+        same 25 mm.
+
+    It is a 180 deg rotation about the post axis and NOTHING ELSE: the post
+    axis is still y_hand, the grip centre is still the TCP, the bore is still
+    the planner's ray and the pen tip does not move by a picometre.  What
+    moves is the housing BODY, from 30.001 mm behind the grip to 55.099 mm
+    behind it — see `penholder22_collision` for what that costs the envelopes.
     """
     d = np.array([float(pen_lat), 0.0, float(pen_ext)])
     reach = float(np.linalg.norm(d))
     u = d / reach                                 # TCP -> tip, unit
     P = PENHOLDER22
-    Xh = -u                                       # housing +X points AWAY
+    Xh = u                                        # housing +X points AT the
+                                                  # tip: the pen leaves the CAP
     Zh = np.array([0.0, 1.0, 0.0])                # post axis == finger travel
     Yh = np.cross(Zh, Xh)
     R = np.column_stack([Xh, Yh, Zh])
@@ -534,7 +601,20 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
     Tc[:3, :3] = Rc
     Tc[:3, 3] = np.array([P["cap_end_x"], P["bore_yz"][0], P["bore_yz"][1]]) \
         - Rc @ np.array([P["cap_xy"][0], P["cap_xy"][1], 0.0])
-    return T, T @ Tc, P["post_xy"][0] - P["nose_x"], reach
+    return T, T @ Tc, P["cap_end_x"] - P["post_xy"][0], reach
+
+
+def penholder22_hull():
+    """Every (x0, x1, r) the tool's collision model is made of, housing frame.
+
+    THE ORDER IS PART OF THE CONTRACT: the three `env_cylinders` that the
+    housing and cap were fitted to come first, and the pencil tail's own
+    envelope last.  A caller that wants to prove something about the HOUSING
+    — `scripts/extract_penholder22_meshes.py` does — takes the first three and
+    says so; a caller that wants the tool's collision geometry takes them all.
+    """
+    P = PENHOLDER22
+    return tuple(P["env_cylinders"]) + (P["tail_cylinder"],)
 
 
 def penholder22_collision(pen_ext, pen_lat, d_hand_tcp):
@@ -545,15 +625,35 @@ def penholder22_collision(pen_ext, pen_lat, d_hand_tcp):
 
     A 7 000-triangle concave printed part is not a collision geometry, and the
     final rig's convention for exactly this problem is a primitive envelope
-    (`TOOL["collision"]`, one cylinder).  This one is three coaxial cylinders
-    — `PENHOLDER22["env_cylinders"]`, whose radii are measured maxima, not
-    guesses — and `scripts/extract_penholder22_meshes.py` re-proves on every
-    run that no visual vertex escapes them.
+    (`TOOL["collision"]`, one cylinder).  This one is FOUR coaxial cylinders
+    (`penholder22_hull`): the three `PENHOLDER22["env_cylinders"]` the housing
+    and cap were fitted to, whose radii are measured maxima rather than
+    guesses and which `scripts/extract_penholder22_meshes.py` re-proves on
+    every run, plus `tail_cylinder` for the length of pencil that stands out
+    of the tail face (7c).
+
+    WHAT THE 2026-09-03 FLIP COSTS HERE, because it is a re-certification and
+    not a render.  These cylinders used to reach 30.001 mm behind the grip and
+    now reach 55.099 mm behind it, and the tail reaches 127.613 mm behind it.
+    Measured against the two lateral tool capsules `STATIC_CAPSULES_LAT`
+    ships — the envelope every gate in this repo actually plans against — the
+    raw CAD escapes them:
+
+        housing + cap, as mounted before   -1.720 mm   (contained)
+        housing + cap, mounted correctly   +6.546 mm  (bracket r 0.0565 needed)
+        + the pencil tail                 +77.661 mm  (bracket r 0.1277 needed)
+
+    NOTHING HERE WIDENS A CAPSULE.  `BRACKET_R_LAT` / `PEN_R_LAT` are the
+    radii the certified programme was gated at and moving them re-opens every
+    number that was earned with them; the escape is REPORTED — in
+    docs/SYSTEM_MODEL.md 7c, in the manifest, and by
+    `scripts/collision_audit.py --part tool` on every run — and it is the
+    re-certification item, not this function's to absorb.
     """
     T_h, _, _, _ = penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp)
     by, bz = PENHOLDER22["bore_yz"]
     out = []
-    for x0, x1, r in PENHOLDER22["env_cylinders"]:
+    for x0, x1, r in penholder22_hull():
         T = np.eye(4)
         T[:3, 3] = (0.5 * (x0 + x1), by, bz)
         # the cylinder's own z must run along the housing's x
@@ -565,21 +665,25 @@ def penholder22_collision(pen_ext, pen_lat, d_hand_tcp):
 def penholder22_stack(spacer=None):
     """The internal stack along the bore -> [dict], housing frame, metres.
 
-    Each row is `dict(name, x0, x1, r, note)` with x measured from the nose
-    (x = 0) along the housing's own +X.  This is the ORDER, and the order is
-    the part of the holder eight loose STLs cannot give you.
+    Each row is `dict(name, x0, x1, r, note)` with x measured from the TAIL
+    face (x = 0) along the housing's own +X, i.e. TOWARD the cap the pen
+    leaves by.  This is the ORDER, and the order is the part of the holder
+    eight loose STLs cannot give you.
 
     WHERE THE ORDER COMES FROM.  The 10-deg "natural hold" assembly in
     raw_slack_file_dump/"Pen holder cad(1).zip" -> "Natural hold assembly -
     closed.zip" is the same architecture built out of the same shapes, and
-    resolving its component transforms puts, along its bore from the nose:
+    resolving its component transforms puts, along its bore from the tail:
 
         tail shoulder  ->  SPRING  ->  SLEEVE  ->  CAP -> the pen
 
-    with the spring's front coil landing 3.302 mm behind the nose (this
-    housing's own shoulder is at 3.34) and the sleeve's front face on the
-    spring's back coil to 0.1 mm.  Every interface below is then a measured
-    fit on THIS delivery's parts:
+    with the spring's end coil landing 3.302 mm from the tail face (this
+    housing's own shoulder is at 3.34) and the sleeve's face on the spring's
+    other coil to 0.1 mm.  In the assembly's own coordinates that reads, along
+    its bore: cap 1017.121..1028.558, sleeve 1020.121..1060.221, spring
+    1060.121..1098.919, housing 1020.855..1102.221 mm — the spring is at the
+    end AWAY from the cap, which is the whole argument in 7c.  Every interface
+    below is then a measured fit on THIS delivery's parts:
 
       * TAIL STOP, AND IT IS THE SPRING'S.  The bore necks to a 17.00 mm land
         at x = 0, and 17.00 will not pass the 19.05 mm spring — that land
@@ -638,29 +742,79 @@ def penholder22_stack(spacer=None):
                     r=clutch["od"] / 2,
                     note=f"{clutch['part']}, inside the sleeve, collet at the "
                          "sleeve's 13.0 mm land"))
-    out.append(dict(name="graphite_buried", x0=x1 - clutch["length"], x1=0.0,
+    out.append(dict(name="graphite_buried", x0=P["tail_x"], x1=P["cap_end_x"],
                     r=P["lead_r"],
-                    note="the 7.0 mm stick from the clutch's grip out through "
-                         "the nose; what shows PAST the nose is `pen_lead`"))
+                    note="the 7.0 mm stick inside the barrel, tail face to "
+                         "cap face: it runs right THROUGH the holder — the "
+                         "clutch, the sleeve's 13.0 mm land, the spring's "
+                         "14.97 mm bore and the 17.00 mm tail land, none of "
+                         "which a 7 mm stick touches.  What shows past the "
+                         "cap is `pen_lead`; what shows past the tail face "
+                         "is `penholder22_tail`"))
     return out
 
 
+def penholder22_tail():
+    """The pencil TAIL — the stick where it stands out of the tail face.
+
+    -> `dict(name, x0, x1, r, note)` in the housing frame, the same shape
+    `penholder22_stack` returns, spanning x in [-`tail_len`, `tail_x`].
+
+    WHY THERE IS ONE AT ALL.  The 10-deg assembly's pencil is 174.614 mm long
+    in an 85.100 mm barrel: it goes STRAIGHT THROUGH and out the back, and its
+    own preview draws it that way — the sharpened point 17.000 mm past the cap
+    and 72.514 mm of blunt, flat-cut tail past the housing's tail face.  The
+    tail is a real body of the assembled tool, it points at the WRIST, and
+    until 2026-09-03 nothing in this model had it anywhere.
+
+    MEASURED vs ASSUMED, precisely.  72.514 mm is MEASURED, off the assembly.
+    That this build shows the SAME overhang is ASSUMED — and the assumption
+    has a price worth writing down: with the gate-validated tip 155.563 mm
+    from the TCP, a stick that still shows 72.514 mm of tail is
+    72.514 + 55.099 + 155.563 = 283.176 mm long, which no 7 mm graphite stick
+    is (a Cretacolor Monolith is 175 mm).  Take the assembly's PENCIL LENGTH
+    instead of its overhang and the arithmetic runs the other way: 174.614 mm
+    pushed out to that tip ends 36.049 mm INSIDE the barrel and there is no
+    tail at all.  The model draws the tail because a body that might be there
+    and reaches at the wrist is the conservative half of that pair — and
+    because the two readings together are one more way of saying what 7c
+    already says, that the planner's 155.563 mm tip is not this housing with a
+    short stick in it.
+    """
+    P = PENHOLDER22
+    return dict(name="graphite_tail", x0=-P["tail_len"], x1=P["tail_x"],
+                r=P["lead_r"],
+                note=f"{P['tail_len'] * 1000:.3f} mm of stick past the tail "
+                     "face, MEASURED off the 10-deg assembly (its pencil "
+                     "stands 72.514 mm proud of the housing's tail face and "
+                     "17.000 mm proud of the cap).  Points at the WRIST; see "
+                     "`penholder22_tail` for what its length assumes")
+
+
+def penholder22_bodies(spacer=None):
+    """Every drawn body of the assembled pen — the bore stack AND the tail."""
+    return list(penholder22_stack(spacer)) + [penholder22_tail()]
+
+
 def penholder22_internals(pen_ext, pen_lat, d_hand_tcp, spacer=None):
-    """`penholder22_stack` placed in the panda_hand frame.
+    """`penholder22_bodies` placed in the panda_hand frame.
 
     -> [(name, T (4,4), (radius, length), note)], each cylinder's axis being
     its own frame's z, the way URDF wants it — the same convention
     `penholder22_collision` uses, and for the same reason.
 
-    VISUAL ONLY.  Every one of these lives inside the 21.148 mm bore and is
-    already inside `env_cylinders`; adding them to the collision model would
-    add nothing but faces.  `penholder22_internals_escape` proves the first
-    half of that claim on every run.
+    VISUAL ONLY, and that is a claim with a proof rather than a convenience.
+    Every bore body lives inside the 21.148 mm bore and so inside
+    `env_cylinders`; the tail lives inside `tail_cylinder`, which is in the
+    collision model precisely because it is the one body that does NOT.
+    Either way, drawing these as collision geometry would add faces and not
+    volume — `penholder22_internals_escape` re-proves that on every generator
+    run, over the whole hull and every shim setting.
     """
     T_h, _, _, _ = penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp)
     by, bz = PENHOLDER22["bore_yz"]
     out = []
-    for b in penholder22_stack(spacer):
+    for b in penholder22_bodies(spacer):
         lo, hi = sorted((b["x0"], b["x1"]))
         T = np.eye(4)
         T[:3, 3] = (0.5 * (lo + hi), by, bz)
@@ -670,20 +824,21 @@ def penholder22_internals(pen_ext, pen_lat, d_hand_tcp, spacer=None):
 
 
 def penholder22_internals_escape(spacer=None):
-    """How far the stack reaches outside `env_cylinders` -> metres.
+    """How far the drawn bodies reach outside the collision hull -> metres.
 
-    0.0 when the complete assembly still fits the collision hull the housing
-    and cap were fitted to, which is the whole question modelling the
-    internals raises.  Measured on the bodies' own corner rings, so a body
-    that pokes out radially OR axially is caught.
+    0.0 when the complete assembly still fits `penholder22_hull` — the three
+    cylinders the housing and cap were fitted to plus the tail's own — which
+    is the whole question modelling the internals raises.  Measured on the
+    bodies' own corner rings, so a body that pokes out radially OR axially is
+    caught.
     """
-    P = PENHOLDER22
+    hull = penholder22_hull()
     worst = -np.inf
-    for b in penholder22_stack(spacer):
+    for b in penholder22_bodies(spacer):
         lo, hi = sorted((b["x0"], b["x1"]))
         for x in (lo, hi):
             d = np.inf
-            for c0, c1, r in P["env_cylinders"]:
+            for c0, c1, r in hull:
                 d = min(d, max(b["r"] - r, c0 - x, x - c1))
             worst = max(worst, d)
     return float(max(0.0, worst))

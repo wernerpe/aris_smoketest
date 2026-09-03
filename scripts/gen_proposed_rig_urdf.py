@@ -357,11 +357,19 @@ def add_cad_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
 
     Collision = `rig_final.penholder22_collision`: three cylinders coaxial
     with the bore whose radii are the largest distance any vertex of either
-    mesh reaches from that axis inside its band.  A 7 420-triangle concave
-    part is not a collision geometry, and the final rig's answer to exactly
-    that problem is a primitive envelope too (`TOOL["collision"]`).  Nothing
-    here is fitted by eye; the extract script re-proves the enclosure on every
-    run.  No inertial is written (welded link).
+    mesh reaches from that axis inside its band, plus a fourth for the pencil
+    tail (7c).  A 7 420-triangle concave part is not a collision geometry, and
+    the final rig's answer to exactly that problem is a primitive envelope too
+    (`TOOL["collision"]`).  Nothing here is fitted by eye; the extract script
+    re-proves the enclosure on every run.  No inertial is written (welded
+    link).
+
+    RE-CERTIFIED 2026-09-03.  The housing was mounted END-FOR-END until then
+    and the flip moves these cylinders 30 mm along the bore — see
+    `rig_final.penholder22_T_hand` and docs/SYSTEM_MODEL.md 7c.  It is the one
+    change this tree has taken since it was certified, and it is a change
+    because the alternative was leaving a known-wrong body in the asset every
+    certified number was checked against.
     """
     P = rig_final.PENHOLDER22
     name = f"{pfx}pen_holder"
@@ -401,8 +409,10 @@ def add_pen_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
 
     `pen_lead` is the graphite stick: the one part of the assembly that is NOT
     in the CAD (it is a consumable, and its protrusion is the adjustable
-    setting), drawn at the clutch bore's own radius from the housing nose to
-    the planning tip.  Its length is the delivery's headline problem: 100 mm.
+    setting), drawn at the clutch bore's own radius from the CAP'S OUTER FACE
+    — where the pen leaves — to the planning tip.  Its length is the
+    delivery's headline problem, and correcting the housing's sense made it
+    worse rather than better: 125.6 mm, against 100.5 mm end-for-end.
     """
     tcp = f"{pfx}tcp"
     link = ET.SubElement(robot, "link", name=tcp)      # pure frame, no geometry
@@ -420,15 +430,15 @@ def add_pen_holder(robot, pfx, pen_ext=PEN_EXT, pen_lat=PEN_LAT_HOLDER):
 
     add_cad_holder(robot, pfx, pen_ext, pen_lat)
 
-    # the graphite: nose -> tip, along the planner's own ray
+    # the graphite: the cap's outer face -> tip, along the planner's own ray
     P = rig_final.PENHOLDER22
-    _, _, nose, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
-                                                     D_HAND_TCP)
+    _, _, exit_x, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
+                                                       D_HAND_TCP)
     lean = np.arctan2(pen_lat, pen_ext)
     _cyl_link(robot, f"{pfx}pen_lead", tcp, (0.0, 0.0, 0.0),
-              (np.sin(lean) * (nose + reach) / 2, 0.0,
-               np.cos(lean) * (nose + reach) / 2), (0.0, lean, 0.0),
-              P["lead_r"], reach - nose, (0.16, 0.16, 0.17, 1.0),
+              (np.sin(lean) * (exit_x + reach) / 2, 0.0,
+               np.cos(lean) * (exit_x + reach) / 2), (0.0, lean, 0.0),
+              P["lead_r"], reach - exit_x, (0.16, 0.16, 0.17, 1.0),
               r_collision=P["lead_r_coll"])
 
     tip = f"{pfx}pen_tip"                              # the tool tip FRAME

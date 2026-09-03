@@ -339,13 +339,15 @@ def test_the_truth_module_does_not_touch_the_tool_global():
 def test_regeneration_is_byte_stable(tmp_path):
     """Twice, and both times equal to what is committed.  No clock, no rng.
 
-    KNOWN RED as of 2026-09-02, and NOT because of a code change.  The
-    committed `installation.urdf` and `installation_capsules.urdf` differ from
-    what this station writes on 48 and 150 lines, every one of them a rotation
-    out of `_rpy_checked`, worst 4.44e-16 — two ULP on pi.  Both this repo's
-    venv (numpy 2.5.2) and the station's (2.2.6) produce the SAME new bytes, so
-    the committed files were written by a third environment.  They are left as
-    committed rather than churned for two ULP; see docs/SYSTEM_MODEL.md 10.
+    GREEN AGAIN SINCE 2026-09-03, and worth saying why.  This was red from
+    2026-09-02: the committed `installation.urdf` and `installation_capsules.
+    urdf` differed from what this station writes on 48 and 150 lines, every one
+    of them a rotation out of `_rpy_checked`, worst 4.44e-16 — two ULP on pi,
+    written by a third environment.  They were left alone rather than churned
+    for two ULP.  The 7c housing correction re-wrote both files anyway, so the
+    two ULP went with it; the 48/150 lines were re-measured against this
+    environment first (they reproduce exactly), so nothing was hidden inside
+    the bigger diff.  See docs/SYSTEM_MODEL.md 10.
     """
     gen = _gen()
     gen.OUT_DIR = tmp_path
@@ -651,7 +653,9 @@ def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
     assert np.allclose(xyz, 0) and np.allclose(rpy, 0)
     want = rig_final.penholder22_collision(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
     cols = links["arm13_pen_holder"].findall("collision")
-    assert len(cols) == len(want) == 3
+    # FOUR since 2026-09-03: the three the housing and cap were fitted to,
+    # plus the pencil tail's own (docs/SYSTEM_MODEL.md 7c)
+    assert len(cols) == len(want) == 4
     for c, (_, T, (r, L)) in zip(cols, want):
         g = c.find("geometry/cylinder")
         assert float(g.get("radius")) == pytest.approx(r, abs=1e-12)
@@ -673,7 +677,7 @@ def test_the_holder_is_the_inferred_placement_and_says_so(links, joints,
 def test_the_internal_stack_fills_the_bore_it_measured_exactly():
     """The stack is a CHAIN, and a chain that does not close is not a stack.
 
-    Nose shoulder to the cap's own 16 mm shoulder is one measured span, and
+    Tail shoulder to the cap's own 16 mm shoulder is one measured span, and
     spring + shim + sleeve must add back to it for every shim in the set —
     otherwise the parts are floating and the preload is a story.
     """
@@ -695,13 +699,111 @@ def test_the_internal_stack_fills_the_bore_it_measured_exactly():
 def test_the_complete_assembly_still_fits_the_hull_the_shell_was_fitted_to():
     """Modelling the internals is only free if they are inside the envelope.
 
-    The 3-cylinder hull was fitted to the housing and cap alone.  Adding five
-    more bodies inside the bore is allowed to change nothing about collision
-    ONLY while every one of them stays inside it — for every shim setting,
-    not just the one that ships.
+    The 3-cylinder hull was fitted to the housing and cap alone, and the
+    fourth cylinder to the pencil tail.  Adding six more bodies is allowed to
+    change nothing about collision ONLY while every one of them stays inside
+    that hull — for every shim setting, not just the one that ships.
     """
     for sp in (0.0,) + tuple(rig_final.PENHOLDER22["spacers"]):
         assert rig_final.penholder22_internals_escape(sp) == 0.0, sp
+
+
+# ---------------------------------------------------------------------------
+# 3a.  which way round the housing is — docs/SYSTEM_MODEL.md 7c
+# ---------------------------------------------------------------------------
+def test_the_housing_is_not_mounted_end_for_end():
+    """The pen leaves through the CAP, and these are the assembly's numbers.
+
+    Until 2026-09-03 `penholder22_T_hand` pointed the housing's +X AWAY from
+    the tip: the 17.00 mm tail land 55.099 mm toward the paper and the cap
+    30.001 mm back toward the wrist.  Four things off
+    `Natural hold assembly - closed.SLDASM` itself say otherwise, and each of
+    them is re-derivable with `scripts/read_solidworks.py asm`:
+
+      * along that assembly's bore the parts run cap 1017.121..1028.558,
+        sleeve 1020.121..1060.221, SPRING 1060.121..1098.919, housing tail
+        face 1102.221 mm — so the spring is at the end away from the cap and
+        pushes the pen assembly toward it.  Mounted the other way round the
+        tool has no compliance at all;
+      * its pencil spans 1000.121..1174.735, i.e. 17.000 mm of sharpened point
+        past the cap's outer face and 72.514 mm of blunt tail past the tail
+        face — which is what the assembly's own preview draws;
+      * the 17.00 mm land will not pass the 19.05 mm spring and does not touch
+        a 7 mm stick: it is the spring's stop, not the pen's;
+      * the grip is 25.001 mm from the housing's cap end and 55.099 mm from
+        its tail, and docs/FINAL_RIG.md's independent extraction read 25 mm.
+
+    The numbers pinned here are the two the old model had exactly backwards.
+    """
+    P = rig_final.PENHOLDER22
+    T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
+        PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
+    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
+    u = u / np.linalg.norm(u)
+    # the SENSE: +X_housing points AT the tip, not away from it
+    assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)
+    # ...and it is a rotation about the POST axis and nothing else
+    assert np.allclose(T_h[:3, :3] @ [0, 0, 1], [0, 1, 0], atol=1e-12)
+    grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
+    assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3], [0, 0, D_HAND_TCP],
+                       atol=1e-12)
+    # grip -> where the pen leaves: the CAP's outer face, 30.001 mm IN FRONT
+    assert exit_x == pytest.approx(0.030001, abs=1e-6)
+    assert exit_x == pytest.approx(P["cap_end_x"] - P["post_xy"][0], abs=1e-15)
+    # grip -> the housing's own end face, the 25 mm docs/FINAL_RIG.md read
+    assert P["thread_x"][1] - P["post_xy"][0] == pytest.approx(0.025001,
+                                                               abs=1e-6)
+    # grip -> the tail face, which is now BEHIND the grip
+    assert P["post_xy"][0] == pytest.approx(0.055099, abs=1e-6)
+    # the cap sits in FRONT of the TCP along the bore (it used to be behind)
+    assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
+    # what the fixed tip therefore asks of the graphite
+    assert (reach - exit_x) == pytest.approx(0.125562, abs=1e-6)
+
+
+def test_the_pencil_tail_is_the_assemblys_own_overhang():
+    """72.514 mm, MEASURED — and its envelope contains it by construction."""
+    P = rig_final.PENHOLDER22
+    b = rig_final.penholder22_tail()
+    assert b["x0"] == pytest.approx(-0.072514, abs=1e-9)
+    assert b["x1"] == P["tail_x"] == 0.0
+    assert b["r"] == P["lead_r"]
+    x0, x1, r = P["tail_cylinder"]
+    assert x0 <= b["x0"] and x1 >= b["x1"] and r > b["r"]
+    # and it is the LAST primitive of the hull, which callers rely on
+    hull = rig_final.penholder22_hull()
+    assert len(hull) == 4 and hull[:3] == tuple(P["env_cylinders"])
+    assert hull[3] == P["tail_cylinder"]
+
+
+def test_the_flip_did_not_move_the_pen_tip(root):
+    """THE PROOF THAT THE RE-CERTIFICATION IS ONLY ABOUT THE BODY.
+
+    `frames.PEN_LAT_HOLDER` is gate-validated against a real touchdown and the
+    holder correction was not allowed to touch it.  So: the URDF's own pen_tip
+    link, walked through its joint tree, must land on TCP + R @ (lat, 0, ext)
+    EXACTLY — the same 0.110 / 0.110 the planner uses — and it must not depend
+    on the holder placement at all, which is checked by asking
+    `penholder22_T_hand` for a housing pointing the other way and getting the
+    same tip back.
+    """
+    qmap = {f"arm{aid}_panda_joint{i + 1}": 0.0
+            for aid in layout.FLEET_PROPOSED for i in range(7)}
+    T = urdf_link_poses(root, qmap)
+    for aid in layout.FLEET_PROPOSED:
+        hand = T[f"arm{aid}_panda_hand"]
+        want = hand[:3, :3] @ (np.array([0.0, 0.0, D_HAND_TCP])
+                               + frames.tool_offset(PEN_EXT,
+                                                    PEN_LAT_HOLDER)) \
+            + hand[:3, 3]
+        got = T[f"arm{aid}_pen_tip"][:3, 3]
+        assert np.max(np.abs(got - want)) < 1e-12, aid
+    # the tip is an INPUT to the placement, never an output of it
+    _, _, _, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+                                                  D_HAND_TCP)
+    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT),
+                                  abs=1e-15)
+    assert frames.PEN_LAT_HOLDER == 0.110 and PEN_EXT == 0.110
 
 
 def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
@@ -712,8 +814,10 @@ def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
     certified clearance in the repo without changing a single number in it.
     """
     want = rig_final.penholder22_internals(PEN_EXT, PEN_LAT_HOLDER, D_HAND_TCP)
-    # spring, sleeve, clutch, buried graphite — plus a shim if one is fitted
-    assert len(want) == 4 + bool(rig_final.PENHOLDER22["spacer_fitted"])
+    # spring, sleeve, clutch, buried graphite, the pencil TAIL — plus a shim
+    # if one is fitted
+    assert len(want) == 5 + bool(rig_final.PENHOLDER22["spacer_fitted"])
+    assert [w[0] for w in want][-1] == "graphite_tail"
     vis = links["arm13_pen_holder"].findall("visual")
     cyl = [v for v in vis if v.find("geometry/cylinder") is not None]
     assert len(vis) == 2 + len(want) and len(cyl) == len(want)
@@ -724,8 +828,8 @@ def test_the_urdf_draws_the_stack_and_keeps_it_out_of_collision(links,
         xyz, rpy = _origin_of(v)
         assert np.allclose(xyz, T[:3, 3], atol=1e-12), name
         assert np.allclose(_rpy(*rpy), T[:3, :3], atol=1e-12), name
-    # still exactly the three envelope cylinders, and nothing else
-    assert len(links["arm13_pen_holder"].findall("collision")) == 3
+    # still exactly the four envelope cylinders, and nothing else
+    assert len(links["arm13_pen_holder"].findall("collision")) == 4
     ins = manifest["tool"]["internals"]
     assert ins["provenance"] == "AUDIT" and ins["collision"] is False
     assert ins["envelope_escape_m"] == 0.0

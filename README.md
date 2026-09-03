@@ -736,10 +736,15 @@ tip does not move — the gate-validated `TCP + R @ (0.110, 0, 0.110)` is still
 truth — but the CAD disagrees with it twice, and both are flagged rather than
 silently reconciled: the housing's **"22 deg" is a clocking about the mount
 post and measures 23.00°**, where the planning transform implies a 45° lean,
-and reaching 155.6 mm from a grip 55.1 mm behind the nose needs **100.5 mm of
-graphite** protruding.  §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
-(That 55.1 is itself the wrong end of the housing — see the update below —
-and the corrected figure is 25.0 mm and **130.5 mm** of graphite.)
+and the graphite has to protrude a long way past the cap to reach 155.6 mm.
+§7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
+(That account used to say "a grip 55.1 mm behind the nose … 100.5 mm of
+graphite", which is the housing mounted **end-for-end**.  Fixed 2026-09-03:
+the grip is 30.001 mm behind the CAP, where the pen actually leaves, and the
+graphite is **125.6 mm**.  `docs/SYSTEM_MODEL.md` §7c is the correction and
+its re-certification — the pen tip did not move, no gate on the certified
+programme flipped, and the r = 0.050 tool capsules no longer contain the
+holder.)
 
 **Update 2026-09-02 — the assembly exists, and it settles the 23-vs-45.**
 `Pen holder cad(1).zip` nests `Natural hold assembly - closed.zip`, which

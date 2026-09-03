@@ -156,8 +156,8 @@ for aid, spec in FLEET_PROPOSED.items():
 # --- 4b. the CAD pen holder ------------------------------------------------
 # The meshes are baked in the panda_hand frame, so drake's own pose for the
 # pen_holder body must BE the hand's, and every visual file must resolve.
-T_h, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
-                                                   D_HAND_TCP)
+T_h, _, exit_x, reach = rig_final.penholder22_T_hand(PEN_EXT, PEN_LAT_HOLDER,
+                                                     D_HAND_TCP)
 for mesh in rig_final.PENHOLDER22["visual_meshes"]:
     ok = (URDF_DIR / mesh).is_file()
     print(f"  {'PASS' if ok else 'FAIL'}  holder visual {mesh} resolves")
@@ -176,13 +176,17 @@ print(f"  PASS  the holder rides the hand frame on all "
 lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT))
 u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT])
 u = u / np.linalg.norm(u)
-bore = T_h[:3, :3] @ np.array([-1.0, 0.0, 0.0])
-check("holder bore points along the planner's TCP->tip ray", bore, u)
+# the SENSE as well as the axis: the housing's +X points AT the tip, because
+# the pen leaves through the cap.  Until 2026-09-03 this read [-1, 0, 0] and
+# the housing was mounted end-for-end (docs/SYSTEM_MODEL.md 7c).
+bore = T_h[:3, :3] @ np.array([1.0, 0.0, 0.0])
+check("holder bore points along the planner's TCP->tip ray, cap first", bore, u)
 print(f"  INFO  planner lean {lean:.2f} deg / reach {reach * 1000:.1f} mm; "
       f"housing clocking {np.degrees(rig_final.PENHOLDER22['post_clock']):.2f}"
-      f" deg, grip->nose {nose * 1000:.1f} mm  =>  "
-      f"{(reach - nose) * 1000:.1f} mm of graphite past the nose, "
-      f"{lean - np.degrees(rig_final.PENHOLDER22['post_clock']):.2f} deg "
+      f" deg, grip->exit {exit_x * 1000:.1f} mm (the cap's outer face; "
+      f"{rig_final.PENHOLDER22['post_xy'][0] * 1000:.1f} mm of barrel behind "
+      f"the grip)  =>  {(reach - exit_x) * 1000:.1f} mm of graphite past the "
+      f"cap, {lean - np.degrees(rig_final.PENHOLDER22['post_clock']):.2f} deg "
       f"owed by the fingertip cradle (FLAGGED, see rig_final.PENHOLDER22)")
 
 # --- 5. static geometry ----------------------------------------------------
