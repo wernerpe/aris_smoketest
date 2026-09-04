@@ -315,6 +315,8 @@ degrades monotonically and lands **inside** the ink: −46.6 mm at 0.910, −56.
 at 0.880, **−126.0 mm** at 0.850 (arm 17's park pose inside arm 13's ink).  A
 build at 850 with today's `layout.py` would have six arms parked where the
 others want to draw, and no ordering fixes that (`coordination.hard_blocks`).
+**That is a cost of the LITERALS, not of the height** — the search below settles
+which.
 
 **BUT THE HEIGHT DOES NOT FORBID IT — THE CEILING IS FLAT.**  A parked arm
 carries one segment no pose can move, the flange-to-shoulder column at its own
@@ -327,21 +329,75 @@ binding pair (31, 71) that the shipped park set actually achieves**, which is
 the measured form of what this file already records as *"+97.8 mm is the
 layout's ceiling, not a lucky draw"*.
 
-**SO THE HEIGHT QUESTION HAS TURNED INTO A PARK-SEARCH QUESTION.**  Every
-height tested has ~97 mm of park-vs-ink available against an 80 mm gate; only
-0.940 has a park set that reaches it, because 0.940 is the only height anyone
-has run the search at.  **This is the first time the three-number (radius,
-hover, bearing) grid has been measured below 0.940 at all** — the 2026-08-26
-figure of 10 mm at 0.850 came from the older TWO-number (radius, hover) search
-at the 110 mm tool, and the bearing was worth ~25 mm at 0.940 (72 → 97.8 mm).
+**SO THE HEIGHT QUESTION TURNED INTO A PARK-SEARCH QUESTION — AND THE SEARCH
+HAS NOW BEEN RUN.**
 
-**WHAT WOULD SETTLE IT, AND WHAT IT COSTS.**  Re-run the park search
-(6 radii × 4 hovers × 24 bearings per arm, gated by `certified_ready_pose`,
-then park-vs-ink ≥ 80 mm, then the fleet gate, then ranked on the depot's own
-flyability) at 0.880 and 0.850 against the atlases now in `out/`.  That is the
-quarter of an hour the 2026-09-03 re-search took, not a re-certification.
-Until it is run, **0.850 and 0.880 are unproven, not refuted** — and the
-distinction matters, because the verticals are being cut now.
+### The park search, re-run below 0.940 — and 0.850 CERTIFIES
+
+`height_sweep.py park`.  **This is the first time the three-number (radius,
+hover, bearing) grid has been searched below 0.940 at all**: the 2026-08-26
+figure of 10 mm at 0.850 came from the older TWO-number (radius, hover) search
+at the 110 mm tool, and the bearing alone was worth ~25 mm at 0.940
+(72 → 97.8 mm).
+
+Same gates and same ranking as the search that produced the shipped grid:
+24 absolute bearings × 6 radii × 4 hovers = **576 candidates per arm**, each
+gated by `certified_ready_pose` at the holder's own (0.0588421, 0.0588421) and
+by `rig_final.chain_static_clearance ≥ STATIC_MARGIN`; scored against every
+other arm's **ink AND lift layers** (`out/park_search3.py`'s v3 criterion — a
+depot clearing the ink by 97 mm was found sitting 51 mm inside the 6 cm lift
+layer above it); ranked on the depot's own flyability, tie-broken on the 5 mm
+clearance plateau and then `min(joint_margin, 2.5σ)`.  2 166–2 423 s per height
+on 6 jobs.
+
+**THE CONTROL PINS IT.**  At 0.940 the search returns **430 of 576** candidates
+certifying per arm — the record for the 2026-09-03 re-search says *"430–431 of
+577 certify"* — a fleet worst of **97.8 mm**, park-vs-park at the **250 mm**
+broad-phase cap, and **78.5 %** flyability against the record's 78.8 %.  Same
+grid, same gates, same answer.
+
+| 576 candidates/arm, gate 80 mm | **0.850** | **0.880** | **0.940** (ships) |
+|---|---|---|---|
+| certify + clear the steel | 374–380 | 398–399 | **430** |
+| fleet worst, ink AND lift | **87.8 mm** | 84.4 mm | **97.8 mm** |
+| …ranked on clearance instead | 87.8 mm | **97.7 mm** | 97.8 mm |
+| fleet park-vs-park | ≥ 250 mm (cap) | ≥ 250 mm (cap) | ≥ 250 mm (cap) |
+| entries flyable | **79.9 %** | 75.7 % | 78.5 % |
+| go-homes flyable | **81.2 %** | 76.4 % | 78.5 % |
+| **verdict at the 80 mm gate** | **CERTIFIES** | **CERTIFIES** | **CERTIFIES** |
+
+**ALL THREE HEIGHTS HAVE A CONDUCTABLE PARK SET, AND 0.850 IS NOT THE WORST OF
+THEM.**  It clears by 87.8 mm and flies to MORE of its own ink than either
+higher rig (79.9 / 81.2 % against 0.940's 78.5 / 78.5 %) — because a lower arm
+reaches under itself less well but reaches its depot more easily.  **The
+2026-08-26 kill does not survive the bearing and the shorter tool.**  What
+killed 0.850 was a two-number search at a tool that no longer exists.
+
+**WHAT BINDS AT 0.850 IS THE LIFT LAYER, NOT THE INK.**  The ink-only ceiling
+there is 97.3 mm and the achieved both-layer number is 87.8 mm, held down by
+**arm 71** — the middle-row arm, whose depot has to clear the 6 cm hover layer
+over a neighbour's ink as well as the ink itself.  At 0.880 and 0.940 the two
+criteria agree to a millimetre.
+
+**THESE GRIDS ARE REPORT-ONLY.**  `layout.PARK_GRID_PROPOSED` is untouched and
+still the 0.940 set.  A build at another height would take the grid for that
+height from `out/park_search_h0850_lat0588.json` /
+`out/park_search_h0880_lat0588.json`, and that is a change to `layout.py` that
+belongs with the decision, not ahead of it:
+
+    h = 0.850:  {2: (0.70, 0.35,  135.0), 13: (0.70, 0.10,  150.0),
+                 17: (0.70, 0.35,  -60.0), 31: (0.70, 0.10,  150.0),
+                 71: (0.70, 0.20,   30.0), 97: (0.70, 0.20,   45.0)}
+    h = 0.880:  {2: (0.48, 0.35, -150.0), 13: (0.70, 0.20,  150.0),
+                 17: (0.70, 0.30,  -45.0), 31: (0.70, 0.10,  150.0),
+                 71: (0.70, 0.20,  -30.0), 97: (0.70, 0.10,  -30.0)}
+
+**WHAT THIS DOES NOT PROVE.**  That a CSAIL programme conducts at 0.850 — a
+park set clearing the gate is the constraint that blocked 2026-08-26, not a
+guarantee that the allocator and the conductor then succeed.  The 2026-08-26
+package ran the whole pipeline end to end at each height; this runs the park
+stage only.  Re-planning the logo at 0.880 is the next thing to ask for, and it
+is a v16-sized job, not a quarter of an hour.
 
 ### The pen-up layers, sampled — and they run the same way
 
