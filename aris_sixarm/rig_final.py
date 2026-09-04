@@ -475,6 +475,30 @@ PENHOLDER22 = dict(
     thread_r=0.014272,                # measured max OD/2 over the thread
     cap_end_x=0.085100,               # the cap's outer face, along the bore —
                                       # AND THIS IS WHERE THE PEN LEAVES (7c)
+    # WHERE THE GRIP SITS IN THE HAND, along the blades' long axis.
+    # USER-SPECIFIED 2026-09-04, from the photo of the real gripper: the
+    # holder is clamped at the FAR END of the Fat finger plates — "the tip of
+    # the finger extension" — not on the finger centreline.  The blade's
+    # contact plate runs link x -9.000 .. +79.500 (measured on the vendored
+    # mesh; the 90 mm is across the hand, not down the finger), so a 26 mm
+    # post whose OUTER face is flush with the plate's far end has its axis at
+    # 79.500 - 13.000 = 66.500 mm.  Until 2026-09-04 this was 0.0 — the post
+    # on the finger centreline, where the plate's own 6 mm hole is — which put
+    # 66.5 mm of blade hanging past the holder in every render.
+    #
+    # THE SIGN IS THE SIDE THE PEN LEANS TOWARD, and that is not a coincidence
+    # to be checked once and forgotten: both blades reach the same way in the
+    # hand (they are one part, mirrored, `fatfinger_T_finger`), the reach is
+    # +x, and the bore leans +x too, so the tool is cantilevered the way the
+    # photograph shows it.  A holder clamped at the far end with the pen
+    # leaning back over the hand would be a different, and much worse, tool.
+    #
+    # WHAT IT DOES NOT CHANGE: anything inside the holder.  Sliding the grip
+    # along hand x translates the whole assembly and nothing else — the bore
+    # still leans `PEN_LEAN_HOLDER` off the approach axis, the grip is still
+    # 30.001 mm from the cap's outer face and 55.099 mm from the tail face,
+    # and the graphite past the cap is the same 53.214 mm it was.
+    grip_hand_x=0.066500,
     post_xy=(0.055099, 0.016894),     # post axis, housing (x, y)
     post_z=(0.0, 0.050000),           # post extent along the housing's +Z
     post_side=0.026000,               # square section
@@ -552,10 +576,13 @@ PENHOLDER22 = dict(
 )
 
 
-def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
+def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp, grip_x=None):
     """(4,4) panda_hand <- housing placement, and the same for the cap.
 
-    -> (T_hand_housing, T_hand_cap, exit_along_bore, tip_along_bore).
+    -> (T_hand_housing, T_hand_cap, exit_from_grip, tip_from_grip).
+
+    Both lengths are measured FROM THE GRIP CENTRE along the bore, which is
+    not the TCP any more — see assumption 2.
 
     THE PLACEMENT IS INFERRED (no assembly file for THIS build).  Three
     assumptions, each of them the only one the parts support:
@@ -563,8 +590,13 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
       1. the mount post's axis is y_hand — the fingers plug into its two end
          sockets, and 50 mm of post + 2 x 3.5 mm engagement is exactly the
          57 mm jaw gap the 28.5 mm finger half-width gives;
-      2. the grip centre — where the post axis crosses the bore — sits at the
-         hand TCP, the stock grasp point;
+      2. the grip centre — where the post axis crosses the bore — sits at
+         `grip_x` along hand x and at `d_hand_tcp` along hand z.  It was the
+         hand TCP (grip_x = 0) until 2026-09-04, when the photo of the real
+         gripper showed the holder clamped at the FAR END of the Fat finger
+         plates rather than on the finger centreline: `grip_hand_x` is
+         66.500 mm, the post's outer face flush with the plate's own far edge.
+         The HEIGHT is unchanged;
       3. the bore points along the PLANNER's ray from the TCP to the pen tip,
          normalize(pen_lat, 0, pen_ext), rather than along the housing's own
          23 deg clocking.  Assumption 3 is what makes the drawing consistent
@@ -599,20 +631,23 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
     moves is the housing BODY, from 30.001 mm behind the grip to 55.099 mm
     behind it — see `penholder22_collision` for what that costs the envelopes.
     """
-    d = np.array([float(pen_lat), 0.0, float(pen_ext)])
-    reach = float(np.linalg.norm(d))
-    u = d / reach                                 # TCP -> tip, unit
     P = PENHOLDER22
+    gx = float(P["grip_hand_x"] if grip_x is None else grip_x)
+    # the bore is the GRIP -> tip ray, which is the TCP -> tip ray only when
+    # the grip is on the TCP.  It is not, since 2026-09-04.
+    d = np.array([float(pen_lat) - gx, 0.0, float(pen_ext)])
+    reach = float(np.linalg.norm(d))
+    u = d / reach                                 # grip -> tip, unit
     Xh = u                                        # housing +X points AT the
                                                   # tip: the pen leaves the CAP
     Zh = np.array([0.0, 1.0, 0.0])                # post axis == finger travel
     Yh = np.cross(Zh, Xh)
     R = np.column_stack([Xh, Yh, Zh])
     grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
-    tcp = np.array([0.0, 0.0, float(d_hand_tcp)])
+    grip_w = np.array([gx, 0.0, float(d_hand_tcp)])
     T = np.eye(4)
     T[:3, :3] = R
-    T[:3, 3] = tcp - R @ grip
+    T[:3, 3] = grip_w - R @ grip
     # the cap: its +Z runs back along the housing's -X, its recess bottom
     # (cap z = cap_seat_z) seated on the housing's threaded end face
     Rc = np.array([[0.0, 0.0, -1.0],              # housing <- cap
@@ -623,6 +658,28 @@ def penholder22_T_hand(pen_ext, pen_lat, d_hand_tcp):
     Tc[:3, 3] = np.array([P["cap_end_x"], P["bore_yz"][0], P["bore_yz"][1]]) \
         - Rc @ np.array([P["cap_xy"][0], P["cap_xy"][1], 0.0])
     return T, T @ Tc, P["cap_end_x"] - P["post_xy"][0], reach
+
+
+def penholder22_lead(pen_ext, pen_lat, d_hand_tcp, grip_x=None):
+    """The GRAPHITE past the cap, as a segment in the panda_hand frame.
+
+    -> (a, b) — the cap's outer face and the pen tip, both (3,).
+
+    It exists because the graphite is the one body whose ends are set by two
+    different things: the CAP, which rides with the holder, and the TIP, which
+    is the tool transform.  Both generators used to rebuild it from
+    `arctan2(pen_lat, pen_ext)`, i.e. from the TCP -> tip ray — which stopped
+    being the bore on 2026-09-04, when the grip slid to the far end of the Fat
+    finger plates (`PENHOLDER22["grip_hand_x"]`).  Asking here means there is
+    one place that knows where the bore is.
+    """
+    P = PENHOLDER22
+    gx = float(P["grip_hand_x"] if grip_x is None else grip_x)
+    grip = np.array([gx, 0.0, float(d_hand_tcp)])
+    tip = np.array([float(pen_lat), 0.0, float(d_hand_tcp) + float(pen_ext)])
+    reach = float(np.linalg.norm(tip - grip))
+    u = (tip - grip) / reach
+    return grip + (P["cap_end_x"] - P["post_xy"][0]) * u, tip
 
 
 def penholder22_hull():

@@ -922,9 +922,9 @@
   </joint>
   <link name="arm13_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -942,7 +942,7 @@
     </collision>
   </link>
   <joint name="arm13_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm13_tcp" />
     <child link="arm13_pen_body" />
   </joint>
@@ -966,25 +966,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -997,7 +997,7 @@
   </joint>
   <link name="arm13_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -1006,7 +1006,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>
@@ -1700,9 +1700,9 @@
   </joint>
   <link name="arm17_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -1720,7 +1720,7 @@
     </collision>
   </link>
   <joint name="arm17_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm17_tcp" />
     <child link="arm17_pen_body" />
   </joint>
@@ -1744,25 +1744,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -1775,7 +1775,7 @@
   </joint>
   <link name="arm17_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -1784,7 +1784,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>
@@ -2478,9 +2478,9 @@
   </joint>
   <link name="arm31_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -2498,7 +2498,7 @@
     </collision>
   </link>
   <joint name="arm31_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm31_tcp" />
     <child link="arm31_pen_body" />
   </joint>
@@ -2522,25 +2522,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -2553,7 +2553,7 @@
   </joint>
   <link name="arm31_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -2562,7 +2562,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>
@@ -3256,9 +3256,9 @@
   </joint>
   <link name="arm71_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -3276,7 +3276,7 @@
     </collision>
   </link>
   <joint name="arm71_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm71_tcp" />
     <child link="arm71_pen_body" />
   </joint>
@@ -3300,25 +3300,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -3331,7 +3331,7 @@
   </joint>
   <link name="arm71_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -3340,7 +3340,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>
@@ -4034,9 +4034,9 @@
   </joint>
   <link name="arm2_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -4054,7 +4054,7 @@
     </collision>
   </link>
   <joint name="arm2_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm2_tcp" />
     <child link="arm2_pen_body" />
   </joint>
@@ -4078,25 +4078,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -4109,7 +4109,7 @@
   </joint>
   <link name="arm2_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -4118,7 +4118,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>
@@ -4812,9 +4812,9 @@
   </joint>
   <link name="arm97_pen_bracket">
     <collision>
-      <origin xyz="0.02942105 0 0" rpy="0 1.570796327 0" />
+      <origin xyz="0.06267105 0 0" rpy="0 1.570796327 0" />
       <geometry>
-        <cylinder radius="0.05" length="0.0588421" />
+        <cylinder radius="0.05" length="0.1253421" />
       </geometry>
     </collision>
   </link>
@@ -4832,7 +4832,7 @@
     </collision>
   </link>
   <joint name="arm97_pen_body_weld" type="fixed">
-    <origin xyz="0.0588421 0 0" />
+    <origin xyz="0.1253421 0 0" />
     <parent link="arm97_tcp" />
     <child link="arm97_pen_body" />
   </joint>
@@ -4856,25 +4856,25 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.027289372 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.039210628 0 0.076102143" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0136" length="0.035" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.000772868 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.065727132 0 0.102618647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0301" length="0.04" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="0.017435132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.083935132 0 0.120826647" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.0181" length="0.0115" />
       </geometry>
     </collision>
     <collision>
-      <origin xyz="-0.064947758 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
+      <origin xyz="0.001552242 0 0.038443757" rpy="-0.785398163 -0 -1.570796327" />
       <geometry>
         <cylinder radius="0.005" length="0.073514" />
       </geometry>
@@ -4887,7 +4887,7 @@
   </joint>
   <link name="arm97_pen_lead">
     <visual>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.0035" length="0.053214296" />
       </geometry>
@@ -4896,7 +4896,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.040028005 0 0.040028005" rpy="0 0.785398163 0" />
+      <origin xyz="0.106528005 0 0.040028005" rpy="0 0.785398163 0" />
       <geometry>
         <cylinder radius="0.005" length="0.053214296" />
       </geometry>

@@ -364,23 +364,33 @@ def test_the_holder_placement_aims_at_the_planning_tip():
     through the CAP — the 10-deg assembly puts its spring at the end away from
     the cap, its pencil 17.000 mm proud of the cap and 72.514 mm proud of the
     tail face, and its preview draws exactly that — so +X_housing points at
-    the tip.  docs/SYSTEM_MODEL.md 7c."""
+    the tip.  docs/SYSTEM_MODEL.md 7c.
+
+    THE BORE IS THE GRIP -> TIP RAY.  It was the TCP -> tip ray while the grip
+    sat on the TCP; on 2026-09-04 the photo of the real gripper put the holder
+    at the FAR END of the Fat finger plates ("the tip of the finger
+    extension"), so the grip is 66.5 mm out along hand x
+    (`PENHOLDER22["grip_hand_x"]`) and the two rays are 20 deg apart — 45.00
+    for the bore, 64.85 for the TCP ray.  docs/SYSTEM_MODEL.md 7e.
+    """
+    GX = rig_final.PENHOLDER22["grip_hand_x"]
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
         PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
+    u = np.array([PEN_LAT_HOLDER - GX, 0.0, PEN_EXT_HOLDER])
     u = u / np.linalg.norm(u)
     assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)    # bore
     assert np.allclose(T_h[:3, :3] @ [0, 0, 1], [0, 1, 0], atol=1e-12)  # post
     P = rig_final.PENHOLDER22
     grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
     assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3],
-                       [0, 0, D_HAND_TCP], atol=1e-12)
-    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT_HOLDER), abs=1e-12)
+                       [GX, 0, D_HAND_TCP], atol=1e-12)
+    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER - GX,
+                                           PEN_EXT_HOLDER), abs=1e-12)
     # the cap is the end the pen leaves by, i.e. IN FRONT of the TCP
     assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
     # ...and the numbers Pete has to rule on
     assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=0.01)
-    assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER)) == \
+    assert np.degrees(np.arctan2(PEN_LAT_HOLDER - GX, PEN_EXT_HOLDER)) == \
         pytest.approx(45.0, abs=1e-9)
     # grip -> the cap's outer face is 30.001 mm, so the graphite past it is
     # 53.2 mm (it was 125.6 mm at the old 0.110 / 0.110 pair, and 100.5 with
@@ -395,22 +405,31 @@ def test_the_graphite_runs_from_the_cap_to_the_tip(links, joints):
     adjustable protrusion).  It must start at the CAP'S OUTER FACE — where the
     pen leaves — and end on the planning tip, or the picture and the transform
     disagree.  It started at the housing's TAIL face until 2026-09-03; see
-    docs/SYSTEM_MODEL.md 7c."""
-    _, _, nose, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
-                                                     D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
-    u = u / np.linalg.norm(u)
+    docs/SYSTEM_MODEL.md 7c.
+
+    AND IT RUNS DOWN THE BORE, NOT DOWN THE TCP -> TIP RAY.  The two parted
+    company on 2026-09-04, when the grip moved to the far end of the Fat
+    finger plates: both generators used to rebuild this segment from
+    `arctan2(pen_lat, pen_ext)`, which would now draw 53 mm of graphite along
+    a line 20 deg off the barrel.  `rig_final.penholder22_lead` owns it."""
+    GX = rig_final.PENHOLDER22["grip_hand_x"]
+    la, lb = rig_final.penholder22_lead(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
+                                        D_HAND_TCP)
+    tcp_o = np.array([0.0, 0.0, D_HAND_TCP])
+    la, lb = la - tcp_o, lb - tcp_o                  # the tcp frame
+    nose, reach = float(np.linalg.norm(la)), float(np.linalg.norm(lb))
+    u = (lb - la) / np.linalg.norm(lb - la)
     for aid in FLEET_PROPOSED:
         p = f"arm{aid}_"
         lead = links[f"{p}pen_lead"]
         T = _origin_of(lead.find("visual"))          # relative to the tcp
         cyl = lead.find("visual/geometry/cylinder")
         L = float(cyl.get("length"))
-        assert L == pytest.approx(reach - nose, abs=1e-9)
+        assert L == pytest.approx(np.linalg.norm(lb - la), abs=1e-9)
         axis = T[:3, :3] @ [0, 0, 1]
         assert np.allclose(axis, u, atol=1e-9)
-        assert np.allclose(T[:3, 3] - L / 2 * axis, nose * u, atol=1e-9)
-        assert np.allclose(T[:3, 3] + L / 2 * axis, reach * u, atol=1e-9)
+        assert np.allclose(T[:3, 3] - L / 2 * axis, la, atol=1e-9)
+        assert np.allclose(T[:3, 3] + L / 2 * axis, lb, atol=1e-9)
         assert float(cyl.get("radius")) == \
             pytest.approx(rig_final.PENHOLDER22["lead_r"], abs=1e-9)
         assert float(lead.find("collision/geometry/cylinder").get("radius")) \

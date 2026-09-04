@@ -219,9 +219,10 @@ docs/
   (`aris_sixarm/lateral.py`, coarse 8-phi ring + coupled rescue lattice).
   `ARIS_TOOL=lateral` switches planner, atlas, validator, capsules and router
   together, and since 2026-09-03 it switches **both halves** of the tool
-  rather than only the lateral one. Both constants are **0.0588421 m** — the
-  45° lean the hand forces, out to the tip a photo of the real gripper shows
-  (~5 cm below the Fat blades' plates). They were 0.110 / 0.110 and were
+  rather than only the lateral one. `PEN_EXT_HOLDER` is **0.0588421 m** (the
+  tip ~5 cm below the Fat blades' plates) and `PEN_LAT_HOLDER` **0.1253421**
+  — 66.5 mm of grip offset, because the holder is clamped at the plates' FAR
+  END (2026-09-04), plus a 45° bore. They were 0.110 / 0.110 and were
   **never gate-validated**; only the inline pen's axial 0.110 is
   (docs/DECISIONS.md, docs/SYSTEM_MODEL.md §7e). The reach numbers below were
   measured at the OLD pair: inverted-arm strict-GO +51 % on its patch, GO
@@ -738,12 +739,13 @@ is a visual-only plate marking the level the booms stop at.
 **no assembly file**): `scripts/extract_penholder22_meshes.py` measures the
 housing, decimates it to ~5 k faces, and bakes the inferred hand-frame
 placement into `assets/proposed_rig/meshes/penholder22_*_hand.obj`.  The pen
-tip moved on 2026-09-03 — `TCP + R @ (0.0588421, 0, 0.0588421)`, from the
-photo of the real gripper — and the CAD's one remaining disagreement is
-flagged rather than silently reconciled: the housing's **"22 deg" is a
-clocking about the mount post and measures 23.00°**, where the transform
-implies a 45° lean. That one is now settled *against* the CAD: at 23° the
-housing's own barrel would be 11.9 mm inside the manufacturer's hand shell.
+tip moved twice on the photo of the real gripper —
+`TCP + R @ (0.1253421, 0, 0.0588421)`, the holder clamped at the far end of
+the Fat finger plates — and the CAD's one remaining disagreement is flagged
+rather than silently reconciled: the housing's **"22 deg" is a clocking about
+the mount post and measures 23.00°**, where the bore this model draws leans
+45°. Still open: at the real placement the gripper's casing rules out
+neither.
 §7a.1 of `docs/LAYOUT_STUDY.md` is the full account.
 (That account used to say "a grip 55.1 mm behind the nose … 100.5 mm of
 graphite", which is the housing mounted **end-for-end**.  Fixed 2026-09-03:
@@ -764,9 +766,11 @@ lean (10.0000°, with the grip centre on the TCP to 0.14 mm).  That verdict —
 gripper and by the hand itself: **no fingertip is fitted**, so nothing
 transmits the clocking, and 55.1 mm of barrel behind the grip does not fit in
 the 37.4 mm under the hand at any lean below **35.17°**.  The transform moved
-instead — to `TCP + R @ (0.0588421, 0, 0.0588421)`, the tip ~5 cm below the
-Fat blades' plates — and it was **never** gate-validated, contrary to what
-this file and several others used to say.  `docs/SYSTEM_MODEL.md` §7e.  The same
+instead — to `TCP + R @ (0.1253421, 0, 0.0588421)`, the tip ~5 cm below the
+Fat blades' plates and the grip at their far end — and it was **never**
+gate-validated, contrary to what this file and several others used to say.
+The 35.17 deg floor that briefly ruled 23 deg out was measured with the grip
+on the finger centreline and does not survive the move (§7e).  The same
 assembly gave the internal stack, which `assets/system_model/` now draws in
 full.  `docs/SYSTEM_MODEL.md` §7a–7b is the account.
 

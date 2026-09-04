@@ -292,26 +292,24 @@ and its re-certification.** The grip centre, the post axis, the bore direction
 and the pen tip are all unchanged by it; the housing body, the cap, the
 graphite and the collision cylinders all moved.
 
-**And the tip was 72 mm too far out.** A photo of the real gripper arrived on
-2026-09-03 and put the pen tip about **5 cm below the bottom edge of the Fat
-Franka Finger blades' contact plates**, not 15 cm below the hand. **§7e is
-that correction.** `frames.PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` are
-**0.0588421 m** each; the holder body does not move by a picometre, because
-its placement is fixed by the ray's *direction* and by the grip centre and
-both are unchanged.
+**And the tip was in the wrong place twice.** A photo of the real gripper
+arrived on 2026-09-03 and put the pen tip about **5 cm below the bottom edge
+of the Fat Franka Finger blades' contact plates**, not 15 cm below the hand;
+read again on 2026-09-04 it put the whole holder at the plates' **far end**,
+not on the finger centreline. **§7e is both corrections.** The tool transform
+is now `PEN_EXT_HOLDER = 0.0588421` and `PEN_LAT_HOLDER = 0.1253421`, with the
+grip centre at `panda_hand` (0.0665, 0, 0.1034).
 
-The housing's own machined flats clock at **23.0°** (measured off the STL).
-The planner's ray leans **45.0°**. Those used to be two live hypotheses.
-**They are not any more: 23° is ruled out by the hand the holder hangs from.**
-The mount post sits 55.099 mm from the housing's tail face, so 55.1 mm of
-barrel stands *behind* the grip pointing at the wrist, and the grip is only
-37.4 mm below the hand's underside. Swept against the manufacturer's own hand
-collision shell, the raw housing STL is **inside the hand at every lean below
-35.17°** — −11.90 mm at 23°, −5.05 at 30°, −0.16 at 35°, **+6.16 mm at 45°**.
-So this model uses the planner's ray because it is the only one that fits, and
-the 3-cylinder housing envelope is proven conservative for it (under the 23°
-hypothesis 211 696 housing vertices escape it, worst +19.43 mm — and the
-housing would be 12 mm inside the gripper's own casting).
+The housing's own machined flats clock at **23.0°** (measured off the STL);
+the bore this model draws leans **45.0°** at the grip. Those are two live
+hypotheses again. For one day (2026-09-03) the gripper's casing ruled 23° out —
+55.1 mm of barrel stands *behind* the grip and there were only 37.4 mm of room
+under the hand — but that was measured with the grip on the finger centreline,
+and at the placement the photograph actually shows (§7e) 23° clears the casing
+by 13.84 mm against 45°'s 7.78. **The lean is 45° because it is the user's
+standing rule and the incumbent, not because the hardware forces it**, and the
+3-cylinder housing envelope is proven conservative for it (under the 23°
+hypothesis 211 696 housing vertices escape it, worst +19.43 mm).
 
 ### 7a. The assembly was found, and it changes the answer
 
@@ -417,7 +415,8 @@ rules that out, and §7e says what the reading should be instead.
 
 One measurement still closes the transform: the perpendicular distance from
 the mounted pen's tip to the gripper's approach axis. The model now says
-**58.8 mm**; §7e turns any reading into a tip.
+**125.3 mm** (66.5 of it is the grip's own offset along the
+blades, §7e); §7e turns any reading into a tip.
 
 ### 7b. The stack inside the bore
 
@@ -940,13 +939,22 @@ bare blade closes on this holder), and it is the conservative one. Either way
 the plate band spans `panda_hand` z **94.242 … 112.242 mm** and its **bottom
 edge is at 112.242 mm**, which is the datum §7e's tip is measured from.
 
-The model's own holder still puts the grip centre on the **hand TCP,
-z = 0.1034** — 0.158 mm out from the centred seating and 3.842 mm in from the
+The model's own holder keeps the grip **height** on the hand TCP,
+z = 0.1034 — 0.158 mm out from the centred seating and 3.842 mm in from the
 butted one. Nothing here is worth moving the TCP convention for.
+
+**Along the plate is a different question, and 2026-09-04 answered it.** The
+plate is 90 mm long and the post is 26 mm, so where the post sits along hand x
+is free as far as the CAD is concerned — and the photograph is not: the holder
+is clamped at the plates' **far end**, the post's outer face flush with the
+plate's own far edge at link x 79.500, so the grip is at **x = 66.500 mm**.
+See §7e. (The plate's far corners carry an R5, so the last ~1.8 mm of the
+post's corner at the plate's distal edge overhangs a rounded edge rather than
+flat material. The post is held off by the rib there anyway.)
 
 | | `panda_hand` |
 |---|---|
-| grip centre (as drawn) | (0, 0, **0.1034**), the stock TCP |
+| grip centre (as drawn) | (**0.0665**, 0, **0.1034**) — the plates' far end, at the TCP's height |
 | post axis | hand **y**, by construction |
 | bore | ⊥ the post, so it lies in the hand's x–z plane |
 | lean out of hand z | free about the jaw axis, **≥ 35.17°** in the room (§7e) |
@@ -955,18 +963,21 @@ Pen tip, at the axial depth the photo gives (§7e):
 
 | lean | tip, `panda_hand` | housing vs the hand shell |
 |---|---|---:|
-| **45° (what the model uses)** | **(0.0588421, 0, 0.1622421)** | **+6.16 mm** |
-| 23° (the housing's flats) | (0.0249771, 0, 0.1622421) | **−11.90 mm — inside the hand** |
+| **45° (what the model uses)** | **(0.1253421, 0, 0.1622421)** | **+7.78 mm** |
+| 23° (the housing's flats) | (0.0914771, 0, 0.1622421) | +13.84 mm |
 
 The 63.3 mm of §7a is gone, and not because the CAD changed: there is no
 mechanism that *could* carry the 22° — not a cradle (§7a), not the fingertip
-sockets (§7a, and the photo shows no tip fitted), not this blade — and there
-is no room for the barrel at 23° either.
+sockets (§7a, and the photo shows no tip fitted), not this blade. **The
+"no room for the barrel at 23°" half of that argument is withdrawn**: it was
+true on the finger centreline and is not true at the placement the photograph
+shows (§7e).
 
 **The measurements that close it — still TWO, and one of them is now urgent.**
 
 1. **The perpendicular distance from the mounted pen's tip to the gripper's
-   approach axis.** The model says **58.8 mm**; §7e turns any reading into a
+   approach axis.** The model says **125.3 mm** — 66.5 mm of grip offset
+   along the blades plus 58.8 mm of bore (§7e); §7e turns any reading into a
    tip, at either lean.
 2. **The gripper's own `width` while the pen is held** — read it off
    `franka::GripperState`, or caliper the jaw. **Expect 0.0339, or 0.0287.**
@@ -1023,7 +1034,87 @@ Fat fingers are what ship, the self-collision guard needs a finger row and
 
 A photo of the real gripper arrived on 2026-09-03. It is the first evidence
 about the *mounted* tool that is not CAD, and it settles three things, leaves
-one open, and moves a constant.
+one open, and moves a constant. It was read twice, and the second reading —
+2026-09-04 — moved a second constant and withdrew an argument. That correction
+comes first, because it changes what the rest of this section is about.
+
+#### The holder is clamped at the FAR END of the blades — 2026-09-04
+
+Pete, on the first render: *"you need to move the pen to the front of the
+aluminum extension … you essentially need to slide it forward in x by a few cm
+so the gripping point is at the tip of the finger extension."*
+
+He is right, and the model had it on the finger centreline because that is
+where the plate's own Ø6.000 hole is — the one feature on the blade that looks
+like it locates something. It does not (§7d(a)): it is an insert hole for a
+fingertip nobody fitted. **The blade's contact plate is 90 mm long and runs
+link x −9.000 … +79.500**, so a post on the centreline leaves 66.5 mm of
+aluminium hanging past the tool, which is what every render before this showed
+and what the photograph does not.
+
+Clamped at the far end instead, a 26 mm post with its **outer face flush with
+the plate's own far edge** has its axis at
+
+```
+grip_hand_x = 79.500 − 26.000/2 = 66.500 mm     rig_final.PENHOLDER22
+```
+
+**The sign is the side the pen leans toward, and that is load-bearing.** Both
+blades reach the same way in the hand (one part, mirrored — §7d), the reach is
++x, and the bore leans +x, so the tool is cantilevered the way the photograph
+shows. Clamped at the far end with the pen leaning back over the wrist it
+would be a different and much worse tool.
+
+**Nothing inside the holder moves.** Sliding the grip along hand x translates
+the whole assembly and nothing else: the bore still leans 45.00° off the
+approach axis, the grip is still 30.001 mm from the cap's outer face and
+55.099 mm from the tail face, and the graphite past the cap is the same
+53.214 mm. The **grip height is unchanged** (the plate band's own centre, §7d
+(d)) and so is the post-between-the-plates seating.
+
+**What it does change is the tip, and one word in the vocabulary.**
+
+| | 2026-09-03 | **2026-09-04** |
+|---|---:|---:|
+| grip centre, `panda_hand` | (0, 0, 0.1034) | **(0.0665, 0, 0.1034)** |
+| `PEN_EXT_HOLDER` (axial, from the TCP) | 0.0588421 | **0.0588421** — unchanged |
+| `PEN_LAT_HOLDER` (lateral, from the TCP) | 0.0588421 | **0.1253421** |
+| tip, `panda_hand` | (0.0588, 0, 0.1622) | **(0.1253421, 0, 0.1622421)** |
+| `PEN_LEAN_HOLDER` — the **bore's** lean, at the grip | 45.00° | **45.00°** |
+| the **TCP → tip ray**, which is no longer the bore | 45.00° | **64.85°** |
+
+`PEN_LEAN_HOLDER` is the angle a protractor on the real barrel would read. It
+stopped being the angle of the TCP → tip ray the moment the grip left the TCP,
+and `penholder22_T_hand` now aims the bore at the **grip → tip** ray. Two
+generators used to rebuild the graphite from `arctan2(pen_lat, pen_ext)` and
+would have drawn it 20° off the barrel; `rig_final.penholder22_lead` owns that
+arithmetic now, in one place.
+
+**AND THIS WITHDRAWS AN ARGUMENT MADE BELOW.** With the grip on the centreline
+the gripper's own casing ruled out any lean under 35.17°, and that was the
+reason given here for 45°. At the far-end placement it does not:
+
+| | grip on the centreline | **grip at the plate end** |
+|---|---:|---:|
+| housing vs the hand shell, 23° | −11.90 mm | **+13.84 mm** |
+| housing vs the hand shell, 45° | +6.15 mm | **+7.78 mm** |
+| cap, 45° | +40.44 mm | **+81.87 mm** |
+| the 72.5 mm pencil tail, 45° | +18.36 mm | **−24.32 mm** |
+
+At this placement **23° clears the casing better than 45° does**, so the
+hardware no longer forces the lean. 45° stands because it is the user's
+standing rule and the incumbent — not because it is forced. Said plainly
+rather than left standing.
+
+And on the user's instruction (2026-09-04) the casing numbers do not constrain
+the placement at all any more: *"the pen's simulated length is a random number
+at this point so it does not matter if it intersects with the gripper
+casing."* The modelled pencil is a ⌀7 stick of arbitrary length until somebody
+measures the real protrusion, so the **−24.32 mm** above — 24 mm of tail
+drawn through the casting — is a drawing artefact, reported and not designed
+around. The barrel itself is clear.
+
+#### What the 2026-09-03 reading said, and still says
 
 **What it settles.**
 
@@ -1043,9 +1134,13 @@ one open, and moves a constant.
    approach to the manufacturer's hand shell is **18.36 mm**, and the housing's
    own tail face sits **1.52 mm** below the hand's underside plane.
 
-**What it forces.** The photo cannot read the lean — the pen leans in the plane
-perpendicular to the jaw axis, which is toward or away from the camera. But the
-geometry can, now that nothing else fixes it. The post sits 55.099 mm from the
+**What it forces — SUPERSEDED 2026-09-04, see above.** This argument was made
+with the grip on the finger centreline and does not survive the move to the
+plate's far end: at the real placement 23° clears the casing better than 45°
+does. It is kept because the measurement is sound and the sweep is worth
+having; it is no longer a reason for anything. The photo cannot read the lean —
+the pen leans in the plane perpendicular to the jaw axis, which is toward or
+away from the camera. The post sits 55.099 mm from the
 housing's tail face, so **55.1 mm of barrel stands behind the grip**, and there
 are **37.4 mm** between the grip and the hand's underside. Sweeping the raw
 housing STL (placed by `rig_final.penholder22_T_hand`) against the convex hull
@@ -1063,33 +1158,40 @@ of the manufacturer's own `hand.obj` collision shell:
 | **45° (what the model uses)** | **+6.16 mm** | +40.4 | **+18.36 mm** |
 | 50° | +9.37 | +38.3 | +22.55 |
 
-**The lean cannot be less than 35.17°, so it cannot be 23°.** At 23° twelve
-millimetres of printed barrel would be inside the gripper's casting. This is
-the first argument for the 45° ray that is about the *hardware* rather than
-about the planner, and it arrived from the one direction nobody was looking
-in — the back end of the holder, which had no body in this model at all until
-§7c gave it one.
+**On the centreline the lean could not be less than 35.17°.** At 23° twelve
+millimetres of printed barrel would have been inside the gripper's casting.
+That was, for one day, the first argument for the 45° ray that was about the
+*hardware* rather than about the planner — and moving the grip 66.5 mm out
+along the plates dissolved it. The sweep above is the centreline's; the
+far-end numbers are in the 2026-09-04 table.
 
 **What it moves.** Pete's reading of the photo: *"just have the pen protruding
-out the bottom of those finger extensions by ca 5 cm."* The Fat blades' contact
-plates end at `panda_hand` **z = 0.1122421** (§7d), so the tip is at
-**z = 0.1622421**, and from the hand TCP at 0.1034:
+out the bottom of those finger extensions by ca 5 cm."* This is the rule that
+has held through both corrections — it fixes the tip's HEIGHT, and neither the
+grip move nor anything else has touched it. The Fat blades' contact plates end
+at `panda_hand` **z = 0.1122421** (§7d), so the tip is at **z = 0.1622421**,
+and from the hand TCP at 0.1034:
 
 ```
-PEN_LEAN_HOLDER = 45°            forced by the hand, above
-PEN_EXT_HOLDER  = 0.1622421 - 0.1034            = 0.0588421 m
-PEN_LAT_HOLDER  = PEN_EXT_HOLDER * tan 45°      = 0.0588421 m
+PEN_LEAN_HOLDER = 45°            the BORE's lean, at the grip
+PEN_EXT_HOLDER  = 0.1622421 - 0.1034                        = 0.0588421 m
+PEN_LAT_HOLDER  = grip_hand_x + PEN_EXT_HOLDER * tan 45 deg = 0.1253421 m
+                = 0.066500 + 0.0588421          (grip_hand_x since 2026-09-04)
 ```
 
-| | old | **now** |
-|---|---:|---:|
-| tip, `panda_hand` | (0.110, 0, 0.2134) | **(0.0588421, 0, 0.1622421)** |
-| reach from the grip centre | 155.563 mm | **83.215 mm** |
-| graphite past the cap's outer face | 125.562 mm | **53.214 mm** |
-| …as the photo's foreshortened view reads it | 110.0 mm | **37.6 mm** |
-| tip below the blades' plate edge | 110.0 mm | **50.000 mm** |
-| tip below the hand's underside | 147.4 mm | **96.3 mm** |
-| implied ⌀7 stick, with 72.514 mm of tail | 283.2 mm | **210.8 mm** |
+| | old | **2026-09-03** | **2026-09-04 (shipped)** |
+|---|---:|---:|---:|
+| tip, `panda_hand` | (0.110, 0, 0.2134) | (0.0588421, 0, 0.1622421) | **(0.1253421, 0, 0.1622421)** |
+| reach from the grip centre | 155.563 mm | 83.215 mm | **83.215 mm** |
+| graphite past the cap's outer face | 125.562 mm | 53.214 mm | **53.214 mm** |
+| …as the photo's foreshortened view reads it | 110.0 mm | 37.6 mm | **37.6 mm** |
+| tip below the blades' plate edge | 110.0 mm | 50.000 mm | **50.000 mm** |
+| tip below the hand's underside | 147.4 mm | 96.3 mm | **96.3 mm** |
+| implied ⌀7 stick, with 72.514 mm of tail | 283.2 mm | 210.8 mm | **210.8 mm** |
+
+Every row but the first is a length **along the holder**, which is why the
+2026-09-04 grip move leaves them all alone: it translates the tool, it does
+not stretch it.
 
 The photo shows roughly 20–40 mm of graphite below the cap, foreshortened;
 37.6 mm is what this transform puts there. **The holder body does not move by
@@ -1127,6 +1229,13 @@ graphite standing past the cap's outer face, where the tip is.
 **Inverse**: given a measured perpendicular distance from the tip to the
 gripper's approach axis — the ruler measurement §7a has been asking for since
 2026-09-02 — everything else.
+
+**Both tables are in the BORE's own lateral offset**, i.e. measured from the
+GRIP, not from the wrist axis. Since 2026-09-04 the grip is 66.500 mm out
+along hand x, so a ruler laid against the real gripper reads
+`66.5 + (this column)`: **subtract 66.5 mm from a ruler reading before
+entering the inverse table, and add it to the forward table's tip x.** The
+shipped row is 58.8 mm here and 125.3 mm on the ruler.
 
 | lean | measured tip↔axis | reach from grip | axial from TCP | tip z | below the plates | graphite past the cap | vs the shipped tip |
 |---:|---:|---:|---:|---:|---:|---:|---:|

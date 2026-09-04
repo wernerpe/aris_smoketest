@@ -43,8 +43,16 @@ from pydrake.systems.framework import DiagramBuilder  # noqa: E402
 from pydrake.systems.sensors import CameraInfo, RgbdSensor  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from aris_sixarm import rig_final  # noqa: E402
 from aris_sixarm import system_model as SM  # noqa: E402
+from aris_sixarm.frames import D_HAND_TCP  # noqa: E402
 from aris_sixarm.layout import FLEET_PROPOSED, Q_PARK_PROPOSED  # noqa: E402
+
+# WHERE THE TOOL ACTUALLY IS, and the two close-ups aim at it rather than at
+# the hand's own axis.  Since 2026-09-04 the holder is clamped at the far end
+# of the Fat finger plates, 66.5 mm out along hand x — a camera still pointed
+# down the wrist centreline puts the subject at the edge of its own frame.
+GRIP_HAND = np.array([rig_final.PENHOLDER22["grip_hand_x"], 0.0, D_HAND_TCP])
 
 
 def _rel(p):
@@ -202,15 +210,15 @@ def stills(out_dir, width, height, views=None):
             # ...and from the -x side, which is the side the barrel and the
             # pencil tail lean to.  From +x the hand's own body stands in
             # front of both of them and the shot proves nothing.
-            ctr = hand + R_hand @ np.array([0.0, 0.0, 0.110])
+            ctr = hand + R_hand @ (GRIP_HAND + np.array([0.0, 0.0, 0.020]))
             eye = ctr - 0.50 * R_hand[:, 0]
             target, up = ctr, -R_hand[:, 2]
         elif name == "photo":
             # the grip centre, seen from -x and from below (+z_hand), the way
             # the photograph was taken.  `up` is -z_hand as in holder_side, so
             # the wrist is at the top of the frame and the paper at the bottom.
-            ctr = hand + R_hand @ np.array([0.004, 0.0, 0.100])
-            eye = ctr + R_hand @ np.array([-0.245, 0.035, 0.115])
+            ctr = hand + R_hand @ (GRIP_HAND + np.array([-0.030, 0.0, 0.008]))
+            eye = ctr + R_hand @ np.array([-0.300, 0.045, 0.140])
             target, up = ctr, -R_hand[:, 2]
         w, h = (width, height)
         cc, dc = camera(w, h, fov)

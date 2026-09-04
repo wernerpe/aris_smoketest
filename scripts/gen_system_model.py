@@ -940,15 +940,22 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
     ET.SubElement(j, "child", link=f"{pfx}pen_holder")
     _origin(j, (0, 0, 0))
 
-    # --- the graphite, the CAP's outer face to the tip, along the bore ----
-    lean = float(np.arctan2(pen_lat, pen_ext))
+    # --- the graphite, the CAP's outer face to the tip, along the BORE ----
+    # `penholder22_lead` owns the arithmetic, because the bore stopped being
+    # the TCP -> tip ray on 2026-09-04 (the grip is at the far end of the Fat
+    # blades now, `PENHOLDER22["grip_hand_x"]`) and rebuilding it here from
+    # `arctan2(pen_lat, pen_ext)` would draw the graphite down the wrong line.
+    la, lb = rig_final.penholder22_lead(pen_ext, pen_lat, D_HAND_TCP)
+    tcp_o = np.array([0.0, 0.0, D_HAND_TCP])       # the link is welded to `tcp`
+    lean = float(np.arctan2(lb[0] - la[0], lb[2] - la[2]))   # the BORE's own
+    lctr = tuple(0.5 * (la + lb) - tcp_o)
+    lL = float(np.linalg.norm(lb - la))
     link = ET.SubElement(robot, "link", name=f"{pfx}pen_lead")
     for role, r in (("visual", P["lead_r"]), ("collision", P["lead_r_coll"])):
         el = ET.SubElement(link, role)
-        _origin(el, (np.sin(lean) * (exit_x + reach) / 2, 0.0,
-                     np.cos(lean) * (exit_x + reach) / 2), (0.0, lean, 0.0))
+        _origin(el, lctr, (0.0, lean, 0.0))
         ET.SubElement(ET.SubElement(el, "geometry"), "cylinder",
-                      radius=_fmt(r), length=_fmt(reach - exit_x))
+                      radius=_fmt(r), length=_fmt(lL))
         if role == "visual":
             mat = ET.SubElement(el, "material", name=f"{pfx}pen_lead_mat")
             ET.SubElement(mat, "color", rgba="0.16 0.16 0.17 1.0")

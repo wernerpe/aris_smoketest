@@ -734,19 +734,35 @@ def test_the_housing_is_not_mounted_end_for_end():
         its tail, and docs/FINAL_RIG.md's independent extraction read 25 mm.
 
     The numbers pinned here are the two the old model had exactly backwards.
+
+    THE BORE IS THE GRIP -> TIP RAY.  It was the TCP -> tip ray while the grip
+    sat on the TCP; on 2026-09-04 the photo of the real gripper put the holder
+    at the FAR END of the Fat finger plates ("the tip of the finger
+    extension"), so the grip is 66.5 mm out along hand x
+    (`PENHOLDER22["grip_hand_x"]`) and the two rays are 20 deg apart — 45.00
+    for the bore, 64.85 for the TCP ray.  docs/SYSTEM_MODEL.md 7e.
     """
     P = rig_final.PENHOLDER22
+    GX = P["grip_hand_x"]
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
         PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
-    u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
+    u = np.array([PEN_LAT_HOLDER - GX, 0.0, PEN_EXT_HOLDER])
     u = u / np.linalg.norm(u)
     # the SENSE: +X_housing points AT the tip, not away from it
     assert np.allclose(T_h[:3, :3] @ [1, 0, 0], u, atol=1e-12)
     # ...and it is a rotation about the POST axis and nothing else
     assert np.allclose(T_h[:3, :3] @ [0, 0, 1], [0, 1, 0], atol=1e-12)
     grip = np.array([P["post_xy"][0], P["post_xy"][1], P["bore_yz"][1]])
-    assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3], [0, 0, D_HAND_TCP],
+    assert np.allclose(T_h[:3, :3] @ grip + T_h[:3, 3], [GX, 0, D_HAND_TCP],
                        atol=1e-12)
+    # ...and the grip is where a 26 mm post's OUTER face is flush with the
+    # plate's own far edge, which is the whole of the 2026-09-04 placement
+    assert GX == pytest.approx(rig_final.FATFINGER["plate_y"][1]
+                               - P["post_side"] / 2, abs=1e-9)
+    # the BORE leans 45 deg at the grip; the TCP -> tip ray does not
+    assert np.degrees(np.arctan2(u[0], u[2])) == pytest.approx(45.0, abs=1e-9)
+    assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER)) \
+        == pytest.approx(64.8522, abs=1e-3)
     # grip -> where the pen leaves: the CAP's outer face, 30.001 mm IN FRONT
     assert exit_x == pytest.approx(0.030001, abs=1e-6)
     assert exit_x == pytest.approx(P["cap_end_x"] - P["post_xy"][0], abs=1e-15)
@@ -812,8 +828,11 @@ def test_the_urdf_tip_is_the_tool_transform_and_nothing_else(root):
     # the tip is an INPUT to the placement, never an output of it
     _, _, _, reach = rig_final.penholder22_T_hand(PEN_EXT_HOLDER, PEN_LAT_HOLDER,
                                                   D_HAND_TCP)
-    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER, PEN_EXT_HOLDER),
-                                  abs=1e-15)
+    # `reach` is measured from the GRIP, which is 66.5 mm out along hand x
+    # since 2026-09-04 — not from the TCP
+    gx = rig_final.PENHOLDER22["grip_hand_x"]
+    assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER - gx,
+                                           PEN_EXT_HOLDER), abs=1e-15)
     # the tip sits 50.000 mm below the Fat blades' plate edge, on the hand's
     # own z — which is the whole derivation, in one line
     plate_bottom = rig_final.FATFINGER["plate_link_z"][1] + 0.0584

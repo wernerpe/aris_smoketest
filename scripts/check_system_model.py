@@ -182,13 +182,23 @@ for aid in FLEET_PROPOSED:
           Xh.GetAsMatrix4(), quiet=True)
 ok("the holder link frame IS the hand frame on every arm",
    not [f for f in fails if "rides the hand" in f[0]])
-u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER]) / reach
+# THE BORE IS THE GRIP -> TIP RAY, NOT THE TCP -> TIP RAY.  They were the
+# same line while the grip sat on the TCP; since 2026-09-04 the grip is at the
+# far end of the Fat blades (`grip_hand_x` = 66.5 mm) and the two are 20 deg
+# apart — 45.00 deg for the bore, 64.85 for the TCP ray.
+GRIP_X = rig_final.PENHOLDER22["grip_hand_x"]
+u = np.array([PEN_LAT_HOLDER - GRIP_X, 0.0, PEN_EXT_HOLDER]) / reach
 # THE SENSE, NOT ONLY THE AXIS.  The housing's +X points AT the tip: the pen
 # leaves through the cap.  Until 2026-09-03 this line read [-1, 0, 0] and the
 # model had the housing end-for-end (docs/SYSTEM_MODEL.md 7c) — an axis-only
 # check would have passed either way, which is exactly how it survived.
-check("holder bore points along the planner's TCP->tip ray, cap first",
+check("holder bore points along the GRIP->tip ray, cap first",
       T_h[:3, :3] @ np.array([1.0, 0.0, 0.0]), u)
+check("the grip centre sits at the far end of the Fat blades' plates",
+      (T_h[:3, :3] @ np.array([rig_final.PENHOLDER22["post_xy"][0],
+                               rig_final.PENHOLDER22["post_xy"][1],
+                               rig_final.PENHOLDER22["bore_yz"][1]])
+       + T_h[:3, 3]), np.array([GRIP_X, 0.0, D_HAND_TCP]))
 check("the pen leaves 30.001 mm in front of the grip, not 55.099 behind it",
       exit_x, rig_final.PENHOLDER22["cap_end_x"]
       - rig_final.PENHOLDER22["post_xy"][0])

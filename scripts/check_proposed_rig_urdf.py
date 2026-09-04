@@ -173,15 +173,18 @@ for aid in FLEET_PROPOSED:
 print(f"  PASS  the holder rides the hand frame on all "
       f"{len(FLEET_PROPOSED)} arms" if not fails else "  see failures above")
 # the inferred placement must aim the bore at the planning tip
-lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER))
-u = np.array([PEN_LAT_HOLDER, 0.0, PEN_EXT_HOLDER])
+# the BORE's lean, measured at the GRIP — which is no longer the TCP: since
+# 2026-09-04 the holder is clamped at the far end of the Fat blades' plates.
+GRIP_X = rig_final.PENHOLDER22["grip_hand_x"]
+lean = np.degrees(np.arctan2(PEN_LAT_HOLDER - GRIP_X, PEN_EXT_HOLDER))
+u = np.array([PEN_LAT_HOLDER - GRIP_X, 0.0, PEN_EXT_HOLDER])
 u = u / np.linalg.norm(u)
 # the SENSE as well as the axis: the housing's +X points AT the tip, because
 # the pen leaves through the cap.  Until 2026-09-03 this read [-1, 0, 0] and
 # the housing was mounted end-for-end (docs/SYSTEM_MODEL.md 7c).
 bore = T_h[:3, :3] @ np.array([1.0, 0.0, 0.0])
-check("holder bore points along the planner's TCP->tip ray, cap first", bore, u)
-print(f"  INFO  planner lean {lean:.2f} deg / reach {reach * 1000:.1f} mm; "
+check("holder bore points along the GRIP->tip ray, cap first", bore, u)
+print(f"  INFO  bore lean {lean:.2f} deg at the grip / reach {reach * 1000:.1f} mm; "
       f"housing clocking {np.degrees(rig_final.PENHOLDER22['post_clock']):.2f}"
       f" deg, grip->exit {exit_x * 1000:.1f} mm (the cap's outer face; "
       f"{rig_final.PENHOLDER22['post_xy'][0] * 1000:.1f} mm of barrel behind "

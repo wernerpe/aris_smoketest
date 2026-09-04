@@ -430,15 +430,18 @@ def add_pen_holder(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
 
     add_cad_holder(robot, pfx, pen_ext, pen_lat)
 
-    # the graphite: the cap's outer face -> tip, along the planner's own ray
+    # the graphite: the cap's outer face -> tip, along the BORE.  Not the
+    # TCP -> tip ray: since 2026-09-04 the grip sits at the far end of the Fat
+    # finger plates (PENHOLDER22["grip_hand_x"]) and the two are 20 deg apart.
     P = rig_final.PENHOLDER22
-    _, _, exit_x, reach = rig_final.penholder22_T_hand(pen_ext, pen_lat,
-                                                       D_HAND_TCP)
-    lean = np.arctan2(pen_lat, pen_ext)
+    la, lb = rig_final.penholder22_lead(pen_ext, pen_lat, D_HAND_TCP)
+    tcp_o = np.array([0.0, 0.0, D_HAND_TCP])       # the link is welded to `tcp`
+    lean = float(np.arctan2(lb[0] - la[0], lb[2] - la[2]))   # the BORE's own
+    lctr = tuple(0.5 * (la + lb) - tcp_o)
+    lL = float(np.linalg.norm(lb - la))
     _cyl_link(robot, f"{pfx}pen_lead", tcp, (0.0, 0.0, 0.0),
-              (np.sin(lean) * (exit_x + reach) / 2, 0.0,
-               np.cos(lean) * (exit_x + reach) / 2), (0.0, lean, 0.0),
-              P["lead_r"], reach - exit_x, (0.16, 0.16, 0.17, 1.0),
+              lctr, (0.0, lean, 0.0),
+              P["lead_r"], lL, (0.16, 0.16, 0.17, 1.0),
               r_collision=P["lead_r_coll"])
 
     tip = f"{pfx}pen_tip"                              # the tool tip FRAME

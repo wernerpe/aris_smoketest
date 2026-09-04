@@ -204,9 +204,12 @@ def main():
 
     T_h, T_c, exit_x, reach = rig_final.penholder22_T_hand(
         PEN_EXT_HOLDER, PEN_LAT_HOLDER, D_HAND_TCP)
-    lean = np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER))
-    print(f"PLANNER asks for a {lean:.2f} deg lean and {reach * 1000:.2f} mm "
-          f"of reach from the TCP; the housing gives {meas['clock_deg']:.2f} "
+    gx = P["grip_hand_x"]
+    lean = np.degrees(np.arctan2(PEN_LAT_HOLDER - gx, PEN_EXT_HOLDER))
+    print(f"GRIP at hand x {gx * 1000:.1f} mm — the far end of the Fat "
+          f"blades' plates (2026-09-04).")
+    print(f"PLANNER asks for a {lean:.2f} deg BORE lean and {reach * 1000:.2f} mm "
+          f"of reach from the GRIP; the housing gives {meas['clock_deg']:.2f} "
           f"deg and {exit_x * 1000:.2f} mm grip-to-exit (the CAP's outer face; "
           f"{P['post_xy'][0] * 1000:.2f} mm of barrel stands the other way, "
           f"behind the grip), so the drawing needs "
