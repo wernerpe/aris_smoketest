@@ -1057,10 +1057,22 @@ _CMD = _re.compile(r"([MmZzLlHhVvCcSsQqTtAa])")
 SVG_FLAT_TOL = 0.25        # user units; curve subdivision flatness
 
 
+def _cross2(u, v):
+    """The z of a 2-D cross product, as a magnitude. -> float.
+
+    `np.cross` accepted 2-vectors and returned this scalar until NumPy 2.0
+    REMOVED that overload; on 2.x the same call raises "Both input arrays must
+    be (arrays of) 3-dimensional vectors".  The arithmetic is one line and
+    exact, so it is written out rather than depending on which NumPy is
+    installed.  (This is the whole of `tests/test_draw.py`'s SVG failure — an
+    environment change, not a planner one.)
+    """
+    return abs(float(u[0]) * float(v[1]) - float(u[1]) * float(v[0]))
+
+
 def _bezier(p0, p1, p2, p3, tol, depth=0):
     """Adaptive cubic subdivision -> list of points EXCLUDING p0."""
-    d = (np.linalg.norm(np.cross(p3 - p0, p1 - p0))
-         + np.linalg.norm(np.cross(p3 - p0, p2 - p0)))
+    d = _cross2(p3 - p0, p1 - p0) + _cross2(p3 - p0, p2 - p0)
     L = np.linalg.norm(p3 - p0)
     if depth >= 12 or (L > 1e-12 and d / L <= tol) or L <= tol:
         return [p3]

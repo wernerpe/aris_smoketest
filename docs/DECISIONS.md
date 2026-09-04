@@ -1,5 +1,238 @@
 # Decisions — the numbers, and where each one is anchored
 
+## RE-PLANNING AT THE HOLDER'S OWN TOOL (2026-09-03)
+
+`bc670bf` moved the lateral tool's tip 72.348 mm — `PEN_LAT_HOLDER` /
+`PEN_EXT_HOLDER` from 0.110 / 0.110 to **0.0588421 / 0.0588421** — and said out
+loud that every certified programme and atlas in `out/` was stale.  This is the
+re-certification.  Nothing below changes a gate, a capsule, a layout, a height
+or a tool constant; every number is the same machinery run again at the new
+pair.
+
+### The atlas first, because everything else reads it
+
+`atlas.is_current` compares a stored sweep's model signature against the
+running build's, and the pen is **inside** that signature (entry 340), so every
+atlas in `out/` refuses at the new tool by name: *"collision model differs at
+entry 340: atlas has 0.1100, this build has 0.0588"*.  Re-swept:
+
+    ARIS_TOOL=lateral scripts/run_atlas6.py --rig proposed \
+        --pen 0.0588421 --pen-lat 0.0588421 \
+        --out out/atlas_proposed_h0940_lat0588        (6 jobs, 464 s/arm)
+    ARIS_RIG=proposed ARIS_TOOL=lateral scripts/regate_atlas.py \
+        --in  out/atlas_proposed_h0940_lat0588 \
+        --out out/atlas_proposed_h0940_lat0588_gated63    (304 s)
+
+**WHAT THE SHORTER PEN COSTS THE CANVAS, before any planning at all:**
+
+| 2 cm sweep, h = 0.940, 16 562 cells | 0.110 tool | **0.0588421 tool** |
+|---|---|---|
+| union strict-GO | 99.64 % | **97.08 %** |
+| reachable | 100.00 % | **99.71 %** |
+| ≥2 arms | 47.90 % | **38.88 %** |
+| ≥3 arms | 11.11 % | **4.21 %** |
+| dead | 0.36 % | **2.92 %** |
+| strict-GO cells, arm 31 | 4 846 | **4 072** |
+
+The tool is 72 mm shorter along its own axis and 51 mm shorter across it, so
+the WRIST has to come 72 mm down and 51 mm in for the same tip: the arm reaches
+less far and the annulus narrows at both edges.  Redundancy is what pays for it
+— the union loses 2.6 points, the ≥3-arm overlap loses two thirds.
+
+### The park set: re-searched, not patched
+
+`Q_PARK_PROPOSED` was flagged stale at its own definition and it was: run at
+the new pair, the OLD grid parks arms 13 and 17 **53.7 mm** apart and
+`certified_park_poses` refuses the fleet.  The old POSES are safe — every one
+still passes `check_pose`, the fleet still holds ≥ 250 mm — but they stand
+**69.0 mm inside** arm 17's certified ink, which is the number a phase is
+conducted on.
+
+The (radius, hover, bearing) search was re-run at the new tool: 6 radii × 4
+hovers × 24 bearings per arm, each gated by `certified_ready_pose` (430–431 of
+577 certify); then park-vs-ink ≥ 80 mm against the new atlas; then the fleet
+gate; then ranked on the depot's own job — of 24 of the arm's certified cells,
+how many it can fly to (`writing.enter_beats`) and home from (`exit_beats`).
+
+| | OLD literals at the new tool | **NEW, re-searched** |
+|---|---|---|
+| worst park-vs-ink | **−69.0 mm** | **+97.8 mm** |
+| worst fleet pair | ≥ 250 mm (cap) | ≥ 250 mm (cap) |
+| entries flyable | 97/137 (70.8 %) | **108/137 (78.8 %)** |
+| go-homes flyable | 94/137 (68.6 %) | **108/137 (78.8 %)** |
+| joint margins | 0.30–0.68 | **0.541–0.682** |
+| park pens inside the CSAIL logo box | arm 71 at (1.357, 1.556) | **none** |
+
+    PARK_GRID_PROPOSED = {2: (0.55, 0.10, -165.0), 13: (0.40, 0.10, -150.0),
+                          17: (0.48, 0.30,  -60.0), 31: (0.55, 0.10, -165.0),
+                          71: (0.55, 0.35,  -30.0), 97: (0.55, 0.20,   15.0)}
+
+**+97.8 mm is the layout's ceiling, not a lucky draw.**  22–42 candidates per
+arm clear the ink gate and every one of them lands on the same 97.8–98.9 mm
+plateau — a parked arm's own base column is pose-invariant, so no bearing buys
+past it.  That is the same plateau the 2026-08-26 search reported as "97–98 mm"
+at the old tool, which is what says the criterion was re-run and not
+re-invented.
+
+**Five of six bearings still point outward; arm 2's is tangential** (dot with
+its own outward ray −0.015, 90.9° off it).  Outwardness was always a means:
+what keeps the six apart is `fleet_park_clearance`, and it proves ≥ 250 mm.
+Held to the outward ray instead — the two-number grid entry — the same radii
+and hovers put arms 2 and 97 **111.0 mm inside each other** at the new tool,
+so the third number is not a refinement, it is the reason there is a park set.
+
+**A test that had been skipping for as long as the directory existed.**
+`test_no_shipped_park_pose_stands_in_another_arms_certified_ink` picked its
+atlas with `atlas.is_current`, which answers against the PROCESS-GLOBAL tool —
+and a bare `pytest` run is the INLINE pen, so every lateral atlas read as stale
+and the test skipped, while its body measured with `PEN_*_HOLDER`.  It now
+matches the atlas's recorded `pen_ext`/`pen_lat` to the tool it measures with
+and answers `is_current` with that tool active.  It RUNS now, and passes at
++97.8 mm; it would have failed at −69.0 mm on the old poses.
+
+### CSAIL v15 — the same picture, the same placement, the new tool
+
+Run as a **GUI job** (`out/gui_jobs/20260903-200349-d8ec`, watchable live on
+`http://127.0.0.1:8765/`), which is `scripts/draw.py` with v14's own flag set:
+same source `assets/csail/csail_old_med.gif`, same placement file
+`out/csail_place_v4_placement.json` (1.4309 × 1.8711 m at (0.8017, 1.81532),
+rotated 90°, offset [−0.1, 0]), `--arms all --two-pass --arm-phases off
+--residual-passes 6 --residual-min-gain 0.0005 --depot-hover-selective
+--freeze-refused-phase --skip-unconductable --tilt-max-deg 15 --image-jobs 6`,
+the RRT pen-up tier ON — and the NEW atlas.  Copied out to
+`out/csail_schedule_h094_v15.{npz,json}`, `out/csail_program_h094_v15.json`,
+`out/h094_v15.log`.
+
+**ONE DELIBERATE DIFFERENCE, NAMED.** v14 was `scripts/csail_schedule.py`,
+which traces with `trace.trace_logo`; the GUI front door traces with
+`trace.trace_any`.  Both give **39 strokes**; the generic tracer's path is
+8 011 px against 7 512, and after placement **16.8048 m** against v14's
+16.7370 m — 0.40 % more ink.  Everything after the tracer is the same call.
+
+| | v14 (0.110 tool) | **v15 (0.0588421 tool)** |
+|---|---|---|
+| coverage | **100.0000 %** (0.0000 m empty) | **99.5224 %** (0.0803 m empty) |
+| makespan | 196.271 s | **277.625 s** (+41.4 %) |
+| phases planned / conducted | 3 / 3 | **2 / 2** (+1 residual that certified 0 m) |
+| segments | 42 | **47** |
+| traced / drawn | 16.7370 / 16.7470 m | **16.8048 / 16.7625 m** |
+| pen recorded | 110.0 mm | **58.8 mm** |
+| min inter-arm, per phase | 82.4 / 82.4 mm | **85.6 / 82.0 mm** (gate 80) |
+| self-collision | 26.6 / 31.1 mm | **22.7 / 33.7 mm** (gate 20) |
+| frame | 54.5 / 54.7 mm | **53.5 / 53.2 mm** (gate 50) |
+| neighbour base column | 138.6 / 138.1 mm | **122.0 / 131.5 mm** (gate 80) |
+| paper, chain | 68.3 / 57.4 mm | **30.7 / 31.4 mm** (gate 20) |
+| paper, tip | −4.1 / −4.5 mm | **−5.0 / −7.3 mm** (floor −10) |
+| pen-swap pause | — | 256.0 mm, 6/6 poses pass |
+| scene_check | PASS | **PASS, both phases** |
+| planner wall clock | 4 170.9 s | **4 910.9 s** |
+
+**INDEPENDENT `scene_check`, re-run from the shipped `.npz`** over the whole
+merged 6 664-frame timeline (not per phase): **VERDICT PASS**, min inter-arm
+**80.26 mm** against the 80 mm gate, worst pair 13–31 at t = 99.09 s; self
+21.4 mm, frame 52.7 mm, column 115.0 mm, paper chain 30.7 mm, tip −7.4 mm,
+frozen poses 6/6.  The whole-run number is 1.7 mm tighter than the tightest
+phase because it spans the pen-swap seam that no per-phase check covers, and
+it clears by **0.26 mm**.  That is the thinnest margin in this programme and
+it is where a re-run should be watched.
+
+**WHERE THE TIME GOES** — the GUI's own substage log, 4 791.5 s of measured
+substage time inside a 4 910.9 s run:
+
+| substage | v15 total | share | v14 |
+|---|---:|---:|---:|
+| balance | 3 136.8 s | 65.5 % | 2 636.8 s |
+| conduct | 710.5 s | 14.8 % | 239.4 s |
+| replan | 465.7 s | 9.7 % | 806.4 s |
+| probe | 272.0 s | 5.7 % | 180.2 s |
+| flycheck | 109.6 s | 2.3 % | *(inside v14's balance)* |
+| merge | 39.1 s | 0.8 % | *(inside v14's balance)* |
+| sequence | 25.4 s | 0.5 % | 13.0 s |
+| guarantee | 23.1 s | 0.5 % | *(inside v14's balance)* |
+| repair | 8.7 s | 0.2 % | 0.0 s |
+| prefilter | 0.4 s | 0.0 % | 0.4 s |
+
+Per phase: allocation 1 735.4 s (grey) + 2 262.7 s (orange) + 5.8 s
+(residual) = 4 081.0 s; conduction 477.0 + 233.6 = 710.5 s; `scene_check`
+50.0 + 49.7 = 99.7 s.  **The balancer is two thirds of the run and it always
+was** — v14 spent 63 % there under a name that also contained flycheck, merge
+and guarantee.  That is the baseline to iterate against.
+
+**THE 80.3 mm THAT WAS LEFT EMPTY IS REACH, and it is one span.**
+`dropped` names it exactly: stroke 36, orange, the fill boundary's
+`s_range` 0.5001–0.6249, 0.0803 m at **(0.0866, 1.2350)** — the logo's own
+LEFT EDGE.  Its two cells (0.08, 1.18) and (0.08, 1.24) each had a certified
+drawing pose for **arms 13 and 31** in the old atlas and have **none at all**
+in the new one; the v13 map calls both `NO_DRAW`.  It is not a park refusal,
+not a neighbour, not self-collision and not a route: 16 probes over 6 (stroke,
+arm) pairs, 4 prefiltered, and no arm can put the tip there.  Those cells sit
+0.77–0.81 m from the nearest base, in the outer rim the shorter tool took away.
+
+**WHAT WOULD RECOVER IT WITHOUT MOVING A CONSTANT: the placement.**  At the
+rows that matter the leftmost live column is now **x = 0.10 m** and the logo's
+left edge is at **x = 0.0866 m** — 14 mm.  A placement re-search against the
+new atlas (`--placement auto`, which is what chose `csail_place_v4` against the
+old one) is the principled fix; the placement file's own `live: 1.0` is no
+longer true at this tool.  1.50 % of the logo's bounding box is dead in v13
+against 0.48 % in v12, so a slightly smaller or slightly right-shifted
+placement is the whole of the difference between 99.52 % and 100 %.
+
+### The feasible-workspace map, v13
+
+`scripts/feasible_workspace.py` at v12's settings (`--fiber-tries 48
+--hover-lean-deg 15 --rrt 60 --rrt-nodes 300 --rescue 0,1`), 8 workers, on
+`out/atlas_proposed_h0940_lat0588_gated63`; sweep 4 573 s + rescue 644 s.
+`out/feasible_workspace_v13.{png,json}`, log `out/feasible_workspace_v13.log`.
+
+| solo-drawable, 16 562 cells | v12 (0.110) | **v13 (0.0588421)** |
+|---|---|---|
+| FEASIBLE | **99.46 %** (6.589 m²) | **96.84 %** (6.416 m²) |
+| draw pose only | 99.64 % | 97.05 % |
+| + hover | 99.64 % | 97.05 % |
+| + reachability | 99.46 % | 96.84 % |
+| DEAD, no draw pose | 0.36 % | **2.95 %** |
+| DEAD, draw ok no hover | 0.00 % | 0.00 % |
+| DEAD, hover ok unreachable | 0.18 % | 0.21 % |
+| largest inscribed rectangle | 0.52 × 3.54 m = 1.841 m² | 0.46 × 3.64 m = **1.674 m²** |
+
+**THE LOSS IS REACH, NOT ROUTING.**  Route-dead barely moves (0.18 → 0.21 %,
+30 → 34 cells) and hover-dead is still zero; "no draw pose" goes 59 → 489
+cells.  The rescue ladder confirms it: rung 0 turned 150 arm-cells (dead
+673 → 523) and rung 1 turned **none**, so what is left is not something a
+better pen-up plan reaches.
+
+**WHERE THE DEAD ZONES MOVED.**  89 → 523 cells; 464 newly dead, 30 revived.
+v12's dead set was almost entirely the six under-base holes (74 of 89).  v13's
+is **two** sets: 263 cells still under the base discs (r ≤ 0.30 m), and **242
+cells out at 0.60–0.85 m from the nearest base** — a new OUTER RIM that did
+not exist at the longer tool, distributed evenly over all three thirds of the
+sheet (163 / 145 / 156 newly dead).  Both edges of every annulus moved inward:
+the tool is 72 mm shorter along the approach axis and 51 mm shorter across it,
+so the wrist has to come to the paper for the inner cells and cannot get out
+to the far ones.
+
+### Loose ends this run leaves behind
+
+**`docs/SYSTEM_MODEL.md`'s park-pose clearance table is measured at the OLD
+six poses** (403.2 / 264.0 mm arm-to-arm, 196.5 mm arm-to-paper).  The poses
+moved here; the fleet's nearest pair is still at the broad-phase cap (≥ 250 mm)
+and the closest tip-to-paper is now the **0.10 m** hover three arms take,
+against the old set's 0.1965 m.  Re-measuring that table needs the URDF
+pipeline and is not done here.
+
+**`np.cross` on 2-vectors** — `tests/test_draw.py`'s SVG failure — was NumPy
+2.0 removing the 2-D overload, not anything in this repo.  `trace._cross2`
+writes the one line of arithmetic out; `test_draw` is 6 green.
+
+**The two FK bit-identity failures in `tests/test_planner_robustness.py` are
+the environment and they stay.**  `_franka_ik`'s C++ batch and `frames.fk`'s
+NumPy chain differ by **max |ΔT| = 3.331e-16 and max |ΔP| = 2.220e-16** — one
+to two ULP — on all 200 sampled configurations, under NumPy 2.5.2.  The
+assertions are `np.array_equal`, deliberately, and loosening a bit-identity
+gate is not an environment fix; the deviation is 13 orders of magnitude under
+the 2 cm threshold the lattice gates on and 4 under the 1e-12 the URDF checks
+hold.  Recorded, not patched.
+
 ## THE CEILING DATUM IS A PROVENANCE BUG (2026-09-01) — and the model says so
 
 `assets/system_model/` is the installation as it will be built; the numbers and

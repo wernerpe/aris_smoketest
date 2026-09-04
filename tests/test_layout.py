@@ -421,6 +421,15 @@ def test_no_shipped_park_pose_stands_in_another_arms_certified_ink():
 
     Skipped without an atlas: `out/` is gitignored, so this is a check the
     rig's own re-certification runs, not something a clean checkout can do.
+
+    AND THE ATLAS HAS TO BE THE ONE THIS TOOL SWEPT (2026-09-03).  The
+    selection used to ask `atlas.is_current`, which is answered against the
+    PROCESS-GLOBAL tool — and a bare test run is the INLINE pen, so every
+    lateral atlas in `out/` read as stale and this test SKIPPED for as long as
+    the directory has existed, while its body measured with the holder's own
+    `EXT`/`LAT`.  It now asks for the tool the atlas records and answers
+    `is_current` with that tool active, so the check either runs against an
+    atlas swept at the geometry it is measuring or says why it did not.
     """
     from pathlib import Path
     from aris_sixarm import atlas as atlas_mod, coordination
@@ -428,18 +437,28 @@ def test_no_shipped_park_pose_stands_in_another_arms_certified_ink():
     h = float(layout.LAYOUT_PROPOSED["h"])
     out = Path(__file__).resolve().parents[1] / "out"
     d = None
-    for cand in sorted(out.glob("atlas_proposed*")):
-        f = cand / "atlas_arm31.npz"
-        if not f.is_file():
-            continue
-        meta = np.load(f)
-        if atlas_mod.is_current(meta)[0] \
-                and abs(float(meta["base"][2, 3]) - h) <= 1e-9:
-            d = cand
-            break
+    was = frames.ACTIVE_TOOL
+    frames.activate_tool("lateral")
+    try:
+        for cand in sorted(out.glob("atlas_proposed*")):
+            f = cand / "atlas_arm31.npz"
+            if not f.is_file():
+                continue
+            meta = np.load(f)
+            if abs(float(meta["pen_ext"]) - EXT) > 1e-9 \
+                    or abs(float(meta["pen_lat"]) - LAT) > 1e-9:
+                continue
+            if atlas_mod.is_current(meta)[0] \
+                    and abs(float(meta["base"][2, 3]) - h) <= 1e-9:
+                d = cand
+                break
+    finally:
+        frames.activate_tool(was)
     if d is None:
-        pytest.skip(f"no current proposed atlas at h = {h:.3f} in out/ — "
-                    "run scripts/run_atlas6.py --rig proposed")
+        pytest.skip(f"no current proposed atlas at h = {h:.3f} and the "
+                    f"holder's tool ({EXT}, {LAT}) in out/ — run "
+                    "scripts/run_atlas6.py --rig proposed --pen "
+                    f"{EXT} --pen-lat {LAT}")
     margin = coordination.SAFETY_M + coordination.CALIB_M
 
     def chain(Q, spec):
@@ -491,29 +510,28 @@ def test_baked_park_poses_are_that_functions_own_output():
     the IK seed, and a fleet already carrying one would be seeded by its own
     answer.
 
-    WHAT THIS DOES NOT RE-RUN is the (radius, hover) SEARCH behind the grid —
-    6 radii x 3 hovers x 24 cells x two directions of `paper.route` per arm is
-    a quarter of an hour, and it needs an atlas out of gitignored `out/`.  The
+    WHAT THIS DOES NOT RE-RUN is the (radius, hover, bearing) SEARCH behind
+    the grid — 6 radii x 4 hovers x 24 bearings, each gated, then ranked on
+    park-vs-ink and on 24 cells x two directions of `paper.route` per arm — a
+    quarter of an hour that needs an atlas out of gitignored `out/`.  The
     grid's scores are recorded where it is defined; what is pinned here is
     that the six poses are what that grid produces.
 
-    AND IT IS RE-RUN AT THE TOOL THEY WERE MADE WITH, WHICH IS NO LONGER THE
-    HOLDER'S.  `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` moved from 0.110 / 0.110 to
-    0.0588421 / 0.0588421 on 2026-09-03 (frames.py, docs/SYSTEM_MODEL.md 7e),
-    so `Q_PARK_PROPOSED` is a STALE certificate: run at the new pair the same
-    grid parks arms 13 and 17 53.7 mm apart, under the conductor's 80 mm, and
-    the fix is a fresh (radius, hover, bearing) SEARCH — the quarter-hour
-    atlas job above — not a different assertion here.  Re-deriving it is a
-    re-certification with its own gate and it is queued, not done.  The baked
-    poses are still SAFE at the new tool (every one passes `check_pose`, the
-    fleet holds 250 mm, and the shorter pen only lifts each tip ~70 mm); they
-    are simply no longer that function's output.
+    AND IT IS RE-RUN AT THE HOLDER'S OWN TOOL AGAIN, which is where it
+    started.  `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` moved from 0.110 / 0.110 to
+    0.0588421 / 0.0588421 on 2026-09-03 (frames.py, docs/SYSTEM_MODEL.md 7e)
+    and the poses were STALE for one afternoon: run at the new pair the OLD
+    grid parked arms 13 and 17 53.7 mm apart and `certified_park_poses`
+    refused the fleet.  The grid was re-searched at the new pair the same day
+    and both the grid and the six literals it makes moved (see `layout`'s own
+    note), so this re-derives at `PEN_*_HOLDER` — the module constants — and
+    no longer at a frozen 0.110.
     """
     bare = layout.build_fleet(layout.LAYOUT_PROPOSED)
     assert all(np.array_equal(s.q_seed, frames.Q_READY_INV)
                for s in bare.values()), "derive from the LEGACY seed"
     made = layout.certified_park_poses(bare, layout.PARK_GRID_PROPOSED,
-                                       pen_lat=0.110, pen_ext=0.110)
+                                       pen_lat=LAT, pen_ext=EXT)
     assert sorted(made) == sorted(layout.Q_PARK_PROPOSED)
     for aid, q in made.items():
         assert np.allclose(q, layout.Q_PARK_PROPOSED[aid], atol=5e-5), aid
@@ -527,9 +545,9 @@ def test_baked_park_poses_are_that_functions_own_output():
     for aid, q in layout.Q_PARK_PROPOSED.items():
         r, hv, bdeg = layout.PARK_GRID_PROPOSED[aid]
         T = frames.fk(np.asarray(q, float))[0]
-        # the OLD 0.110 / 0.110 pair, because these hovers were recorded
-        # with it — see this test's own docstring on the stale certificate
-        tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(0.110, 0.110)
+        # the HOLDER's own pair, which is what the 2026-09-03 re-search used
+        # and what `PARK_HOVER_PROPOSED` was recorded with
+        tip = T[:3, 3] + T[:3, :3] @ frames.tool_offset(EXT, LAT)
         Twb = layout.FLEET_PROPOSED[aid].T_world_base()
         w = Twb[:3, :3] @ tip + Twb[:3, 3]
         assert np.allclose(w[:2], layout.PARK_HOVER_PROPOSED[aid], atol=1e-3)
@@ -540,17 +558,33 @@ def test_baked_park_poses_are_that_functions_own_output():
         # is why this is a bound and not an equality)
         assert float(np.dot(w[:2] - b, u)) > 0.5 * r, aid
         assert float(np.linalg.norm(w[:2] - b)) <= r + 1e-4, aid
-        # ...and STILL outward: every shipped bearing points away from the
-        # fleet centroid, which is the property that keeps the six apart
+        # ...and NOT INWARD.  Outwardness was the 2026-08-26 rule and it was
+        # always a means: what keeps the six apart is `fleet_park_clearance`,
+        # asserted directly above.  At the holder's own tool the ink-ranked
+        # search takes five bearings that still point outward and one — arm
+        # 2's, at -165 deg — that is TANGENTIAL, 90.9 deg off its own outward
+        # ray (dot -0.015).  So the bar is "not inward", with the one
+        # tangential case named rather than rounded away.
         out = (b - cent) / np.linalg.norm(b - cent)
-        assert float(np.dot(u, out)) > 0.0, aid
-    # a two-number grid entry is still the old outward recipe, unchanged
-    two = layout.certified_park_poses(
-        bare, {a: v[:2] for a, v in layout.PARK_GRID_PROPOSED.items()},
-        pen_lat=0.110, pen_ext=0.110)
-    assert sorted(two) == sorted(made)
-    assert any(not np.allclose(two[a], made[a], atol=1e-6) for a in made), \
-        "the bearing must actually be doing something"
+        assert float(np.dot(u, out)) > -0.05, aid
+    assert sum(float(np.dot(
+        np.array([np.cos(np.deg2rad(layout.PARK_GRID_PROPOSED[a][2])),
+                  np.sin(np.deg2rad(layout.PARK_GRID_PROPOSED[a][2]))]),
+        (np.asarray(bare[a].xy, float) - cent)
+        / np.linalg.norm(np.asarray(bare[a].xy, float) - cent))) > 0.4
+        for a in layout.Q_PARK_PROPOSED) == 5, \
+        "five of the six still stand off along their own outward ray"
+    # A TWO-NUMBER GRID ENTRY IS STILL THE OLD OUTWARD RECIPE, and at the
+    # holder's own tool that recipe REFUSES this fleet.  Held to the outward
+    # ray at the searched radii and hovers, arms 2 and 97 come out 111.0 mm
+    # INSIDE each other — so the third number is not a refinement of the
+    # bearing, it is the reason there is a park set at all.  (Before
+    # 2026-09-03 the same call certified a fleet that merely differed from
+    # `made`; the shorter pen turned the difference into a refusal.)
+    with pytest.raises(RuntimeError, match="park .* mm apart"):
+        layout.certified_park_poses(
+            bare, {a: v[:2] for a, v in layout.PARK_GRID_PROPOSED.items()},
+            pen_lat=LAT, pen_ext=EXT)
 
 
 # ===========================================================================

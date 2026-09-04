@@ -1031,10 +1031,12 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 #
 # 92 % of entries flyable against the ladder's 62 %.  The two arms it rescues
 # are the two the first CSAIL run could not get home: every execution profile
-# refused at "go-home at segment N cannot clear the paper plane".  The shipped
-# grid sits in the same radius band (0.55-0.62) and the same hover band
-# (0.20-0.30) as those winners, which is not a coincidence — it is why the
-# conditioning tie-break was worth applying.
+# refused at "go-home at segment N cannot clear the paper plane".  THAT DAY's
+# shipped grid sat in the same radius band (0.55-0.62) and the same hover band
+# (0.20-0.30) as those winners, which was not a coincidence — it is why the
+# conditioning tie-break was worth applying.  The 2026-09-03 re-search at the
+# holder's own tool ranks on this same criterion and lands lower in both bands
+# (0.40-0.55 m, 0.10-0.35 m), which is what a 72 mm shorter pen does.
 #
 # ...AND A DEPOT MUST ALSO NOT STAND ON SOMEBODY ELSE'S INK (2026-08-26).  A
 # park pose is held for the whole of every phase its arm is not drawing in, so
@@ -1042,12 +1044,57 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 # transverse pairs are 0.61 m apart that is the tighter of the two
 # constraints.  On the flat-column model the fleet's worst was 20 mm (arm 97
 # lying across the north half with arm 2's ink under it) and then 72 mm after
-# the height went up; the whole fleet refused to conduct on it.  It is 97.3 mm
-# now, and `allocate.ParkProbe` prunes against these poses at allocation time
-# so a span inside one of them never reaches the conductor at all.
-PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
-                      17: (0.62, 0.20, -45.9), 31: (0.62, 0.30, 150.0),
-                      71: (0.30, 0.20, -60.0), 97: (0.62, 0.20, 45.9)}
+# the height went up; the whole fleet refused to conduct on it.  It was 97.3 mm
+# after that search and it is **97.8 mm** at the tool of 2026-09-03 (below),
+# and `allocate.ParkProbe` prunes against these poses at allocation time so a
+# span inside one of them never reaches the conductor at all.
+PARK_GRID_PROPOSED = {2: (0.55, 0.10, -165.0), 13: (0.40, 0.10, -150.0),
+                      17: (0.48, 0.30, -60.0), 31: (0.55, 0.10, -165.0),
+                      71: (0.55, 0.35, -30.0), 97: (0.55, 0.20, 15.0)}
+# RE-SEARCHED 2026-09-03 AT THE HOLDER'S OWN TOOL, and the grid above is that
+# search's output.  `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` went 0.110 / 0.110 ->
+# 0.0588421 / 0.0588421 (frames.py, docs/SYSTEM_MODEL.md 7e), which moves the
+# WRIST 72 mm down and 51 mm in for the same tip, and the old grid does not
+# survive it: re-run at the new pair it parks arms 13 and 17 **53.7 mm** apart
+# and `certified_park_poses` REFUSES the fleet.  What was re-searched, at the
+# new tool, against the new atlas (`out/atlas_proposed_h0940_lat0588`):
+#
+#   candidates   6 radii (0.30 .. 0.70) x 4 hovers (0.10 .. 0.35) x 24
+#                bearings (15 deg grid), per arm, each one gated by
+#                `certified_ready_pose` — 430-431 of 577 certify per arm
+#   gate 1       park-vs-INK: the parked chain against every OTHER arm's
+#                certified drawing poses, the conductor's own capsules and
+#                80 mm.  This is the number the 2026-08-26 search was won on
+#                and it is the binding one: 22-42 candidates per arm clear it
+#                and they all sit on the same 97.8-98.9 mm plateau, which is
+#                the layout's own ceiling (a parked arm's base column is
+#                pose-invariant, so no bearing can buy past it)
+#   gate 2       the FLEET gate `certified_park_poses` applies itself
+#   rank         the depot's job: of 24 of the arm's own certified cells, how
+#                many it can fly to (`writing.enter_beats`) and home from
+#                (`exit_beats`) — on the deterministic route ladder, with the
+#                C-space tier off, because 2.5 s per refusal costs hours and
+#                does not change the order
+#
+# WHAT IT BOUGHT, against the OLD literals measured at the NEW tool:
+#
+#   park-vs-ink, worst arm      -69.0 mm  ->  **+97.8 mm**
+#   entries flyable             97/137 (70.8 %)  ->  108/137 (78.8 %)
+#   go-homes flyable            94/137 (68.6 %)  ->  108/137 (78.8 %)
+#   worst fleet pair            >= 250 mm  ->  >= 250 mm  (the broad-phase cap)
+#
+# FIVE OF THE SIX BEARINGS STILL POINT OUTWARD and arm 2's is TANGENTIAL
+# (dot with its own outward ray -0.015, i.e. 90.9 deg off it), not inward.
+# Outwardness was always a means and never the gate — what keeps the six apart
+# is proved directly by `fleet_park_clearance`, and it proves 250 mm.  Arm 2's
+# outward alternatives are on the same ink plateau and cost 2 entries and 5
+# go-homes, which is the whole of the difference.
+#
+# ARMS 2 AND 31 HOLD THE SAME SEVEN JOINT VALUES.  They are the same mount on
+# the same column of the grid at the same (radius, hover, bearing), so their
+# base frames differ by a pure translation in canvas y and the IK search has
+# the same problem twice.  Their pens hover 1.21 m apart.
+#
 # ARM 71 MOVED, AND THE REASON IS A GATE THAT DID NOT EXIST (2026-08-26).
 # It used to park at (0.30, 0.55, -60.0): a 0.30 m radius and a 0.55 m hover,
 # the shortest reach and the highest lift in the fleet, which is a posture that
@@ -1092,36 +1139,39 @@ PARK_GRID_PROPOSED = {2: (0.55, 0.35, 134.1), 13: (0.62, 0.20, -134.1),
 # SEEDS, NOT MEASUREMENTS, like every other pose in this repo that no arm has
 # yet held: re-derive by Desk fine-adjust once the ceiling grid exists.
 #
-# STALE SINCE 2026-09-03, AND SAID OUT LOUD.  These six were certified for the
-# tool of the day — `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` both 0.110 m.  The
-# photo of the real gripper moved both to 0.0588421 (frames.py,
-# docs/SYSTEM_MODEL.md 7e), and re-running `certified_park_poses` on the SAME
-# grid at the new pair parks arms 13 and 17 **53.7 mm** apart, under the
-# conductor's 80 mm.  The fix is a fresh (radius, hover, bearing) SEARCH —
-# 6 radii x 3 hovers x 24 cells x two directions of `paper.route` per arm,
-# against an atlas out of gitignored `out/` — which is a re-certification with
-# its own gate and is QUEUED, not done.  What is true meanwhile: the six poses
-# as they stand still pass `validate.check_pose` at the new tool, the fleet
-# holds 250 mm between its nearest pair, and the shorter pen only lifts each
-# tip about 70 mm — so they are safe, they are simply no longer that
-# function's own output, and `PARK_HOVER_PROPOSED` below is the OLD tool's
-# hover.  `tests/test_layout.py` re-derives them at 0.110 / 0.110 and says so.
+# RE-DERIVED AGAIN 2026-09-03 AT THE HOLDER'S OWN TOOL — the pair the photo
+# settled, `PEN_LAT_HOLDER` = `PEN_EXT_HOLDER` = 0.0588421 m — from the
+# re-searched grid above and against `out/atlas_proposed_h0940_lat0588`.  ALL
+# SIX MOVED.  The literals this replaces were certified at 0.110 / 0.110; run
+# at the new pair the OLD grid parks arms 13 and 17 53.7 mm apart and the
+# function refuses the fleet, and the old POSES, while they still pass
+# `validate.check_pose` and still hold 250 mm between the nearest pair, stand
+# 69.0 mm INSIDE arm 17's certified ink.  Every one of these six passes
+# `check_pose` (joint margins 0.541-0.682), the fleet's nearest pair is at the
+# broad-phase cap (>= 250 mm), and the worst park-vs-ink is +97.8 mm against
+# the conductor's 80 mm.  They hover 0.10-0.35 m over the paper — lower than
+# the 0.110 tool's set, because the shorter pen holds the wrist lower for the
+# same tip and the ink gate no longer has to be bought with height.
+#
+# AND ALL SIX PENS NOW HOVER OUTSIDE THE CSAIL PLACEMENT'S BOUNDING BOX
+# (x 0.086..1.517, y 0.878..2.752 for the v14/v15 logo), which the old set did
+# not: arm 71 parked at (1.357, 1.556), inside it.
 Q_PARK_PROPOSED = {
-    2:  (-0.1933, 1.2642, 1.2767, -2.0492, 1.7237, 1.1764, -1.7795),
-    13: (0.6776, 1.0744, -1.5633, -2.1141, -2.0017, 1.3162, 0.5932),
-    17: (-0.6777, -1.0400, -1.5916, -2.1168, 2.0272, 1.2889, 0.9886),
-    31: (-0.5776, 1.1469, 1.2019, -1.7054, 1.9749, 1.1800, 2.1750),
-    71: (-0.7626, -0.6861, -1.2354, -2.6357, 2.3209, 0.9573, -2.5704),
-    97: (0.6776, -1.0744, 1.5783, -2.1141, -2.0017, 1.3162, 0.5932),
+    2:  (0.8318, 1.1573, -1.8033, -1.7148, -2.0186, 1.7226, -2.1750),
+    13: (0.9677, 1.2431, -2.0394, -2.2081, -2.1167, 1.7235, -1.7795),
+    17: (-0.5975, -1.2007, -1.5594, -2.3880, 1.8381, 1.3115, 1.3841),
+    31: (0.8318, 1.1573, -1.8033, -1.7148, -2.0186, 1.7226, -2.1750),
+    71: (-0.6298, -1.0448, -1.8249, -2.1659, 1.9084, 1.0911, -1.3841),
+    97: (0.8788, -1.1021, 1.5476, -1.8659, -2.0275, 1.4590, -2.1750),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
-    13: (0.165, 0.160), 17: (1.638, 0.160),     # hover 0.20 m
-    97: (1.638, 3.471),                         # hover 0.20 m
-    31: (0.060, 2.125),                         # hover 0.30 m
-    2:  (0.214, 3.421),                         # hover 0.35 m
-    71: (1.357, 1.556),                         # hover 0.20 m (was 0.55:
-    #                                             see PARK_GRID_PROPOSED)
+    13: (0.250, 0.405),                         # hover 0.10 m
+    17: (1.447, 0.189),                         # hover 0.30 m
+    97: (1.738, 3.168),                         # hover 0.20 m
+    31: (0.065, 1.673),                         # hover 0.10 m
+    2:  (0.065, 2.883),                         # hover 0.10 m
+    71: (1.683, 1.540),                         # hover 0.35 m
 }
 
 
