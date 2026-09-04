@@ -177,6 +177,122 @@ longer true at this tool.  1.50 % of the logo's bounding box is dead in v13
 against 0.48 % in v12, so a slightly smaller or slightly right-shifted
 placement is the whole of the difference between 99.52 % and 100 %.
 
+### CSAIL v16 — the placement WAS re-searched, and it made the picture worse
+
+v15's entry named the lever: *"a placement re-search against the new atlas
+(`--placement auto`) is the principled fix."*  It was run, at v15's own flag set
+with nothing else changed, as GUI job **`20260903-215636-b6f9`**.  Copied out to
+`out/csail_schedule_h094_v16.{npz,json}`, `out/csail_program_h094_v16.json`,
+`out/csail_place_v16_placement.json`, `out/h094_v16.log`.
+
+**IT DID NOT RECOVER 100 %.  IT LOST 0.65 pp.**
+
+| | **v15** (placement file) | **v16** (`--placement auto`) |
+|---|---|---|
+| placement | 90°, 0.85, offset (−0.10, **0.00**) | 90°, 0.85, offset (−0.10, **+0.10**) |
+| centre | (0.8017, 1.81532) | **(0.8017, 1.91532)** |
+| size | 1.4309 × 1.8711 m | **same** |
+| coverage, allocated | **99.5224 %** | **98.8729 %** |
+| coverage, conducted | 99.7485 % | **97.9754 %** |
+| left empty | 0.0803 m in 1 span | **0.1894 m in 1 span** |
+| skipped at conduction | 0.0000 m | **0.1947 m** |
+| segments | 47 | 48 allocated / 47 conducted |
+| makespan | 277.625 s | **249.875 s** (−10.0 %) |
+| conducted pause | — | 56.667 s |
+| phases planned / conducted | 2 / 2 | **3 / 7** |
+| min inter-arm, worst phase | 82.0 mm | **81.2 mm** (gate 80) |
+| neighbour base column | 122.0 mm | 131.0 mm (gate 80) |
+| paper, chain | 30.7 mm | **22.6 mm** (gate 20) |
+| paper, tip | −7.3 mm | −4.9 mm (floor −10) |
+| planner wall clock | 4 910.9 s | **29 352.9 s** |
+
+**INDEPENDENT `scene_check`, whole merged 6 241-frame timeline**, re-run from
+the shipped `.npz`: **VERDICT PASS**, min inter-arm **80.25 mm** against the
+80 mm gate — **+0.25 mm** — worst pair **17–71 at t = 35.68 s**; self 27.5 mm,
+frame 53.0 mm, column 130.9 mm, paper chain 23.0 mm, tip −4.9 mm, joint margin
+0.1051, frozen poses 6/6.  v15's whole-timeline number was 80.26 mm on pair
+13–31.  **Both runs clear the gate by a quarter of a millimetre on a different
+pair — the margin is a property of this rig at this tool, not of either
+placement.**
+
+**WHERE THE 0.1894 m WENT, AND IT IS A DIFFERENT FAILURE FROM v15's.**
+`dropped` names it: stroke 1, orange, an **outline drawn as a whole stroke**
+(`s_range` 0.0–1.0), 0.18941 m at **(0.7012, 1.8020)**, running from
+(0.71646, 1.80259) to (0.52705, 1.80205).  That is not the canvas edge — it is
+**straight through arm 31's own base**.  Cell (0.60, 1.80) sits **0.016 m** from
+arm 31's base at (0.5967, 1.8153) and has a certified drawing pose for **no arm
+at all**; its neighbours (0.72, 1.80), (0.70, 1.80) and (0.52, 1.80) are
+certified for 31 and 71.  The by-third accounting puts all 0.19 m in the
+**middle** third.  Residual pass 2 spent 16 probes over 6 (stroke, arm) pairs,
+4 prefiltered, and gap repair offered **12 windows** and got **0** certified
+spans back.
+
+**SO v15 LOST INK TO THE OUTER RIM AND v16 LOSES IT TO AN UNDER-BASE HOLE** —
+the two dead sets the height table below shows trading against each other, met
+one after the other by the same logo shifted 10 cm.
+
+**AND THE CONDUCTOR PAID FOR THE SHIFT TWICE.**  Moving the logo 0.10 m toward
+the middle row put phase 1 beyond the idle policy: grey was refused with 5 arms
+drawing, re-offered as `{13,31,2}` + `{17,71,97}`, refused again at 2 arms, and
+arm 2's tour was cut in half twice more — **7 conducted phases against v15's
+2**, and 0.1947 m of allocated ink skipped outright.  The conductor says why in
+its own words: *"this is a FROZEN POSE problem: arm 31 cannot stop clear of 2
+(38 mm); arm 71 cannot stop clear of 17 (62 mm); arm 97 cannot stop clear of 2
+(76 mm)"*.  The 10 % faster makespan is not a win — it is 0.34 m of ink that is
+not being drawn.
+
+**WHY THE SEARCH CHOSE IT, AND THE HONEST GAP.**  The rule is the standing one,
+*largest AREA within 1 pp of the best real coverage*.  The three best cells were
+within **0.16 pp** of each other — 0.75× at 95.418 %, 0.80× at 95.334 %, 0.85×
+at 95.257 % — so the area rule took the largest, spending 0.16 pp of search
+coverage to buy 0.6 m² of drawing.  **It cost 0.65 pp of real coverage.**  And
+`--top 3` means only three offsets per (rotation × scale) cell are allocated for
+real: the proxy ranked (−0.10, +0.10), (+0.10, −0.20) and (+0.10, +0.20) above
+**v15's own (−0.10, 0.00), which was therefore never allocated for real in this
+search at all.**  The incumbent was not beaten; it was never entered.
+
+**THE NEXT CONSTANT-FREE LEVERS, IN ORDER OF CHEAPNESS.**  All three are FLAGS:
+1. **Keep v15's placement.**  It is the best number anyone has at this tool and
+   v16 is the evidence that the search at these settings does not improve on it.
+2. **`--slack 0`** — stop the area rule spending coverage.  On this very search
+   that picks 0.75× at 95.418 % instead, a 1.816 m² drawing rather than 2.677.
+3. **`--top` raised, or the incumbent seeded** — allocate v15's cell for real
+   alongside the proxy's favourites so a re-search can never regress.
+A fourth, not free: the search's objective cannot see the conductor at all, and
+v16 is the first run where the difference between allocating and conducting
+decided which placement was better.
+
+**WHAT `--placement auto` COSTS AT THIS FLAG SET — the measurement to iterate
+against.**  826 proxy placements, **78 allocated for real, 27 243.3 s**: the
+search alone is **5.5×** v15's entire run, and the job's 29 352.9 s is **6.0×**.
+Per candidate ≈ 1 990 worker-seconds on 6 jobs.  Where it goes, over the whole
+job's 156 525 s of measured substage time:
+
+| substage | v16 total | share |
+|---|---:|---:|
+| flycheck | 90 368.3 s | 57.7 % |
+| merge | 34 165.9 s | 21.8 % |
+| replan | 23 252.9 s | 14.9 % |
+| probe | 4 893.7 s | 3.1 % |
+| sequence | 1 321.2 s | 0.8 % |
+| guarantee | 1 259.4 s | 0.8 % |
+| repair | 631.4 s | 0.4 % |
+| balance | 466.9 s | 0.3 % |
+| conduct | 148.1 s | 0.1 % |
+| prefilter | 17.8 s | 0.0 % |
+
+By stage: **placement 27 243.3 s**, allocation 1 811.2 s, conduction 294.0 s,
+`scene_check` 70.2 s over 7 phases, export 3.0 s, trace 0.2 s.  **`balance` is
+0.3 % here against 65.5 % in v15** — `scripts/draw.py` passes `balance=False,
+split=False` to the search, so the 78 candidates pay `flycheck` and `merge`
+instead, and those two are 80 % of the bill.  `docs/ANY_PICTURE.md`'s premise —
+*"that is the difference between a 48-placement search in 6 minutes and one in
+8 hours"* — was measured before `--residual-passes` and the RRT pen-up tier
+existed, and it no longer holds: **the search now inherits the run's whole flag
+set and pays it 78 times.**  The obvious speed lever, and it is the rig owner's
+call, is to search under a cheap flag set and spend the full one only on the
+winner.
+
 ### The feasible-workspace map, v13
 
 `scripts/feasible_workspace.py` at v12's settings (`--fiber-tries 48
