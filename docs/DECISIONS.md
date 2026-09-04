@@ -562,6 +562,82 @@ opposite ways and only a full map settles it.  **Quote the union column as the
 h comparison and the pilot column as the direction of the correction; do not
 add them.**
 
+### The logo re-planned end to end at 0.880 and 0.850
+
+The park search says all three heights have a conductable depot set.  That is
+the constraint that blocked 2026-08-26, not a guarantee the allocator and the
+conductor then succeed — so the whole pipeline was run at each, and this is the
+part the 2026-08-26 package did that the park stage alone cannot.
+
+`scripts/replan_at_height.py`, new and report-only, driving `scripts/draw.py`
+**directly**: the GUI form cannot express a height or a park override, so these
+are not GUI jobs.  Same picture, same flag set as v15/v16, **v16's placement
+held fixed** (`out/csail_place_v16_placement.json`, no search), the per-height
+atlas, and the park grid **searched at that height**.  `layout.LAYOUT_PROPOSED`
+and `layout.PARK_GRID_PROPOSED` are untouched; the height rides on the fleet
+object and the script proves that before it plans (see its docstring).
+`out/csail_schedule_h088_v17.*`, `out/csail_schedule_h085_v17.*`,
+`out/h08{8,5}_v17.log`.
+
+| on v16's placement, holder tool | **0.850** | **0.880** | **0.940** (v16) |
+|---|---|---|---|
+| coverage, allocated | 98.1080 % | **98.8730 %** | 98.8729 % |
+| coverage, **conducted** | 95.6783 % | **99.1194 %** | 97.9754 % |
+| left empty at allocation | 0.3179 m, 2 spans | 0.1894 m, 1 span | 0.1894 m, 1 span |
+| **skipped at conduction** | 0.4323 m | **0.0000 m** | 0.1947 m |
+| segments | 47 | 47 | 48 / 47 |
+| makespan | 320.167 s | 420.750 s | **249.875 s** |
+| conducted pause | 120.3 s | 57.7 s | 56.7 s |
+| phases planned / conducted | 4 / 6 | 4 / 8 | 3 / 7 |
+| min inter-arm, worst phase | 80.8 mm | **85.2 mm** | 81.2 mm |
+| neighbour base column | 120.1 mm | 123.2 mm | 131.0 mm |
+| paper, chain | 22.4 mm | **32.8 mm** | 22.6 mm |
+| paper, tip | −5.9 mm | −6.4 mm | −4.9 mm |
+| planner wall clock | 2 408.7 s | 1 750.0 s | 2 105.2 s |
+
+**INDEPENDENT `scene_check`, whole merged timeline, each against a fleet built
+at its own height:**
+
+| | 0.850 | 0.880 | 0.940 (v16) |
+|---|---|---|---|
+| verdict | **PASS** | **FAIL** | **PASS** |
+| min inter-arm | 80.24 mm (2–97, t = 80.98 s) | 80.32 mm (13–17, t = 6.98 s) | 80.25 mm (17–71, t = 35.68 s) |
+| self-collision | 20.2 mm (arm 71) | **19.4 mm (arm 2) — under the 20 mm gate** | 27.5 mm |
+| frame | 52.1 mm | 53.9 mm | 53.0 mm |
+| column | 120.1 mm | 119.1 mm | 130.9 mm |
+| paper chain / tip | 22.3 / −6.1 mm | 32.7 / −6.0 mm | 23.0 / −4.9 mm |
+
+**0.880 IS THE BEST OF THE THREE ON INK AND THE ONLY ONE THAT FAILS.**  It
+conducts **everything it allocates** — 0.0000 m skipped, 99.1194 % conducted,
+the best number in this whole re-certification — and then the whole-timeline
+check refuses it on **arm 2's self-collision at 19.4 mm, 0.6 mm under the gate**,
+while every per-phase check inside the run passed.  That is the seam the v15
+entry already names: the merged timeline spans the pen swap and the freeze that
+no per-phase check covers.  **It is 0.6 mm, and it is a refusal.**
+
+**THE SAME 0.19 m IS LOST AT EVERY HEIGHT, AND IT IS THE PLACEMENT'S FAULT.**
+Stroke 1 at **(0.7012, 1.802)** is dropped at 0.850, 0.880 and 0.940 alike —
+because it runs through arm 31's base, and the under-base hole is there at every
+height (242 cells at 0.940, 358 at 0.880, 679 at 0.850).  0.850 loses a second
+span, stroke 3 at **(0.5229, 1.8041)**, in the same middle row, which is exactly
+the 679-cell hole set showing up in ink.  **So this table compares three heights
+on a placement now known to be bad at all of them**, and none of these three
+coverage numbers should be read against v15's 99.5224 % — v15 is a different
+placement.
+
+**WHAT IT DOES SAY.**  Height ordering on conducted ink is
+**0.880 > 0.940 > 0.850**, and the gap is conduction, not reach: 0.850 skips
+0.43 m of ink it had already certified, 0.940 skips 0.19 m, 0.880 skips none.
+0.850's conducted pause is 120.3 s against ~57 s at both higher rigs.  The
+searched park sets held at both heights — no phase was refused for a park pose
+— which is the 2026-08-26 blocker not recurring.
+
+**WHAT WOULD MAKE THIS DECIDABLE.**  Re-plan all three on a placement that
+clears the base holes (`--slack 0`, or the incumbent seeded, per the v16 entry),
+and re-run the whole-timeline check on each.  Until then 0.880 is the most
+promising and the least proven: best ink, thinnest self-collision margin, and a
+refusal at 0.6 mm.
+
 **WHAT NONE OF THIS ANSWERS.**  `SYSTEM_MODEL.md`'s ceiling survey (§8 item 3) —
 how high the real room is above the paper — which is the physical question this
 whole table is downstream of.
