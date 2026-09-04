@@ -343,17 +343,56 @@ quarter of an hour the 2026-09-03 re-search took, not a re-certification.
 Until it is run, **0.850 and 0.880 are unproven, not refuted** — and the
 distinction matters, because the verticals are being cut now.
 
-**WHAT THIS DOES NOT ANSWER.**  The solo-drawable number (the map's FEASIBLE,
-which adds the hover and route layers on top of the drawing pose) is measured
-here only at 0.940, where v13 puts it 0.24 pp under the union strict-GO figure
-(97.08 → 96.84 %).  The h column above is the DRAWING-POSE layer at the
-checker's own 50 mm floor.  A full `feasible_workspace` map per height is
-~1.7 h each at 6 workers and was not run; `height_sweep.py pilot` samples the
-hover and route layers instead, and its numbers are added below when it lands.
-Until then the h column should be read as reach, and the −0.24 pp correction as
-measured at 0.940 only.  Nor does it re-derive
-`SYSTEM_MODEL.md`'s ceiling survey (§8 item 3), which is the physical question
-this whole table is downstream of.
+### The pen-up layers, sampled — and they run the same way
+
+The table above is the DRAWING-POSE layer.  Solo-drawable (`feasible_workspace`'s
+FEASIBLE) adds the hover ladder and the route, and a full map is ~1.7 h per
+height at 6 workers, so instead `height_sweep.py pilot` walks **every 25th
+certified cell** at v13's own ladder (fiber-tries 48, hover-lean 15°, RRT 60 s ×
+300 nodes), ~950 arm-cells per height, 696–1 858 s each.
+
+**A PILOT IS NOT A MAP.**  It says what fraction of an arm's CERTIFIED cells
+survive, never what fraction of the CANVAS does — the cells it skipped are
+indistinguishable from cells no arm can draw.
+
+| every 25th certified cell, ungated atlas | **0.850** | **0.880** | **0.910** | **0.940** |
+|---|---|---|---|---|
+| arm-cells sampled | 963 | 960 | 946 | 940 |
+| feasible | 78.50 % | 83.85 % | 84.36 % | **85.64 %** |
+| no hover | 6.75 % | **5.73 %** | 7.29 % | 7.98 % |
+| **no route** | **14.75 %** | 10.42 % | 8.35 % | **6.38 %** |
+
+**THE PEN-UP LAYERS COST MORE THE LOWER THE ARMS HANG, AND IT IS ROUTE, NOT
+HOVER.**  Refusals rise 14.36 → 15.64 → 16.15 → **21.50 %** of arm-cells as h
+falls from 0.940 to 0.850, and essentially all of the rise is `no route`
+(6.38 → 14.75 %) while `no hover` barely moves.  That is the same mechanism
+`layout_rescore.py` named for the drawing layer — an arm hanging low has to
+FOLD, and the fold lifts its elbow into the band its neighbour's base column
+occupies — showing up one layer further out, in the transits.
+
+**SO 0.850 IS WORSE ON BOTH LAYERS AND 0.880 IS THE COMPROMISE.**  The pilot
+ordering runs the same way as the union column: 0.850 is last on reach (95.75 %)
+and last on routing (78.50 %); 0.880 buys back nearly all of both.
+
+**WHAT THE PILOT'S OWN CONTROL SAYS.**  At 0.940 this pilot reads **85.64 %**
+against v13's **92.88 %** on the same cells — because the pilots run on the
+UNGATED atlases (the checker's 50 mm floor) and v13 ran on `_gated63`.  Those
+7.24 pp are the [50, 63) mm band `scripts/regate_atlas.py` exists to remove, not
+the height; the h comparison is like-for-like because every row is ungated, and
+a re-gated run would lift all four.
+
+**AND THE CANVAS-LEVEL CORRECTION CANNOT BE READ OFF THESE NUMBERS.**
+Redundancy absorbs almost all of a per-arm-cell loss: at 0.940 a **7.12 pp**
+arm-cell refusal rate becomes a **0.24 pp** canvas loss (union 97.08 →
+solo-drawable 96.84 %).  0.850 carries a bigger arm-cell loss *and* more
+redundancy to absorb it with (≥ 3 arms 8.31 % against 4.21 %), so the two move
+opposite ways and only a full map settles it.  **Quote the union column as the
+h comparison and the pilot column as the direction of the correction; do not
+add them.**
+
+**WHAT NONE OF THIS ANSWERS.**  `SYSTEM_MODEL.md`'s ceiling survey (§8 item 3) —
+how high the real room is above the paper — which is the physical question this
+whole table is downstream of.
 
 ## THE CEILING DATUM IS A PROVENANCE BUG (2026-09-01) — and the model says so
 
