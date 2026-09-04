@@ -233,6 +233,128 @@ gate is not an environment fix; the deviation is 13 orders of magnitude under
 the 2 cm threshold the lattice gates on and 4 under the 1e-12 the URDF checks
 hold.  Recorded, not patched.
 
+## OPEN — FOR PETE: THE MOUNTING HEIGHT, RE-ASKED AT THE REAL TOOL (2026-09-03)
+
+**Nothing here changes `layout.LAYOUT_PROPOSED`.  h = 0.940 is still what
+ships.**  This is the data for a decision that is Pete's, and it is being
+re-asked because the decision that set 0.940 (2026-08-26, README "Re-certifying
+the rig at height") was made against a **110 mm** tool that no longer exists.
+The holder's own tip is 72.348 mm closer to the hand, so at any given h the
+arms are effectively that much further from the paper than that decision
+assumed — and the hardware is being built at **850** with the option to trim
+the verticals to 940, which is a one-way door in one direction only.
+
+Measured with `scripts/height_sweep.py`, new this run.  Every instrument in the
+repo that reads a height takes it from `LAYOUT_PROPOSED` and offers no way to
+ask about another one, so the layout and the parks are built LOCALLY by
+`feasible_workspace.rig(None, h, None)` — the call the map already makes, with
+the `h` its own CLI never passes.  A run at 0.940 reproduces the shipped rig's
+published numbers exactly (97.08 % union, 0.46 × 3.64 m rectangle, +97.8 mm
+park-vs-ink), which is what makes the other three rows believable.
+
+    scripts/height_sweep.py sweep  --h H --out out/atlas_proposed_hHHHH_lat0588
+    scripts/height_sweep.py report --case H=out/atlas_proposed_hHHHH_lat0588 ...
+
+**FULL RESOLUTION, NOT REDUCED.**  2 cm over all six arms, 16 562 canvas cells,
+the same sweep and the same denominator as the tool-change table above; 876 s
+(0.850), 794 s (0.880), 661 s (0.910) on 6 jobs.  0.940's atlas is the one v15
+and v16 were planned against.
+
+| 2 cm, 16 562 cells, tool 0.0588421 | **0.850** | **0.880** | **0.910** | **0.940** (ships) |
+|---|---|---|---|---|
+| union strict-GO | 95.75 % | **97.44 %** | 97.33 % | 97.08 % |
+| reachable | 99.98 % | **100.00 %** | 99.93 % | 99.71 % |
+| dead | 4.25 % (703) | **2.56 % (424)** | 2.67 % (442) | 2.92 % (484) |
+| ≥ 2 arms | 37.98 % | 37.53 % | 37.66 % | **38.88 %** |
+| ≥ 3 arms | **8.31 %** | 7.17 % | 5.75 % | 4.21 % |
+| largest live rectangle | 1.74 × 0.94 = 1.636 m² | **1.70 × 1.00 = 1.700 m²** | 1.66 × 1.00 = 1.660 m² | 0.46 × 3.64 = 1.674 m² |
+| …its shape | landscape | landscape | landscape | **portrait** |
+| dead under the bases (r < 0.20) | 679 | 358 | 310 | 242 |
+| dead in the outer rim (r ≥ 0.70) | **24** | 66 | 132 | 242 |
+| park-vs-ink, **shipped grid** | −126.0 mm | −56.7 mm | −46.6 mm | **+97.8 mm** |
+| park-vs-ink **ceiling** | 97.3 mm | 97.7 mm | 97.9 mm | 97.8 mm |
+
+**THE COVERAGE OPTIMUM IS 0.880, NOT 0.940, AND NOT 0.850.**  97.44 % against
+97.08 %, with every canvas cell reachable and the biggest clean rectangle of
+the four.  That is a 0.36 pp preference and it should not by itself move a
+build; what it does say is that **at the holder's own tool the reach argument
+no longer points up.**  It pointed up at the 110 mm tool (87.00 → 90.70 % from
+0.850 to 0.940); the shorter tool has closed most of that gap.
+
+**BECAUSE TWO DEAD SETS TRADE AGAINST EACH OTHER, AND THEY MOVE OPPOSITE WAYS.**
+The outer rim the shorter tool created is a HIGH-h problem — 242 cells at
+0.70–0.90 m from the nearest base at 0.940, 24 at 0.850 — because the wrist
+cannot get out that far when it hangs high.  The holes under the six bases are
+a LOW-h problem — 242 cells at 0.940, 679 at 0.850 — because an arm hanging low
+has to fold to reach under itself and the fold is what the gates refuse.  0.880
+is where the sum is smallest.  It also changes the SHAPE of what is drawable:
+0.940 keeps a full-length 0.46 × 3.64 m portrait strip that the low heights cut
+into by opening the base holes, while the low heights keep a wide landscape
+block the high ones lose to the rim.  **A picture that wants the length wants
+0.940; a picture that wants the width wants 0.880 or lower.**
+
+**AND REDUNDANCY GOES THE OTHER WAY AGAIN.**  ≥ 3-arm overlap doubles from
+4.21 % at 0.940 to 8.31 % at 0.850 — the thing the shorter tool cost most
+(11.11 → 4.21 % at 0.940) is partly bought back by hanging lower.  That is
+concurrency, which is makespan, not coverage.
+
+### What a lower h costs — the honest caveat, and it is not reach
+
+**THE 2026-08-26 KILL WAS COLLISION-DRIVEN, NOT REACH-DRIVEN.**  The record is
+explicit (README, and `layout.py` at `LAYOUT_PROPOSED`): union coverage was
+worse at 0.850, but that is not what killed it.  What killed it was
+**park-vs-ink** — how far a parked arm's chain stands from every OTHER arm's
+certified ink, which the conductor holds to 80 mm — climbing 10 → 61 → 72 mm
+across 0.850 / 0.925 / 0.940.  *"At 0.850 and 0.925 the shortfall is total and
+the rig draws nothing."*  And it was not the margin: re-conducting with the
+calibration term cut to zero returned the same programme.
+
+**THE SHIPPED PARK GRID DOES NOT TRANSFER DOWNWARD, AND THAT IS THE REAL COST.**
+`PARK_GRID_PROPOSED` was searched at 0.940.  Applied at the other heights it
+degrades monotonically and lands **inside** the ink: −46.6 mm at 0.910, −56.7 mm
+at 0.880, **−126.0 mm** at 0.850 (arm 17's park pose inside arm 13's ink).  A
+build at 850 with today's `layout.py` would have six arms parked where the
+others want to draw, and no ordering fixes that (`coordination.hard_blocks`).
+
+**BUT THE HEIGHT DOES NOT FORBID IT — THE CEILING IS FLAT.**  A parked arm
+carries one segment no pose can move, the flange-to-shoulder column at its own
+base xy, and the clearance from a mover's certified ink to a neighbour's COLUMN
+is therefore an upper bound on park-vs-ink that no park set whatever can beat.
+Measured, that ceiling is **97.3 / 97.7 / 97.9 / 97.8 mm** across the four
+heights — flat, because the columns are at the same six xy at every height.
+The check on it: at 0.940 the ceiling comes out at **97.8 mm on the same
+binding pair (31, 71) that the shipped park set actually achieves**, which is
+the measured form of what this file already records as *"+97.8 mm is the
+layout's ceiling, not a lucky draw"*.
+
+**SO THE HEIGHT QUESTION HAS TURNED INTO A PARK-SEARCH QUESTION.**  Every
+height tested has ~97 mm of park-vs-ink available against an 80 mm gate; only
+0.940 has a park set that reaches it, because 0.940 is the only height anyone
+has run the search at.  **This is the first time the three-number (radius,
+hover, bearing) grid has been measured below 0.940 at all** — the 2026-08-26
+figure of 10 mm at 0.850 came from the older TWO-number (radius, hover) search
+at the 110 mm tool, and the bearing was worth ~25 mm at 0.940 (72 → 97.8 mm).
+
+**WHAT WOULD SETTLE IT, AND WHAT IT COSTS.**  Re-run the park search
+(6 radii × 4 hovers × 24 bearings per arm, gated by `certified_ready_pose`,
+then park-vs-ink ≥ 80 mm, then the fleet gate, then ranked on the depot's own
+flyability) at 0.880 and 0.850 against the atlases now in `out/`.  That is the
+quarter of an hour the 2026-09-03 re-search took, not a re-certification.
+Until it is run, **0.850 and 0.880 are unproven, not refuted** — and the
+distinction matters, because the verticals are being cut now.
+
+**WHAT THIS DOES NOT ANSWER.**  The solo-drawable number (the map's FEASIBLE,
+which adds the hover and route layers on top of the drawing pose) is measured
+here only at 0.940, where v13 puts it 0.24 pp under the union strict-GO figure
+(97.08 → 96.84 %).  The h column above is the DRAWING-POSE layer at the
+checker's own 50 mm floor.  A full `feasible_workspace` map per height is
+~1.7 h each at 6 workers and was not run; `height_sweep.py pilot` samples the
+hover and route layers instead, and its numbers are added below when it lands.
+Until then the h column should be read as reach, and the −0.24 pp correction as
+measured at 0.940 only.  Nor does it re-derive
+`SYSTEM_MODEL.md`'s ceiling survey (§8 item 3), which is the physical question
+this whole table is downstream of.
+
 ## THE CEILING DATUM IS A PROVENANCE BUG (2026-09-01) — and the model says so
 
 `assets/system_model/` is the installation as it will be built; the numbers and
