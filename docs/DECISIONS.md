@@ -293,6 +293,105 @@ set and pays it 78 times.**  The obvious speed lever, and it is the rig owner's
 call, is to search under a cheap flag set and spend the full one only on the
 winner.
 
+### CSAIL v17 — 100.0000 %, and then the tool moved again (ABORTED 2026-09-04)
+
+**READ THE STALENESS FIRST.**  Every number in this section was measured at the
+`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = **0.0588421 / 0.0588421** pair.  On
+2026-09-04, while the follow-on run was still conducting, Pete corrected the
+holder placement again — **the grip point moves to the far end of the Fat finger
+plates**, which moves the tool transform a third time.  So this entry is a
+RECORD OF A METHOD AND OF A PLACEMENT, not a shippable programme: the atlas,
+the parks and every gate below were certified against a tool that is being
+superseded, exactly as `bc670bf` superseded the 0.110 pair.  **Nothing here
+should be conducted, and the comparison at h = 0.880 was killed mid-run and is
+not reported.**
+
+WHAT SURVIVES THE TOOL CHANGE is the *method*: the proxy pre-check below costs
+five minutes, it predicted v15's measured loss to 2 mm, and it is the thing to
+re-run first against the new pair — it will say in minutes whether a placement
+can reach 100 % before anyone spends 7.57 h searching for one.
+
+v16 spent 7.57 h searching and lost 0.65 pp.  v17 spends **five minutes** on a
+proxy pre-check, moves the logo by hand, and closed the gap: GUI job
+**`20260904-074027-32b1`**, v15's exact flag set, v15's exact size and rotation
+(90°, scale 0.85, `target_width` 1.43089), one fixed offset, **no search**.
+`out/csail_schedule_h094_v17.{npz,json}`, `out/csail_program_h094_v17.json`,
+`out/csail_place_v17_placement.json`, `out/h094_v17.log`.
+
+**THE METRIC THAT PICKED IT, AND WHY IT IS TRUSTWORTHY.**  Sample the traced
+ink every 1 cm, look each sample up in the 2 cm atlas union, and take the
+**longest CONTIGUOUS run of dead samples inside one stroke** — because a
+scattered dead cell is drawn anyway (the atlas is a sampling; the pose search is
+continuous) while a contiguous run is a span nobody can cover.  On v15's own
+offset it predicts **82 mm** against v15's **measured 80.3 mm loss**.  It is
+right to 2 mm on the one case where the answer is known.
+
+| offset at scale 0.85 | left edge | outer-rim ink | under-base ink | **longest run** |
+|---|---|---|---|---|
+| (−0.10, 0.00) = **v15** | 0.0863 | 82 mm | 98 mm | **82 mm** at (0.09, 1.24) |
+| (−0.09, 0.00) | 0.0963 | 37 mm | 177 mm | 79 mm |
+| (−0.07, 0.00) | 0.1163 | **0 mm** | 197 mm | **118 mm** at (0.55, 1.78) |
+| (−0.03, 0.00) | 0.1563 | 0 mm | 237 mm | 158 mm |
+| **(+0.05, −0.20) = v17** | 0.2363 | **0 mm** | **0 mm** | **0 mm** |
+
+**A PURE LEFTWARD-TO-RIGHTWARD NUDGE CANNOT DO IT.**  Walking the logo right
+does clear the outer rim at the left edge — by (−0.07, 0.00) the rim ink is
+zero — but it walks the logo's INTERIOR onto **arm 31's base disc**, and the
+longest run gets *worse*, 82 → 118 mm.  The middle-row columns stand at
+x = 0.5967 and x = 1.2067 and a 1.431 m-wide logo at this size spans both; every
+offset from −0.11 to −0.02 puts ink either in the rim or on a disc.  **The fix
+is not a smaller x-nudge, it is +x AND −y together**: of **1 976** offsets that
+fit the sheet, exactly **10** have a zero dead run, all at scale 0.85, all at
+dx ≈ +0.05…+0.07.  v17 takes the one that also moves ink AWAY from the middle
+row, since that is the direction that cost v16 five extra phases.
+
+| | v15 | v16 | **v17** |
+|---|---|---|---|
+| offset | (−0.10, 0.00) | (−0.10, +0.10) | **(+0.05, −0.20)** |
+| centre | (0.8017, 1.8153) | (0.8017, 1.9153) | **(0.9517, 1.6153)** |
+| size | 1.4309 × 1.8711 m | same | **same** |
+| coverage, allocated | 99.5224 % | 98.8729 % | **100.0000 %** |
+| coverage, conducted | 99.7485 % | 97.9754 % | **100.0000 %** |
+| left empty / skipped | 0.0803 / 0.0000 m | 0.1894 / 0.1947 m | **0.0000 / 0.0000 m** |
+| segments | 47 | 48 / 47 | **49** |
+| makespan | 277.625 s | 249.875 s | **195.229 s** |
+| conducted pause | — | 56.7 s | 121.4 s |
+| phases planned / conducted | 2 / 2 | 3 / 7 | **2 / 2** |
+| min inter-arm, worst phase | 82.0 mm | 81.2 mm | **82.2 mm** |
+| column / chain / tip | 122.0 / 30.7 / −7.3 | 131.0 / 22.6 / −4.9 | **136.6 / 30.4 / −7.0** |
+| planner wall clock | 4 910.9 s | 29 352.9 s | **3 381.7 s** |
+
+**INDEPENDENT `scene_check`, whole merged timeline, from the shipped `.npz`:**
+**VERDICT PASS**, min inter-arm **80.91 mm** against the 80 mm gate — **+0.91 mm**,
+worst pair **31–71 at t = 91.19 s**; self 20.6 mm, frame 53.1 mm, column
+132.8 mm, paper chain 30.2 mm, tip −6.8 mm, joint margin 0.1124, frozen 6/6.
+**That is 3.6× the margin v15 and v16 cleared by** (0.26 and 0.25 mm).  The
+razor-thin seam this file flagged as "where a re-run should be watched" was a
+property of those two placements after all, not of the rig.
+
+**AND IT IS THE FASTEST PROGRAMME OF THE THREE**, 195.229 s against v15's
+277.625 s — 30 % less makespan for 0.48 pp more ink, in two conducted phases
+with no split and no skip.  At the 0.0588421 tool v17 superseded v15; at the
+tool now being fitted, **neither of them stands**.
+
+**THE h = 0.880 COMPARISON WAS ABORTED.**  The same v17 placement was being
+re-planned at 0.880 on the searched 0.880 park grid — the run Pete needs for the
+trim decision on a placement that is not known-bad — and it was killed at
+08:39→10:03 during conduction when the tool correction landed.  It got as far as
+scheduling the movers (arm 71: 3 170 steps, 66.0 s nominal → 122.3 s with
+56.3 s of pauses) and **no coverage, gate or `scene_check` number was reached**,
+so none is quoted.  `out/h088_v17p.log` and `out/csail_schedule_h088_v17p_trace.png`
+are the partial remains; there is no schedule, no programme and no `.npz`.
+
+**WHAT TO DO WHEN THE NEW TOOL LANDS**, in the order that costs least:
+re-sweep the atlas at the new pair; run the five-minute proxy over the offset
+grid to see whether a zero-dead-run placement still exists at scale 0.85;
+re-search the park set (it is a quarter of an hour and the 0.940 grid did not
+transfer to any other height, so it will not transfer across a tool either);
+and only then spend an hour on a full plan.  **Do not start with
+`--placement auto`** — v16 is the measurement of what that costs and what it
+gets.
+
 ### The feasible-workspace map, v13
 
 `scripts/feasible_workspace.py` at v12's settings (`--fiber-tries 48
