@@ -1048,9 +1048,40 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 # after that search and it is **97.8 mm** at the tool of 2026-09-03 (below),
 # and `allocate.ParkProbe` prunes against these poses at allocation time so a
 # span inside one of them never reaches the conductor at all.
-PARK_GRID_PROPOSED = {2: (0.55, 0.10, -165.0), 13: (0.40, 0.10, -150.0),
-                      17: (0.48, 0.30, -60.0), 31: (0.55, 0.10, -165.0),
-                      71: (0.55, 0.35, -30.0), 97: (0.55, 0.20, 15.0)}
+PARK_GRID_PROPOSED = {2: (0.48, 0.20, 150.0), 13: (0.55, 0.20, -120.0),
+                      17: (0.48, 0.20, -30.0), 31: (0.62, 0.30, 150.0),
+                      71: (0.40, 0.10, 30.0), 97: (0.40, 0.35, 45.0)}
+# RE-SEARCHED AGAIN 2026-09-07, AT THE HOLDER'S FINAL TOOL, and the grid above
+# is THAT search's output; the 2026-09-03 grid is in the note below.  `7f99565`
+# put the grip at the far end of the Fat finger plates and the bore at the
+# housing's own 23 deg, moving the pair to `PEN_EXT_HOLDER` / `PEN_LAT_HOLDER`
+# = 0.0460262 / 0.0860369 — the tip 40 mm further out across the hand and
+# 13 mm shallower — so every pose in the old set was measured on a tool that
+# does not exist and all three park tests went red.
+#
+#     scripts/height_sweep.py park --h 0.940 \
+#         --atlas out/atlas_proposed_h0940_lat0860 --jobs 6
+#
+# 24 absolute bearings x 6 radii x 4 hovers = 576 candidates per arm, each
+# gated by `certified_ready_pose` at the holder's pair and by
+# `rig_final.chain_static_clearance >= STATIC_MARGIN`, scored against every
+# other arm's INK **and** 6 cm LIFT layers, ranked on the depot's own
+# flyability and tie-broken on the 5 mm clearance plateau then
+# min(joint_margin, 2.5 sigma).  2 456 s on 6 jobs.
+#
+# | | 2026-09-03 tool | **this tool** |
+# |---|---|---|
+# | candidates certifying | 430 of 576 | **473-474 of 576** |
+# | fleet worst park-vs-(ink AND lift) | 97.8 mm | **93.1 mm** |
+# | fleet park-vs-park | >= 250 mm (cap) | >= 250 mm (cap) |
+# | entries / go-homes flyable | 108/137, 108/137 | **113/144, 113/144** |
+#
+# MORE POSES CERTIFY AND THE FLEET CLEARS BY LESS, and both are the same fact:
+# the tip is 86 mm off the hand's axis now instead of 59, so a parked arm
+# reaches further sideways — which buys candidates (473 against 430) and also
+# puts the parked PEN nearer a neighbour's ink.  93.1 mm is arm 71's own
+# ceiling, not the fleet's: the other five clear by 97.6-98.6 mm and arm 71's
+# best is 93.1, so it alone sets the number.  Still 13.1 mm over the gate.
 # RE-SEARCHED 2026-09-03 AT THE HOLDER'S OWN TOOL, and the grid above is that
 # search's output.  `PEN_LAT_HOLDER` / `PEN_EXT_HOLDER` went 0.110 / 0.110 ->
 # 0.0588421 / 0.0588421 (frames.py, docs/SYSTEM_MODEL.md 7e), which moves the
@@ -1156,22 +1187,29 @@ PARK_GRID_PROPOSED = {2: (0.55, 0.10, -165.0), 13: (0.40, 0.10, -150.0),
 # AND ALL SIX PENS NOW HOVER OUTSIDE THE CSAIL PLACEMENT'S BOUNDING BOX
 # (x 0.086..1.517, y 0.878..2.752 for the v14/v15 logo), which the old set did
 # not: arm 71 parked at (1.357, 1.556), inside it.
+# RE-DERIVED 2026-09-07 at the tool of `7f99565`, from the grid above.  These
+# are `certified_park_poses(build_fleet(LAYOUT_PROPOSED), PARK_GRID_PROPOSED,
+# pen_lat=PEN_LAT_HOLDER, pen_ext=PEN_EXT_HOLDER)`'s own output and nothing
+# else — `test_baked_park_poses_are_that_functions_own_output` pins that, and
+# it is the reason these are not typed by hand.  Every one passes `check_pose`,
+# the fleet's nearest pair is at the broad-phase cap (>= 250 mm), and the worst
+# park-vs-(ink AND lift) is +93.1 mm against the conductor's 80.
 Q_PARK_PROPOSED = {
-    2:  (0.8318, 1.1573, -1.8033, -1.7148, -2.0186, 1.7226, -2.1750),
-    13: (0.9677, 1.2431, -2.0394, -2.2081, -2.1167, 1.7235, -1.7795),
-    17: (-0.5975, -1.2007, -1.5594, -2.3880, 1.8381, 1.3115, 1.3841),
-    31: (0.8318, 1.1573, -1.8033, -1.7148, -2.0186, 1.7226, -2.1750),
-    71: (-0.6298, -1.0448, -1.8249, -2.1659, 1.9084, 1.0911, -1.3841),
-    97: (0.8788, -1.1021, 1.5476, -1.8659, -2.0275, 1.4590, -2.1750),
+    2:  (-0.7431, 1.1045, 1.7370, -2.1199, 2.0526, 1.4620, -2.1750),
+    13: (-0.0035, 1.1450, -1.6052, -1.7504, -1.9958, 1.5278, -2.1750),
+    17: (-0.7431, -1.1045, -1.4046, -2.1199, 2.0526, 1.4620, -2.1750),
+    31: (-0.5891, 1.0065, 1.2532, -1.7495, 2.1092, 1.2082, 2.1750),
+    71: (0.8674, -1.2423, 1.1187, -2.1013, -2.0908, 1.7654, -1.7795),
+    97: (0.5752, -1.1079, 1.6776, -2.4046, -1.8232, 1.1650, -2.1750),
 }
 # where each of them holds the pen (canvas m), for the log and the scene
 PARK_HOVER_PROPOSED = {
-    13: (0.250, 0.405),                         # hover 0.10 m
-    17: (1.447, 0.189),                         # hover 0.30 m
-    97: (1.738, 3.168),                         # hover 0.20 m
-    31: (0.065, 1.673),                         # hover 0.10 m
-    2:  (0.065, 2.883),                         # hover 0.10 m
-    71: (1.683, 1.540),                         # hover 0.35 m
+    2:  (0.181, 3.266),                         # hover 0.20 m
+    13: (0.322, 0.129),                         # hover 0.20 m
+    17: (1.622, 0.365),                         # hover 0.20 m
+    31: (0.060, 2.125),                         # hover 0.30 m
+    71: (1.553, 2.015),                         # hover 0.10 m
+    97: (1.490, 3.308),                         # hover 0.35 m
 }
 
 
