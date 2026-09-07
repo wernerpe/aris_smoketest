@@ -354,14 +354,14 @@
     },
     {
       "file": "meshes/penholder/penholder22_housing_hand.obj",
-      "bytes": 511524,
-      "sha256": "0457156447549d48e21b7e4e8d827cd520634efbea7037b43103ba60fd81db47",
+      "bytes": 511385,
+      "sha256": "4e968a0c76f7385f5d905b58d87de96f67db8609f4732dcff1eb209f778c754d",
       "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder housing - 22 deg - reinforced - v20260429.STL"
     },
     {
       "file": "meshes/penholder/penholder22_cap_hand.obj",
-      "bytes": 511556,
-      "sha256": "79f907c68bfa119955e3cf139ce27ba5fa0e59cc1a38cb3c9c2cbbeb0965376e",
+      "bytes": 511531,
+      "sha256": "80c1824fac34f2c56a5f4deb24c3b63f5747bcc633578ff733214bf81ac89282",
       "source": "/home/franka/aris_project/raw_slack_file_dump/Pen holder all parts 2026.08.19/pen holder cap v20250903.STL"
     },
     {
@@ -396,7 +396,7 @@
         ]
       }
     ],
-    "envelope_worst_escape_m": 1.08895e-07,
+    "envelope_worst_escape_m": 2.89602e-07,
     "envelope_bar_m": 1e-05
   },
   "fat_finger": {

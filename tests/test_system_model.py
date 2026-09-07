@@ -759,10 +759,19 @@ def test_the_housing_is_not_mounted_end_for_end():
     # plate's own far edge, which is the whole of the 2026-09-04 placement
     assert GX == pytest.approx(rig_final.FATFINGER["plate_y"][1]
                                - P["post_side"] / 2, abs=1e-9)
-    # the BORE leans 45 deg at the grip; the TCP -> tip ray does not
-    assert np.degrees(np.arctan2(u[0], u[2])) == pytest.approx(45.0, abs=1e-9)
+    # THE BORE LEANS 23 DEG AT THE GRIP, AND THAT IS THE HOUSING'S OWN ANGLE
+    # (2026-09-07).  The post is a 26 mm square whose four flats are clocked
+    # `post_clock` = 23.00 deg about the post axis relative to the bore, so
+    # the block sits SQUARE to the hand at this lean and nowhere else — which
+    # is what the photograph shows ("the square part of the holder is flush
+    # with the metal part").  Measured off the STL: the flats' normals are at
+    # -113.00 / -23.00 / +67.00 / +157.00 deg off the housing's +X, and with
+    # the bore at 23 deg they land at -180 / -90 / 0 / +90 off hand z.
+    assert np.degrees(np.arctan2(u[0], u[2])) == pytest.approx(23.0, abs=1e-3)   # the constants are 7 dp
+    assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=1e-4)
+    # the TCP -> tip ray is a different line, and always will be now
     assert np.degrees(np.arctan2(PEN_LAT_HOLDER, PEN_EXT_HOLDER)) \
-        == pytest.approx(64.8522, abs=1e-3)
+        == pytest.approx(61.8551, abs=1e-3)
     # grip -> where the pen leaves: the CAP's outer face, 30.001 mm IN FRONT
     assert exit_x == pytest.approx(0.030001, abs=1e-6)
     assert exit_x == pytest.approx(P["cap_end_x"] - P["post_xy"][0], abs=1e-15)
@@ -773,12 +782,15 @@ def test_the_housing_is_not_mounted_end_for_end():
     assert P["post_xy"][0] == pytest.approx(0.055099, abs=1e-6)
     # the cap sits in FRONT of the TCP along the bore (it used to be behind)
     assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
-    # what the fixed tip therefore asks of the graphite.  53.2 mm since
-    # 2026-09-03, when the photo put the tip 5 cm below the Fat blades'
-    # plates instead of 155.6 mm from the TCP (frames.PEN_EXT_HOLDER); it
-    # was 125.562 mm at the old 0.110 / 0.110 pair, which is more graphite
-    # than a 175 mm stick has left after 55.1 mm of barrel behind the grip.
-    assert (reach - exit_x) == pytest.approx(0.053214, abs=1e-6)
+    # what the fixed tip therefore asks of the graphite.  20.000 mm since
+    # 2026-09-07, and it is now an INPUT rather than a consequence: Pete read
+    # it off the side view ("it only juts out 3-4 cm max", then "about 2 cm"
+    # once the orientation was right) and the tip is derived from it,
+    # `frames.PEN_GRAPHITE_HOLDER`.  It was 53.2 mm while the tip came off the
+    # blades, and 125.562 at the old 0.110 / 0.110 pair.
+    assert (reach - exit_x) == pytest.approx(frames.PEN_GRAPHITE_HOLDER,
+                                             abs=1e-6)
+    assert frames.PEN_GRAPHITE_HOLDER == 0.020
 
 
 def test_the_pencil_tail_is_the_assemblys_own_overhang():
@@ -808,10 +820,10 @@ def test_the_urdf_tip_is_the_tool_transform_and_nothing_else(root):
     `PEN_EXT = 0.110` ever was (gate B, MZ 0.924).  The holder's pair was
     USER-SPECIFIED — an estimate on 2026-08-25, and now the photo of the real
     gripper: the tip sits ~5 cm below the bottom edge of the Fat blades'
-    contact plates, which is `panda_hand` z 0.1622421 and so 0.0588421 m of
-    axial depth below the TCP, at the 45 deg lean the hand itself forces (the
-    housing's 55.1 mm of barrel behind the grip is inside the hand's own
-    collision shell at any lean under 35.17 deg).  See frames.py and
+    contact plates.  It has moved twice more since: the grip to the FAR END
+    of those plates (2026-09-04) and the bore to the HOUSING's own 23 deg with
+    20 mm of graphite past the cap (2026-09-07), which is where it stands —
+    `PEN_EXT_HOLDER` 0.0460262, `PEN_LAT_HOLDER` 0.0860369.  See frames.py and
     docs/SYSTEM_MODEL.md 7e.
     """
     qmap = {f"arm{aid}_panda_joint{i + 1}": 0.0
@@ -833,11 +845,25 @@ def test_the_urdf_tip_is_the_tool_transform_and_nothing_else(root):
     gx = rig_final.PENHOLDER22["grip_hand_x"]
     assert reach == pytest.approx(np.hypot(PEN_LAT_HOLDER - gx,
                                            PEN_EXT_HOLDER), abs=1e-15)
-    # the tip sits 50.000 mm below the Fat blades' plate edge, on the hand's
-    # own z — which is the whole derivation, in one line
+    # THE DERIVATION, in one line: the tip is 30.001 mm of holder plus
+    # 35.000 mm of graphite along the bore, from the grip.
+    gx = rig_final.PENHOLDER22["grip_hand_x"]
+    grip = np.array([gx, 0.0, D_HAND_TCP])
+    lean = frames.PEN_LEAN_HOLDER
+    u = np.array([np.sin(lean), 0.0, np.cos(lean)])
+    exit_x = (rig_final.PENHOLDER22["cap_end_x"]
+              - rig_final.PENHOLDER22["post_xy"][0])
+    want = grip + (exit_x + frames.PEN_GRAPHITE_HOLDER) * u
+    got = np.array([PEN_LAT_HOLDER, 0.0, D_HAND_TCP + PEN_EXT_HOLDER])
+    assert np.max(np.abs(got - want)) < 1e-7
+    # ...and the "tip 50 mm below the blades" rule it SUPERSEDED is now also
+    # CONTRADICTED, which is worth pinning rather than glossing: the derived
+    # tip sits 37.2 mm below the plate edge.  The blades' edge was a plausible
+    # datum for a tip nobody had measured; the holder is a better one, because
+    # the protrusion is what a person can see and adjust.
     plate_bottom = rig_final.FATFINGER["plate_link_z"][1] + 0.0584
     assert D_HAND_TCP + PEN_EXT_HOLDER - plate_bottom == \
-        pytest.approx(0.050, abs=1e-9)
+        pytest.approx(0.0372, abs=5e-4)
     # and the INLINE pen, the one that IS gate-validated, did not move
     assert frames.PEN_EXT == 0.110
 

@@ -875,8 +875,11 @@ def add_tool(robot, pfx, pen_ext=PEN_EXT_HOLDER, pen_lat=PEN_LAT_HOLDER):
     housing's 55.1 mm of barrel behind the grip is inside the manufacturer's
     own hand collision shell at every lean under 35.17 deg (-11.90 mm at 23,
     +6.16 at 45).  The 45 deg ray stays, now for a hardware reason.  What DID
-    move is the axial depth: PEN_EXT_HOLDER, 0.0588421 m, the tip ~5 cm below
-    the blades' contact plates.  Neither half was ever gate-validated — only
+    move was the axial depth — and then, 2026-09-07, the whole transform:
+    the grip sits at the far end of the blades' plates, the bore at the
+    HOUSING's own 23 deg (the only lean that puts its square block flush with
+    them), and the tip 20 mm of graphite past the cap.  PEN_EXT_HOLDER
+    0.0460262, PEN_LAT_HOLDER 0.0860369.  Neither half was ever gate-validated — only
     the INLINE pen's 0.110 is.  See
     system_model.OPEN_QUESTIONS["penholder_cradle"] and
     docs/SYSTEM_MODEL.md 7e.

@@ -662,8 +662,11 @@ OPEN_QUESTIONS = {
         answer_by="survey the room",
         blocking="cutting the grid"),
     "penholder_cradle": dict(
-        what="Does the mounted pen lean 23 deg out of tool z, or 45 — and "
-             "which fingers are on the arms?",
+        what="Which fingers are on the arms, and how far in is the blade's "
+             "foot bolted?  (THE LEAN IS SETTLED, 2026-09-07: 23 deg, the "
+             "housing's own clocking, which is the only lean that puts the "
+             "square block flush with the blades.  The graphite is "
+             "USER-SPECIFIED at 20 mm past the cap.)",
         why="THERE IS NO CRADLE, AND THERE IS NO FEATURE ON THE FAT FINGER "
             "EITHER.  The 2026-09-02 mesh of 'Fat Franka Finger v250904' has "
             "been read (rig_final.FATFINGER, docs/SYSTEM_MODEL.md 7d).  It is "
@@ -713,16 +716,17 @@ OPEN_QUESTIONS = {
             "user's standing rule, not a forced choice — and per the user the "
             "casing does not constrain the model at all while the pencil's "
             "modelled length is arbitrary.",
-        rides_on="HOW MUCH GRAPHITE.  The tool transform moved on "
-                 "2026-09-03 (frames.PEN_EXT_HOLDER / PEN_LAT_HOLDER, both "
-                 "0.0588421 and 0.1253421 m, USER-SPECIFIED from the photo: the tip ~5 cm "
-                 "below the Fat blades' plates).  At that tip the planner's "
-                 "45 deg ray needs 53.2 mm of graphite past the cap's outer "
-                 "face — 37.6 mm as a photo along the hand's x axis sees it, "
-                 "against the 20-40 mm the photo shows.  It was 125.6 mm at "
-                 "the old 0.110 / 0.110 pair, which asked for a 283 mm stick.  "
-                 "WHAT IS NOT SETTLED is the protrusion itself: it is "
-                 "adjustable, and one ruler reading sets it (see "
+        rides_on="HOW MUCH GRAPHITE, and it is an INPUT now.  The tool "
+                 "transform moved three times on one photograph and settled "
+                 "2026-09-07 at frames.PEN_EXT_HOLDER 0.0460262 / "
+                 "PEN_LAT_HOLDER 0.0860369, derived in one line: a grip at "
+                 "(0.066500, 0, 0.1034) — the far end of the Fat blades' "
+                 "plates — plus 30.001 mm of holder and 20.000 mm of graphite "
+                 "along a 23 deg bore.  The 20 mm is USER-SPECIFIED (\"about "
+                 "2 cm\", orientation confirmed); it was 53.2 mm while the tip "
+                 "came off the blades and 125.6 at the old 0.110 pair, which "
+                 "asked for a 283 mm stick.  The protrusion is adjustable, so "
+                 "one ruler reading confirms rather than sets it (see "
                  "docs/SYSTEM_MODEL.md 7e).  Neither number was ever "
                  "gate-validated — only the INLINE pen's axial 0.110 was "
                  "(gate B, MZ 0.924); frames.py says so.  RIDING ON "

@@ -45,7 +45,8 @@ from PIL import Image  # noqa: E402
 
 from aris_sixarm import rig_final  # noqa: E402
 from aris_sixarm import system_model as SM  # noqa: E402
-from aris_sixarm.frames import D_HAND_TCP  # noqa: E402
+from aris_sixarm.frames import (D_HAND_TCP, PEN_EXT_HOLDER,  # noqa: E402
+                                PEN_LAT_HOLDER)
 from aris_sixarm.layout import FLEET_PROPOSED, Q_PARK_PROPOSED  # noqa: E402
 
 # WHERE THE TOOL ACTUALLY IS, and the two close-ups aim at it rather than at
@@ -53,6 +54,7 @@ from aris_sixarm.layout import FLEET_PROPOSED, Q_PARK_PROPOSED  # noqa: E402
 # of the Fat finger plates, 66.5 mm out along hand x — a camera still pointed
 # down the wrist centreline puts the subject at the edge of its own frame.
 GRIP_HAND = np.array([rig_final.PENHOLDER22["grip_hand_x"], 0.0, D_HAND_TCP])
+TIP_HAND = np.array([PEN_LAT_HOLDER, 0.0, D_HAND_TCP + PEN_EXT_HOLDER])
 
 
 def _rel(p):
@@ -127,6 +129,13 @@ VIEWS = (
     # matter of opinion.  From the -x side, where the barrel and the tail
     # lean; "below" means further along +z_hand, which is toward the paper.
     ("photo", None, None, 34),
+    # THE VIEW PETE JUDGES THE TOOL FROM.  Straight down the JAW axis
+    # (hand y), aimed between the grip and the tip, with up = -z_hand: the
+    # bore's lean and the graphite's protrusion are both IN the image plane
+    # here and neither is foreshortened, which is what makes it the shot to
+    # hold against a photograph.  `holder_side` looks down hand X and shows
+    # the V of the blades; this one looks down hand Y and shows the ANGLE.
+    ("holder_jaw", None, None, 32),
 )
 
 LIGHTS = [
@@ -212,6 +221,14 @@ def stills(out_dir, width, height, views=None):
             # front of both of them and the shot proves nothing.
             ctr = hand + R_hand @ (GRIP_HAND + np.array([0.0, 0.0, 0.020]))
             eye = ctr - 0.50 * R_hand[:, 0]
+            target, up = ctr, -R_hand[:, 2]
+        elif name == "holder_jaw":
+            # centred on the HOLDER's own middle — the tail face is 55.1 mm
+            # behind the grip and the tip 65.0 in front, so that is the grip
+            # plus a whisker down the bore, not the grip-to-tip midpoint
+            u = (TIP_HAND - GRIP_HAND) / np.linalg.norm(TIP_HAND - GRIP_HAND)
+            ctr = hand + R_hand @ (GRIP_HAND + 0.005 * u)
+            eye = ctr + 0.42 * R_hand[:, 1]
             target, up = ctr, -R_hand[:, 2]
         elif name == "photo":
             # the grip centre, seen from -x and from below (+z_hand), the way

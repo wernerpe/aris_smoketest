@@ -300,16 +300,15 @@ not on the finger centreline. **§7e is both corrections.** The tool transform
 is now `PEN_EXT_HOLDER = 0.0588421` and `PEN_LAT_HOLDER = 0.1253421`, with the
 grip centre at `panda_hand` (0.0665, 0, 0.1034).
 
-The housing's own machined flats clock at **23.0°** (measured off the STL);
-the bore this model draws leans **45.0°** at the grip. Those are two live
-hypotheses again. For one day (2026-09-03) the gripper's casing ruled 23° out —
-55.1 mm of barrel stands *behind* the grip and there were only 37.4 mm of room
-under the hand — but that was measured with the grip on the finger centreline,
-and at the placement the photograph actually shows (§7e) 23° clears the casing
-by 13.84 mm against 45°'s 7.78. **The lean is 45° because it is the user's
-standing rule and the incumbent, not because the hardware forces it**, and the
-3-cylinder housing envelope is proven conservative for it (under the 23°
-hypothesis 211 696 housing vertices escape it, worst +19.43 mm).
+**And the 22° is gone.** The housing's own machined flats clock at **23.0°**
+(measured off the STL) and, since 2026-09-07, so does the bore this model
+draws. That disagreement had been the biggest open question in this file since
+2026-08-25 — a 22° discrepancy with no mechanism to live in — and it closed
+from the direction nobody was checking: the **square block** the fingers pinch
+is flush with the blades only when the bore is at 23°, and the photograph
+shows it flush (§7e). `extract_penholder22_meshes.py` has printed that
+disagreement on every run for a fortnight; it now prints **−0.00°**. The model
+was drawing the bore along a planner ray that was only ever an assumption.
 
 ### 7a. The assembly was found, and it changes the answer
 
@@ -415,7 +414,7 @@ rules that out, and §7e says what the reading should be instead.
 
 One measurement still closes the transform: the perpendicular distance from
 the mounted pen's tip to the gripper's approach axis. The model now says
-**125.3 mm** (66.5 of it is the grip's own offset along the
+**86.0 mm** (66.5 of it is the grip's own offset along the
 blades, §7e); §7e turns any reading into a tip.
 
 ### 7b. The stack inside the bore
@@ -957,14 +956,14 @@ flat material. The post is held off by the rib there anyway.)
 | grip centre (as drawn) | (**0.0665**, 0, **0.1034**) — the plates' far end, at the TCP's height |
 | post axis | hand **y**, by construction |
 | bore | ⊥ the post, so it lies in the hand's x–z plane |
-| lean out of hand z | free about the jaw axis, **≥ 35.17°** in the room (§7e) |
+| lean out of hand z | **23.00°** — the post's own clocking, which is the only lean that puts the block square to the hand (§7e) |
 
 Pen tip, at the axial depth the photo gives (§7e):
 
 | lean | tip, `panda_hand` | housing vs the hand shell |
 |---|---|---:|
-| **45° (what the model uses)** | **(0.1253421, 0, 0.1622421)** | **+7.78 mm** |
-| 23° (the housing's flats) | (0.0914771, 0, 0.1622421) | +13.84 mm |
+| **23° — the housing's flats, and what the model uses since 2026-09-07** | **(0.0860369, 0, 0.1494262)** | **+13.84 mm** |
+| 45° (what it drew for three days) | (0.1253421, 0, 0.1622421) | +7.78 mm |
 
 The 63.3 mm of §7a is gone, and not because the CAD changed: there is no
 mechanism that *could* carry the 22° — not a cradle (§7a), not the fingertip
@@ -976,8 +975,8 @@ shows (§7e).
 **The measurements that close it — still TWO, and one of them is now urgent.**
 
 1. **The perpendicular distance from the mounted pen's tip to the gripper's
-   approach axis.** The model says **125.3 mm** — 66.5 mm of grip offset
-   along the blades plus 58.8 mm of bore (§7e); §7e turns any reading into a
+   approach axis.** The model says **86.0 mm** — 66.5 mm of grip offset
+   along the blades plus 19.5 mm of bore (§7e); §7e turns any reading into a
    tip, at either lean.
 2. **The gripper's own `width` while the pen is held** — read it off
    `franka::GripperState`, or caliper the jaw. **Expect 0.0339, or 0.0287.**
@@ -1038,6 +1037,85 @@ one open, and moves a constant. It was read twice, and the second reading —
 2026-09-04 — moved a second constant and withdrew an argument. That correction
 comes first, because it changes what the rest of this section is about.
 
+#### The block is square to the hand, and the pen is short — 2026-09-07
+
+Pete, reviewing the side view down the jaw axis, gave two corrections. The
+second is a **measurement in disguise**.
+
+> *"shorten the shaft of the pen and bring the tip closer to the cylindrical
+> pen holder, I think it only juts out 3–4 cm max"* — and, once the
+> orientation below was corrected and confirmed (*"looks great now"*),
+> **about 2 cm**.
+>
+> *"in the picture the square part of the holder is flush with the metal part,
+> so the entire pen-holder plastic bit that is being pinched is about 20
+> degrees more upright"*
+
+**"Square to the hand" IS "bore at 23°", and the housing's own STL says so to
+0.00°.** The mount post is a 26 mm square section whose four flats are clocked
+`PENHOLDER22["post_clock"]` = **23.00°** about the post axis relative to the
+bore — measured, not assumed: the four large flats' normals sit at
+**−113.00 / −23.00 / +67.00 / +157.00°** off the housing's own +X, which *is*
+the bore. The post axis is hand y, so those normals live in the hand's x–z
+plane. Then:
+
+| bore lean | post-flat normals, off hand +z | the block |
+|---|---|---|
+| 45° (what the model drew) | −158 / −68 / **+22** / +112 | askew, by 22° |
+| **23°** | **−180 / −90 / 0 / +90** | **square to the hand** |
+
+So the block is flush with the blades' plate faces and edges at 23° and at no
+other angle, and the 22° it was out is exactly the *"about 20 degrees more
+upright"* Pete asked for. **The housing's file-name angle is the mounted lean
+after all** — which is what §7a concluded on 2026-09-02, what the casing
+argument of 2026-09-03 briefly overturned, and what the withdrawal of that
+argument on 2026-09-04 left standing unopposed.
+
+**And the tip now comes off the holder, not off the blades.** 20 mm of
+graphite past the cap's outer face, which is 30.001 mm from the grip:
+
+```
+PEN_LEAN_HOLDER     = 23°                    the housing's own clocking
+PEN_GRAPHITE_HOLDER = 0.020 m                "about 2 cm"
+u                   = (sin 23, 0, cos 23)  = (0.390731, 0, 0.920505)
+tip = grip + (0.030001 + 0.020) * u        = (0.0860369, 0, 0.1494262)
+PEN_EXT_HOLDER      = 0.1494262 - 0.1034   = 0.0460262 m
+PEN_LAT_HOLDER      = 0.0860369 m
+```
+
+**This SUPERSEDES the "tip 50 mm below the bottom edge of the blades" rule** of
+2026-09-03 — and, at 20 mm, contradicts it: the derived tip sits **37.18 mm**
+below the plate edge, not 50. The blades' edge was a plausible datum for a tip
+nobody had measured; the holder is a better one, because the protrusion is the
+thing a person can actually see and adjust. One corroboration that is not an
+argument but is worth writing down: 20 mm of graphite + the 85.100 mm barrel +
+the assembly's 72.514 mm tail is a **177.6 mm** stick, and a Cretacolor
+Monolith is **175 mm**.
+
+| | 2026-09-04 | **2026-09-07 (shipped)** |
+|---|---:|---:|
+| `PEN_LEAN_HOLDER` — the bore, at the grip | 45.00° | **23.00°** |
+| `PEN_GRAPHITE_HOLDER` | — (a consequence) | **0.020 m, an INPUT** |
+| `PEN_EXT_HOLDER` | 0.0588421 | **0.0460262** |
+| `PEN_LAT_HOLDER` | 0.1253421 | **0.0860369** |
+| tip, `panda_hand` | (0.1253, 0, 0.1622) | **(0.0860369, 0, 0.1494262)** |
+| graphite past the cap | 53.214 mm | **20.000 mm** |
+| reach from the grip | 83.215 mm | **50.001 mm** |
+| the TCP → tip ray | 64.85° | **61.86°** |
+| tip below the blades' plate edge | 50.000 mm | **37.184 mm** |
+| grip centre | (0.0665, 0, 0.1034) | **unchanged** |
+
+**And the §7 red flag closes.** `scripts/extract_penholder22_meshes.py` has
+printed the disagreement between the drawn bore and the housing's own clocking
+on every run since 2026-08-25. It now prints **−0.00°**. The 22° that had no
+mechanism to live in — not a cradle, not the fingertip sockets, not the blade —
+turns out never to have needed one: the model was drawing the bore along a
+planner ray that was itself only ever an assumption.
+
+Casing clearance stays irrelevant by instruction and is reported only: at this
+lean the housing clears the hand shell by **+13.84 mm**, the cap by **+59.90**,
+and the 72.5 mm pencil tail runs **−10.61 mm** into it.
+
 #### The holder is clamped at the FAR END of the blades — 2026-09-04
 
 Pete, on the first render: *"you need to move the pen to the front of the
@@ -1074,14 +1152,14 @@ approach axis, the grip is still 30.001 mm from the cap's outer face and
 
 **What it does change is the tip, and one word in the vocabulary.**
 
-| | 2026-09-03 | **2026-09-04** |
-|---|---:|---:|
-| grip centre, `panda_hand` | (0, 0, 0.1034) | **(0.0665, 0, 0.1034)** |
-| `PEN_EXT_HOLDER` (axial, from the TCP) | 0.0588421 | **0.0588421** — unchanged |
-| `PEN_LAT_HOLDER` (lateral, from the TCP) | 0.0588421 | **0.1253421** |
-| tip, `panda_hand` | (0.0588, 0, 0.1622) | **(0.1253421, 0, 0.1622421)** |
-| `PEN_LEAN_HOLDER` — the **bore's** lean, at the grip | 45.00° | **45.00°** |
-| the **TCP → tip ray**, which is no longer the bore | 45.00° | **64.85°** |
+| | 2026-09-03 | 2026-09-04 | **2026-09-07 (shipped)** |
+|---|---:|---:|---:|
+| grip centre, `panda_hand` | (0, 0, 0.1034) | **(0.0665, 0, 0.1034)** | (0.0665, 0, 0.1034) |
+| `PEN_EXT_HOLDER` | 0.0588421 | 0.0588421 | **0.0460262** |
+| `PEN_LAT_HOLDER` | 0.0588421 | 0.1253421 | **0.0860369** |
+| tip, `panda_hand` | (0.0588, 0, 0.1622) | (0.1253, 0, 0.1622) | **(0.0860369, 0, 0.1494262)** |
+| `PEN_LEAN_HOLDER` — the **bore's** lean, at the grip | 45.00° | 45.00° | **23.00°** |
+| the **TCP → tip ray**, which is no longer the bore | 45.00° | 64.85° | **61.86°** |
 
 `PEN_LEAN_HOLDER` is the angle a protractor on the real barrel would read. It
 stopped being the angle of the TCP → tip ray the moment the grip left the TCP,
@@ -1102,9 +1180,10 @@ reason given here for 45°. At the far-end placement it does not:
 | the 72.5 mm pencil tail, 45° | +18.36 mm | **−24.32 mm** |
 
 At this placement **23° clears the casing better than 45° does**, so the
-hardware no longer forces the lean. 45° stands because it is the user's
-standing rule and the incumbent — not because it is forced. Said plainly
-rather than left standing.
+hardware no longer forces the lean. 45° stood, for three days, because it was
+the user's standing rule and the incumbent — and on 2026-09-07 the housing's
+own block geometry replaced it with 23° anyway (above). The casing was never
+the reason for either.
 
 And on the user's instruction (2026-09-04) the casing numbers do not constrain
 the placement at all any more: *"the pen's simulated length is a random number
@@ -1155,7 +1234,7 @@ of the manufacturer's own `hand.obj` collision shell:
 | 35° | **−0.16 mm** | +44.6 | +9.46 |
 | **35.17° (the floor)** | **0.00 mm** | +44.6 | +9.61 |
 | 40° | +2.99 | +42.6 | +13.99 |
-| **45° (what the model uses)** | **+6.16 mm** | +40.4 | **+18.36 mm** |
+| 45° (what it drew, 2026-09-03/04) | **+6.16 mm** | +40.4 | **+18.36 mm** |
 | 50° | +9.37 | +38.3 | +22.55 |
 
 **On the centreline the lean could not be less than 35.17°.** At 23° twelve
@@ -1235,7 +1314,9 @@ GRIP, not from the wrist axis. Since 2026-09-04 the grip is 66.500 mm out
 along hand x, so a ruler laid against the real gripper reads
 `66.5 + (this column)`: **subtract 66.5 mm from a ruler reading before
 entering the inverse table, and add it to the forward table's tip x.** The
-shipped row is 58.8 mm here and 125.3 mm on the ruler.
+shipped row is **19.5 mm** here (50.001 mm of reach at 23°) and **86.0 mm**
+on the ruler. The 45° rows below are kept as arithmetic; the shipped lean is
+23°.
 
 | lean | measured tip↔axis | reach from grip | axial from TCP | tip z | below the plates | graphite past the cap | vs the shipped tip |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1422,9 +1503,18 @@ here is picometres rather than nanometres.
 
 `scripts/render_system_model.py` → `out/` (gitignored):
 `system_model_three_quarter.png`, `_elevation.png`, `_plan.png`,
-`_drop_cluster.png`, `_holder.png`, `_holder_side.png`, `_photo.png`
-(2400 px, PBR, shadows) and `system_model.html` (static meshcat, 32.6 MB).
-Arms are posed at `Q_PARK_PROPOSED`.
+`_drop_cluster.png`, `_holder.png`, `_holder_side.png`, `_photo.png`,
+`_holder_jaw.png` (2400 px, PBR, shadows) and `system_model.html` (static
+meshcat, 32.6 MB). Arms are posed at `Q_PARK_PROPOSED`.
+
+**`_holder_jaw` is the view the tool gets judged from** (added 2026-09-07):
+straight down the **jaw** axis, aimed at the holder's own middle, `up = −z_hand`.
+The bore's lean and the graphite's protrusion both lie *in* the image plane
+here, so neither is foreshortened — which is what makes it the shot to hold
+against a photograph. `_holder_side` looks down hand **x** and shows the V of
+the blades; this one looks down hand **y** and shows the **angle**. The 18 mm
+plate band hides the middle of the block from this camera; the barrel above it
+and the cap below are on the same line and carry the angle.
 
 **`_holder_side` is the shot that says which way round the housing is** (§7c),
 and it was added because the error was visible in `_holder.png` for a day
@@ -1453,7 +1543,7 @@ first — the fat-finger close-ups of §7d and §7e are
 ```
 <station venv>/bin/python scripts/render_system_model.py \
     --urdf assets/system_model/installation_fatfingers.urdf \
-    --tag fatfingers_ --views holder,holder_side,photo --no-html
+    --tag fatfingers_ --views holder,holder_side,photo,holder_jaw --no-html
 ```
 
 → `out/system_model_fatfingers_holder.png`,

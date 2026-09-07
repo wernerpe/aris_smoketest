@@ -159,8 +159,10 @@ the gate-validated real-touchdown value — a measurement outranks a CAD whose
 deployed configuration is unconfirmed — and the CAD's own numbers are pinned
 alongside it in `frames.py` (`TIP_HAND_HOLDER10`, `PEN_TILT_HOLDER10`,
 `PEN_EXT_HOLDER10`).  The LATERAL holder's own pair moved on 2026-09-03 to
-`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = 0.0588421 m from a photo of the real
-gripper; that pair never was gate-validated (docs/SYSTEM_MODEL.md §7e).
+`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = 0.0460262 / 0.0860369 m from a photo of
+the real gripper — grip at the far end of the Fat blades, bore at the
+housing's own 23°, 20 mm of graphite past the cap.  That pair never was
+gate-validated (docs/SYSTEM_MODEL.md §7e).
 
 Collision: the final-rig pen capsule and the URDF tool cylinder use the
 **union envelope of both builds** — r = 0.05 m, z −0.033…+0.210 in the hand

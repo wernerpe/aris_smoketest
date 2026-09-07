@@ -390,14 +390,18 @@ def test_the_holder_placement_aims_at_the_planning_tip():
     assert (T_c[:3, 3] - np.array([0, 0, D_HAND_TCP])) @ u > 0
     # ...and the numbers Pete has to rule on
     assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=0.01)
+    # the BORE's own 23 deg — the housing's clocking, which is what puts the
+    # square block flush with the blades (2026-09-07, docs/SYSTEM_MODEL.md 7e)
     assert np.degrees(np.arctan2(PEN_LAT_HOLDER - GX, PEN_EXT_HOLDER)) == \
-        pytest.approx(45.0, abs=1e-9)
+        pytest.approx(23.0, abs=1e-3)   # the constants are 7 dp
+    assert np.degrees(P["post_clock"]) == pytest.approx(23.0, abs=1e-4)
     # grip -> the cap's outer face is 30.001 mm, so the graphite past it is
-    # 53.2 mm (it was 125.6 mm at the old 0.110 / 0.110 pair, and 100.5 with
-    # the housing end-for-end).  53.2 mm along the bore reads 37.6 mm in the
-    # photo's own view, which is the 20-40 mm of graphite the photo shows.
+    # 20.0 mm, and since 2026-09-07 that is an INPUT (Pete, off the side
+    # view, with the orientation confirmed: "about 2 cm") from which the tip
+    # is derived.  It was 53.2 mm while the tip came off the blades, 125.6 at
+    # the old 0.110 / 0.110 pair, and 100.5 with the housing end-for-end.
     assert exit_x == pytest.approx(0.030001, abs=1e-6)
-    assert (reach - exit_x) == pytest.approx(0.05321, abs=5e-4)  # graphite
+    assert (reach - exit_x) == pytest.approx(0.020, abs=1e-6)  # graphite
 
 
 def test_the_graphite_runs_from_the_cap_to_the_tip(links, joints):

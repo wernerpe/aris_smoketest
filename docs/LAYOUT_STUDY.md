@@ -437,8 +437,8 @@ namespaced Franka arms welded at `layout.FLEET_PROPOSED`'s base transforms
 (inverted, h = 0.85), their base plates and booms, the paper web, and the
 LATERAL pen holder on every hand as fixed links — `tcp` → `pen_bracket`
 (`PEN_LAT_HOLDER` along hand x) → `pen_body` (`PEN_EXT_HOLDER` along tool z) →
-a `pen_tip` frame.  Both were 0.110 until 2026-09-03; they are 0.1253421 and
-0.0588421 now (docs/SYSTEM_MODEL.md §7e).
+a `pen_tip` frame.  Both were 0.110 until 2026-09-03; they are 0.0860369 and
+0.0460262 now (docs/SYSTEM_MODEL.md §7e).
 `environment.urdf` is the same file without the arms.
 
 Both are GENERATED, by `scripts/gen_proposed_rig_urdf.py`, from `layout.py`,
@@ -519,7 +519,7 @@ same disagreement with the file's name.
 
 1. **23 deg of CAD vs 45 deg of planner — CLOSED 2026-09-03, see the second
    note below.**  `frames`' lateral tool puts the tip at
-   TCP + R @ (0.1253421, 0, 0.0588421) — a 45-degree BORE lean at a grip
+   TCP + R @ (0.0860369, 0, 0.0460262) — a 23-degree BORE lean at a grip
    66.5 mm out along the blades.  The transform was
    taken as truth and the meshes drawn along the planner's ray, with the
    missing 22 deg parked in the fingertip cradle, whose geometry is not in
@@ -549,12 +549,13 @@ same disagreement with the file's name.
    > underside, so the raw housing STL is INSIDE the manufacturer's own hand
    > collision shell at every lean below **35.17 deg** (−11.90 mm at 23 deg)
    > and clears by **6.16 mm** at 45.  The lean stays 45; the DEPTH moved, to
-   > 0.0588421 m axial — the tip ~5 cm below the Fat blades' plates — and
-   > then, on 2026-09-04, the GRIP moved to the plates' far end and the
-   > lateral half became 0.1253421.  That move also withdrew the casing
-   > argument: at the real placement 23 deg clears better than 45 does, so
-   > the lean is the standing rule and not a forced choice.
-   > `docs/SYSTEM_MODEL.md` §7e.
+   > 0.0588421 m axial at the time — the tip ~5 cm below the plates — and
+   > then, on 2026-09-04, the GRIP moved to the plates' far end.  That move
+   > also withdrew the casing argument.  And on 2026-09-07 the LEAN went to
+   > 23 deg — the housing's own clocking — because the square block it names
+   > is flush with the blades at 23 and 22 deg askew at 45, which is what the
+   > photograph shows.  **The 22-degree question above is CLOSED, in the
+   > CAD's favour.**  `docs/SYSTEM_MODEL.md` §7e.
 2. **53.2 mm of graphite** (125.6 mm until 2026-09-03).  Grip-to-exit is
    30.001 mm — the cap's outer face — and the planning tip is now 83.215 mm
    from the TCP, so the stick has to protrude **53.214 mm** past the cap;

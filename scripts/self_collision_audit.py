@@ -106,8 +106,9 @@ OUT = ROOT / "out"
 CAPS = coordination.CAPSULES_LAT
 NB = coordination.N_BASE
 # the HOLDER's own pair (frames.PEN_EXT_HOLDER / PEN_LAT_HOLDER), not the
-# inline pen's: both were 0.110 until 2026-09-03 and are 0.0588421 now, so an
-# audit recorded before that date was run against a longer tool.
+# inline pen's: both were 0.110 until 2026-09-03 and are 0.0460262 /
+# 0.0860369 now, so an audit recorded before that date was run against a
+# longer tool.
 PEN_EXT, PEN_LAT = _F.PEN_EXT_HOLDER, _F.PEN_LAT_HOLDER
 ATLAS_DIR = "atlas_proposed_h0940_gated"
 

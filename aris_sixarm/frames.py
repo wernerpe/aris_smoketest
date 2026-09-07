@@ -89,7 +89,50 @@ PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
 #
 #     PEN_EXT_HOLDER = 0.1622421 - 0.1034 = 0.0588421 m       (AXIAL, fixed)
 #
-# ...AND THE LATERAL HALF MOVED AGAIN ON 2026-09-04, for a reason that has
+# ...AND BOTH HALVES WERE RE-DERIVED ON 2026-09-07, FROM THE HOLDER RATHER
+# THAN FROM THE BLADES.  Pete, reviewing the side view along the jaw axis:
+# "shorten the shaft of the pen and bring the tip closer to the cylindrical
+# pen holder, I think it only juts out 3-4 cm max", and "in the picture the
+# square part of the holder is flush with the metal part, so the entire
+# pen-holder plastic bit that is being pinched is about 20 degrees more
+# upright".  Two statements, and the second one is a MEASUREMENT in disguise.
+#
+#   THE BLOCK SQUARE TO THE HAND *IS* THE BORE AT 23 DEG, and the housing's
+#   own STL says so to 0.00 deg.  The mount post is a 26 mm square section
+#   whose four flats are clocked `PENHOLDER22["post_clock"]` = 23.00 deg about
+#   the post axis relative to the bore (measured: the four large flats' face
+#   normals sit at -113.00 / -23.00 / +67.00 / +157.00 deg off the housing's
+#   own +X, which is the bore).  The post axis is hand y, so those normals
+#   live in the hand's x-z plane.  Place the bore at 23 deg and they land at
+#   -180 / -90 / 0 / +90 deg off hand z — flush with the blades' plate faces
+#   and edges, which is exactly what the photograph shows.  Place it at 45 and
+#   they land at -158 / -68 / +22 / +112: the block sits askew, 22 deg off,
+#   which is the "about 20 degrees more upright" Pete is asking for.
+#
+#   So the housing's file-name angle IS the mounted lean after all.  That is
+#   what 7a concluded on 2026-09-02 and what the casing argument of 2026-09-03
+#   briefly overturned; the casing argument was itself withdrawn on 2026-09-04
+#   (it was measured with the grip on the finger centreline), and nothing now
+#   stands against 23 deg.
+#
+#   AND THE TIP COMES OFF THE HOLDER NOW, NOT OFF THE BLADES.  Pete first
+#   said "3-4 cm max" past the cylindrical body and then, confirming the
+#   corrected orientation ("looks great now"), settled it at about 2 cm ->
+#   20 mm of graphite past the cap's outer face, which is 30.001 mm from the
+#   grip along the bore:
+#
+#       tip = grip + (30.001 + 20.000) mm * u,   u = (sin 23, 0, cos 23)
+#
+#   THIS REPLACES the "tip 50 mm below the bottom edge of the blades" rule of
+#   2026-09-03.  That rule is SUPERSEDED, and this time it is also
+#   CONTRADICTED: the derived tip sits 37.184 mm below the plate edge, not 50.
+#   The blades' edge was a plausible datum for a tip nobody had measured; the
+#   holder is a better one, because the protrusion is the thing a person can
+#   actually see and adjust.  One corroboration that is not an argument but is
+#   worth writing down: 20 mm of graphite + the 85.100 mm barrel + the 72.514
+#   assembly tail is a 177.6 mm stick, and a Cretacolor Monolith is 175 mm.
+#
+# ...AND THE LATERAL HALF MOVED ON 2026-09-04, for a reason that has
 # nothing to do with the pen and everything to do with WHERE THE HOLDER IS
 # CLAMPED.  USER-SPECIFIED, from the same photograph read a second time: the
 # holder sits at the FAR END of the Fat finger plates — "the tip of the finger
@@ -100,7 +143,7 @@ PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
 # whole holder slides 66.5 mm along hand x with it, and so does the tip:
 #
 #     PEN_LAT_HOLDER = grip_hand_x + PEN_EXT_HOLDER * tan(PEN_LEAN_HOLDER)
-#                    = 0.066500 + 0.0588421 = 0.1253421 m
+#                    = 0.066500 + 0.0195369 = 0.0860369 m
 #
 # NOTE WHAT `PEN_LEAN_HOLDER` NOW MEANS.  It is the BORE's lean off the hand's
 # approach axis, measured at the GRIP — which is what a protractor on the real
@@ -116,16 +159,16 @@ PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
 # about the build.  The numbers are still MEASURED and REPORTED, at this
 # placement, against the manufacturer's own hand collision shell:
 #
-#     housing  +7.78 mm    cap  +81.87 mm    the 72.5 mm pencil tail  -24.32
+#     housing +13.84 mm    cap  +59.90 mm    the 72.5 mm pencil tail  -10.61
 #
-# — the barrel is clear and the TAIL runs 24 mm INTO the casing, which is the
-# artefact Pete named.  AND THE ONE ARGUMENT THIS WITHDRAWS: on 2026-09-03,
+# (the housing and the tail do not move with the graphite; only the tip does)
+#
+# — the barrel is clear and the TAIL runs 11 mm INTO the casing, which is the
+# artefact Pete named.  AND THE ONE ARGUMENT THIS WITHDREW: on 2026-09-03,
 # with the grip on the finger centreline, the casing ruled out any lean under
-# 35.17 deg and that was the reason given here for 45 deg.  At THIS placement
-# it does not: 23 deg clears the shell by 13.84 mm, better than 45 deg's 7.78.
-# So the lean is 45 deg because it is the user's standing rule and the
-# incumbent, NOT because the hardware forces it.  Said plainly rather than
-# left standing.  docs/SYSTEM_MODEL.md 7e.
+# 35.17 deg and that was the reason given here for 45 deg.  At the far-end
+# placement it does not — 23 deg clears the shell BETTER than 45 did — and the
+# lean is now 23 deg on the housing's own geometry anyway.  docs/SYSTEM_MODEL.md 7e.
 #
 # Refine by touchdown calibration once the holder is mounted
 # (docs/DECISIONS.md).  What one ruler reading would settle is in
@@ -145,11 +188,20 @@ PEN_EXT = 0.110       # hand TCP -> pen tip (gate-B validated at MZ=0.924)
 # consistently.  BOTH halves switch together: before 2026-09-03 only the
 # lateral offset did, and a lateral run silently kept the inline pen's axial
 # 0.110.
-PEN_LEAN_HOLDER = np.deg2rad(45.0)   # rad, the BORE's lean off the approach
-                                     # axis, measured AT THE GRIP
-PEN_EXT_HOLDER = 0.0588421   # m, the holder's AXIAL tip depth below the TCP
-PEN_LAT_HOLDER = 0.1253421   # m, = grip_hand_x + PEN_EXT_HOLDER * tan(lean)
-                             #      = 0.066500 + 0.0588421
+PEN_LEAN_HOLDER = np.deg2rad(23.0)   # rad, the BORE's lean off the approach
+                                     # axis, measured AT THE GRIP.  It is the
+                                     # housing's own clocking: the block sits
+                                     # SQUARE to the hand at this angle and
+                                     # nowhere else (see above).
+PEN_GRAPHITE_HOLDER = 0.020  # m, graphite standing past the CAP's outer face
+                             # ("about 2 cm", USER-SPECIFIED 2026-09-07 with
+                             # the orientation confirmed against the real
+                             # gripper).  The tip derives from this and the
+                             # holder; it is no longer set by the blades.
+PEN_EXT_HOLDER = 0.0460262   # m, the holder's AXIAL tip depth below the TCP
+                             # = (0.030001 + PEN_GRAPHITE_HOLDER) * cos(lean)
+PEN_LAT_HOLDER = 0.0860369   # m, = grip_hand_x
+                             #     + (0.030001 + PEN_GRAPHITE_HOLDER)*sin(lean)
 PEN_LAT = 0.0            # m, ACTIVE lateral offset (0.0 = legacy inline pen)
 PEN_EXT_ACTIVE = PEN_EXT  # m, ACTIVE axial depth (PEN_EXT = the inline pen)
 TOOL_NAMES = ("inline", "lateral")
