@@ -1,5 +1,170 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE HOLDER IS FINAL, AND THE RIG IS BETTER FOR IT (2026-09-07)
+
+`7f99565` and `efd53f5` settled the tool against the real gripper: the grip is
+at the FAR END of the Fat finger plates and the bore leans **23°**, the
+housing's own clocking, so **`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = 0.0460262 /
+0.0860369** — the tip 40 mm further out across the hand and 13 mm shallower
+than the 2026-09-03 pair.  Everything below is that tool, re-certified from the
+atlas up.  Nothing here moves a gate, a capsule, the layout grid or h; the only
+committed constants that changed are the two the park search owns.
+
+### The atlas, and what the final tool is worth
+
+    ARIS_TOOL=lateral scripts/run_atlas6.py --rig proposed \
+        --pen 0.0460262 --pen-lat 0.0860369 --jobs 6 \
+        --out out/atlas_proposed_h0940_lat0860              (298 s/arm)
+    ARIS_RIG=proposed ARIS_TOOL=lateral scripts/regate_atlas.py \
+        --in  out/atlas_proposed_h0940_lat0860 \
+        --out out/atlas_proposed_h0940_lat0860_gated63      (246 s)
+
+| 2 cm sweep, h = 0.940, 16 562 cells | 0.110 | 0.0588421 | **0.0460262/0.0860369** |
+|---|---|---|---|
+| union strict-GO | 99.64 % | 97.08 % | **98.47 %** |
+| reachable | 100.00 % | 99.71 % | **99.84 %** |
+| ≥ 2 arms | 47.90 % | 38.88 % | **42.13 %** |
+| ≥ 3 arms | 11.11 % | 4.21 % | **4.32 %** |
+| dead | 0.36 % | 2.92 % | **1.53 %** |
+| strict-GO cells, arm 31 | 4 846 | 4 072 | **4 208** |
+
+**THE LATERAL OFFSET IS WHAT BUYS IT BACK.**  The 0.0588421 tool lost 2.56
+points of union because it was short in BOTH directions at once; this one is
+shorter still along the approach axis (46 mm against 59) but **86 mm across
+it**, and reach across the hand is what an inverted arm spends on the paper.
+Half of what the shorter pen cost is recovered, and the redundancy with it.
+
+### The feasible-workspace map, v14
+
+`scripts/feasible_workspace.py` at v12/v13's settings (`--fiber-tries 48
+--hover-lean-deg 15 --rrt 60 --rrt-nodes 300 --rescue 0,1`), 6 workers, on
+`_gated63`; sweep 7 087 s + rescue 761 s.  `out/feasible_workspace_v14.{png,json}`.
+
+| solo-drawable, 16 562 cells | v12 (0.110) | v13 (0.0588) | **v14 (final)** |
+|---|---|---|---|
+| FEASIBLE | 99.46 % | 96.84 % | **97.95 %** (6.489 m²) |
+| draw pose only | 99.64 % | 97.05 % | **98.23 %** |
+| + hover | 99.64 % | 97.05 % | 98.18 % |
+| + reachability | 99.46 % | 96.84 % | 97.95 % |
+| DEAD, no draw pose | 0.36 % | 2.95 % | **1.77 %** |
+| DEAD, draw ok no hover | 0.00 % | 0.00 % | 0.05 % |
+| DEAD, hover ok unreachable | 0.18 % | 0.21 % | 0.23 % |
+| largest inscribed rectangle | 0.52 × 3.54 = 1.841 m² | 0.46 × 3.64 = 1.674 m² | **0.54 × 2.72 = 1.469 m²** |
+
+**WHERE THE DEAD CELLS SIT — the under-base holes halved and the rim did not
+move.**  339 dead cells:
+
+| distance to the nearest base | v13 | **v14** |
+|---|---|---|
+| under the base discs (r < 0.30 m) | ~263 | **93** (86 of them r < 0.20) |
+| in between (0.30–0.60 m) | few | 21 |
+| **the OUTER RIM (r ≥ 0.70 m)** | 242 (at 0.60–0.85) | **225** (126 at 0.70–0.80, 99 at 0.80–0.90) |
+| median dead-cell radius | 0.434 m | **0.783 m** |
+
+By cause: `no draw pose` is 293 cells and **225 of them are the rim** (median
+r 0.787); `draw ok, no hover` is 8 cells and all 8 are under a base; `hover ok,
+unreachable` is 38, median r 0.317.  **So the final tool bought back the
+under-base holes and not the rim** — 86 mm of lateral offset lets an arm reach
+UNDER itself where 59 mm could not, but nothing about a shorter axial depth
+extends the outer edge of the annulus.  The rim is now essentially the whole
+dead set, and it is the constraint any future placement has to respect.
+
+**AND THE RECTANGLE GOT SMALLER WHILE THE COVERAGE ROSE**, which is not a
+contradiction: 1.469 m² against v13's 1.674.  v13's dead set was concentrated
+(a long clear portrait strip survived beside it); v14's 339 cells are spread
+thinner over both rims, so the largest *clean* block is shorter even though
+1.11 points more of the canvas is drawable.  A picture that needs one big
+rectangle is not the same ask as a picture that needs coverage.
+
+### CSAIL v18 — 100.0000 %, on a placement chosen in five minutes
+
+The proxy first (`scripts/placement_proxy.py`, promoted to the repo this run),
+then ONE plan.  No placement search: v16 measured that at 27 243 s to lose
+0.65 pp.
+
+**THE PROXY SAYS THE FINAL TOOL CHANGED THE PROBLEM.**  At the 0.0588421 tool,
+**10 of 1 976** offsets had a zero contiguous dead run and the best had 82 mm of
+5th-percentile clearance.  At this tool, **143 of 325** do, and the best has
+**141 mm**.  Top five, 90°, scale 0.85:
+
+| dx | dy | longest dead run | total dead | p5 clearance | centre |
+|---|---|---|---|---|---|
+| **−0.03** | **+0.05** | **0 mm** | **0 mm** | **141 mm** | (0.8717, 1.8653) |
+| −0.02 | +0.05 | 0 | 0 | 141 | (0.8817, 1.8653) |
+| −0.03 | +0.10 | 0 | 0 | 140 | (0.8717, 1.9153) |
+| −0.02 | +0.10 | 0 | 0 | 140 | (0.8817, 1.9153) |
+| −0.02 | −0.00 | 0 | 0 | 134 | (0.8817, 1.8153) |
+
+Scale 0.80 and 0.90 were scanned too and both also have zero-dead-run offsets
+(0.80 at +0.00/+0.05 with 143 mm; 0.90 at +0.00/+0.05 with 134 mm) — **a
+BIGGER drawing at 100 % is available and nobody has asked for one**; 0.85 is
+kept here only so v18 compares with v15 and v17 like for like.
+
+Run as GUI job **`20260907-162523-6ac6`**, v15's flag set exactly, fixed
+placement, the new atlas, the re-searched parks.
+`out/csail_schedule_h094_v18.{npz,json}`, `out/csail_program_h094_v18.json`,
+`out/csail_place_v18_placement.json`, `out/h094_v18.log`.
+
+| | v15 | v16 | v17 (0.0588 tool) | **v18 (final tool)** |
+|---|---|---|---|---|
+| offset | (−0.10, 0.00) | (−0.10, +0.10) | (+0.05, −0.20) | **(−0.03, +0.05)** |
+| centre | (0.8017, 1.8153) | (0.8017, 1.9153) | (0.9517, 1.6153) | **(0.8717, 1.8653)** |
+| coverage, allocated | 99.5224 % | 98.8729 % | 100.0000 % | **100.0000 %** |
+| coverage, conducted | 99.7485 % | 97.9754 % | 100.0000 % | **100.0000 %** |
+| left empty / skipped | 0.0803 / 0 m | 0.1894 / 0.1947 m | 0 / 0 m | **0.0000 / 0.0000 m** |
+| segments | 47 | 48 / 47 | 49 | **53** |
+| makespan | 277.625 s | 249.875 s | 195.229 s | 242.146 s |
+| conducted pause | — | 56.7 s | 121.4 s | 220.2 s |
+| phases planned / conducted | 2 / 2 | 3 / 7 | 2 / 2 | **3 / 3** |
+| min inter-arm, worst phase | 82.0 mm | 81.2 mm | 82.2 mm | 81.9 mm |
+| column / chain / tip | 122.0 / 30.7 / −7.3 | 131.0 / 22.6 / −4.9 | 136.6 / 30.4 / −7.0 | **149.9 / 20.8 / −6.4** |
+| planner wall clock | 4 910.9 s | 29 352.9 s | 3 381.7 s | **4 144.6 s** |
+
+**INDEPENDENT `scene_check`, whole merged timeline** (`scripts/recheck_timeline.py`,
+also promoted this run): **VERDICT PASS**, min inter-arm **80.59 mm** against
+the 80 mm gate — **+0.59 mm** — worst pair **13–31 at t = 42.01 s**; self
+21.5 mm, frame 51.6 mm, column 145.8 mm, joint margin 0.1076, frozen 6/6.
+
+**THE GATE TO WATCH ON THIS ONE IS THE PAPER, NOT THE NEIGHBOURS.**  Chain
+clearance is **20.5 mm against a 20 mm gate** — 0.5 mm, the thinnest margin in
+the programme and thinner than the inter-arm one.  It is arm 31 at t = 80.0 s.
+v15 and v17 had 30 mm there; the final tool holds the wrist lower for the same
+tip (46 mm of axial depth against 59), which is exactly where that went.  **A
+touchdown calibration that lowers the tip further eats this first.**
+
+**WHERE THE TIME WENT** — 3 962.9 s of measured substage time in a 4 144.6 s
+run, from `scripts/job_substages.py`:
+
+| substage | v18 | share | v15 |
+|---|---:|---:|---:|
+| balance | 2 345.1 s | 59.2 % | 3 136.8 s (65.5 %) |
+| conduct | 525.2 s | 13.3 % | 710.5 s |
+| replan | 510.1 s | 12.9 % | 465.7 s |
+| probe | 279.0 s | 7.0 % | 272.0 s |
+| flycheck | 142.0 s | 3.6 % | 109.6 s |
+| merge | 104.5 s | 2.6 % | 39.1 s |
+| sequence / guarantee / repair / prefilter | 57.0 s | 1.4 % | 57.2 s |
+
+By stage: allocation 3 437.7 s, conduction 702.7 s, `scene_check` 138.3 s over
+4 calls, export 3.0 s, trace 0.3 s.  **The balancer is still two thirds of the
+run** and it is still the thing to iterate against.
+
+### The park set, re-searched at the final tool
+
+Details and the full comparison are in `aris_sixarm/layout.py` beside the grid.
+Headline: **473–474 of 576** candidates certify per arm (430 before), fleet
+worst park-vs-(ink AND lift) **93.1 mm** against the 80 mm gate, park-vs-park
+at the ≥ 250 mm cap, entries and go-homes **113/144 = 78.5 %**.  `PARK_GRID_PROPOSED`
+and `Q_PARK_PROPOSED` are that search's output, re-derived rather than typed.
+93.1 mm is arm 71's own ceiling; the other five clear by 97.6–98.6 mm.
+
+**A LOOSE END, NAMED.**  Of the five arms that swing aside under
+`region_aware_parks`, two — arms 2 and 17 — have a certified `repark_route`
+that `idle.conduct` cannot schedule while the other five stand still
+(`Unconductable`, no monotone pause schedule).  v18 does not use `--aside-parks`
+so nothing shipped depends on it, but the aside feature is not fully available
+on this park set and that is not the same as it working.
+
 ## RE-PLANNING AT THE HOLDER'S OWN TOOL (2026-09-03)
 
 `bc670bf` moved the lateral tool's tip 72.348 mm — `PEN_LAT_HOLDER` /
