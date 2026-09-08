@@ -95,12 +95,12 @@ def do_sweep(a):
     arms = sorted(fl)
     d = Path(a.out)
     d.mkdir(parents=True, exist_ok=True)
-    print(f"h={h} pitch={pitch} grid={a.grid} PEN_LAT={frames.PEN_LAT} "
-          f"pen={fl[arms[0]].pen}", flush=True)
+    print(f"h={h} pitch={pitch} grid={a.grid} tilt<={a.tilt} deg "
+          f"PEN_LAT={frames.PEN_LAT} pen={fl[arms[0]].pen}", flush=True)
     t0 = time.time()
     with mp.get_context("fork").Pool(min(a.jobs, len(arms))) as pool:
         pool.starmap(atlas_mod.sweep_arm,
-                     [(x, str(d), a.grid, 1.05, h, 15.0, fl[x].pen, fl,
+                     [(x, str(d), a.grid, 1.05, h, a.tilt, fl[x].pen, fl,
                        SHEET, frames.PEN_LAT) for x in arms])
     print(f"atlas h={h} -> {d}  {time.time() - t0:.0f}s", flush=True)
 
@@ -610,6 +610,11 @@ def main():
     s.add_argument("--out", required=True)
     s.add_argument("--jobs", type=int, default=6)
     s.add_argument("--grid", type=float, default=GRID)
+    s.add_argument("--tilt", type=float, default=15.0,
+                   help="the pen-lean cone the gated search may climb, in "
+                        "degrees.  15 is the shipped allowance; 20 is Pete's "
+                        "pending decision and a wider cone certifies cells a "
+                        "perpendicular pen cannot reach.")
     s.set_defaults(fn=do_sweep)
 
     r = sub.add_parser("report", help="what the atlases say, per height")

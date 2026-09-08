@@ -613,6 +613,132 @@ gate is not an environment fix; the deviation is 13 orders of magnitude under
 the 2 cm threshold the lattice gates on and 4 under the 1e-12 the URDF checks
 hold.  Recorded, not patched.
 
+## OPEN — FOR PETE: NO HOLES UNDER THE ARMS (2026-09-08)
+
+Pete: *"can we make it so the continuously covered chunk is as big as possible
+(no holes under the arms)... This doesn't mean the overall coverage is maximal
+but we just don't want any holes if we place a drawing in the certified area."*
+
+**THAT IS A DIFFERENT FIGURE OF MERIT AND IT ORDERS THE HEIGHTS DIFFERENTLY.**
+Coverage counts a dead cell as 0.006 % of the canvas; a drawing counts it as a
+knife through every rectangle that contains it.  Measured with
+`scripts/certified_area.py` (new): the largest axis-aligned rectangle with NO
+dead cell in it, at the final tool (0.0460262 / 0.0860369, 23°),
+`LAYOUT_PROPOSED` untouched at 0.940.
+
+### The sweep — drawing-pose layer, all six heights
+
+2 cm atlases at the current gates, ≤ 15° lean, one per height
+(`out/atlas_proposed_h*_lat0860`, 90–709 s each).
+
+| h | live % | dead under bases | dead on the rim | enclosed holes | **largest hole-free rectangle** | contains the centre? |
+|---|---|---|---|---|---|---|
+| 0.850 | 98.38 | **249** | 20 | 7 (0.0996 m²) | 1.78 × 1.00 = **1.780 m²** | **no rectangle does** |
+| 0.880 | 98.44 | 202 | 57 | 6 (0.0808 m²) | 1.70 × 1.06 = **1.802 m²** | 0.48 × 2.38 = 1.142 |
+| 0.910 | 98.42 | 129 | 133 | 9 (0.0516 m²) | 1.66 × 1.08 = **1.793 m²** | 0.48 × 3.64 = 1.747 |
+| **0.940** (ships) | **98.47** | 29 | 225 | 8 (0.0116 m²) | 0.62 × 3.64 = **2.257 m²** | yes, the same one |
+| **0.970** ⚠ | 97.72 | **0** | 378 | **0** | 1.50 × 3.64 = **5.460 m²** | yes, the same one |
+| 1.000 ⚠ | 96.32 | **0** | 609 | **0** | 1.40 × 3.64 = **5.096 m²** | yes, the same one |
+
+⚠ = hardware check needed (the drop posts trim shorter; the runway underside is
+1623.6 mm above the paper, so there is room, but nobody has cut it).
+
+By aspect class, same layer (landscape ≥ 1.5:1 / near-square / portrait):
+
+| h | landscape | near-square | portrait |
+|---|---|---|---|
+| 0.850 | **1.780** | 1.269 | 1.674 |
+| 0.880 | **1.802** | 1.272 | 1.602 |
+| 0.910 | 1.793 | 1.782 | 1.747 |
+| 0.940 | 1.696 | 1.792 | **2.257** |
+| 0.970 | 1.793 | **3.435** | **5.460** |
+| 1.000 | 1.685 | 3.010 | 5.096 |
+
+**THE CROSSOVER IS BETWEEN 0.940 AND 0.970, AND IT IS A CLIFF, NOT A SLOPE.**
+The under-base holes close completely — 29 cells to **zero** — and with them the
+last enclosed hole in the live set, so the largest hole-free rectangle jumps
+**2.257 → 5.460 m², 2.4×**, while total coverage *falls* 0.75 pp.  Coverage and
+hole-freeness are not just different, here they point opposite ways.  **Past
+0.970 the trend reverses**: at 1.000 the rim has eaten 609 cells and the
+rectangle is back to 5.096 m².  0.970 is the peak of the six.
+
+**AND AT 0.850 THERE IS NO HOLE-FREE RECTANGLE CONTAINING THE PAPER'S CENTRE AT
+ALL** — the centre cell itself is dead.  "Put it in the middle" is not
+available at the bottom of the range.
+
+### ...and then the pen-up layers put the holes back
+
+The table above is the drawing-pose layer.  The honest map is
+`feasible_workspace`'s three (draw pose + hover + reachability), and it was run
+in full at the shipped height and at the winner — park set re-searched at each,
+`--rescue 0,1` as v13/v14, ~2 h each.
+
+| all three layers | **h = 0.940** (v14) | **h = 0.970** |
+|---|---|---|
+| solo-drawable | **97.95 %** | 97.44 % |
+| dead under bases | 93 | **32** |
+| dead on the rim | 225 | 379 |
+| enclosed holes | 37 (0.0456 m²) | 32 (0.0180 m²) |
+| **largest hole-free rectangle** | 0.54 × 2.72 = **1.469 m²** | 0.58 × 3.48 = **2.018 m²** |
+| …landscape | 1.14 × 0.76 = 0.866 | 1.14 × 0.76 = 0.866 |
+| …near-square | 1.10 × 0.88 = 0.968 | 1.12 × 1.14 = 1.277 |
+| …portrait / centred | 1.469 | **2.018** |
+| park-vs-ink (re-searched) | 93.1 mm | **97.7 mm** |
+| park flyability | 78.5 % | **79.2 %** |
+
+**THE 5.460 m² DOES NOT SURVIVE CONTACT WITH THE ROUTER.**  At 0.970 the
+drawing-pose layer is perfectly hole-free; requiring each cell to be *lifted
+off* and *flown to* puts **32 holes back** and collapses the rectangle to
+0.58 m wide.  0.970 still beats 0.940 — **2.018 against 1.469 m², +37 %** — and
+it is still the best of the six, but the honest number is a third of the
+optimistic one.  **Those 32 holes are hover and route failures, not reach**, so
+they are the kind a better router or a better park set can attack, and rungs 2
+and 3 of the rescue ladder were NOT run here (as in v13/v14).  That is the
+cheapest unexplored lever on this question.
+
+### The 20° lean allowance buys nothing here
+
+Both best heights re-swept at `--tilt 20` (Pete's pending decision):
+
+| | 15° | 20° |
+|---|---|---|
+| h = 0.940 rectangle | 2.257 m² | **2.257 m²** (under-base 29 → 27) |
+| h = 0.970 rectangle | 5.460 m² | **5.460 m²** (under-base 0 → 0) |
+
+A wider cone certifies a handful more cells at the *rim*, where the dead set
+already is; it does not open the holes under the arms, because those are not
+lean-limited.  **The lean decision and the hole question are independent** —
+decide 20° on its own merits.
+
+### Recommendation
+
+**Trim to h = 0.970 if the hardware allows it, and treat 0.58 m as the width
+of the certified strip either way.**  It is the peak of the six on the measure
+Pete asked for: the under-base holes close completely at the drawing-pose layer
+(29 → 0 cells), the hole-free rectangle grows 37 % on the honest three-layer map
+(1.469 → 2.018 m²), the park set re-searches *better* there than at 0.940
+(97.7 mm against 93.1, 79.2 % flyable against 78.5), and it costs 0.51 pp of
+total coverage — which is precisely the trade Pete said he was willing to make.
+Do not go to 1.000: the rim starts taking more than the bases give back.  But
+the headline should not be oversold — **at no height in this range is there a
+wide hole-free region once the pen-up layers are honest**; the best strip is
+0.58 m across, so a drawing wider than that cannot be placed hole-free anywhere
+at any height tested.  If Pete wants a genuinely large certified area the next
+lever is not the height, it is the 32 hover/route holes at 0.970: rescue rungs
+2–3, or a park set chosen to keep the depots out of the middle third.
+
+**DELIVERABLES.**  The certified rectangle is emitted as JSON with the atlas,
+tool and gates it came from — `out/certified_area_h0940.json` (shipped) and
+`out/certified_area_h0970.json` (best) — and drawn on the maps
+(`out/feasible_workspace_v14_certified.png`,
+`out/feasible_workspace_h0970_certified.png`).
+`scripts/placement_proxy.py --certified-area FILE` refuses any placement whose
+box leaves that rectangle and prints the overhang per side.  **The CSAIL logo
+does not fit either of them**: at 0.940 it overhangs 0.47 m west and 0.44 m
+east at scale 0.85, and 0.18/0.14 m even at scale 0.50 — v18 draws 100 % only
+because its ink threads *between* the holes, not because it sits in a
+hole-free box.
+
 ## OPEN — FOR PETE: THE MOUNTING HEIGHT, RE-ASKED AT THE REAL TOOL (2026-09-03)
 
 **Nothing here changes `layout.LAYOUT_PROPOSED`.  h = 0.940 is still what
