@@ -78,7 +78,20 @@ EXT, LAT = frames.PEN_EXT_HOLDER, frames.PEN_LAT_HOLDER
 
 # ---------------------------------------------------------------------------
 def do_sweep(a):
-    fl, parks, h, pitch = fw.rig(None, a.h, None)
+    # THE ATLAS DOES NOT DEPEND ON THE PARKS, so a park recipe that does not
+    # transfer to this height must not block the sweep.  `atlas.sweep_arm`
+    # reads the spec's base pose, its pen and its static obstacles and nothing
+    # else; `rig` computes depots on the way past and at h = 0.850 the 0.940
+    # grid has no certified ready pose for arm 97 at the final tool.  That is
+    # a fact about the GRID (and the reason `park` is re-run per height), not
+    # a reason to have no atlas.
+    try:
+        fl, parks, h, pitch = fw.rig(None, a.h, None)
+    except RuntimeError as exc:
+        h, pitch = float(a.h), fw.SHIPPED_PITCH
+        fl = layout.build_fleet(layout.paired_grid(spacing=pitch, rows=3, h=h))
+        print(f"  parks refused at this height ({exc}); sweeping the BARE "
+              "fleet — the atlas does not read them", flush=True)
     arms = sorted(fl)
     d = Path(a.out)
     d.mkdir(parents=True, exist_ok=True)

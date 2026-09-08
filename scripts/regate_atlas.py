@@ -70,11 +70,29 @@ from aris_sixarm import atlas, frames, layout, paper, rig_final   # noqa: E402
 _W = {}
 
 
-def _init(floor, cone):
+def _init(floor, cone, h=None):
     _W["floor"] = float(floor)
     _W["cone"] = tuple(cone)
-    _W["fleet"] = layout.FLEET_PROPOSED
-    _W["h"] = float(layout.LAYOUT_PROPOSED["h"])
+    _W["fleet"] = _fleet_at(h)
+    _W["h"] = float(layout.LAYOUT_PROPOSED["h"]) if h is None else float(h)
+
+
+def _fleet_at(h=None):
+    """The rig to re-solve against. -> fleet.
+
+    THE BASE POSE IS THE WHOLE POINT OF A RE-GATE.  `solve_cell` re-searches
+    each row against the neighbours' steel and body columns at a stricter
+    floor, and every one of those clearances is measured from the arm's base.
+    Re-gating an atlas swept at one height against a fleet built at another
+    silently answers a question about a rig that does not exist -- and this
+    script bound `layout.FLEET_PROPOSED` unconditionally, so a height study
+    that re-gated its own atlas got the shipped 0.940 bases.  The parks are
+    NOT read here (no routing happens), so only the geometry is rebuilt.
+    """
+    if h is None:
+        return layout.FLEET_PROPOSED
+    return layout.build_fleet(layout.paired_grid(
+        spacing=layout.PAIR_SPACING, rows=3, h=float(h)))
 
 
 def _resolve(job):
@@ -97,14 +115,14 @@ def _resolve(job):
     return a, x, y, [x, y, *r[:7], *r[7], r[8], r[9]]
 
 
-def regate(arm, src, dst, floor, cone, pool, log=print):
+def regate(arm, src, dst, floor, cone, pool, log=print, h_over=None):
     arr, meta = atlas.load(src, arm)
     ok, why = atlas.is_current(meta)
     if not ok:
         raise SystemExit(f"atlas for arm {arm} is STALE: {why}")
-    fl = layout.FLEET_PROPOSED
+    fl = _fleet_at(h_over)
     spec = fl[arm]
-    h = float(layout.LAYOUT_PROPOSED["h"])
+    h = float(layout.LAYOUT_PROPOSED["h"]) if h_over is None else float(h_over)
     go = atlas.strict_go(arr)
     boxes = paper.static_boxes(spec)
     sc = np.full(len(arr), np.inf)
@@ -228,11 +246,17 @@ def main():
                          "which is the whole point: an atlas whose cells the "
                          "router may not fly to is an atlas that overstates "
                          "the canvas.")
+    ap.add_argument("--h", type=float, default=None, metavar="M",
+                    help="REPORT-ONLY.  Re-gate an atlas swept at a mounting "
+                         "height other than the shipped one.  Every clearance "
+                         "re-solved here is measured from the arm's BASE, so "
+                         "re-gating a 0.970 atlas against the 0.940 fleet "
+                         "answers a question about a rig that does not exist.")
     ap.add_argument("--arms", default="")
     ap.add_argument("--workers", type=int, default=max(1, os.cpu_count() - 8))
     a = ap.parse_args()
 
-    fl = layout.FLEET_PROPOSED
+    fl = _fleet_at(a.h)
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
     if a.compare:
         band = tuple(float(v) for v in a.band.split(",")) if a.band else None
@@ -241,7 +265,7 @@ def main():
         return compare(a.src, a.dst, arms, fl, band)
     dst = Path(a.dst)
     dst.mkdir(parents=True, exist_ok=True)
-    print(f"rig=proposed tool=lateral h={layout.LAYOUT_PROPOSED['h']}")
+    print(f"rig=proposed tool=lateral h={a.h if a.h is not None else layout.LAYOUT_PROPOSED[chr(39)+chr(104)+chr(39)]}")
     print(f"atlas gate  STATIC_MARGIN      = "
           f"{1000 * rig_final.STATIC_MARGIN:.0f} mm  (what {a.src} was swept at)")
     print(f"router floor FRAME_FLOOR       = "
@@ -253,10 +277,12 @@ def main():
     tot_fixed = tot_dropped = 0
     with mp.get_context("fork").Pool(a.workers, initializer=_init,
                                      initargs=(a.floor,
-                                               atlas.GATE_CONE_DEG)) as pool:
+                                               atlas.GATE_CONE_DEG,
+                                               a.h)) as pool:
         for arm in arms:
             arr, meta, fixed, dropped = regate(arm, Path(a.src), dst, a.floor,
-                                               atlas.GATE_CONE_DEG, pool)
+                                               atlas.GATE_CONE_DEG, pool,
+                                               h_over=a.h)
             tot_fixed += fixed
             tot_dropped += dropped
             out = dst / f"atlas_arm{arm}.npz"

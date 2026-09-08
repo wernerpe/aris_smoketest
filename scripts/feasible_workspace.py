@@ -1612,11 +1612,37 @@ def main():
                          "LOCALLY and no package constant is touched, so this "
                          "cannot leak into a shipped number — write it to its "
                          "own --out and quote it as a projection.")
+    ap.add_argument("--h", type=float, default=None, metavar="M",
+                    help="REPORT-ONLY.  Map a mounting height other than the "
+                         "shipped `LAYOUT_PROPOSED['h']`.  `rig` has always "
+                         "taken an `h`; only this CLI never passed one, so a "
+                         "height study had to re-implement the map.  Nothing "
+                         "in aris_sixarm/ is written — write it to its own "
+                         "--out and quote it as a projection.")
+    ap.add_argument("--parks", default=None, metavar="JSON",
+                    help="a `scripts/height_sweep.py park` result whose depots "
+                         "to use.  Needed with --h, because the shipped "
+                         "(radius, hover, bearing) grid was searched at 0.940 "
+                         "and does not transfer: at 0.850 it has no certified "
+                         "ready pose for arm 97 at all.  Parked arms are "
+                         "obstacles for the route layer, so mapping one height "
+                         "with another's depots is not that height's map.")
     a = ap.parse_args()
 
-    fl, parks, h, pitch = rig(a.pitch, None, a.calib)
+    fl, parks, h, pitch = rig(a.pitch, a.h, a.calib)
+    if a.parks:
+        doc = json.load(open(a.parks))
+        if not doc.get("certifies"):
+            raise SystemExit(f"{a.parks}: that search found no fleet park set "
+                             "clearing the gate; refusing to map on it")
+        parks = {int(k): np.asarray(v["q"], float)
+                 for k, v in doc["best"].items()}
+        fl = layout.build_fleet(
+            layout.paired_grid(spacing=pitch, rows=3, h=h), q_park=parks)
+        print(f"parks from {a.parks} (searched at h = {doc['h']})")
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
-    ph = (layout.PARK_HOVER_PROPOSED if abs(pitch - SHIPPED_PITCH) < 1e-9
+    ph = (layout.PARK_HOVER_PROPOSED
+          if abs(pitch - SHIPPED_PITCH) < 1e-9 and a.h is None and not a.parks
           else park_hovers(fl, parks, h))
     print(f"rig=proposed tool=lateral PEN_LAT={frames.PEN_LAT} h={h} "
           f"pitch={pitch}"

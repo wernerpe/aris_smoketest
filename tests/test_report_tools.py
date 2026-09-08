@@ -124,6 +124,57 @@ def test_recheck_reads_the_shipped_npz_and_gates_on_the_whole_timeline():
     assert any("min inter-arm" in ln for ln in lines)
 
 
+def test_certified_area_gate_accepts_what_fits_and_measures_what_does_not():
+    """A placement is inside the hole-free rectangle, or it is refused WITH the
+    overhang — "move it 3 cm east" is actionable and "refused" is not."""
+    import placement_proxy
+    cert = {"rect": {"largest": {"x0": 0.60, "x1": 1.20, "y0": 0.50,
+                                 "y1": 2.50, "w": 0.60, "h": 2.00,
+                                 "area_m2": 1.20}}}
+    inside = {"center": (0.90, 1.50), "logo_w": 0.40, "logo_h": 1.00}
+    c = placement_proxy.check_certified(inside, cert)
+    assert c["inside"] and c["worst_overhang_m"] == 0.0
+
+    # a box too wide, off-centre to the west: west overhang only
+    wide = {"center": (0.85, 1.50), "logo_w": 0.80, "logo_h": 1.00}
+    c = placement_proxy.check_certified(wide, cert)
+    assert not c["inside"]
+    assert c["overhang_m"]["west"] == pytest.approx(0.15)
+    assert c["overhang_m"]["east"] == pytest.approx(0.05)
+    assert c["overhang_m"]["north"] == 0.0 and c["overhang_m"]["south"] == 0.0
+    assert c["worst_overhang_m"] == pytest.approx(0.15)
+
+    # ...and the margin eats into the rectangle, never out of it
+    tight = placement_proxy.check_certified(inside, cert, margin=0.15)
+    assert not tight["inside"]
+    assert tight["overhang_m"]["west"] == pytest.approx(0.05)
+
+    # the flat form (just the rect) is accepted as well as the whole document
+    flat = placement_proxy.check_certified(inside, cert["rect"]["largest"])
+    assert flat["inside"]
+
+
+def test_certified_area_rectangle_really_has_no_dead_cell_in_it():
+    """The promise the JSON makes, checked against the map it came from."""
+    import certified_area
+    j = ROOT / "out" / "certified_area_h0940.json"
+    m = ROOT / "out" / "feasible_workspace_v14_map.npz"
+    if not (j.exists() and m.exists()):
+        pytest.skip("no certified-area JSON/map in gitignored out/")
+    doc = json.loads(j.read_text())
+    r = doc["rect"]["largest"]
+    live, xs, ys = certified_area.live_from_map(str(m))
+    j0 = int(np.argmin(np.abs(xs - r["x0"])))
+    j1 = int(np.argmin(np.abs(xs - r["x1"])))
+    i0 = int(np.argmin(np.abs(ys - r["y0"])))
+    i1 = int(np.argmin(np.abs(ys - r["y1"])))
+    block = live[i0:i1 + 1, j0:j1 + 1]
+    assert block.all(), (
+        f"{int((~block).sum())} dead cells inside a rectangle the JSON calls "
+        "certified; a drawing placed there would not be drawable")
+    assert block.size == r["cells"]
+
+
 def test_recheck_refuses_a_fleet_that_is_not_at_the_height_asked_for():
     """`--h` exists for the report-only re-plans, and it must prove itself."""
     import recheck_timeline

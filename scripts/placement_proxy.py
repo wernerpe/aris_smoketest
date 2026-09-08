@@ -106,10 +106,44 @@ def dead_runs(strokes, u):
     return longest, total, float(np.percentile(clear, 5)), float(clear.min())
 
 
+def check_certified(info, cert, margin=0.0):
+    """Is this placement's box inside the certified rectangle? -> dict.
+
+    THE CERTIFIED RECTANGLE IS A PROMISE ABOUT ANYWHERE INSIDE IT, so the only
+    question a placement has to answer is whether its bounding box fits — and
+    if it does not, by how much and on which side, because "move it 3 cm east"
+    is actionable and "refused" is not.
+
+    `cert` is `scripts/certified_area.py`'s JSON (or its `rect.largest`).
+    """
+    r = cert.get("rect", {}).get("largest", cert) if isinstance(cert, dict) \
+        else cert
+    cx, cy = float(info["center"][0]), float(info["center"][1])
+    w, h = float(info["logo_w"]), float(info["logo_h"])
+    box = dict(x0=cx - w / 2, x1=cx + w / 2, y0=cy - h / 2, y1=cy + h / 2)
+    over = dict(
+        west=round(max(0.0, (r["x0"] + margin) - box["x0"]), 4),
+        east=round(max(0.0, box["x1"] - (r["x1"] - margin)), 4),
+        south=round(max(0.0, (r["y0"] + margin) - box["y0"]), 4),
+        north=round(max(0.0, box["y1"] - (r["y1"] - margin)), 4))
+    worst = max(over.values())
+    return dict(inside=worst <= 0.0, overhang_m=over, worst_overhang_m=worst,
+                box={k: round(v, 4) for k, v in box.items()},
+                certified={k: r[k] for k in ("x0", "x1", "y0", "y1", "w", "h",
+                                             "area_m2") if k in r})
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("source")
     ap.add_argument("--atlas", required=True)
+    ap.add_argument("--certified-area", default=None, metavar="JSON",
+                    help="scripts/certified_area.py output.  Every candidate "
+                         "is also checked against that hole-free rectangle "
+                         "and the ones that do not fit are REFUSED, with the "
+                         "overhang per side reported")
+    ap.add_argument("--certified-margin", type=float, default=0.0,
+                    help="metres of the certified rectangle to keep in hand")
     ap.add_argument("--rotate", type=float, nargs="+", default=[90.0])
     ap.add_argument("--scales", type=float, nargs="+", default=[0.85])
     ap.add_argument("--offset-range", type=float, default=0.30)
@@ -126,9 +160,17 @@ def main(argv=None):
     fl = layout.FLEET_PROPOSED
     u = union_mask(a.atlas, fl)
     px, _ = trace.trace_any(a.source)
+    cert = None
+    if a.certified_area:
+        cert = json.loads(Path(a.certified_area).read_text())
+        cr = cert.get("rect", {}).get("largest", cert)
+        print(f"certified rectangle: {cr['w']:.2f} x {cr['h']:.2f} m = "
+              f"{cr['area_m2']:.3f} m² at ({cr['x0']:.2f}, {cr['y0']:.2f})"
+              + (f", margin {a.certified_margin:.3f} m"
+                 if a.certified_margin else ""))
     print(f"atlas {a.atlas}: {100 * u.mean():.2f} % of {u.size} cells live")
     print(f"traced {len(px)} strokes from {a.source}")
-    rows, n_fit = [], 0
+    rows, n_fit, n_refused = [], 0, 0
     R = a.offset_range
     for rot in a.rotate:
         for f in a.scales:
@@ -142,6 +184,11 @@ def main(argv=None):
                     if not info["fits"]:
                         continue
                     n_fit += 1
+                    if cert is not None:
+                        c = check_certified(info, cert, a.certified_margin)
+                        if not c["inside"]:
+                            n_refused += 1
+                            continue
                     lo, tot, p5, mn = dead_runs(st, u)
                     rows.append(dict(rot=rot, scale=f, dx=round(float(dx), 3),
                                      dy=round(float(dy), 3),
@@ -157,8 +204,24 @@ def main(argv=None):
     rows.sort(key=lambda r: (r["longest_mm"], r["total_mm"],
                              -r["p5_clear_mm"], -r["logo_w"]))
     zero = [r for r in rows if r["longest_mm"] == 0.0]
-    print(f"{n_fit} placements fit the sheet; {len(zero)} have a ZERO "
-          f"contiguous dead run\n")
+    print(f"{n_fit} placements fit the sheet; "
+          + (f"{n_refused} refused as outside the certified rectangle; "
+             if cert is not None else "")
+          + f"{len(zero)} of the rest have a ZERO contiguous dead run\n")
+    if cert is not None and not rows:
+        print("NOTHING FITS THE CERTIFIED RECTANGLE.  The overhang of the "
+              "largest candidate says which way to move or shrink:")
+        for rot in a.rotate:
+            for f in a.scales:
+                _st, info = trace.to_sheet(
+                    px, SHEET, margin=a.margin, min_len=a.min_len,
+                    target_width=f * a.base_width, offset=(0.0, 0.0),
+                    rotate_deg=rot)
+                c = check_certified(info, cert, a.certified_margin)
+                print(f"  rot {rot:.0f} scale {f:.2f} centred: "
+                      f"{info['logo_w']:.3f} x {info['logo_h']:.3f} m, "
+                      f"overhang {c['overhang_m']}")
+        return 1
     print(f"{'rot':>4} {'scale':>6} {'dx':>7} {'dy':>7} {'longest':>8} "
           f"{'total':>7} {'p5 clr':>7}  centre")
     for r in rows[:a.top]:
