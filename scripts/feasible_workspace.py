@@ -104,6 +104,25 @@ _W = {}
 SHIPPED_PITCH = 0.61
 
 
+# THE PARK OVERRIDE IS A MODULE GLOBAL BECAUSE THE WORKERS FORK.
+# `--parks` has to reach `rig`, and `rig` is called inside every pool worker's
+# `_init` — in the sweep AND in the rescue ladder.  Threading it through three
+# signatures and two `initargs` tuples is how the FIRST version of this went
+# wrong: main() replaced its own `fl`/`parks`, printed the searched depots, and
+# every worker went on deriving `PARK_GRID_PROPOSED`'s.  The map that came out
+# said one thing in its header and routed against another.  A module global set
+# once before any pool is created cannot be half-applied, and it is the idiom
+# this file already uses for `paper.RRT_SAFE` and `transit.TIME_BUDGET`.
+_PARK_OVERRIDE = None
+
+
+def set_park_override(parks):
+    """Depots every later `rig()` must use, or None for the derived recipe."""
+    global _PARK_OVERRIDE
+    _PARK_OVERRIDE = (None if parks is None else
+                      {int(k): np.asarray(v, float) for k, v in parks.items()})
+
+
 def rig(pitch=None, h=None, calib=None):
     """The fleet and its parks. -> (fleet, parks, h, pitch).
 
@@ -131,19 +150,24 @@ def rig(pitch=None, h=None, calib=None):
     """
     h = layout.LAYOUT_PROPOSED["h"] if h is None else float(h)
     pitch = SHIPPED_PITCH if pitch is None else float(pitch)
-    shipped = abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9
+    shipped = (abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9
+               and _PARK_OVERRIDE is None)
     if calib is None:
         if shipped:
             return layout.FLEET_PROPOSED, layout.Q_PARK_PROPOSED, h, pitch
         lay = layout.paired_grid(spacing=pitch, rows=3, h=h)
-        fl = layout.build_fleet(lay)
-        parks = layout.certified_park_poses(fl, layout.PARK_GRID_PROPOSED)
+        if _PARK_OVERRIDE is not None:
+            parks = _PARK_OVERRIDE
+        else:
+            parks = layout.certified_park_poses(layout.build_fleet(lay),
+                                                layout.PARK_GRID_PROPOSED)
         return layout.build_fleet(lay, q_park=parks), parks, h, pitch
     from aris_sixarm import mounts
     model = mounts.MOUNTS.scaled(calib=float(calib))
     lay = (layout.LAYOUT_PROPOSED if shipped
            else layout.paired_grid(spacing=pitch, rows=3, h=h))
-    parks = (layout.Q_PARK_PROPOSED if shipped else
+    parks = (_PARK_OVERRIDE if _PARK_OVERRIDE is not None else
+             layout.Q_PARK_PROPOSED if shipped else
              layout.certified_park_poses(layout.build_fleet(lay),
                                          layout.PARK_GRID_PROPOSED))
     return (layout.build_fleet(lay, mount_model=model, q_park=parks),
@@ -1635,11 +1659,10 @@ def main():
         if not doc.get("certifies"):
             raise SystemExit(f"{a.parks}: that search found no fleet park set "
                              "clearing the gate; refusing to map on it")
-        parks = {int(k): np.asarray(v["q"], float)
-                 for k, v in doc["best"].items()}
-        fl = layout.build_fleet(
-            layout.paired_grid(spacing=pitch, rows=3, h=h), q_park=parks)
-        print(f"parks from {a.parks} (searched at h = {doc['h']})")
+        set_park_override({int(k): v["q"] for k, v in doc["best"].items()})
+        fl, parks, h, pitch = rig(a.pitch, a.h, a.calib)
+        print(f"parks from {a.parks} (searched at h = {doc['h']}) — in force "
+              "for every worker, not just this header")
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
     ph = (layout.PARK_HOVER_PROPOSED
           if abs(pitch - SHIPPED_PITCH) < 1e-9 and a.h is None and not a.parks

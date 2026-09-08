@@ -613,6 +613,118 @@ gate is not an environment fix; the deviation is 13 orders of magnitude under
 the 2 cm threshold the lattice gates on and 4 under the 1e-12 the URDF checks
 hold.  Recorded, not patched.
 
+## OPEN — FOR PETE: THE HOLES ARE THE DESCENT, NOT THE NEIGHBOURS (2026-09-08)
+
+The entry below found that at h = 0.970 the DRAWING-POSE layer is perfectly
+hole-free over 1.50 × 3.64 m and the pen-up layers cut it to 0.58 × 3.48.  Four
+levers were aimed at those pen-up holes — including Pete's *"you can also move
+the neighbour out of the way to try to reach under."*  **One works a little,
+three cannot work at all, and the reason is the same for all three.**
+
+| lever | h = 0.940 | h = 0.970 | cost |
+|---|---|---|---|
+| *baseline* (rescue rungs 0,1) | 37 holes, **1.469 m²** | 32 holes, **2.018 m²** | — |
+| **1. rescue rungs 2–3** | 35 holes, **1.469 m²** (no change) | 29 holes, **2.100 m²** (+4.1 %) | 2 h 03 m / 1 h 29 m |
+| **2. deeper RRT than rung 3** | not reachable — see below | not reachable | abandoned, unbounded |
+| **3. depots out of the middle third** | **impossible** | **provably no effect** | minutes |
+| **4. move the blocking neighbour** | **no cell is blocked by one** | **no cell is blocked by one** | minutes |
+
+**RUNG 2 IS "seeds" (96 hovers, 16 plans, 900-node trees, 2 restarts) AND RUNG 3
+IS "deep" (192, 24, 1800, 2, plus 3 aside park sets).**  Neither had ever been
+run.  Together they cost **2 h 03 m at 0.940 and 1 h 29 m at 0.970** and bought
+2 holes and 3 holes respectively — at 0.940 not enough to move the rectangle at
+all, at 0.970 worth **0.082 m²**.  That is the honest price of the only lever
+that works.
+
+### Why levers 3 and 4 cannot work, measured rather than argued
+
+`_cell_hovers` plans each leg with `writing.enter_beats` **against the metal**
+(static boxes + the arm against itself) and only THEN checks the planned leg
+against the PARKED partners with `ParkProbe.clearance`.  So a cell that a
+parked neighbour vetoes has a *finite* `park_clear` recorded in the map's raw
+array, and a cell the router could not plan at all has `NaN`.  Counting them:
+
+| refusing (arm, cell) pairs on hole cells | h = 0.940 | h = 0.970 |
+|---|---|---|
+| no certified hover pose at all | 8 | 7 |
+| **no leg plannable against the METAL** (`park_clear` = NaN) | **33** | **38** |
+| **a parked partner vetoed a plannable leg** | **0** | **0** |
+
+**NOT ONE CELL IS BLOCKED BY A PARKED ARM, AT EITHER HEIGHT.**  That is why
+rung 1 "aside" was offered 46 cells and turned 0: the aside rung exists to move
+a vetoing partner, and there is no vetoing partner to move.  The file already
+said so in as many words — *"a cell whose DESCENT the ladder cannot do is
+behind a wall no park can move"* — and this is that claim measured.
+
+**AND THE SAME FACT KILLS LEVER 3 TWICE OVER.**  At 0.970, re-running the whole
+three-layer map with a materially different park set (the depots searched at
+0.970, every arm's pose different from the derived ones) gives a **bit-identical
+map** — 16 138 feasible cells, zero cells changed.  And at 0.940 the constraint
+is not even reachable: arms 31 and 71 sit ON the sheet's midline, and **no
+certified depot exists for either of them outside the middle third** at any
+radius, hover or bearing in the search.  The middle row has nowhere else to
+stand — the same finding 2026-08-26 made about park-vs-ink, one layer out.
+
+### Lever 4 in full: which leg refuses
+
+For every refusing pair at h = 0.970 (after rungs 0–3), both legs of
+`enter_beats` were re-planned separately over all certified hovers and the
+whole 48-candidate fiber:
+
+| verdict | count |
+|---|---|
+| **DESCENT (hover → paper) fails for every hover** | **21** |
+| both legs fail, and only 2–4 hover candidates exist at all | 14 |
+| no hover candidate at all | 7 |
+| flight from the depot fails while the descent flies | **0** |
+| both legs fly for some hover (i.e. a park veto) | **0** |
+
+**THE DEPOT LEG NEVER FAILS ON ITS OWN.**  In the 21 clean cases the arm can
+fly from its park to all 53 hover candidates and cannot get down from any of
+them.  So no park pose — the arm's own or a neighbour's — is on the critical
+path: **moving the neighbour out of the way cannot recover a single one of
+these cells**, because the neighbour was never in the way.  What is in the way
+is the last few centimetres between a hover and the paper, next to a base
+column, and that is geometry the planner cannot route around rather than an
+obstacle a schedule can remove.
+
+**SO THESE ARE THE PHYSICS CASES.**  Each hole cell is certified for exactly
+ONE arm (there is no second arm to fall back on — that is why it is a hole and
+not merely a slow cell), and it sits a median **137 mm** from a base.  The arm
+has a certified drawing pose there; what it does not have is a descent onto it.
+The 7 "no hover candidate" cells are stronger still: no certified hover exists
+above them at any height on the fiber.
+
+### What is left, and what the certification now depends on
+
+**ADOPTED: rungs 2–3 at h = 0.970 only.**  `out/certified_area_h0970.json`
+records the rectangle **0.58 × 3.62 m = 2.100 m²** at (0.64, 0.00) and, in its
+new `recipe` field, that rungs 2–3 are load-bearing for it — a map rebuilt at
+rungs 0,1 has 2.018 m² and not this rectangle.  At h = 0.940 rungs 2–3 change
+nothing, so `out/certified_area_h0940.json` keeps **0.54 × 2.72 m = 1.469 m²**
+and records that the rungs are optional there.  Overlays redrawn.
+
+**THE RECOMMENDATION IS UNCHANGED AND NOW BETTER EVIDENCED.**  0.970 remains the
+best height (2.100 against 1.469 m², +43 %), and the strip is still ~0.58 m
+wide.  **The remaining holes are not a planner budget problem and not a
+scheduling problem** — three of the four levers are now excluded by measurement
+rather than by estimate.  If Pete wants a materially wider certified strip the
+levers left are physical, not software: the pen-up contact floor
+(`paper.CONTACT_FLOOR`, which is what the descent is refused against and is a
+GATE, so out of scope here), a shallower approach at the cell, or a layout where
+no cell is single-arm — the 0.58 m width is set by cells only one arm can reach,
+and redundancy, not routing, is what would remove them.
+
+**ONE PROVENANCE CORRECTION TO THE ENTRY BELOW.**  Its h = 0.970 three-layer
+numbers were produced by a run whose header printed the searched depots while
+its WORKERS derived their own from `PARK_GRID_PROPOSED` — `--parks` reached
+`main()` but not the forked pool, a defect introduced with that flag.  It is
+fixed (`feasible_workspace.set_park_override`, proved to reach a forked worker),
+and the map was rebuilt correctly.  **The rebuilt map is bit-identical**, so
+every number below stands; the finding is that those numbers never depended on
+the park set in the first place, which is the same conclusion this entry reaches
+by four other routes.
+
 ## OPEN — FOR PETE: NO HOLES UNDER THE ARMS (2026-09-08)
 
 Pete: *"can we make it so the continuously covered chunk is as big as possible

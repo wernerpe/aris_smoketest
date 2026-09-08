@@ -215,6 +215,13 @@ def main(argv=None):
     ap.add_argument("--json", default=None)
     ap.add_argument("--png", default=None)
     ap.add_argument("--label", default=None)
+    ap.add_argument("--recipe", default=None,
+                    help="the pen-up recipe this rectangle DEPENDS ON, e.g. "
+                         "'rescue rungs 0,1,2,3'.  A certified area is only "
+                         "reproducible if the escalation that produced it is "
+                         "named: at h = 0.970 rungs 2-3 are worth 0.082 m² of "
+                         "it, so a map rebuilt at rungs 0,1 does not have this "
+                         "rectangle.")
     a = ap.parse_args(argv)
 
     # THE BARE FLEET, because only the base xy is read here (to say which dead
@@ -236,6 +243,7 @@ def main(argv=None):
                          pen_lat=frames.PEN_LAT_HOLDER,
                          lean_deg=round(float(np.rad2deg(
                              frames.PEN_LEAN_HOLDER)), 3)),
+               recipe=a.recipe,
                grid=GRID, sheet=[float(SHEET[0]), float(SHEET[1])],
                cells=int(live.size),
                live_cells=int(live.sum()),
