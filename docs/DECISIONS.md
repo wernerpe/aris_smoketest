@@ -2049,3 +2049,56 @@ turns at any height.
 
 So: the hover is not crazy high (60 mm default, 30 mm on the ladder's low
 rung), and it is not what is refusing these cells.
+
+### the hover collision, shown (2026-09-09)
+
+Pete: *"can you please show me the collisions you are getting at the hover
+pose."*  `out/hover_collision/`, live on :7004 — arm 71 over (0.64, 1.80) at
+the shipped h = 0.940, one of the ORANGE cells.
+
+It is a clean single-gate story.  The DRAWING pose clears arm 31's base column
+by **63.1 mm** against the 63 mm floor — 0.1 mm of slack.  Lift the pen and the
+forearm swings INTO that column, and the higher the lift the deeper it goes:
+
+    hover 60 mm   link7->hand   vs body:31_column3    8.0 mm   deficit 55.0
+    hover 30 mm   link4->link5  vs body:31_column3   35.0 mm   deficit 28.0
+    hover 10 mm   link7->hand   vs body:31_column3   53.1 mm   deficit  9.9
+
+1180 IK solutions exist at the 30 mm lift and **none** certifies; every one of
+the six heights tried fails the SAME gate and only that gate — self-clearance
+holds 156-228 mm against 23, chain-z 32-82 mm against 20, joint margin
+0.336-0.373 rad against 0.30, sigma 0.194-0.214 against 0.14.  Nothing here is
+marginal except the static floor, and it is short by 10 to 55 mm.
+
+That is also the mechanical answer to "can we just hover lower": the deficit
+shrinks monotonically as the hover drops, but at 10 mm — already half the
+20 mm `TIP_CLEAR` transit floor — it is still 9.9 mm short.
+
+### and the re-clocking what-if: not a lever, and it cannot be
+
+`scripts/reclock_whatif.py`.  Two findings, and the first is the one that
+matters.
+
+**THE COLUMN BAND IS YAW-INVARIANT.**  `mounts.arm_column_boxes` builds each
+band from the base ORIGIN and the base Z AXIS as a cylinder carried as its
+AABB.  Rotating a base about its own z changes neither, so the obstacle is
+bit-identical under any clocking — verified numerically on all three rotated
+variants.  Re-clocking therefore CANNOT move the thing that is in the way; it
+can only change how well an arm reaches past it.  Pete's hypothesis that the
+asymmetry is the clocking is right about the CAUSE (the arms share a clocking
+instead of mirroring it, so reaching left-to-right and right-to-left are
+different problems in each arm's own frame) but a 180 deg turn is not the fix.
+
+**AND IT MEASURES WORSE, IN EVERY VARIANT.**  Under one consistent method:
+baseline 13 of 14 cells feasible; left column turned 0; right column (the
+drawers) turned 0; all six turned 0.  A turned arm's hover set collapses —
+arm 17 goes from 48 hover candidates to 2-4 — because reaching under the
+opposite base is now behind it.
+
+CAVEAT, AND IT IS LOAD-BEARING: that reconstruction does NOT reproduce the
+shipped map's baseline (13 of 14 where the map says 0 of 14).  It calls
+`atlas.solve_cell` directly at the 63 mm gate while the shipped atlas is a
+50 mm sweep re-gated at 63, so it finds drawing poses the re-gate never had —
+two drawers per cell where the atlas has one.  The BETWEEN-CLOCKING comparison
+is sound; the absolute counts are not.  Settling it properly needs an atlas
+re-swept per clocking, which is exactly the cost this was written to avoid.
