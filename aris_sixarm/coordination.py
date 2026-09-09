@@ -86,6 +86,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+from . import link_spheres
 from .frames import PEN_EXT, ext_of, fk_many
 from .fleet import FLEET, H_INV_DEFAULT
 from .rig_final import PEN_R_FINAL
@@ -370,6 +371,23 @@ class ArmPath:
             # (the lateral table already carries the envelope radius)
             self.r = self.r.copy()
             self.r[-1] = PEN_R_FINAL
+        if link_spheres.enabled():
+            # THE MOVING LINKS AS SPHERES (2026-09-09, default OFF).  The five
+            # sausages drawn about the joint-origin lines come out; 64 fitted
+            # spheres go in as DEGENERATE capsules (A == B), which is all the
+            # adapting this needs — everything below and everything that reads
+            # `A`/`B`/`r` takes segments and never asks whether they have
+            # length.  The base column and the tool are untouched: they are
+            # not chain sausages, and the column is exact for what it models.
+            # See aris_sixarm/link_spheres.py.
+            _, keep = link_spheres.moving_capsules(caps)
+            SC = link_spheres.centres_world(self.q, spec.T_world_base(h_inv))
+            A = np.concatenate([A[:, keep], SC], axis=1)
+            B = np.concatenate([B[:, keep], SC], axis=1)
+            self.A = np.ascontiguousarray(A, np.float32)
+            self.B = np.ascontiguousarray(B, np.float32)
+            self.r = np.concatenate([self.r[keep],
+                                     link_spheres.RADII]).astype(np.float32)
         # THE BOUNDING SPHERE IS DRAWN ROUND THE CAPSULES, NOT THE CHAIN.
         # Since the base column became bands, two capsule endpoints lie
         # OUTSIDE the chain's own point set (the connector reaches back past

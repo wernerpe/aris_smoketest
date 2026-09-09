@@ -1,5 +1,96 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE MOVING LINKS CAN BE SPHERES, AND THE SHIPPED SPHERE SETS CANNOT (2026-09-09)
+
+Pete: *"for the rest of the robot why not just use the standard collision
+geometry models that are shipped with the frankas, or you can scavenge the
+collision geoms from the other repo where we use a bunch of spheres?  that will
+be more accurate for the robots.  the static orange cylinders for the pivoting
+bases are great though."*
+
+**Answered in two halves, and the first half is a refusal.**  None of the three
+sphere models on this machine contains the robot.  Escape is the largest
+distance any point of a body's mesh (the manufacturer's collision shells UNION
+the full-resolution visuals — the ground truth the self capsules were fitted
+against) lies OUTSIDE the spheres attached to that body;
+`scripts/link_sphere_fit.py --part validate` measures it:
+
+| shipped sphere model | spheres | worst escape |
+|---|---|---|
+| `assets/franka_description/urdf/panda_arm_hand.urdf` (Drake's stock Panda) | 66 | **+235.2 mm** (link0), +66.5 (link5) |
+| `~/git/vamp/resources/panda/panda_spherized.urdf` | 59 | **+225.7 mm** (link0), +62.1 (link5) |
+| `~/git/mmt_gcs/.../fr3_franka_hand_sphere_collisions.urdf` (real FR3) | 35 | **+146.9 mm** (link0), +56.8 (link5) |
+
+Every one is optimistic on **every** body, by 4 mm at best.  They are planner
+models and were never envelopes.  Scavenging one puts a hole in the certificate
+at the fingers, the wrist bulge and the base connector.  (`~/git/cc_experiment`
+has no Franka sphere set — it benchmarks an iiwa14 and computes bounding
+spheres at runtime; `aris_project/reachability` has none.  Both were checked.)
+
+**So the spheres are fitted here, and containment is by construction.**
+`aris_sixarm/link_spheres.py`: **64 spheres, 8 per moving body** (link1..link7,
+hand — the same budget Drake's stock Panda spends), farthest-point seed, Lloyd
+descent, Badoiu-Clarkson MEB polish, radius = the exact maximum distance to any
+point assigned to that centre, rounded **UP** to the millimetre.  Worst escape
+over all eight bodies **-0.21 mm**; `tests/test_link_spheres.py` re-measures it.
+
+**THE BASE CYLINDERS DO NOT MOVE.**  `coordination.BASE_CAPSULES`,
+`mounts.column_bands`, `envelope.body_cylinders`, `scene_check.COLUMN_BANDS` —
+all unchanged.  link0 is not in the sphere table at all.  Neither is the tool:
+its capsules are a CAD-provenance question (`rig_final.BRACKET_R_LAT`), not a
+mesh-accuracy one.
+
+### What it buys, and where
+
+What is replaced is the five sausages `coordination.CAPSULES` draws about the
+lines between JOINT ORIGINS — shoulder→elbow 0.130, elbow 0.117, forearm 0.131,
+wrist 0.091, hand 0.104.  An FR3's castings are L-shaped: the line runs inside
+the bend and the radius is set by the outside of it.  Six random configurations,
+`scripts/link_sphere_fit.py --part accuracy`:
+
+| model | volume | mean offset | max offset |
+|---|---|---|---|
+| the five moving capsules | 58.02 L | 55.8 mm | 130.9 mm |
+| **the 64 fitted spheres** | **32.80 L** | **24.8 mm** | **75.1 mm** |
+| | **−43.5 %** | **−31.1 mm** | **−55.8 mm** |
+
+"Offset" is how far a point of real metal lies inside the model — the fictitious
+steel the gate is charged for, on both arms of every pair, against a
+`PAIR_MARGIN` of 50 mm.
+
+**AND IT BUYS NOTHING ON THE SELF MODEL, SO IT IS NOT APPLIED THERE.**
+`selfcoll.BODY_CAPSULES` is already per-link, per-link-FRAME and mesh-fitted
+(three bands a body, radii 0.038–0.078) and has no L-shape problem.  Measured
+the same way the spheres are 38.5 L against its 43.6 — 12 % smaller overall but
+**larger** on link1 (7.11 vs 6.31), link2 (7.08 vs 6.12) and link5 (8.27 vs
+7.33), three of the four bodies the fold gate exists for.  `selfcoll` keeps its
+capsules under this flag, and the ≥4-joint pair rule and `SELF_PLAN_MARGIN`
+(23 mm) are untouched.
+
+### The flag, and it is OFF
+
+`ARIS_COLLISION_MODEL=spheres`, or `link_spheres.install()` / `uninstall()` —
+the same shape `envelope.install` and `frozen.freeze` already use, read at the
+same point in `scripts/feasible_workspace.py`.  **Default `capsules`.**  A
+sphere is a capsule with a zero-length segment, which is the whole of the
+wiring: `coordination.ArmPath`, `frozen.freeze` and `scene_check.pair_clearance`
+hand the block over as degenerate capsules and every box, tile, exact distance
+and 1-Lipschitz residual downstream is unchanged.  `scene_check` keeps its own
+row-selection rule and its own centre placement (it imports the 64-row
+measurement, exactly as `self_clearance` already imports the 31-row one, because
+hand-copying 256 fitted numbers buys typos rather than independence).
+
+Flag OFF is **bit-identical** — pinned on `ArmPath`, on `frozen`'s partner
+capsules and on `scene_check.check_static`.
+
+**FLIPPING THE DEFAULT IS A RE-CERTIFICATION, NOT A COMMIT.**  Every atlas,
+every certified rectangle, every park set and every conducted programme in
+`out/` was earned against the sausages.  Flipping it re-opens all of them: the
+six-arm atlas sweep, `regate_atlas`, the park search, `certified_area` at both
+heights, and a fresh `scene_check` on every shipped timeline.  It also widens
+`atlas.model_signature`, so every cached atlas goes stale by design.
+
+
 ## THE HOLDER IS FINAL, AND THE RIG IS BETTER FOR IT (2026-09-07)
 
 `7f99565` and `efd53f5` settled the tool against the real gripper: the grip is

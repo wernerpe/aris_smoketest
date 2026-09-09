@@ -35,7 +35,7 @@ import re
 
 import numpy as np
 
-from . import coordination, rig_final
+from . import coordination, link_spheres, rig_final
 
 # {aid: (A (C,3), B (C,3), R (C,))} of every frozen partner's world capsules
 _CAPS = {}
@@ -91,9 +91,21 @@ def freeze(parks, fleet, pens, h_inv):
         # a FROZEN partner is a known pose: drop link1's revolution sweep, its
         # real upper arm is already in the table
         tab, keep = coordination.known_pose_capsules(tab)
-        _CAPS[aid] = (np.asarray(A, float)[0][keep],
-                      np.asarray(B, float)[0][keep],
-                      np.array([c[2] for c in tab], float))
+        A, B = np.asarray(A, float)[0][keep], np.asarray(B, float)[0][keep]
+        R = np.array([c[2] for c in tab], float)
+        if link_spheres.enabled():
+            # ...and under the sphere model the "real upper arm" is 64 fitted
+            # spheres rather than five chain sausages.  Applied AFTER the
+            # known-pose drop so the two filters compose in the one order that
+            # makes sense: band 3 goes because the pose is known, the moving
+            # sausages go because something tighter stands in for them.
+            tab, keep2 = link_spheres.moving_capsules(tab)
+            SC = link_spheres.centres_world(
+                q, fleet[aid].T_world_base(h_inv))[0]
+            A = np.concatenate([A[keep2], SC])
+            B = np.concatenate([B[keep2], SC])
+            R = np.concatenate([R[keep2], link_spheres.RADII])
+        _CAPS[aid] = (A, B, R)
         _POSES[aid] = np.asarray(q, float).reshape(7).copy()
 
 

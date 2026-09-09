@@ -101,9 +101,13 @@ def _cap_ends(P, radii):
 
 def _radii_for(fleet_dict, arms):
     if _frames.PEN_LAT != 0.0:          # the ACTIVE tool is the lateral holder
-        return RADII_LAT
-    final = any(getattr(fleet_dict[a], "rig", "sixarm") == "final" for a in arms)
-    return RADII_FINAL if final else RADII
+        rr = RADII_LAT
+    else:
+        final = any(getattr(fleet_dict[a], "rig", "sixarm") == "final"
+                    for a in arms)
+        rr = RADII_FINAL if final else RADII
+    from .link_spheres import enabled as _sph
+    return _sphere_rows(rr) if _sph() else rr
 
 # REPORTED, NOT GATED, AND DELIBERATELY SO.  `validate.check_pose` measures the
 # pen tip against the paper plane, which nothing did before: the paper-clearance
@@ -239,14 +243,62 @@ def segment_distance(p0, p1, q0, q1):
     return np.minimum(interior, edge)
 
 
-def pair_clearance(Pi, Pj, radii=RADII):
+# THE MOVING LINKS AS SPHERES, RESTATED (2026-09-09, default OFF).  Same
+# discipline as `self_clearance` below and for the same reason: what is NOT
+# restated is the 64-row fitted table, because that is a mesh MEASUREMENT
+# (`scripts/link_sphere_fit.py`, validated by `tests/test_link_spheres.py`) and
+# hand-copying 256 fitted numbers would buy typos rather than independence.
+# What IS restated is everything a bug could hide in — which rows of `RADII`
+# the spheres stand in for, where the centres go in the world, and the
+# distance arithmetic — and none of it goes through `coordination`,
+# `link_spheres.centres_world` or `link_spheres.moving_capsules`.
+def _sphere_rows(radii):
+    """`radii` minus the moving-link sausages the spheres replace. -> tuple.
+
+    Own derivation: the base column is every row whose first chain point is 0
+    (`_moving`'s rule, restated), the tool is every row that touches chain
+    point 8 or beyond, and what is left in between is exactly the five arm
+    sausages.  A test pins this against `link_spheres.REPLACES`.
+    """
+    return tuple(c for c in radii if c[0] == 0 or c[0] >= 8 or c[1] >= 9)
+
+
+def _sphere_centres(q, spec, h_inv):
+    """One configuration -> its sphere centres in WORLD. (S,3).
+
+    Own placement: an explicit per-row loop off `frames.link_frames_many`,
+    where `link_spheres` does one `einsum` over the whole table.
+    """
+    from .frames import link_frames_many
+    from .link_spheres import SPHERES
+    L = link_frames_many(np.asarray(q, float).reshape(1, 7))[0]
+    Twb = spec.T_world_base(h_inv)
+    out = np.empty((len(SPHERES), 3))
+    for k, (_, f, c, _r) in enumerate(SPHERES):
+        out[k] = L[f, :3, :3] @ np.asarray(c, float) + L[f, :3, 3]
+    return out @ Twb[:3, :3].T + Twb[:3, 3]
+
+
+def pair_clearance(Pi, Pj, radii=RADII, Ci=None, Cj=None):
     """Min capsule clearance between two arms, for chain points (...,10,3).
 
     Broadcasts over any leading axis, so a whole timeline costs one call.
+
+    `Ci`/`Cj` are the two arms' sphere centres (...,S,3) when the sphere model
+    is active; each sphere joins the pair table as a DEGENERATE capsule, which
+    the arithmetic above already handles because a segment of zero length is
+    just a point.  `radii` must then already be `_sphere_rows(...)`.
     """
     rr = np.array([c[2] for c in radii])
     Ai, Bi = _cap_ends(Pi, radii)
     Aj, Bj = _cap_ends(Pj, radii)
+    if Ci is not None:
+        from .link_spheres import RADII as SPH_R
+        Ai = np.concatenate([Ai, Ci], axis=-2)
+        Bi = np.concatenate([Bi, Ci], axis=-2)
+        Aj = np.concatenate([Aj, Cj], axis=-2)
+        Bj = np.concatenate([Bj, Cj], axis=-2)
+        rr = np.concatenate([rr, SPH_R])
     a0, a1 = Ai[..., :, None, :], Bi[..., :, None, :]
     b0, b1 = Aj[..., None, :, :], Bj[..., None, :, :]
     d = segment_distance(a0, a1, b0, b1) - rr[:, None] - rr[None, :]
@@ -447,10 +499,14 @@ def check_static(q_by_arm, margin, h_inv=H_INV_DEFAULT, pen_ext=None,
     P = {a: _chain(np.asarray(q_by_arm[a], float).reshape(7), fl[a], h_inv,
                    pen_len(pen_ext, a)) for a in arms}
     rr = _radii_for(fl, arms)
+    from .link_spheres import enabled as _sph_on
+    S = ({a: _sphere_centres(np.asarray(q_by_arm[a], float).reshape(7),
+                             fl[a], h_inv) for a in arms}
+         if _sph_on() else {a: None for a in arms})
     per_pair, worst, worst_at = {}, np.inf, None
     for i, ai in enumerate(arms):
         for aj in arms[i + 1:]:
-            d = float(pair_clearance(P[ai], P[aj], rr))
+            d = float(pair_clearance(P[ai], P[aj], rr, S[ai], S[aj]))
             per_pair[(ai, aj)] = d
             if d < worst:
                 worst, worst_at = d, (ai, aj)
@@ -536,8 +592,21 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
     fl = FLEET if fleet is None else fleet
     P = {a: np.array([_chain(q, fl[a], h_inv, pen_len(pen_ext, a))
                       for q in fine[a]]) for a in arms}
+    # ...and the sphere centres alongside, when the sphere model is active.
+    # They join `stepd` too: the 1-Lipschitz sweep residual has to cover the
+    # travel of every point the gate is drawn about, and under this model the
+    # centres ARE those points.
+    from .link_spheres import enabled as _sph_on
+    C = ({a: np.array([_sphere_centres(q, fl[a], h_inv) for q in fine[a]])
+          for a in arms} if _sph_on() else {a: None for a in arms})
     stepd = {a: np.concatenate([[0.0], np.linalg.norm(np.diff(P[a], axis=0),
                                                       axis=2).max(1)]) for a in arms}
+    if _sph_on():
+        stepd = {a: np.maximum(
+            stepd[a],
+            np.concatenate([[0.0], np.linalg.norm(np.diff(C[a], axis=0),
+                                                  axis=2).max(1)]))
+            for a in arms}
 
     rr = _radii_for(fl, arms)
     worst, worst_at = np.inf, None
@@ -546,7 +615,7 @@ def check_timeline(qtraj, dt, margin, programs=None, h_inv=H_INV_DEFAULT,
         for aj in arms[i + 1:]:
             # ...minus the sweep back to the previous fine sample, so the bound
             # holds between samples and not only at them
-            lo = (pair_clearance(P[ai], P[aj], rr)
+            lo = (pair_clearance(P[ai], P[aj], rr, C[ai], C[aj])
                   - 0.55 * (stepd[ai] + stepd[aj]))
             k = int(np.argmin(lo))
             per_pair[(ai, aj)] = float(lo[k])
