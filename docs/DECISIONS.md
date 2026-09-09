@@ -2322,3 +2322,86 @@ bound by about that much.  h = 0.970 ran rungs 0 and 1.
 HELD: `scene_check` over v18's whole merged timeline is **bit-identical** —
 28 of 28 keys, `min_clearance` 80.59104857659906 mm, PASS — because the library
 defaults are untouched and both models are inert until a script installs them.
+
+## 2026-09-09 — DECISION: the arm-to-arm gate is 50 mm, and a known pose stops paying for a sweep
+
+Pete, after the :7005 scene showed the last five dead cells refused by a PARKED
+neighbour at 61-69 mm against an 80 mm gate: *"ohh ok so these are not real
+collisions.  make the arm to arm margin 5cm."*  Two changes follow, and
+together they close the canvas at h = 0.970.
+
+### 1. `PAIR_MARGIN = 0.050` (was 0.080)
+
+The arm-to-arm gate is now ONE constant, `coordination.PAIR_MARGIN`, and every
+consumer already reduced to `SAFETY_M + CALIB_M` — the conductor's inter-arm
+clearance, `allocate.ParkProbe`'s park-vs-mover and park-vs-ink checks,
+`scene_check`'s inter-arm pass (which takes it as an argument), `layout`'s park
+screens, the pause and pen-swap checks — so the sum is what moved and no call
+site changed.
+
+THE CALIBRATION ALLOWANCE IS NOT WHAT WAS SPENT.  `CALIB_M` stays at 30 mm: it
+is a real uncertainty about where the bases ARE, and spending it would be
+spending something we do not have.  What moved is the discretionary operating
+clearance on top of it, 50 -> 20 mm.  **SELF and STATIC are untouched**:
+`selfcoll.SELF_PLAN_MARGIN` 23 mm, `rig_final.STATIC_MARGIN` 50 mm,
+`STATIC_PLAN_MARGIN` 63 mm all stand.  This is one arm against another arm and
+nothing else.
+
+Two existing tests moved with it, and both moved in the safe direction.  The
+mount model's identity `box_r + STATIC_MARGIN == cap_r + pair margin` was an
+EQUALITY when the pair margin was 0.08; it is now an inequality with exactly
+`CALIB_M` = 30 mm of slack, i.e. **the static box gate is now strictly stronger
+than the arm-to-arm gate**, and the test pins that.  And `layout`'s inward-park
+control, written to show a refusal, measures 61.3 mm: a refusal at 80 mm, a
+clearance at 50.  It is now pinned in millimetres rather than in a constant
+that has moved.
+
+### 2. link1's revolution sweep is dropped for a KNOWN pose
+
+`coordination.BASE_CAPSULES` runs flange-to-shoulder and its last band is
+link1's swept solid — the envelope of the upper arm REVOLVING about joint 1.
+For an arm whose pose is unknown that is exactly right.  For one FROZEN at a
+named park, link1 is somewhere specific and its real body is already carried by
+the `(1, 3, UPPER_R)` capsule, so the sweep is the same double count the body
+column's AABB was, one layer up.  Measured on the five residual cells it was
+worth 8-36 mm of pair clearance and refused every one of them.
+
+`coordination.known_pose_capsules` drops that band and only that band; bands
+0-2 are link0's own casting and stay.  It is applied in exactly two places —
+`allocate.ParkProbe` (whose partners are parked by definition) and
+`frozen.freeze` — and **a moving partner keeps the full table**, which is the
+never-loosens property and is pinned by a test.
+
+### the five cells, and the rectangle
+
+|                        | h = 0.970 |          | h = 0.940 |          |
+|------------------------|-----------|----------|-----------|----------|
+|                        | 80 mm     | **50 mm**| 80 mm     | **50 mm**|
+| solo-drawable          | 97.687 %  | 97.718 % | 98.279 %  | 98.587 % |
+| `NO_DRAW`              | 378       | 378      | 225       | 225      |
+| `NO_HOVER`             | 0         | 0        | 0         | 0        |
+| `NO_ROUTE`             | 5         | **0**    | 60        | **9**    |
+| enclosed holes         | 4         | **0**    | 7         | **4**    |
+| hole cells             | 5         | **0**    | 60        | **9**    |
+| **largest hole-free**  | 3.1008 m² | **5.4600 m²** | 1.9656 m² | **3.8584 m²** |
+| ...its extent          | 1.02 x 3.04 | **1.50 x 3.64** | 0.54 x 3.64 | **1.06 x 3.64** |
+| near-square hole-free  | 1.8240 m² | **3.4352 m²** | 1.7280 m² | **1.8960 m²** |
+
+**All five cells are live.**  (1.22, 0.58), (0.60, 0.60), (0.60, 1.82),
+(0.60, 1.84) and (0.62, 3.00) all read `cause = feasible`.
+
+**At h = 0.970 the canvas has NO HOLES AT ALL** — `NO_HOVER` and `NO_ROUTE` are
+both zero and every remaining dead cell is `NO_DRAW`, out of reach at the rim.
+The certified block is 1.50 x 3.64 m = 5.46 m², spanning y = 0.00 to 3.62 (the
+FULL length of the canvas) and x = 0.16 to 1.64 on a canvas 1.80 m wide.  So it
+reaches the rim in y outright, and stops 160 mm short of each side in x —
+against the reach limit, which is the red Pete accepts.  The rectangle is up
+76 % at 0.970 and 96 % at 0.940.
+
+### v18
+
+`scene_check` over the whole merged timeline: **PASS**, and bit-identical, 28
+of 28 keys.  Its inter-arm minimum is **unchanged at 80.59 mm** — the geometry
+did not move — and against the new 50 mm gate it now carries **30.59 mm of
+headroom** instead of 0.59 mm.  A programme certified at 80 passes at 50 by
+construction, and there is a test for that too.

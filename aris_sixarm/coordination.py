@@ -179,8 +179,32 @@ FORE_R = 0.131       # m, forearm (link4)
 WRIST_R = 0.091      # m, wrist (link5)
 HAND_R = 0.104       # m, hand: flange, gripper body and fingers (link6..hand)
 PEN_R = 0.03         # m, the inline pen itself — UNAUDITED, legacy tool only
-SAFETY_M = 0.05      # m, operating clearance between two arms
+# ==========================================================================
+# THE ARM-TO-ARM GATE — DECISION 2026-09-09 (Pete), 80 mm -> 50 mm
+# ==========================================================================
+# Pete, after the :7005 scene showed the last five dead cells refused by a
+# PARKED neighbour at 61-69 mm against an 80 mm gate: "ohh ok so these are not
+# real collisions.  make the arm to arm margin 5cm."
+#
+# `PAIR_MARGIN` is that gate and it is the ONLY arm-to-arm number: the
+# conductor's inter-arm clearance, `allocate.ParkProbe`'s park-vs-mover and
+# park-vs-ink checks, `scene_check`'s inter-arm pass (which takes it as an
+# argument), `layout`'s park-set screens and the pause/pen-swap checks all
+# reduce to `SAFETY_M + CALIB_M`, so it is expressed that way and every one of
+# them picks the new value up without a call-site change.
+#
+# THE CALIBRATION ALLOWANCE IS NOT WHAT WAS RELAXED.  `CALIB_M` is 30 mm of
+# unsurveyed base position — a real uncertainty about where the arms ARE, and
+# spending it would be spending something we do not have.  What moved is the
+# discretionary operating clearance on top of it, 50 mm -> 20 mm.
+#
+# SELF and STATIC margins are UNTOUCHED: `selfcoll.SELF_PLAN_MARGIN` (23 mm),
+# `rig_final.STATIC_MARGIN` (50 mm) and `STATIC_PLAN_MARGIN` (63 mm) all stand.
+# This is one arm against another arm, and nothing else.
+PAIR_MARGIN = 0.050  # m, THE arm-to-arm gate (was 0.080 before 2026-09-09)
 CALIB_M = 0.03       # m, unsurveyed base positions (see module docstring)
+SAFETY_M = 0.020     # m of operating clearance on top of CALIB_M;
+#                      SAFETY_M + CALIB_M == PAIR_MARGIN, pinned by a test
 SWEEP_K = 0.55       # sweep slack factor: 0.5 for the chord, +10 % for the arc
 BROAD_CAP = 0.25     # m, clearances above this are not computed exactly
 PRIORITY_SEARCH_MAX = 6   # moving arms whose 6! = 720 orders are all enumerated
@@ -217,6 +241,30 @@ _IMAGE_STATS = dict(built=0, cached=0, transposed=0, cells=0, wall=0.0, jobs=0)
 # base z / d1.  t leaves [0, 1] at both ends and is meant to: the connector
 # reaches 0.2325 m back past the flange and link1's swept solid 0.0545 m past
 # the shoulder, and both are metal.
+# WHICH BASE BAND A KNOWN POSE DOES NOT NEED (2026-09-09).  `BASE_CAPSULES`
+# runs from the flange to the shoulder and its LAST band is link1's swept
+# solid — the envelope of the upper arm REVOLVING about joint 1.  For an arm
+# whose pose is unknown that is exactly right.  For one we have FROZEN at a
+# named park, link1 is somewhere specific and its real body is already carried
+# by the `(1, 3, UPPER_R)` capsule, so the sweep is the same double count the
+# body-column AABB was: measured on the five residual cells at h = 0.970 it
+# costs 8-36 mm of pair clearance and refused every one of them.
+#
+# Bands 0-2 are link0's OWN casting (connector, taper, waist) and stay: they
+# are structure, and structure does not move whatever the pose.
+FROZEN_SWEEP_BANDS = (3,)
+
+
+def known_pose_capsules(tab):
+    """`tab` minus the bands a KNOWN pose carries as real links. -> (tab, idx).
+
+    `idx` is the surviving columns, so a caller that already has
+    `cap_endpoints` output can slice it rather than recompute.
+    """
+    keep = [k for k in range(len(tab)) if k not in FROZEN_SWEEP_BANDS]
+    return tuple(tab[k] for k in keep), keep
+
+
 BASE_CAPSULES = tuple((0, 1, r, z0 / D1_BASE, z1 / D1_BASE)
                       for z0, z1, r in BODY_BANDS)
 N_BASE = len(BASE_CAPSULES)      # how many leading entries are the base column

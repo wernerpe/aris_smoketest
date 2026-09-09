@@ -88,7 +88,11 @@ def freeze(parks, fleet, pens, h_inv):
         tab = (coordination.CAPSULES_LAT if P.shape[1] >= 11
                else coordination.CAPSULES)
         A, B = coordination.cap_endpoints(P, tab)
-        _CAPS[aid] = (np.asarray(A, float)[0], np.asarray(B, float)[0],
+        # a FROZEN partner is a known pose: drop link1's revolution sweep, its
+        # real upper arm is already in the table
+        tab, keep = coordination.known_pose_capsules(tab)
+        _CAPS[aid] = (np.asarray(A, float)[0][keep],
+                      np.asarray(B, float)[0][keep],
                       np.array([c[2] for c in tab], float))
         _POSES[aid] = np.asarray(q, float).reshape(7).copy()
 

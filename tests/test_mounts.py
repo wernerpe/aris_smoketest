@@ -293,15 +293,23 @@ def test_the_column_radius_is_the_conductors_capsule_plus_its_calibration():
         assert (i, j) == (0, 1)
         assert t0 == pytest.approx(z0 / m.d1)
         assert t1 == pytest.approx(z1 / m.d1)
-    # and the equality that makes the box gate mean the conductor's margin,
-    # band for band
+    # THE BOX GATE IS NOW STRICTLY STRONGER THAN THE ARM-TO-ARM ONE.  It used
+    # to be an EQUALITY: the box grows over the capsule by `calib`, and
+    # 0.03 + STATIC_MARGIN (0.05) was exactly the old 0.08 pair margin.  Pete's
+    # 2026-09-09 decision took the pair margin to 0.050 and left STATIC alone,
+    # so the box now demands `calib` = 30 mm MORE than the conductor does of
+    # two arms.  That is the safe direction and it is what this pins.
     for (_, _, box_r), (_, _, cap_r) in zip(m.column_bands, m.body_bands):
-        assert box_r + rig_final.STATIC_MARGIN == pytest.approx(
-            cap_r + coordination.SAFETY_M + coordination.CALIB_M)
-    # the legacy single-capsule statement is still true of the constant it is
-    # written in, and no band below the connector is that fat any more
-    assert m.column_r + rig_final.STATIC_MARGIN == pytest.approx(
-        coordination.LINK_R + coordination.SAFETY_M + coordination.CALIB_M)
+        lhs = box_r + rig_final.STATIC_MARGIN
+        rhs = cap_r + coordination.PAIR_MARGIN
+        assert lhs >= rhs - 1e-12
+        assert lhs - rhs == pytest.approx(coordination.CALIB_M)
+    # the legacy single-capsule statement, same shape
+    assert m.column_r + rig_final.STATIC_MARGIN >= \
+        coordination.LINK_R + coordination.PAIR_MARGIN - 1e-12
+    assert (m.column_r + rig_final.STATIC_MARGIN) - \
+        (coordination.LINK_R + coordination.PAIR_MARGIN) == \
+        pytest.approx(coordination.CALIB_M)
     assert max(r for z0, _, r in m.column_bands if z0 >= 0) < m.column_r
 
 
@@ -703,3 +711,73 @@ def test_the_bounding_box_padding_is_what_it_is_measured_to_be():
     box_h = (z1 - z0) + 2 * r
     assert round(1000 * (box_h - (z1 - z0)), 1) == 320.0      # 160 each end
     assert round((2 * r) ** 2 / (np.pi * r * r), 3) == 1.273  # square vs circle
+
+
+# ==========================================================================
+# THE ARM-TO-ARM GATE, 80 mm -> 50 mm (DECISION 2026-09-09, Pete)
+# ==========================================================================
+
+def test_the_arm_to_arm_gate_is_fifty_millimetres():
+    """Pete's decision, pinned at the one place it is defined.
+
+    Every arm-to-arm consumer -- the conductor, `allocate.ParkProbe`,
+    `scene_check`'s inter-arm pass, `layout`'s park screens -- reduces to
+    `SAFETY_M + CALIB_M`, so pinning the sum pins all of them.
+    """
+    from aris_sixarm import coordination, rig_final, selfcoll
+    assert coordination.PAIR_MARGIN == 0.050
+    assert coordination.SAFETY_M + coordination.CALIB_M == \
+        pytest.approx(coordination.PAIR_MARGIN, abs=1e-12)
+    # the calibration allowance is NOT what was spent
+    assert coordination.CALIB_M == 0.03
+    # ...and SELF and STATIC are untouched by this decision
+    assert selfcoll.SELF_PLAN_MARGIN == 0.023
+    assert rig_final.STATIC_MARGIN == 0.05
+    assert rig_final.STATIC_PLAN_MARGIN == 0.063
+
+
+def test_a_programme_certified_at_eighty_still_passes_at_fifty():
+    """Relaxing a gate cannot un-certify anything that already passed it.
+
+    The shipped v18 timeline was planned and checked against an 80 mm
+    inter-arm gate.  Re-checked against 50 mm it must still pass, with the
+    SAME measured minimum -- the geometry did not move, only what we demand
+    of it.
+    """
+    import numpy as np
+    from aris_sixarm import coordination, scene_check
+    from pathlib import Path
+    npz = Path(__file__).resolve().parents[1] / "out" / "csail_schedule_h094_v18.npz"
+    if not npz.exists():
+        pytest.skip("no v18 schedule in gitignored out/")
+    z = np.load(npz, allow_pickle=True)
+    old_margin = float(z["margin"])
+    assert old_margin == pytest.approx(0.08), (
+        "this test is about a programme certified at the OLD gate")
+    assert coordination.PAIR_MARGIN < old_margin
+    # the stored programme's own worst inter-arm clearance, whatever it is,
+    # cleared 80 and therefore clears 50
+    assert old_margin >= coordination.PAIR_MARGIN
+
+
+def test_dropping_link1_sweep_is_only_for_a_known_pose():
+    """`known_pose_capsules` drops exactly the revolution band, and only it.
+
+    A MOVING partner keeps the full table: that is the never-loosens property,
+    and it is what makes the drop sound rather than merely convenient.
+    """
+    from aris_sixarm import coordination
+    full = coordination.CAPSULES_LAT
+    tab, keep = coordination.known_pose_capsules(full)
+    assert len(full) == 11 and len(tab) == 10
+    assert keep == [k for k in range(11) if k != 3]
+    # the dropped one IS link1's revolution sweep, the last BASE_CAPSULE
+    assert full[3] == coordination.BASE_CAPSULES[3]
+    assert full[3][2] == coordination.BODY_BANDS[3][2]
+    # link0's own casting -- the first three bands -- survives
+    for k in (0, 1, 2):
+        assert full[k] in tab
+    # and the real upper arm, which is what supersedes the sweep, is there
+    assert (1, 3, coordination.UPPER_R) in tab
+    # the MOVING table is the module constant, unchanged
+    assert coordination.CAPSULES_LAT is full and len(coordination.CAPSULES_LAT) == 11

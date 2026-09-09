@@ -874,7 +874,13 @@ class ParkProbe:
             tab = (coordination.CAPSULES_LAT if P.shape[1] >= 11
                    else coordination.CAPSULES)
             A, B = coordination.cap_endpoints(P, tab)
-            self.caps[int(a)] = (A[0], B[0],
+            # A PARKED PARTNER IS A KNOWN POSE, so link1's revolution sweep is
+            # dropped: its real upper arm is already in the table (see
+            # coordination.known_pose_capsules).  This is the parked half of
+            # the same double count aris_sixarm/envelope.py removed from the
+            # body columns.
+            tab, keep = coordination.known_pose_capsules(tab)
+            self.caps[int(a)] = (A[0][keep], B[0][keep],
                                  np.array([c[2] for c in tab], float))
 
     def __bool__(self):

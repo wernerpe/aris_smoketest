@@ -375,6 +375,11 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
         assert rig_final.chain_static_clearance(Pw, steel)[0] >= 0.46, aid
 
 
+def coordination_PAIR():
+    from aris_sixarm.coordination import PAIR_MARGIN
+    return PAIR_MARGIN
+
+
 def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     """WHY THE BEARING IS OUTWARD.  Aimed at the canvas centre — which is what
     one arm alone wants — the middle row cannot certify a pose at all and the
@@ -401,8 +406,16 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     outer = [13, 17, 2, 97]
     inward = {aid: layout.certified_ready_pose(fl[aid], pen_lat=LAT, pen_ext=EXT)[0]
               for aid in outer}
-    assert _park_clearance(inward, {a: fl[a] for a in outer}) \
-        < SAFETY_M + CALIB_M + 0.005               # still a near miss
+    # THE ABSOLUTE NUMBER, because the gate it is compared against moved.
+    # The inward four stand 61.3 mm apart.  Against the OLD 80 mm pair margin
+    # that was a refusal, which is what this control was written to show;
+    # against Pete's 2026-09-09 50 mm gate the same poses now CLEAR, by
+    # 11.3 mm.  The geometry did not move and the test says so in millimetres
+    # rather than in a constant that has.
+    inward_clear = _park_clearance(inward, {a: fl[a] for a in outer})
+    assert inward_clear == pytest.approx(0.0613, abs=5e-4)
+    assert inward_clear < 0.080                    # refused by the old gate
+    assert inward_clear >= coordination_PAIR()     # cleared by the new one
 
     # ...and the function still refuses a fleet that parks inside itself.
     # THE GATE IS WHAT THIS PINS, AND ONLY THE GATE.  Which INPUT trips it has
