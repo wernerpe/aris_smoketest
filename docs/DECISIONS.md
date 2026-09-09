@@ -2236,3 +2236,89 @@ obstacles has to leave an already-certified programme alone, and it does.
 
 Tests: paper, transit, mounts, selfcoll, layout, system_model, report_tools,
 lateral, gates — **199 passed, 20 skipped**.
+
+## 2026-09-09 — the atlas gets the honest room too, and 0.970's rectangle grows 47 %
+
+The neighbour-model fix earlier today moved the ROUTER and the HOVER gate off
+the bounding boxes and left the ATLAS on them, which is where most of the dead
+canvas lived: 378 of 400 dead cells at h = 0.970 were `NO_DRAW`.  This closes
+that.
+
+`atlas._clears` now measures through the same funnel the router uses
+(`frozen.chain_clearance`), and `atlas.sweep_arm` applies whatever neighbour
+model is installed to its own box set.  Both are inert until installed, so a
+plain sweep reproduces every shipped atlas bit for bit — checked on a shipped
+row before anything else was run.  `scripts/sweep_atlas_model.py` re-sweeps a
+height under the model; `scripts/regate_atlas.py` gained `--model-parks` so the
+re-gate to 63 mm re-solves in the same room.
+
+### the drawing-pose layer
+
+Re-swept at both heights (57 s and 63 s for six arms), then re-gated to 63 mm:
+
+| | strict-GO arm-cells | distinct cells with a drawer |
+|---|---|---|
+| 0.970 shipped (AABB) | 23 330 | 16 184 |
+| **0.970 new (cyl+frozen)** | **24 053** (+723) | **16 184** (+0) |
+| 0.940 shipped (AABB) | 23 945 | 16 269 |
+| **0.940 new (cyl+frozen)** | **25 082** (+1137) | **16 337** (+68) |
+
+**Not one arm-cell was dropped at either height**, so the new atlas is a strict
+SUPERSET of the shipped one and every cell the old map called live is still
+live.  And the honest headline: at h = 0.970 the fix buys REDUNDANCY — 723 more
+(arm, cell) pairs — and NOT ONE NEW CELL.  Every one of the 378 `NO_DRAW` cells
+there is out of REACH, not blocked by a neighbour.  At 0.940 it buys 68 cells.
+
+### the map
+
+The full three-layer sweep would have cost about six hours per height — the map
+got expensive precisely because the fix worked, since far more cells now reach
+the routing layer instead of failing fast at the hover gate.  The superset
+property above makes the shortcut sound, so `scripts/remap_dead_cells.py`
+re-decides ONLY the dead cells (389 and 296 of them) against the new atlas and
+merges; it checks the superset property itself and refuses if it does not hold.
+
+|                        | h = 0.970 |           | h = 0.940 |           |
+|------------------------|-----------|-----------|-----------|-----------|
+|                        | AABB atlas | cyl atlas | AABB atlas | cyl atlas |
+| solo-drawable          | 97.651 %  | 97.687 %  | 98.213 %  | 98.279 %  |
+| `NO_DRAW`              | 378       | 378       | 293       | **225**   |
+| `NO_HOVER`             | 0         | 0         | 0         | 0         |
+| `NO_ROUTE`             | 11        | **5**     | 3         | 60        |
+| enclosed holes         | 9         | **4**     | 6         | 7         |
+| hole cells             | 11        | **5**     | 71        | **60**    |
+| **largest hole-free**  | 2.1112 m² | **3.1008 m²** | 1.9656 m² | 1.9656 m² |
+| ...its extent          | 0.58 x 3.64 | **1.02 x 3.04** | 0.54 x 3.64 | 0.54 x 3.64 |
+| near-square hole-free  | 1.7328 m² | **1.8240 m²** | 1.7280 m² | 1.7280 m² |
+
+**h = 0.970's certified rectangle grows 47 %, from a 0.58 m sliver to a
+1.02 x 3.04 m block.**  That is the number worth having: a strip that narrow was
+never going to hold a drawing, and this one will.
+
+`NO_ROUTE` rising to 60 at 0.940 is not a regression — it is 68 cells that used
+to be `NO_DRAW` arriving at the next gate.  They can now be drawn; they still
+cannot be flown to.  The cause moved, honestly.
+
+### how much of what is left is rim
+
+Counting dead cells within 100 mm of a canvas edge and outside every base disc:
+
+    h = 0.970   344 of the 378 NO_DRAW are rim  (91 %)
+    h = 0.940   221 of the 225 NO_DRAW are rim  (98 %)
+
+Pete accepts the rim, and the rim is what is left.  Under-base dead cells fall
+11 -> 5 at 0.970 and 71 -> 60 at 0.940.  His own cell (0.60, 1.82) is still
+dead at both heights, and still at the ROUTE layer: it can be drawn, and the
+arm that draws it cannot be flown there past the neighbour that is really
+parked over it.
+
+### what was cut, and what held
+
+CUT: the full three-layer sweeps (six hours per height), replaced by the
+dead-cell remap above; and rung 1 at h = 0.940, which ran rung 0 only — it
+turned 2 cells in the comparable earlier run, so the 0.940 numbers are a lower
+bound by about that much.  h = 0.970 ran rungs 0 and 1.
+
+HELD: `scene_check` over v18's whole merged timeline is **bit-identical** —
+28 of 28 keys, `min_clearance` 80.59104857659906 mm, PASS — because the library
+defaults are untouched and both models are inert until a script installs them.

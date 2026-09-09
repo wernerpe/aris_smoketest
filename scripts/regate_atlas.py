@@ -66,6 +66,7 @@ os.environ.setdefault("ARIS_RIG", "proposed")
 os.environ.setdefault("ARIS_TOOL", "lateral")
 
 from aris_sixarm import atlas, frames, layout, paper, rig_final   # noqa: E402
+from aris_sixarm import envelope, frozen
 
 _W = {}
 
@@ -100,7 +101,12 @@ def _resolve(job):
     a, x, y = job
     spec = _W["fleet"][a]
     h = _W["h"]
-    boxes = spec.static_obstacles()
+    # THE SAME ROOM THE ROUTER USES, when one is installed: body columns as
+    # cylinders and parked partners as their real capsules.  Both are inert
+    # unless `--parks`/the model was switched on, so a plain re-gate is the
+    # bit-identical one it always was (aris_sixarm/envelope.py, frozen.py).
+    frozen.observe(a)
+    boxes = envelope.swap(frozen.filter_boxes(spec.static_obstacles()))
     Twb = spec.T_world_base(h)
     # the HOLDER's OWN axial depth, not the spec's (which is the inline pen's
     # 0.110 unless ARIS_TOOL says otherwise): naming pen_lat and letting
@@ -254,9 +260,30 @@ def main():
                          "answers a question about a rig that does not exist.")
     ap.add_argument("--arms", default="")
     ap.add_argument("--workers", type=int, default=max(1, os.cpu_count() - 8))
+    ap.add_argument("--model-parks", default=None, metavar="JSON",
+                    help="switch the 2026-09-09 neighbour model ON for this "
+                         "re-gate: body columns as cylinders and these parks' "
+                         "poses as the partners' real capsules.  Omit to "
+                         "re-gate against the shipped bounding boxes.")
     a = ap.parse_args()
 
     fl = _fleet_at(a.h)
+    if a.model_parks:
+        import json as _json
+        if a.model_parks == "shipped":
+            _pk = {int(k): np.asarray(v, float)
+                   for k, v in layout.Q_PARK_PROPOSED.items()}
+        else:
+            _doc = _json.load(open(a.model_parks))
+            _pk = {int(k): np.asarray(v["q"], float)
+                   for k, v in _doc["best"].items()}
+        _fl2 = _fleet_at(a.h)
+        envelope.install(_fl2, float(a.h if a.h else layout.LAYOUT_PROPOSED["h"]))
+        frozen.freeze(_pk, _fl2, {x: _fl2[x].pen for x in _fl2},
+                      float(a.h if a.h else layout.LAYOUT_PROPOSED["h"]))
+        print("neighbour model ON: cylinders + frozen partners from %s"
+              % a.model_parks)
+
     arms = [int(v) for v in a.arms.split(",")] if a.arms else sorted(fl)
     if a.compare:
         band = tuple(float(v) for v in a.band.split(",")) if a.band else None
@@ -265,7 +292,8 @@ def main():
         return compare(a.src, a.dst, arms, fl, band)
     dst = Path(a.dst)
     dst.mkdir(parents=True, exist_ok=True)
-    print(f"rig=proposed tool=lateral h={a.h if a.h is not None else layout.LAYOUT_PROPOSED[chr(39)+chr(104)+chr(39)]}")
+    _h_shown = a.h if a.h is not None else layout.LAYOUT_PROPOSED["h"]
+    print(f"rig=proposed tool=lateral h={_h_shown}")
     print(f"atlas gate  STATIC_MARGIN      = "
           f"{1000 * rig_final.STATIC_MARGIN:.0f} mm  (what {a.src} was swept at)")
     print(f"router floor FRAME_FLOOR       = "

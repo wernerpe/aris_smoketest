@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import envelope
+from . import frozen
 from . import ik
 from . import rig_final
 from .fleet import FLEET, SHEET, H_INV_DEFAULT
@@ -257,7 +259,7 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
         tool_w = [Twb[:3, :3] @ t + Twb[:3, 3] for t in tool_pts]
         P10 = np.vstack([pts_w] + [t[None] for t in tool_w])
         floor = rig_final.STATIC_MARGIN if static is None else float(static)
-        if rig_final.chain_static_clearance(P10, boxes)[0] < floor:
+        if frozen.chain_clearance(P10, boxes)[0] < floor:
             return None
     return T
 
@@ -459,6 +461,13 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
     spec = (FLEET if fleet is None else fleet)[arm_id]
     sheet = SHEET if sheet is None else sheet
     boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
+    # THE NEIGHBOUR MODEL, if one is installed (aris_sixarm/envelope.py and
+    # aris_sixarm/frozen.py).  Both are inert until `install`/`freeze` is
+    # called, so a plain sweep reproduces every shipped atlas bit for bit; with
+    # them on, a DRAWING pose is gated against the same room the router uses
+    # instead of against the bands' bounding boxes.
+    frozen.observe(arm_id)
+    boxes = envelope.swap(frozen.filter_boxes(boxes))
     Twb = spec.T_world_base(h_inv)
     Twb_inv = np.linalg.inv(Twb)
     cand_sets = _candidates(tilt_max_deg)
@@ -486,6 +495,9 @@ def sweep_arm(arm_id, out_dir, grid=0.02, rmax=1.05, h_inv=H_INV_DEFAULT,
                         mount=spec.mount, base=Twb, grid=grid, h_inv=h_inv,
                         tilt_max_deg=tilt_max_deg, pen_ext=pen_ext,
                         pen_lat=pen_lat, model=model_signature(),
+                        neighbour_model=np.array(
+                            ("cyl" if envelope.active() else "aabb")
+                            + "+" + ("frozen" if frozen.active() else "bands")),
                         cone=np.array(GATE_CONE_DEG if cone is None
                                       else [float(c) for c in cone], float))
     go = strict_go(arr)
