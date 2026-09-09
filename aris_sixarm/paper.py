@@ -62,6 +62,7 @@ orders of magnitude, which is the property that makes it worth having.
 """
 import numpy as np
 
+from . import envelope
 from . import frozen
 from . import rig_final
 from . import frames as _frames
@@ -998,7 +999,13 @@ def static_boxes(spec):
     # ...and with `frozen` switched on, a partner known to be holding a pose is
     # modelled by that pose's capsules instead of its pose-invariant band (see
     # aris_sixarm/frozen.py).  Off by default: `filter_boxes` is the identity.
-    return frozen.filter_boxes(boxes)
+    #
+    # `envelope.swap` then replaces whatever body bands are LEFT — the partners
+    # that are still modelled pose-invariantly — with the band's own CYLINDER
+    # rather than its bounding box.  The AABB padded a 128 mm cylinder into a
+    # 449 mm box and that padding is what refused the pen-ups under a base
+    # (see aris_sixarm/envelope.py).  Off by default; identity when off.
+    return envelope.swap(frozen.filter_boxes(boxes))
 
 
 def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):

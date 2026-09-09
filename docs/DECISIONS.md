@@ -2102,3 +2102,137 @@ shipped map's baseline (13 of 14 where the map says 0 of 14).  It calls
 two drawers per cell where the atlas has one.  The BETWEEN-CLOCKING comparison
 is sound; the absolute counts are not.  Settling it properly needs an atlas
 re-swept per clocking, which is exactly the cost this was written to avoid.
+
+
+## 2026-09-09 — "that is a fake collision": the band was a box, and the box was mostly air
+
+Pete, on the :7004 hover scene: *"ohh that is a fake collision. the box is very
+over conservative!!!"*  He is right, and it is worth 144 mm.
+
+### what the bands are, and what the box did to them
+
+`mounts.MOUNTS.body_bands` is the mesh audit's measured radial profile of an
+FR3's base casting and shoulder: four (z0, z1, r) bands in BASE z, from the
+connector and cable stub 232.5 mm ABOVE the flange down to 387.5 mm below it,
+each grown by `calib` = 30 mm of unsurveyed-base allowance.  Joint 1 turns
+about base z, so everything link0 and link1 carry sweeps into a SOLID OF
+REVOLUTION about that axis — the profile is not an approximation of the swept
+body, it IS the swept body, and a cylinder per band is exact for it.  (Links 2
+and beyond have never been in this envelope and still are not; they are the
+conductor's pair clearance and `allocate.ParkProbe`'s business.)
+
+`mounts.arm_column_boxes` then handed each band to the box machinery as
+`lo = min(a, b) - r`, `hi = max(a, b) + r` — the band's AXIS-ALIGNED BOUNDING
+BOX, inflated by the band's radius in ALL THREE AXES.  Measured, arm 31 at
+h = 0.970:
+
+| band | what it stands for | cylinder | its AABB | volume |
+|------|--------------------|----------|----------|--------|
+| 0 | connector + cable stub | r 207 mm x 299 mm | 414 x 414 x 713 mm | **3.04x** |
+| 1 | the shoulder-ward taper | r 148 mm x 32 mm | 296 x 296 x 328 mm | **13.01x** |
+| 2 | THE WAIST | r 108 mm x 160 mm | 216 x 216 x 376 mm | **2.99x** |
+| 3 | link1's swept solid | r 160 mm x 128.5 mm | 320 x 320 x 449 mm | **4.44x** |
+
+The footprint is 1.273x the circle in every band (a square circumscribing it),
+which is the honest cost of an AABB.  The Z PADDING IS NOT: a cylinder needs
+none at all, and band 3's box therefore hangs **160.0 mm below where the arm's
+body actually ends** — 207.0 mm for band 0.  That is the space a neighbour's
+forearm passes through on its way under a base, and it is empty.
+
+WHAT IT COST, on the cell Pete was looking at — arm 71 over (0.64, 1.80),
+h = 0.940, its hovers measured against arm 31's column:
+
+    hover 60 mm    AABB    8.0 mm      cylinder  152.2 mm     fake +144.2
+    hover 30 mm    AABB   35.0 mm      cylinder  173.4 mm     fake +138.5
+    hover 10 mm    AABB   53.1 mm      cylinder  214.7 mm     fake +161.6
+    drawing pose   AABB   63.1 mm      cylinder  224.6 mm     fake +161.6
+
+The drawing pose was clearing the floor by 0.1 mm and the 60 mm hover was
+"inside by 55 mm".  Neither was true.  Both were measuring the corner of a box
+that is 4.4 times the volume of the thing it stands for.
+
+### the tight envelope
+
+`aris_sixarm/envelope.py`: the same four bands as FINITE CYLINDERS, with an
+exact segment-to-cylinder distance in the same ternary-search style
+`rig_final.segment_box_clearance` uses — the distance is convex along the
+segment, so the search finds the true minimum.  Each cylinder still carries its
+`lo`/`hi`, so `paper.near_boxes` and every other box-shaped consumer keep
+working and only the NARROW phase changes.
+
+Three tests pin it.  It still ENVELOPES: 256 random joint samples of a
+neighbour over its full range, every `coordination.BASE_CAPSULES` surface, max
+escape **0.000 mm** — zero to floating point, because the bands ARE the
+measured profile and `calib` is pure margin on top.  It is CONTAINED in what it
+replaces: 4000 random points, the cylinder set is inside the box set
+everywhere, so a pose the boxes cleared is a pose the cylinders clear and the
+only new answers are fake collisions going away.  And the padding itself is
+pinned at 160 mm and 1.273x, so nobody re-derives it by accident.
+
+### what it recovers, and where it is inert
+
+The hover gate first, because that is the layer the padding was refusing.  Over
+every dead cell that has a certified drawing pose, counting cells that get a
+certified hover on `writing.HOVER_LADDER`:
+
+| h | AABB bands | CYLINDER bands | gained | lost |
+|---|-----------|----------------|--------|------|
+| 0.940 | 7 of 15 | **15 of 15** | **8** | 0 |
+| 0.970 | 1 of 22 | **22 of 22** | **21** | 0 |
+
+Ladder rungs certified in total go 35 -> 67 and 5 -> 110.  EVERY addressable
+dead cell at both heights now has a hover, and the eight cells gained at 0.940
+are exactly the eight ORANGE `draw ok, no hover` cells — including (0.64, 1.80),
+the one on :7004.  Pete's "can we just hover lower" was the right instinct
+aimed at the wrong knob: the hover was never too high, the obstacle was too fat.
+
+Then the three-layer maps, rescue rungs 0 and 1 from the pre-fix maps:
+
+|                        | h = 0.970 |          | h = 0.940 |          |
+|------------------------|-----------|----------|-----------|----------|
+|                        | before    | after    | before    | after    |
+| **NO_HOVER cells**     | 7         | **0**    | 8         | **0**    |
+| NO_ROUTE cells         | 15        | **11**   | 7         | **3**    |
+| NO_DRAW cells          | 378       | 378      | 293       | 293      |
+| enclosed holes         | 9         | 9        | 13        | **6**    |
+| hole cells             | 22        | **11**   | 83        | **71**   |
+| solo-drawable          | 97.585 %  | 97.651 % | 98.140 %  | 98.213 % |
+| largest hole-free rect | 2.1112 m² | 2.1112 m² | 1.9656 m² | 1.9656 m² |
+| near-square hole-free  | 1.7024 m² | **1.7328 m²** | 1.7064 m² | **1.7280 m²** |
+
+**`NO_HOVER` is gone as a category at both heights.**  The cell on :7004 —
+(0.64, 1.80) — is now LIVE at both heights.  `NO_DRAW` does not move by one
+cell, and that is the honest limit of this change: the ATLAS still gates
+drawing poses against the bounding boxes, and 378 of the 400 dead cells at
+0.970 are `NO_DRAW`.  Re-sweeping the atlases under the cylinder model is the
+large remaining prize and it was not attempted here.
+
+AND WHERE IT IS INERT, which matters for reading the table.  With `frozen` on
+for every partner — the default for a SOLO map, where every other arm is parked
+by construction — the body bands are already replaced by the partners' real
+capsules, so the cylinder swap has nothing left to swap.  The two halves are
+complementary, not additive: cylinders are what the router uses for a partner
+that is MOVING, frozen capsules for one that is parked.  The map numbers above
+are therefore the frozen model's; the cylinder model's own contribution is the
+hover table, and it is what makes the non-frozen path honest.
+
+They also disagree in the right direction.  On (0.64, 1.80): cylinders alone
+give the hover 152.2 mm and let the legs plan — and then `ParkProbe` reports
+**-8.2 mm**, because arm 31's REAL parked arm is where the route goes.  With
+frozen on, the hover is refused up front for the same real reason.  The
+cylinder model removes a fake obstacle; it does not invent clearance.
+
+### defaults, and the flag
+
+`--frozen-partners` and the cylinder envelope are now BOTH ON by default in
+`scripts/feasible_workspace.py`, and the JSON records which model produced it
+(`neighbour_model`) alongside the `frozen_dependency` block.
+`--legacy-bands` turns both off and reproduces the pre-2026-09-09 model
+exactly.  The library defaults are untouched: `envelope` and `frozen` are inert
+until installed, so nothing outside the map pipeline changed behaviour — which
+is why `scene_check` over v18's whole merged timeline is **bit-identical**, all
+28 keys, `min_clearance` 80.591 mm, PASS.  A model that only removes fake
+obstacles has to leave an already-certified programme alone, and it does.
+
+Tests: paper, transit, mounts, selfcoll, layout, system_model, report_tools,
+lateral, gates — **199 passed, 20 skipped**.

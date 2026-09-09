@@ -156,13 +156,22 @@ def partner_clearance(P):
     return worst
 
 
-def chain_clearance(P, boxes):
-    """`rig_final.chain_static_clearance`, pose-aware when switched on.
+def chain_clearance(P, room):
+    """The whole static room, measured. -> (N,).
 
-    -> (N,).  With the model off this IS `chain_static_clearance`, called with
+    `room` is what `paper.static_boxes` hands out: real steel as boxes, and —
+    when `envelope` is installed — body columns as CYLINDERS rather than their
+    bounding boxes.  Each is measured with its own exact primitive, and a
+    frozen partner's real capsules are folded in on top.
+
+    With everything off this IS `rig_final.chain_static_clearance` called with
     the identical arguments, so every shipped number is reproduced exactly.
     """
+    from . import envelope
+    boxes, cyls = envelope.split(room)
     d = rig_final.chain_static_clearance(P, boxes)
+    if cyls:
+        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls))
     if not _CAPS:
         return d
     return np.minimum(d, partner_clearance(P))

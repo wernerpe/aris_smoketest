@@ -606,3 +606,100 @@ def test_scene_check_catches_a_column_graze_on_its_own():
                                          m.column_bands):
         assert br - r == pytest.approx(m.calib)
         assert z1 <= bz1 + 1e-9
+
+
+# ==========================================================================
+# THE BODY COLUMN AS A CYLINDER, NOT ITS BOUNDING BOX (2026-09-09)
+# ==========================================================================
+
+def _fleet_970():
+    from aris_sixarm import layout
+    return layout.build_fleet(layout.paired_grid(spacing=0.61, rows=3, h=0.970))
+
+
+def test_the_cylinder_column_still_contains_the_moving_neighbours_body():
+    """The tight envelope must still envelope, over the whole joint range.
+
+    Joint 1 turns about base z, so everything link0 and link1 carry sweeps
+    into a SOLID OF REVOLUTION about that axis, and the mesh audit's measured
+    radial profile IS that solid.  This samples the neighbour's joint range and
+    checks that every `coordination.BASE_CAPSULES` SURFACE — the part the
+    column has always stood for — stays inside the cylinders.  The reported
+    escape must be <= 0.
+    """
+    import numpy as np
+    from aris_sixarm import atlas, coordination, envelope
+    fl = _fleet_970()
+    spec = fl[31]
+    cyls = envelope.body_cylinders(spec, h_inv=0.970)
+    p0, zc, z0, z1, r = envelope._pack(cyls)
+    rng = np.random.default_rng(20260909)
+    lo = np.asarray(atlas.FR3_MIN, float)
+    hi = np.asarray(atlas.FR3_MAX, float)
+    Q = lo + rng.random((256, 7)) * (hi - lo)
+    P = coordination.chain_world(Q, spec, 0.970, float(spec.pen))
+    worst = -np.inf
+    for (i, j, rad, f0, f1) in coordination.BASE_CAPSULES:
+        A = P[:, i] + f0 * (P[:, j] - P[:, i])
+        B = P[:, i] + f1 * (P[:, j] - P[:, i])
+        for t in np.linspace(0.0, 1.0, 9):
+            X = A + t * (B - A)
+            # the capsule SURFACE is covered when the axis point is at least
+            # `rad` inside some cylinder: shrink each cylinder by `rad` and ask
+            # for distance zero to the shrunken set
+            d = envelope.point_cyl_d(X[:, None], p0, zc, z0, z1, r - rad)
+            worst = max(worst, float(d.min(axis=1).max()))
+    assert worst <= 1e-9, (
+        f"the neighbour's own body escapes the cylinder envelope by "
+        f"{1000 * worst:.6f} mm")
+    # ...and it is not merely non-positive, it is zero to floating point: the
+    # bands ARE the measured profile, grown by `calib`, so the containment is
+    # exact by construction and the 30 mm of calib is pure margin on top
+    assert worst < 1e-12
+
+
+def test_the_cylinder_column_is_inside_the_box_column_it_replaces():
+    """Strictly tighter, never looser: the new model can only ADD clearance.
+
+    Every shipped number was earned against the AABBs, so the swap is only
+    safe if the cylinder set is CONTAINED in the box set — then a pose the
+    boxes cleared is a pose the cylinders clear, and the only new answers are
+    the fake collisions going away.
+    """
+    import numpy as np
+    from aris_sixarm import envelope, mounts, rig_final
+    fl = _fleet_970()
+    spec, other = fl[71], fl[31]
+    boxes = [b for b in spec.static_obstacles() if b["name"].startswith("body:31")]
+    cyls = envelope.body_cylinders(other, h_inv=0.970)
+    assert len(boxes) == len(cyls) == len(mounts.MOUNTS.column_bands)
+    rng = np.random.default_rng(7)
+    lo = np.minimum.reduce([np.asarray(b["lo"], float) for b in boxes]) - 0.4
+    hi = np.maximum.reduce([np.asarray(b["hi"], float) for b in boxes]) + 0.4
+    X = lo + rng.random((4000, 3)) * (hi - lo)
+    d_box = rig_final._point_box_d(
+        X[:, None], np.stack([b["lo"] for b in boxes]),
+        np.stack([b["hi"] for b in boxes])).min(axis=1)
+    d_cyl = envelope.point_cyl_d(X[:, None], *envelope._pack(cyls)).min(axis=1)
+    # a point inside a cylinder must be inside a box: d_box == 0 wherever
+    # d_cyl == 0, and everywhere the cylinder distance is the LARGER one
+    assert np.all(d_cyl >= d_box - 1e-12), (
+        f"cylinder set is not inside the box set: worst "
+        f"{1000 * float((d_cyl - d_box).min()):.4f} mm")
+    assert not np.any((d_cyl == 0.0) & (d_box > 0.0))
+
+
+def test_the_bounding_box_padding_is_what_it_is_measured_to_be():
+    """The number this whole change is about, pinned.
+
+    Band 3 stands for link1's swept solid, 128.5 mm of cylinder at r = 160 mm.
+    Its AABB is 320 x 320 x 449 mm: 160 mm of pure padding below where the
+    arm's body ends, which is the space a neighbour's forearm passes through.
+    """
+    import numpy as np
+    from aris_sixarm import mounts
+    z0, z1, r = mounts.MOUNTS.column_bands[3]
+    assert (round(z0, 4), round(z1, 4), round(r, 4)) == (0.2590, 0.3875, 0.1600)
+    box_h = (z1 - z0) + 2 * r
+    assert round(1000 * (box_h - (z1 - z0)), 1) == 320.0      # 160 each end
+    assert round((2 * r) ** 2 / (np.pi * r * r), 3) == 1.273  # square vs circle

@@ -66,7 +66,7 @@ os.environ.setdefault("ARIS_RIG", "proposed")
 os.environ.setdefault("ARIS_TOOL", "lateral")
 
 from aris_sixarm import allocate, atlas, layout, paper, writing   # noqa: E402
-from aris_sixarm import frozen
+from aris_sixarm import envelope, frozen
 from aris_sixarm import transit                                   # noqa: E402
 from aris_sixarm import frames                                    # noqa: E402
 
@@ -84,7 +84,18 @@ NO_ROUTE = 3       # some arm can draw and lift, none can fly here
 CAUSE_NAME = {FEASIBLE: "feasible", NO_DRAW: "no draw pose",
               NO_HOVER: "draw ok, no hover", NO_ROUTE: "hover ok, unreachable"}
 
-FROZEN = False           # --frozen-partners, see aris_sixarm/frozen.py
+# THE NEIGHBOUR MODEL, and both halves are ON by default since 2026-09-09.
+# CYLM  the body column measured as its own cylinder instead of its bounding
+#       box (aris_sixarm/envelope.py) -- the AABB padded a 128 mm cylinder
+#       into a 449 mm box and refused pen-ups under a base against 160 mm of
+#       nothing.  Strictly tighter and still a valid outer envelope.
+# FROZEN  partners modelled by their ACTUAL park capsules (aris_sixarm/
+#       frozen.py).  A solo feasibility map assumes every other arm is parked
+#       BY CONSTRUCTION, so this is the map's own premise made explicit; the
+#       dependency is recorded in the JSON.  `--legacy-bands` turns both off
+#       and reproduces the pre-2026-09-09 model exactly.
+CYLM = True
+FROZEN = True
 RRT_CELL_PLANS = 3      # C-space plans one (arm, cell) may spend (see `_cell`)
 
 
@@ -191,7 +202,8 @@ def park_hovers(fleet, parks, h):
 
 def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
           tries=12, rrt=0.0, rrt_nodes=600, attempts=1, plans=None,
-          shortcut=None, calib=None, frozen_partners=False):
+          shortcut=None, calib=None, frozen_partners=True,
+          cyl_model=True):
     """Per-worker state: the fleet, the parks, the probe.  Built once."""
     writing.HOVER_LEAN_MAX_DEG = float(lean)
     fl, parks, h, _ = rig(pitch, h, calib)
@@ -224,6 +236,11 @@ def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
         frozen.freeze(parks, fl, pens, h)
     else:
         frozen.thaw()
+    _W["cyl"] = bool(cyl_model)
+    if _W["cyl"]:
+        envelope.install(fl, h)
+    else:
+        envelope.uninstall()
     _W["probes"] = {}
     _W["atlas_dir"] = atlas_dir
     _W["redundant"] = bool(redundant)
@@ -810,7 +827,7 @@ def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
     with ctx.Pool(workers, initializer=_init,
                   initargs=(str(atlas_dir), h, redundant, pitch, fiber,
                             lean, tries, rrt, rrt_nodes, 1, None, None, None,
-                            FROZEN)) as pool:
+                            FROZEN, CYLM)) as pool:
         for arm, out in pool.imap_unordered(_chunk, jobs, chunksize=1):
             res[arm].extend(out)
             done += 1
@@ -893,7 +910,8 @@ def rescue(per_arm, arms, atlas_dir, h, workers, rungs=None, chunk=6,
         with ctx.Pool(workers, initializer=_init,
                       initargs=(str(atlas_dir), h, True, pitch, True, lean,
                                 r["tries"], rrt, r["nodes"], r["attempts"],
-                                r["plans"], 5.0, calib, FROZEN)) as pool:
+                                r["plans"], 5.0, calib, FROZEN,
+                                CYLM)) as pool:
             for _ri, out, st in pool.imap_unordered(_rescue_chunk, jobs,
                                                     chunksize=1):
                 got += out
@@ -1669,6 +1687,10 @@ def main():
                          "height study had to re-implement the map.  Nothing "
                          "in aris_sixarm/ is written — write it to its own "
                          "--out and quote it as a projection.")
+    ap.add_argument("--legacy-bands", action="store_true",
+                    help="reproduce the pre-2026-09-09 neighbour model exactly:"
+                         " body columns as their bounding BOXES and no "
+                         "pose-aware frozen partners.  For comparison runs.")
     ap.add_argument("--frozen-partners", action="store_true",
                     help="model every OTHER arm by its ACTUAL park capsules "
                          "instead of its pose-invariant body band (see "
@@ -1686,8 +1708,12 @@ def main():
                          "with another's depots is not that height's map.")
     a = ap.parse_args()
 
-    global FROZEN
-    FROZEN = bool(a.frozen_partners)
+    global FROZEN, CYLM
+    if a.legacy_bands:
+        FROZEN = CYLM = False
+    print("neighbour model: body columns as %s ; partners %s"
+          % ("CYLINDERS" if CYLM else "bounding boxes",
+             "FROZEN at their parks" if FROZEN else "pose-invariant"))
 
     fl, parks, h, pitch = rig(a.pitch, a.h, a.calib)
     if a.parks:
@@ -1839,6 +1865,15 @@ def main():
     # partner's actual parked capsules is certified ONLY while that partner
     # holds that pose — for the whole stroke and both its pen-up legs.  That is
     # an obligation on the conductor, so it travels with the number.
+    nums["neighbour_model"] = dict(
+        body_columns=("CYLINDERS (aris_sixarm/envelope.py)" if CYLM
+                      else "bounding boxes (pre-2026-09-09)"),
+        partners=("frozen at their certified parks" if FROZEN
+                  else "pose-invariant bands"),
+        note=("the AABB of a band padded a 128.5 mm cylinder into a 449 mm "
+              "box -- 160 mm of nothing below where the arm's body ends, "
+              "which is where a neighbour's forearm passes under a base.  "
+              "The cylinder is the same measured profile, exactly."))
     if FROZEN:
         # the workers froze in `_init`; the PARENT has to as well, or the block
         # it writes names no arms at all
