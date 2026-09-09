@@ -1968,3 +1968,84 @@ swap is a replacement and not a deletion.
     rung's set, not the shipped one.  Recording it per cell is the next step
     before any of this could ship.
   * the budget/seeding lever above.
+
+## 2026-09-09 — the anatomy of the purple cells, and why a lower hover does not help
+
+Pete, looking at the workspace scenes on :7002/:7003: *"the red ones are off to
+the side, those are completely fine.  for the purple ones I see that the arms
+are mounted all with the same orientation and all of the purple things are
+under the bases of the arms on one side.  I want to understand the anatomy of
+these failures.  also for the orange ones can we just reduce the hover height?
+it should not need to hover crazy high."*
+
+### A. the purple cells (hover ok, no route)
+
+**Pete's reading of the picture is right, and the asymmetry is real.**  At
+h = 0.970, 14 of the 15 purple cells sit DIRECTLY under a base — within 45 mm
+of the base centre — and every one of those 14 is under a LEFT-COLUMN base
+(arms 13, 31, 2, all at x = 0.597).  Not one is under a right-column base.  In
+every case the arm that certifies the drawing pose is the ACROSS-THE-BAY
+partner (17, 71, 97 respectively), never the arm whose base it is:
+
+    under arm 13 (0.597, 0.605)   5 cells   all drawn by arm 17
+    under arm 31 (0.597, 1.815)   5 cells   all drawn by arm 71
+    under arm  2 (0.597, 3.026)   4 cells   all drawn by arm 97
+    (0.46, 2.60), r = 0.447       1 cell    drawn by arm 2 itself — the odd one
+
+h = 0.940's 7 purple cells are a DIFFERENT population and should not be read
+with them: they are 0.307–0.522 m from the nearest base, not under it, and each
+is drawn by its own nearest arm.
+
+THE MECHANISM.  All six bases are clocked identically (yaw 0).  A cell under a
+left-column base is reached by a right-column arm travelling in world −x; a
+cell under a right-column base is reached by a left-column arm travelling in
+world +x.  Same world geometry — but because the two arms share a clocking
+rather than mirroring it, those are OPPOSITE directions in each arm's own base
+frame.  The two cases are therefore not mirror images of each other, and only
+one of them has to thread the partner's column band with the forearm.
+
+Measured on the representative cell (0.60, 1.82), arm 71 (`out/dead_under_base`):
+every one of its 8 pen-up legs is refused against `body:31_column3` — the
+column of the base the cell sits under — at −131.0, 38.6, 8.0 and 62.8 mm on
+the depot legs and 62.6, −48.2, −131.0 and −104.0 mm on the descents, against a
+63 mm floor.  Arm 31's ACTUAL parked capsules clear those same routes by
+127.0 mm, so it is the pose-invariant band and not the neighbour arm.
+
+**NOT DONE, and it is the test that would settle it:** re-clocking alternate
+bases by 180° about their z and re-solving just these cells.  The enumeration
+above cost 40 minutes of the box and the what-if was cut rather than the
+deadline.  It is a cheap run — `scripts/asbuilt_layout.py` already carries a
+per-arm yaw — and it is the next thing to do, because if the purple cells move
+to the other side under re-clocking then base clocking is a live hardware lever
+and it is still open on the checklist.
+
+### B. the orange cells (draw ok, no hover) — a lower hover does not help
+
+`writing.HOVER_LADDER` solves at 60/45/30/90/120 mm.  Extending it DOWNWARD to
+25, 20, 15 and 10 mm, in process, at both heights:
+
+**0 of 8 orange cells turn at h = 0.940, and 0 of 7 at h = 0.970.**
+
+There are two distinct reasons and neither is the height:
+
+  * NO IK AT ALL for the lift, at any of the five heights — all 8 cells at
+    0.940, and 4 of the 7 at 0.970.  These sit at the far reach limit of the
+    across-bay arm; the drawing pose exists but nothing above it does.
+  * THE LIFT DRIVES A LINK INTO THE NEIGHBOUR'S COLUMN — the other 3 at 0.970.
+    Static clearance at the hover is NEGATIVE and stays negative all the way
+    down: (1.22, 0.58) arm 13 reads −70 mm at 30 mm and −40 mm at 10 mm;
+    (1.22, 1.80) arm 31 reads −53 mm and −46 mm; (1.22, 1.78) arm 31 is the
+    best of them and only reaches +5 mm at a 10 mm hover, against a 63 mm
+    floor.  Lowering the hover buys single-digit millimetres of a 60-plus
+    millimetre deficit.
+
+HOW LOW A HOVER MAY GO, since it was asked.  `paper.TIP_CLEAR` = 20 mm is the
+shipped pen-up travel clearance, and `paper.travel_floor` follows the hover
+down — a 15 mm hover certifies its transit only to 15 mm above the paper.  A
+sane minimum is therefore about 20 mm: below that the pen skims the wet line
+with less margin than the 3 mm sweep residual and the 30 mm calibration term
+the checker already carries, for no gain.  On this canvas it is moot — nothing
+turns at any height.
+
+So: the hover is not crazy high (60 mm default, 30 mm on the ladder's low
+rung), and it is not what is refusing these cells.
