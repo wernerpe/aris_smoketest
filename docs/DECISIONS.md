@@ -1670,3 +1670,173 @@ planning or safety gate moved, and `validate.TIP_TOL` still holds the ink to
 null-space reconfiguration in the stroke DP — is still open, and is what would
 bring arm 71's 0.762 mm down among the 0.46 mm and under the other five
 already draw at.
+
+
+## 2026-09-09 — the certificate was refusing, not the geometry
+
+Pete looked at a Drake render of one speckle — arm 31, cell (0.52, 1.48) at
+h = 0.970, a single dead cell in the middle third — and said what turned out to
+be exactly right: *"there is more than enough space to reach there and plan to
+it.  we are likely setting some restriction on the planner that is preventing
+it from getting there.  the physical system should comfortably be able to reach
+that."*  He was right, and the restriction was ours.  No gate constant moved.
+
+### the cell, measured
+
+The drawing pose is a good one — mid-range, flat (lean 0.00°), sigma_min
+0.2290, joint margin 0.4772 rad, 82 IK solutions, q7 = -2.1750 rad in a
+0.791 rad window — and it stands **63.7 mm** from arm 71's base column band 3
+(capsule link1->link3, r = 130 mm): clear of the 50 mm hard gate by 13.7 mm and
+of the 63 mm producer gate by 0.7 mm.
+
+All 53 of its certified hover candidates were refused on the descent, and not
+one of them collides.  Sampled at 2001 points the straight line down never
+falls below 63.7 mm; its chain holds 46.0 mm over the paper against a 20 mm
+floor; its tip never dips below the contact band; its self-clearance holds
+75.8 mm against 23.  `paper.leg_bounds` certified that leg to **61.1 mm**
+against a **63.0 mm** floor.  The refusal was 1.9 mm of arithmetic.
+
+### (1) the swept-leg certificate now subdivides where it binds
+
+`leg_bounds` and `leg_self_lb` priced a straight move as `min over every
+sample` minus `SWEEP_K x the worst point-motion over every interval` — a
+minimum taken at one end of the leg against a residual taken from the other.
+On a short hop that is nothing.  On a 4.40 rad branch change it was the whole
+answer: even after `refine_n` spent a thousand configurations driving the
+per-point step down to `STATIC_STEP`, the residual bottoms out at
+`SWEEP_K * STATIC_STEP` = 2.75 mm and no further refinement was on offer at any
+price.
+
+Every interval now carries its own residual and therefore its own bound —
+`min(c[i], c[i+1]) - SWEEP_K * motion_i`, the identical Lipschitz argument
+stated where it applies — and only the intervals still under the floor are
+bisected (`paper.interval_bounds`, `paper.adaptive_lb`,
+`paper.adaptive_static_lb`; `ADAPT_TOL` = 0.5 mm, `ADAPT_CAP` = 4097 samples).
+The per-interval form is never looser than the whole-leg form, because the
+whole-leg form is this one with its two terms taken worst-case independently.
+A leg that was never in doubt costs exactly what it cost before — the two
+early-outs are untouched — and a leg like that descent converges on the four or
+five intervals that actually decide it.
+
+**On the exhibit cell the bound goes 61.1 -> 63.0 mm and the descent routes**,
+`mode='direct'`, zero vias, in under a second: the straight line down was
+always available.  The self bound tightened on the same legs too (75.8 -> 77.8,
+99.8 -> 101.7, 92.4 -> 94.3 mm).
+
+It is a TIGHTENING OF A LOWER BOUND, so it can only turn refusals into
+certificates and never the reverse.  Four new tests in `tests/test_paper.py`
+pin that: the converged bound never exceeds a 4001-sample measurement of the
+same leg; a finer tolerance only ever raises it; it is never below the
+whole-leg form it replaces; and `leg_self_lb` stays under a 2001-sample self
+measurement.  A wider spot check — 36 random legs across arms 31, 71 and 13 —
+found 0 invalid and a worst gap to the dense truth of 0.27 mm, against the
+2.75 mm the old bound gave away by construction.
+
+### (2) the straight lift IS generated, and it is refused honestly
+
+The obvious suspicion was that the hover candidates were all branch changes
+because the same-branch straight lift was never offered.  It is offered:
+`writing.lifted_config` returns it, 0.15 rad from the drawing pose at
+z = 0.06 and 0.25 rad at z = 0.10, and 5 of the 53 candidates sit within
+1.0 rad of the drawing pose.
+
+It is refused by the STATIC gate, on its own merits and not on a residual.
+This arm is inverted and reaching outboard, so lifting the tip swings its own
+elbow TOWARDS the neighbour's column: static clearance falls
+**63.7 -> 38.7 mm at z = 0.06 and -> 21.9 mm at z = 0.10**, against a 63 mm
+producer floor and below even the 50 mm hard gate.  Those are single-pose
+measurements with no sweep and no residual in them.  Adding a "straight lift"
+candidate would be adding a pose the checker would refuse.
+
+That is also why the surviving hovers are branch changes: on this cell a branch
+change is the ONLY way to get 6 cm of air over the paper without putting the
+elbow in arm 71's column.  The candidate structure was not the restriction.
+The certificate was.
+
+### (3) the 13 mm producer slack IS paid twice on a pen-up
+
+`STATIC_PLAN_MARGIN` = `STATIC_MARGIN` (50 mm) + `STATIC_SWEEP_PAD` (12.75 mm),
+and the pad is itemised: 10.0 mm for the checker's half-step along a capsule,
+2.75 mm for the checker's own 1-Lipschitz residual between two samples of the
+TRAJECTORY.  The producers pay it so the checker is a second opinion and not a
+lottery.
+
+The router then charged its OWN 1-Lipschitz trajectory residual — the same
+`SWEEP_K * STATIC_STEP` = 2.75 mm — on top of that floor.  So the trajectory
+term was paid **twice** on every pen-up leg: once inside the 63 mm floor, once
+again in the bound compared against it.  A leg needed a true clearance of
+50 + 10 + 2.75 + 2.75 = 65.5 mm to be certified at a nominal 63 mm floor.  The
+adaptive bound cuts the router's half of that from 2.75 mm to at most
+`ADAPT_TOL` = 0.5 mm, recovering 2.25 of the 2.75 mm — without touching a
+constant.
+
+There is a third instance, reported and NOT acted on: a DRAWING POSE is a
+single configuration making no motion at all, and it pays the 2.75 mm
+trajectory residual too, because the atlas is gated at `STATIC_PLAN_MARGIN`.
+The size of that prize, measured on the enclosed holes of the pre-fix maps:
+**2 of 42 hole cells at h = 0.970 and 39 of 108 at h = 0.940** have a drawing
+pose certified at the 50 mm hard gate and dropped only by the 63 mm producer
+gate.  At 0.940 that is the single largest cause of the holes (68 of the 108
+are `no draw pose` at all).  Changing it is Pete's call and it is not made
+here.
+
+### (4) what it is worth, at both heights
+
+The three-layer maps were rebuilt `--from-raw` the pre-fix maps and re-offered
+the whole escalation ladder over the cells they refused — which is the honest
+cheap form of the rebuild, because a tightening can only ADD cells and every
+pre-fix live cell is carried forward unchanged.  Rungs 0 and 1 completed at
+both heights; rung 2 was still running at the time box and rung 3 was not
+reached, so **every number below is a LOWER bound on the fix**.
+
+|                          | h = 0.970 |          | h = 0.940 |          |
+|--------------------------|-----------|----------|-----------|----------|
+|                          | before    | after    | before    | after    |
+| enclosed holes           | 29        | **11**   | 35        | **13**   |
+| hole cells (m²)          | 42 (0.0168) | 24 (0.0096) | 108 (0.0432) | 83 (0.0332) |
+| solo-drawable            | 97.458 %  | 97.573 % | 97.989 %  | 98.140 % |
+| largest hole-free rect   | 2.0996 m² | **2.1112 m²** | 1.4688 m² | **1.9656 m²** |
+| ...its extent            | 0.58 x 3.62 | 0.58 x 3.64 | 0.54 x 2.72 | 0.54 x 3.64 |
+| near-square hole-free    | 1.2768 m² | **1.7024 m²** | 0.9680 m² | **1.7064 m²** |
+
+**The holes fall by 62 % at both heights.**  The headline rectangle at 0.970
+barely moves because it was already the full-height strip; at 0.940 it grows
+**33.8 %**, and the reason is visible in the extent: a hole was cutting the
+canvas at y = 2.70 and the strip now runs the whole 3.64 m.  The shape a logo
+would actually use — the near-square — is up **33 %** at 0.970 and **76 %** at
+0.940.
+
+Route-dead area in the middle third, which is what Pete was looking at: **0.000
+m² at 0.970 and 0.001 m² at 0.940**.  The speckles he asked about are gone.
+His own cell, arm 31 at (0.52, 1.48) at h = 0.970, goes `cause = NO_ROUTE`,
+`n_arms = 0` -> `cause = feasible`, `n_arms = 1`.
+
+`out/certified_area_h0970.json` / `_h0940.json` and their overlays are
+re-issued at the adaptive certificate, with the recipe stamped in.
+
+### (5) it changes nothing for a programme that was already certified
+
+`scripts/recheck_timeline.py` over v18's whole merged timeline is
+**bit-identical** before and after — all 28 keys equal, `min_clearance`
+80.59104857659906 mm against the 80 mm gate, worst pair 13-31.  That is the
+property a tightening has to have: it certifies more, it re-certifies nothing
+differently, and `scene_check` remains the independent last word.
+
+`tests/test_paper.py tests/test_transit.py tests/test_lateral.py
+tests/test_gates.py tests/test_layout.py tests/test_system_model.py`:
+**148 passed, 19 skipped**.  The skips are pre-existing and unrelated —
+`PROPOSED_ATLAS` still points at `out/atlas_proposed_h0940_gated`, swept at the
+0.110 inline pen, and `_require_current_atlas` has been skipping that block
+since the holder landed (7f99565).  The four new tests read
+`out/atlas_proposed_h0940_lat0860_gated63` instead and run.  Re-sweeping the
+stale dir is its own errand and is not done here.
+
+### what is still open
+
+  * rung 2 and rung 3 of the ladder had not finished re-offering at the time
+    box; both maps can only improve when they do.
+  * the 2.75 mm trajectory residual charged to a STATIC DRAWING POSE (§3),
+    worth 39 of the 108 hole cells at h = 0.940.  It is a constant and it is
+    Pete's call.
+  * `PROPOSED_ATLAS` in `tests/test_paper.py` wants a re-sweep at the final
+    tool so that block of tests runs again.

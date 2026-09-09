@@ -458,12 +458,10 @@ def leg_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
             return m - res                       # certified without refining
         if m < float(floor) - EPS:
             return m                             # refused without refining
-    n2 = refine_n(P, n)
-    if n2 > n:
-        P = world_chain(line_samples(q0, q1, n2), spec, pen_ext, h_inv)
-        m, res = float(rig_final.chain_static_clearance(P, boxes).min()), \
-            sample_residual(P)
-    return m - res
+    # ...and the band between those two is where the whole-leg residual used to
+    # decide the answer by itself.  `adaptive_static_lb` subdivides only the
+    # intervals still under the floor instead (see ADAPT_TOL).
+    return adaptive_static_lb(spec, q0, q1, pen_ext, h_inv, boxes, n, floor)
 
 
 # ==========================================================================
@@ -601,46 +599,170 @@ def self_floor(spec, q0, q1, pen_ext=None):
     return float(min(selfcoll.SELF_PLAN_MARGIN, lo))
 
 
-def leg_self_lb(spec, q0, q1, pen_ext=None, n=SAMPLES, floor=None):
+# ==========================================================================
+# THE CERTIFICATE WAS REFUSING, NOT THE GEOMETRY (2026-09-09)
+# ==========================================================================
+# Both bounds above price a straight move by sampling it and charging a
+# 1-Lipschitz residual for what happens in between, and both charged ONE
+# residual for the WHOLE leg: `min over every sample` minus `SWEEP_K` times
+# `the worst point-motion over every interval`.  On a short hop that is
+# nothing.  On a branch change it is the whole answer, because the residual
+# bottoms out at `SWEEP_K * STATIC_STEP` = 2.75 mm and no further refinement
+# was on offer at any price.
+#
+# MEASURED, and it is why this got written: arm 31, cell (0.52, 1.48) at
+# h = 0.970, the descent from every one of 53 certified hovers refused on a
+# 63.0 mm static floor by a bound of 61.1 mm — while the leg's true minimum
+# over 2001 dense samples is 63.7 mm and not one sampled configuration on it
+# touches anything.  Pete looked at the scene and said what the numbers say:
+# "there is more than enough space to reach there".  The arm was not the
+# problem and neither was the floor.  The certificate was.
+#
+# THE FIX IS TO SPEND SAMPLES WHERE THE BOUND BINDS.  Every interval carries
+# its own residual, so every interval gets its own bound —
+# `min(c[i], c[i+1]) - SWEEP_K * motion_i` — which is the identical Lipschitz
+# argument stated locally and is never looser than the global form (the global
+# form is this one with the two terms taken worst-case INDEPENDENTLY, a
+# minimum from one end of the leg against a residual from the other).  Then
+# only the intervals whose own bound is still under the floor are bisected,
+# and their residual halves every round.  A leg that was never in doubt costs
+# what it always cost; a leg like that descent converges on the four or five
+# intervals that actually decide it.
+#
+# It is a TIGHTENING OF A LOWER BOUND, so it can only ever turn refusals into
+# certificates and never the reverse — `scene_check`, which samples the real
+# timeline and clamps nothing, still has the last word.
+
+ADAPT_TOL = 0.0005         # m: how close to the sampled minimum the bound is
+#                            driven before it stops buying samples.  Half a
+#                            millimetre is an order under the 13 mm the
+#                            producers already carry and under every gate step
+#                            on this rig, so no verdict can turn on it.
+ADAPT_CAP = 4097           # most configurations one adaptive leg may sample
+ADAPT_SPLIT = 512          # most intervals bisected in one round
+SELF_SCREEN_PAD = 0.05     # m of headroom the self screen stays EXACT over,
+#                            so an interval can be certified against the floor
+#                            rather than against the screen's own bound
+
+
+def interval_bounds(c, X, k=SWEEP_K):
+    """`sample_residual`'s argument, made once per interval. -> (lb, res).
+
+    `c` is (N,) clearance at the samples of one straight move and `X` is
+    (N, P, 3) the points whose travel bounds how fast it can change — the chain
+    for the static gate, the capsule ends for the self gate.  Both returns are
+    (N-1,), one per interval.
+
+    Between samples i and i+1 no watched point moves further than `res[i]`, so
+    the clearance inside that interval cannot fall below the lower of its two
+    ends by more than that.  The whole-leg residual is this quantity maximised
+    over every interval and then subtracted from every interval's minimum,
+    which is the same statement made worst-case twice.
+    """
+    c = np.asarray(c, float)
+    if len(c) < 2:
+        return c, np.zeros(max(len(c) - 1, 0))
+    res = float(k) * np.linalg.norm(np.diff(np.asarray(X, float), axis=0),
+                                    axis=2).max(axis=1)
+    return np.minimum(c[:-1], c[1:]) - res, res
+
+
+def adaptive_lb(sample, floor=None, n=SAMPLES, tol=ADAPT_TOL, cap=ADAPT_CAP,
+                k=SWEEP_K):
+    """A CONVERGED 1-Lipschitz lower bound along one straight move.
+
+    -> (lb, sampled_min, n_used).  `sample(ts)` takes a (M,) array of
+    parameters in [0, 1] and returns `(c (M,), X (M, P, 3))`: the clearance at
+    those points of the move, and the points whose travel bounds it.
+
+    Stops the moment a finer grid cannot change a verdict — the bound clears
+    `floor`; or the SAMPLED minimum is already under it, which no refinement
+    can rescue because the truth is at most the sampled minimum; or the bound
+    has closed to within `tol` of the sampled minimum and there is nothing left
+    to win.  Without a `floor` it simply converges to `tol`.
+    """
+    ts = np.linspace(0.0, 1.0, int(n))
+    c, X = sample(ts)
+    c = np.asarray(c, float)
+    X = np.asarray(X, float)
+    while True:
+        lb, res = interval_bounds(c, X, k)
+        m = float(c.min())
+        best = float(lb.min()) if len(lb) else m
+        if floor is not None and m < float(floor) - EPS:
+            return m, m, len(ts)               # no density rescues a collision
+        if floor is not None and best >= float(floor) - EPS:
+            return best, m, len(ts)            # certified
+        if m - best <= tol or len(ts) >= cap:
+            return best, m, len(ts)
+        # only the intervals that could still be the binding one, and only
+        # while halving their residual can still buy anything
+        thr = float(floor) if floor is not None else m - tol
+        split = np.where((lb < thr) & (res > 0.5 * tol))[0]
+        if not len(split):
+            return best, m, len(ts)
+        room = int(cap) - len(ts)
+        if room <= 0:
+            return best, m, len(ts)
+        budget = min(ADAPT_SPLIT, room)
+        if len(split) > budget:                # tightest first
+            split = split[np.argsort(lb[split])[:budget]]
+        mid = 0.5 * (ts[split] + ts[split + 1])
+        cm, Xm = sample(mid)
+        ts = np.concatenate([ts, mid])
+        order = np.argsort(ts, kind="stable")
+        ts = ts[order]
+        c = np.concatenate([c, np.asarray(cm, float)])[order]
+        X = np.concatenate([X, np.asarray(Xm, float)])[order]
+
+
+def adaptive_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
+                       boxes=None, n=SAMPLES, floor=None, tol=ADAPT_TOL):
+    """`leg_static_lb`, converged. -> metres."""
+    if boxes is None:
+        boxes = static_boxes(spec)
+    if not boxes:
+        return np.inf
+    q0 = np.asarray(q0, float).reshape(7)
+    q1 = np.asarray(q1, float).reshape(7)
+    dq = q1 - q0
+
+    def sample(ts):
+        Q = q0[None, :] + np.asarray(ts, float)[:, None] * dq[None, :]
+        P = world_chain(Q, spec, pen_ext, h_inv)
+        return rig_final.chain_static_clearance(P, boxes), P
+
+    return float(adaptive_lb(sample, floor, n, tol)[0])
+
+
+def leg_self_lb(spec, q0, q1, pen_ext=None, n=SAMPLES, floor=None,
+                tol=ADAPT_TOL):
     """A LOWER BOUND on the arm's self-clearance over the whole straight move.
 
-    -> metres.  Same shape as `leg_static_lb` — sampled, residual-corrected,
-    refined only when the coarse pass cannot decide, and given a `floor` only
+    -> metres.  `adaptive_lb` on the capsule ends, and given a `floor` only
     guaranteed to land on the right side of it.
+
+    The screen is held EXACT to `SELF_SCREEN_PAD` above the floor rather than
+    to the floor itself, because an interval is certified by its ENDS MINUS ITS
+    RESIDUAL: a sample screened off at the floor comes back as a bound at the
+    floor and the subtraction then puts the interval under it forever.
     """
     if not SELF_SAFE:
         return np.inf
     from . import selfcoll
-    # ...AND THE REFINEMENT DOUBLES RATHER THAN JUMPING TO THE CAP.  The static
-    # bound can afford `refine_n`'s one big step because its measurement is
-    # cheap per sample; this one is a 165-pair screen, and jumping straight to
-    # 32x costs a thousand configurations to settle a question two doublings
-    # usually settle.  Doubling costs at most twice the step that actually
-    # decides, and every step is a valid bound on its own, so the answer is the
-    # same one the single jump would have reached.
-    cap = (n - 1) * REFINE_CAP + 1
-    k = int(n)
-    while True:
-        m, res = selfcoll.path_clearance_lb(line_samples(q0, q1, k), floor,
-                                            pen_ext, k=SWEEP_K)
-        if floor is not None:
-            if m - res >= float(floor) - EPS:
-                return m - res                  # certified at this density
-            if m < float(floor) - EPS:
-                return m                        # refused at this density
-        if res <= SWEEP_K * STATIC_STEP or k >= cap:
-            return m - res
-        # ...AND THE NEXT DENSITY IS AIMED, NOT GUESSED.  The residual falls
-        # like 1/k and `m` barely moves, so the density that would settle this
-        # is about `k * res / (m - floor)` — one step instead of the three
-        # doublings that estimate reaches by feel.  It is an estimate, so the
-        # loop stays: if `m` drops on the finer grid the next pass aims again,
-        # and the doubling is the floor under it.
-        nxt = (k - 1) * 2 + 1
-        if floor is not None and m - float(floor) > EPS:
-            want = int(np.ceil(1.3 * res / (m - float(floor))))
-            nxt = max(nxt, (k - 1) * max(1, want) + 1)
-        k = min(nxt, cap)
+    q0 = np.asarray(q0, float).reshape(7)
+    q1 = np.asarray(q1, float).reshape(7)
+    dq = q1 - q0
+    fl = None if floor is None else float(floor)
+    screen = None if fl is None else fl + SELF_SCREEN_PAD
+
+    def sample(ts):
+        Q = q0[None, :] + np.asarray(ts, float)[:, None] * dq[None, :]
+        A, B, R = selfcoll.capsule_ends(Q, pen_ext)
+        return (selfcoll.clearance_screened(A, B, R, screen),
+                np.concatenate([A, B], axis=1))
+
+    return float(adaptive_lb(sample, fl, n, tol)[0])
 
 
 def block_self_lb(L, pen_ext=None, floor=None, k=SWEEP_K):
@@ -704,12 +826,9 @@ def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
     if floor is not None:
         if m - res >= float(floor) - EPS or m < float(floor) - EPS:
             return cz, tz, (m - res if m - res >= float(floor) - EPS else m)
-    n2 = refine_n(P, n)
-    if n2 > n:
-        P = world_chain(line_samples(q0, q1, n2), spec, pen_ext, h_inv)
-        m, res = float(rig_final.chain_static_clearance(P, bx).min()), \
-            sample_residual(P)
-    return cz, tz, m - res
+    # the undecided band: subdivide where the bound binds, not everywhere
+    return cz, tz, adaptive_static_lb(spec, q0, q1, pen_ext, h_inv, bx, n,
+                                      floor)
 
 
 def path_static_lb(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,

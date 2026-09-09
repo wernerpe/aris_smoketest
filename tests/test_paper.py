@@ -1035,3 +1035,127 @@ def test_the_default_atlas_gate_is_bit_identical(lateral):
         assert np.allclose(np.asarray(a[7], float),
                            np.asarray(row[atlas.QCOL:atlas.QCOL + 7], float),
                            atol=1e-9)
+
+
+# ==========================================================================
+# THE ADAPTIVE CERTIFICATE (2026-09-09)
+# ==========================================================================
+# These four read the FINAL-TOOL atlas rather than `PROPOSED_ATLAS`, which was
+# swept at the 0.110 inline pen and has been stale — and therefore skipping the
+# tests above — since the holder landed (7f99565).  Fixing that dir is its own
+# re-sweep; these do not need it, they need any current corpus of certified
+# poses to build legs out of.
+FINAL_ATLAS = ROOT / "out/atlas_proposed_h0940_lat0860_gated63"
+
+
+def _final_cells(aid, n):
+    """`n` certified drawing poses at the FINAL tool. -> (spec, rows, Q, h)."""
+    from aris_sixarm import atlas, layout
+    _require_current_atlas(FINAL_ATLAS, aid)
+    arr, _ = atlas.load(FINAL_ATLAS, aid)
+    go = arr[atlas.strict_go(arr)]
+    if not len(go):
+        pytest.skip(f"no strict-GO cells for arm {aid}")
+    sel = go[np.linspace(0, len(go) - 1, min(n, len(go))).astype(int)]
+    return (layout.FLEET_PROPOSED[aid], sel,
+            sel[:, atlas.QCOL:atlas.QCOL + 7],
+            float(layout.LAYOUT_PROPOSED["h"]))
+
+def test_the_adaptive_bound_never_exceeds_a_dense_measurement(lateral):
+    """The tightening must stay a LOWER bound, on legs chosen to stress it.
+
+    `test_the_static_bound_is_a_lower_bound` asks this of `leg_static_lb` at
+    the old density.  This asks it of the converged bound against a grid an
+    order finer than anything the router samples, on the long branch-changing
+    legs the adaptive path is written for — the ones where the old whole-leg
+    residual was the entire answer.
+    """
+    from aris_sixarm import rig_final
+    spec, rows, Q, h = _final_cells(31, 16)
+    boxes = spec.static_obstacles()
+    rng = np.random.default_rng(20260909)
+    n_checked = 0
+    for i in rng.permutation(len(Q))[:6]:
+        for j in rng.permutation(len(Q))[:4]:
+            if i == j:
+                continue
+            a, b = np.asarray(Q[i], float), np.asarray(Q[j], float)
+            lb = paper.adaptive_static_lb(spec, a, b, spec.pen, h, boxes)
+            P = paper.world_chain(paper.line_samples(a, b, 4001), spec,
+                                  spec.pen, h)
+            dense = float(rig_final.chain_static_clearance(P, boxes).min())
+            assert lb <= dense + 1e-9, (
+                f"adaptive bound {1000 * lb:.3f} mm is ABOVE a 4001-sample "
+                f"measurement of {1000 * dense:.3f} mm")
+            n_checked += 1
+    assert n_checked >= 15
+
+
+def test_finer_subdivision_only_tightens_the_bound(lateral):
+    """A smaller tolerance may raise the bound and must never lower it.
+
+    The property that makes the adaptive path safe to turn on: it converges
+    upward towards the truth, so every leg the coarse certificate accepted is
+    still accepted and the only new answers are rescues.
+    """
+    spec, rows, Q, h = _final_cells(71, 12)
+    boxes = spec.static_obstacles()
+    n_checked = 0
+    for a, b in zip(Q[:6], Q[6:]):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        coarse = paper.adaptive_static_lb(spec, a, b, spec.pen, h, boxes,
+                                          tol=0.008)
+        mid = paper.adaptive_static_lb(spec, a, b, spec.pen, h, boxes,
+                                       tol=0.002)
+        fine = paper.adaptive_static_lb(spec, a, b, spec.pen, h, boxes,
+                                        tol=paper.ADAPT_TOL)
+        assert mid >= coarse - 1e-9 and fine >= mid - 1e-9, (
+            f"bound went DOWN under refinement: {1000 * coarse:.3f} -> "
+            f"{1000 * mid:.3f} -> {1000 * fine:.3f} mm")
+        n_checked += 1
+    assert n_checked >= 5
+
+
+def test_the_adaptive_bound_is_at_least_as_tight_as_the_whole_leg_residual(
+        lateral):
+    """The localised residual can only beat the global one.
+
+    `min over every sample` minus `max over every interval` is this bound with
+    its two terms taken from opposite ends of the leg; the per-interval form is
+    the same argument stated where it applies.
+    """
+    from aris_sixarm import rig_final
+    spec, rows, Q, h = _final_cells(31, 12)
+    boxes = spec.static_obstacles()
+    for a, b in zip(Q[:6], Q[6:]):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        P = paper.world_chain(paper.line_samples(a, b, paper.SAMPLES), spec,
+                              spec.pen, h)
+        c = rig_final.chain_static_clearance(P, boxes)
+        whole = float(c.min()) - paper.sample_residual(P)
+        lb, res = paper.interval_bounds(c, P)
+        assert float(lb.min()) >= whole - 1e-12
+        assert paper.adaptive_static_lb(spec, a, b, spec.pen, h,
+                                        boxes) >= whole - 1e-12
+
+
+def test_the_self_bound_stays_under_a_dense_self_measurement(lateral):
+    """`leg_self_lb` moved onto the same adaptive path and must keep its side.
+
+    The self screen is held exact to `SELF_SCREEN_PAD` above the floor for
+    exactly this reason: certified against a screened bound rather than the
+    truth, an interval could never clear its own residual.
+    """
+    from aris_sixarm import selfcoll
+    spec, rows, Q, h = _final_cells(13, 12)
+    n_checked = 0
+    for a, b in zip(Q[:6], Q[6:]):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        lb = paper.leg_self_lb(spec, a, b, spec.pen)
+        dense = float(selfcoll.self_clearance(
+            paper.line_samples(a, b, 2001), spec.pen).min())
+        assert lb <= dense + 1e-9, (
+            f"self bound {1000 * lb:.3f} mm is ABOVE a 2001-sample "
+            f"measurement of {1000 * dense:.3f} mm")
+        n_checked += 1
+    assert n_checked >= 5
