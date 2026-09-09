@@ -1785,21 +1785,23 @@ here.
 The three-layer maps were rebuilt `--from-raw` the pre-fix maps and re-offered
 the whole escalation ladder over the cells they refused — which is the honest
 cheap form of the rebuild, because a tightening can only ADD cells and every
-pre-fix live cell is carried forward unchanged.  Rungs 0 and 1 completed at
-both heights; rung 2 was still running at the time box and rung 3 was not
-reached, so **every number below is a LOWER bound on the fix**.
+pre-fix live cell is carried forward unchanged.  Rungs 0, 1 and 2 completed at
+h = 0.970 and rungs 0 and 1 at h = 0.940 before the time box ran out, so
+**every number below is a LOWER bound on the fix** — though not by much, since
+under the OLD certificate rungs 2 and 3 together turned 3 cells at 0.970 and 6
+at 0.940, and rung 3 turned none at either.
 
 |                          | h = 0.970 |          | h = 0.940 |          |
 |--------------------------|-----------|----------|-----------|----------|
 |                          | before    | after    | before    | after    |
-| enclosed holes           | 29        | **11**   | 35        | **13**   |
-| hole cells (m²)          | 42 (0.0168) | 24 (0.0096) | 108 (0.0432) | 83 (0.0332) |
-| solo-drawable            | 97.458 %  | 97.573 % | 97.989 %  | 98.140 % |
+| enclosed holes           | 29        | **9**    | 35        | **13**   |
+| hole cells               | 42        | 22       | 108       | 83       |
+| solo-drawable            | 97.458 %  | 97.585 % | 97.989 %  | 98.140 % |
 | largest hole-free rect   | 2.0996 m² | **2.1112 m²** | 1.4688 m² | **1.9656 m²** |
 | ...its extent            | 0.58 x 3.62 | 0.58 x 3.64 | 0.54 x 2.72 | 0.54 x 3.64 |
 | near-square hole-free    | 1.2768 m² | **1.7024 m²** | 0.9680 m² | **1.7064 m²** |
 
-**The holes fall by 62 % at both heights.**  The headline rectangle at 0.970
+**The holes fall by 69 % at h = 0.970 and 63 % at h = 0.940.**  The headline rectangle at 0.970
 barely moves because it was already the full-height strip; at 0.940 it grows
 **33.8 %**, and the reason is visible in the extent: a hole was cutting the
 canvas at y = 2.70 and the strip now runs the whole 3.64 m.  The shape a logo
@@ -1833,8 +1835,8 @@ stale dir is its own errand and is not done here.
 
 ### what is still open
 
-  * rung 2 and rung 3 of the ladder had not finished re-offering at the time
-    box; both maps can only improve when they do.
+  * rung 3 at h = 0.970, and rungs 2-3 at h = 0.940, had not finished
+    re-offering at the time box; both maps can only improve when they do.
   * the 2.75 mm trajectory residual charged to a STATIC DRAWING POSE (§3),
     worth 39 of the 108 hole cells at h = 0.940.  It is a constant and it is
     Pete's call.
