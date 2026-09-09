@@ -1159,3 +1159,126 @@ def test_the_self_bound_stays_under_a_dense_self_measurement(lateral):
             f"measurement of {1000 * dense:.3f} mm")
         n_checked += 1
     assert n_checked >= 5
+
+
+# ==========================================================================
+# THE POSE-AWARE NEIGHBOUR MODEL (2026-09-09) -- aris_sixarm/frozen.py
+# ==========================================================================
+
+@pytest.fixture
+def thawed():
+    """`frozen` is a process global; every test here restores it."""
+    from aris_sixarm import frozen
+    frozen.thaw()
+    paper.clear_cache()
+    try:
+        yield frozen
+    finally:
+        frozen.thaw()
+        paper.clear_cache()
+
+
+def _frozen_fleet(h=None):
+    from aris_sixarm import layout
+    h = float(layout.LAYOUT_PROPOSED["h"]) if h is None else h
+    fl = layout.build_fleet(layout.paired_grid(spacing=0.61, rows=3, h=h))
+    return fl, {a: fl[a].pen for a in fl}, h
+
+
+def test_the_frozen_model_is_off_by_default_and_changes_nothing(lateral, thawed):
+    """The option must be inert until it is asked for.
+
+    Every shipped number was earned with the pose-invariant bands, so with
+    `frozen` thawed the box set and the clearance have to be the SAME OBJECTS
+    and the SAME NUMBERS the router always saw.
+    """
+    from aris_sixarm import rig_final
+    fl, pens, h = _frozen_fleet()
+    spec = fl[71]
+    raw = spec.static_obstacles()
+    assert not thawed.active()
+    assert len(paper.static_boxes(spec)) == len(raw)
+    spec2, rows, Q, _ = _final_cells(71, 8)
+    P = paper.world_chain(np.asarray(Q, float), spec, spec.pen, h)
+    assert np.array_equal(rig_final.chain_static_clearance(P, raw),
+                          thawed.chain_clearance(P, raw))
+
+
+def test_freezing_drops_only_the_named_partners_bands(thawed):
+    """True structure is never dropped, and neither is a moving partner's band.
+
+    The whole safety argument is that this swaps ONE thing: the pose-invariant
+    stand-in for a partner's movable links, and only for partners that are
+    actually being held still.
+    """
+    fl, pens, h = _frozen_fleet()
+    spec = fl[71]
+    raw = spec.static_obstacles()
+    structure = [b for b in raw if thawed.band_owner(b["name"]) is None]
+    assert structure, "expected mounts/plates/runway in the static set"
+    # freeze only arm 31
+    thawed.freeze({31: np.zeros(7)}, fl, pens, h)
+    thawed.observe(71)
+    kept = paper.static_boxes(spec)
+    names = {b["name"] for b in kept}
+    assert all(b["name"] in names for b in structure), "structure was dropped"
+    for b in raw:
+        o = thawed.band_owner(b["name"])
+        if o == 31:
+            assert b["name"] not in names, "arm 31's band should be gone"
+        else:
+            assert b["name"] in names, f"{b['name']} should have been kept"
+
+
+def test_a_partner_that_is_not_frozen_never_loosens(lateral, thawed):
+    """The lower-bound property: a MOVING partner keeps its band, exactly.
+
+    This is what makes the option safe to have in the tree at all -- turning it
+    on for one arm cannot quietly relax the model for another.
+    """
+    from aris_sixarm import rig_final
+    fl, pens, h = _frozen_fleet()
+    spec = fl[71]
+    raw = spec.static_obstacles()
+    spec2, rows, Q, _ = _final_cells(71, 8)
+    Qa = np.asarray(Q, float)
+    P = paper.world_chain(Qa, spec, spec.pen, h)
+    base = rig_final.chain_static_clearance(P, raw)
+    # freeze a partner that is NOWHERE near these poses, and check the other
+    # partners' bands still bind exactly as before
+    thawed.freeze({2: np.zeros(7)}, fl, pens, h)
+    thawed.observe(71)
+    kept = paper.static_boxes(spec)
+    still = rig_final.chain_static_clearance(
+        P, [b for b in kept if thawed.band_owner(b["name"]) is not None])
+    band_only = rig_final.chain_static_clearance(
+        P, [b for b in raw
+            if thawed.band_owner(b["name"]) not in (None, 2)])
+    assert np.array_equal(still, band_only), (
+        "freezing arm 2 changed what arm 13/17/31/97's bands say")
+
+
+def test_the_frozen_partners_capsules_actually_bind(thawed):
+    """The swap is not a deletion: the partner's real arm is still an obstacle.
+
+    Dropping a band and adding nothing would be unsound, so the model has to be
+    able to REFUSE on the capsules it put in the band's place.
+    """
+    fl, pens, h = _frozen_fleet()
+    spec = fl[71]
+    # park arm 31 where its own links reach out of its column footprint
+    q31 = np.array([0.0, -0.6, 0.0, -2.2, 0.0, 2.0, 0.0])
+    thawed.freeze({31: q31}, fl, pens, h)
+    thawed.observe(71)
+    P31 = paper.world_chain(q31[None, :], fl[31], fl[31].pen, h)[0]
+    # a pose of arm 71 built to sit ON one of arm 31's link capsules is refused
+    d = thawed.partner_clearance(P31[None])      # arm 31 against itself, frozen
+    assert np.isfinite(d[0]) and d[0] < 0.0, (
+        "a chain lying on the frozen partner should read negative, got "
+        f"{1000 * d[0]:.1f} mm")
+    # ...and the combined answer is never above the boxes-only answer
+    kept = paper.static_boxes(spec)
+    from aris_sixarm import rig_final
+    both = thawed.chain_clearance(P31[None], kept)
+    boxes_only = rig_final.chain_static_clearance(P31[None], kept)
+    assert both[0] <= boxes_only[0] + 1e-12

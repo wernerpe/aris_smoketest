@@ -1842,3 +1842,129 @@ stale dir is its own errand and is not done here.
     Pete's call.
   * `PROPOSED_ATLAS` in `tests/test_paper.py` wants a re-sweep at the final
     tool so that block of tests runs again.
+
+
+## 2026-09-09 — the band refuses what the arm does not: a pose-aware neighbour, as an option
+
+`mounts.attach_body_columns` gives every arm the OTHER arms' pose-invariant
+BASE COLUMN BANDS — a 0.32 m AABB per band standing in for a neighbour's
+shoulder and upper links AT ANY POSE, because at sweep time nobody has decided
+what pose the neighbour will hold.  Against a neighbour that might be moving
+that is the honest model.  Against one that is FROZEN at a certified park it is
+over-conservative by construction, and the under-base holes are where that
+bites.
+
+MEASURED, at cell (0.60, 1.82), h = 0.970 — the cell Pete looked at on :7001.
+Arm 71 is the only arm that can draw it, its drawing pose is healthy (margin
+0.3503, sigma 0.1586, lean 12.5°, static 71.2 mm), and every one of its 8
+pen-up legs is refused against `body:31_column3`, arm 31's own band, at −131.0,
+38.6, 8.0, 62.8 mm on the depot legs and 62.6, −48.2, −131.0, −104.0 mm on the
+descents.  Arm 31's ACTUAL parked capsules clear the same routes by **127.0 mm**
+— and `_enter_clear` never even asks, because `allocate.ParkProbe` is consulted
+only AFTER `enter_beats` has planned.  The band refuses what the arm does not.
+
+### the option
+
+`aris_sixarm/frozen.py`, OFF by default and inert until `freeze()` is called.
+Given `{aid: q}` it drops exactly the `body:<aid>_column<k>` bands of the named
+arms and replaces them with those arms' real link capsules at those poses,
+checked at the same floors the bands were checked at.  TRUE STRUCTURE IS NEVER
+DROPPED — mounts, plates, the drop cluster, the runway, and the bands of any
+partner NOT named all stay.  `frozen.observe(aid)` names the arm that is
+moving so it is never checked against itself.
+
+`paper.py` routes its six static-clearance sites and its one box accessor
+through it, so the pen-up legs AND the hover gate (`writing.static_gate` ->
+`paper.chain_static`) see the same room.  `scripts/feasible_workspace.py` gains
+`--frozen-partners`, threaded through both worker pools.
+
+### THE DEPENDENCY, and it is not free
+
+A cell certified this way is certified ONLY WHILE EACH NAMED ARM HOLDS ITS
+NAMED POSE — for the whole stroke and for both of that cell's pen-up legs.
+That is an obligation on the conductor, so it travels with the number:
+`--frozen-partners` writes a `frozen_dependency` block into the map JSON
+carrying the arms, their exact poses, the parks file they came from, what was
+replaced, what was kept, and the floor.  `scripts/certified_area.py` carries it
+into the certified-area JSON.
+
+The conductor already has the mechanism.  Its phases freeze the arms that are
+not drawing; `scene_check` reports `frozen N/N` over the merged timeline (v18
+reports 6/6) and lists each frozen arm's own worst clearances; and
+`allocate.ParkProbe` is what holds a parked partner to the pair margin while
+another arm draws.  What this option does is let the MAP assume what the
+conductor already enforces — which is also exactly the solo-map assumption.
+
+### what it recovers
+
+Both maps were rebuilt `--from-raw` the adaptive-certificate maps and re-offered
+the ladder over the cells they refused, with `--frozen-partners` on.  **Rungs 0
+and 1 completed at both heights; rungs 2-3 were not reached, so these are a
+LOWER bound.**
+
+|                        | h = 0.970 |            | h = 0.940 |            |
+|------------------------|-----------|------------|-----------|------------|
+|                        | bands     | pose-aware | bands     | pose-aware |
+| enclosed holes         | 9         | 9          | 13        | **6**      |
+| hole cells             | 22        | **11**     | 83        | **71**     |
+| solo-drawable          | 97.585 %  | 97.651 %   | 98.140 %  | 98.213 %   |
+| largest hole-free rect | 2.1112 m² | 2.1112 m²  | 1.9656 m² | 1.9656 m²  |
+| near-square hole-free  | 1.7024 m² | **1.7328 m²** | 1.7064 m² | **1.7280 m²** |
+
+11 arm-cells turned at h = 0.970 and 12 at h = 0.940.  The hole CELLS halve at
+0.970 (22 -> 11) while the hole COUNT does not move, which is what shrinking
+holes rather than closing them looks like; at 0.940 the count itself falls
+13 -> 6.  The headline rectangles do not move — the cells this turns are not
+the ones cutting them — but the near-square, which is the shape a logo actually
+uses, gains 1.8 % and 1.3 %.
+
+AND PETE'S OWN CELL DOES NOT TURN, which is worth saying plainly.  Arm 71 at
+(0.60, 1.82) goes from 4 hover candidates routing 0 of 4 depot legs and 0 of 4
+descents, to **49** candidates routing **27 of 49** depot legs and **19 of 49**
+descents — the legs genuinely open, and the hover GATE loosens as well as the
+legs.  But the pipeline still does not certify the cell at rungs 0-1.  An
+earlier pass DID certify it at rung 1 with a parked-partner clearance of
+81.9 mm; that pass had the aside bug below, and once the frozen set is made to
+follow the aside parks the answer goes away.  The optimistic number is
+superseded and is not claimed.
+
+### the aside rungs had to be made consistent
+
+The first cut had a real bug, and it was caught by exactly the discrepancy that
+should catch it — Pete's cell turned in process and did not turn in the map.
+An ASIDE rung MOVES the partners, and the frozen set was still derived from the
+shipped depots, so the obstacle model and `allocate.ParkProbe` were describing
+two different sets of six poses.  The ACCEPTANCE was never wrong (the probe
+always measured the planned path against the parks actually in force, at the
+80 mm pair margin), but the room the planner searched was, and the dependency
+the map recorded would have named the wrong poses.  `_cell_escalated` now
+re-freezes on each park set before planning against it, and drops `paper`'s
+memo with it.
+
+### the search artifact, as a separate lever
+
+Independently of all of this: on that same cell, at a 50 mm floor the router
+finds depot routes whose TRUE minimum clearance is **63.1 mm** — legal at the
+shipped 63 mm floor, and not found at it within budget.  2 of the 8 legs on
+that cell are in that class.  That is a search-budget/seeding lever rather than
+a geometry one.  The cell-level question — how many cells a doubled budget
+would turn — was CUT for the box and is not claimed.
+
+### tests
+
+`tests/test_paper.py` gains four for the option: it is off by default and
+reproduces the shipped boxes and clearances exactly; freezing drops ONLY the
+named partners' `body:<aid>_column<k>` bands and never structure nor a moving
+partner's band; a partner that is NOT frozen is unaffected, which is the
+never-loosens property; and the frozen partner's capsules actually bind, so the
+swap is a replacement and not a deletion.
+
+### still open
+
+  * rungs 2 and 3 with the corrected aside re-freeze — both maps can only
+    improve, and Pete's cell is the one to watch.
+  * which park set each frozen-certified cell depended on: the map records the
+    set in force at the run, but a cell turned at an ASIDE rung depends on that
+    rung's set, not the shipped one.  Recording it per cell is the next step
+    before any of this could ship.
+  * the budget/seeding lever above.

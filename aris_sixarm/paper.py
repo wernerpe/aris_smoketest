@@ -62,6 +62,7 @@ orders of magnitude, which is the property that makes it worth having.
 """
 import numpy as np
 
+from . import frozen
 from . import rig_final
 from . import frames as _frames
 from .fleet import H_INV_DEFAULT
@@ -451,7 +452,7 @@ def leg_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     boxes = near_boxes(P, boxes)
     if not boxes:
         return np.inf
-    m = float(rig_final.chain_static_clearance(P, boxes).min())
+    m = float(frozen.chain_clearance(P, boxes).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS:
@@ -730,7 +731,7 @@ def adaptive_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     def sample(ts):
         Q = q0[None, :] + np.asarray(ts, float)[:, None] * dq[None, :]
         P = world_chain(Q, spec, pen_ext, h_inv)
-        return rig_final.chain_static_clearance(P, boxes), P
+        return frozen.chain_clearance(P, boxes), P
 
     return float(adaptive_lb(sample, floor, n, tol)[0])
 
@@ -821,7 +822,7 @@ def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
     bx = near_boxes(P, boxes)
     if not bx:
         return cz, tz, np.inf
-    m = float(rig_final.chain_static_clearance(P, bx).min())
+    m = float(frozen.chain_clearance(P, bx).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS or m < float(floor) - EPS:
@@ -871,7 +872,7 @@ def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     boxes = near_boxes(P, boxes) if boxes else boxes
     if not boxes:
         return chain_z, tip_z, np.full(len(qs), np.inf)
-    return chain_z, tip_z, rig_final.chain_static_clearance(P, boxes)
+    return chain_z, tip_z, frozen.chain_clearance(P, boxes)
 
 
 def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
@@ -898,7 +899,7 @@ def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     boxes = near_boxes(P, boxes) if boxes else boxes
     if not boxes:
         return cz, tz, np.full((R, N), np.inf), np.zeros((R, N))
-    sc = rig_final.chain_static_clearance(P, boxes).reshape(R, N, K).min(axis=2)
+    sc = frozen.chain_clearance(P, boxes).reshape(R, N, K).min(axis=2)
     res = SWEEP_K * np.linalg.norm(np.diff(Pb, axis=2), axis=4).max(axis=(2, 3))
     return cz, tz, sc, res
 
@@ -993,7 +994,11 @@ def static_boxes(spec):
     (`mounts.attach_body_columns`).  One accessor, so the router, the hover
     solver and the screen cannot end up asking about different rooms.
     """
-    return spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
+    boxes = spec.static_obstacles() if hasattr(spec, "static_obstacles") else []
+    # ...and with `frozen` switched on, a partner known to be holding a pose is
+    # modelled by that pose's capsules instead of its pose-invariant band (see
+    # aris_sixarm/frozen.py).  Off by default: `filter_boxes` is the identity.
+    return frozen.filter_boxes(boxes)
 
 
 def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
@@ -1013,7 +1018,7 @@ def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     pw = p @ R.T + t
     tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
     P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
-    return rig_final.chain_static_clearance(P10, boxes)
+    return frozen.chain_clearance(P10, boxes)
 
 
 def frame_clearance(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):

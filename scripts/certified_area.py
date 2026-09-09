@@ -124,6 +124,26 @@ def best_rects(live, xs, ys):
     )
 
 
+def _frozen_dependency_of(src):
+    """The `frozen_dependency` block of the map this area came from. -> dict|None.
+
+    `src` is a `*_map.npz`; its sibling `*.json` is what
+    `scripts/feasible_workspace.py` writes.  Absent for every map built with
+    the shipped pose-invariant bands, which is the default.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    p = _Path(str(src))
+    j = p.with_name(p.name[:-len("_map.npz")] + ".json") \
+        if p.name.endswith("_map.npz") else None
+    if j is None or not j.is_file():
+        return None
+    try:
+        return _json.loads(j.read_text()).get("frozen_dependency")
+    except Exception:
+        return None
+
+
 def components_and_holes(live):
     """Largest connected live component and the holes sealed inside it."""
     from scipy import ndimage
@@ -244,6 +264,12 @@ def main(argv=None):
                          lean_deg=round(float(np.rad2deg(
                              frames.PEN_LEAN_HOLDER)), 3)),
                recipe=a.recipe,
+               # THE DEPENDENCY TRAVELS WITH THE AREA.  A map built with
+               # `--frozen-partners` is certified only while the named arms
+               # hold the named poses; that block lives in the map's own JSON
+               # and a certified area computed FROM that map inherits it, so a
+               # caller reading only this file still learns what it owes.
+               frozen_dependency=_frozen_dependency_of(src),
                grid=GRID, sheet=[float(SHEET[0]), float(SHEET[1])],
                cells=int(live.size),
                live_cells=int(live.sum()),

@@ -66,6 +66,7 @@ os.environ.setdefault("ARIS_RIG", "proposed")
 os.environ.setdefault("ARIS_TOOL", "lateral")
 
 from aris_sixarm import allocate, atlas, layout, paper, writing   # noqa: E402
+from aris_sixarm import frozen
 from aris_sixarm import transit                                   # noqa: E402
 from aris_sixarm import frames                                    # noqa: E402
 
@@ -83,6 +84,7 @@ NO_ROUTE = 3       # some arm can draw and lift, none can fly here
 CAUSE_NAME = {FEASIBLE: "feasible", NO_DRAW: "no draw pose",
               NO_HOVER: "draw ok, no hover", NO_ROUTE: "hover ok, unreachable"}
 
+FROZEN = False           # --frozen-partners, see aris_sixarm/frozen.py
 RRT_CELL_PLANS = 3      # C-space plans one (arm, cell) may spend (see `_cell`)
 
 
@@ -189,7 +191,7 @@ def park_hovers(fleet, parks, h):
 
 def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
           tries=12, rrt=0.0, rrt_nodes=600, attempts=1, plans=None,
-          shortcut=None, calib=None):
+          shortcut=None, calib=None, frozen_partners=False):
     """Per-worker state: the fleet, the parks, the probe.  Built once."""
     writing.HOVER_LEAN_MAX_DEG = float(lean)
     fl, parks, h, _ = rig(pitch, h, calib)
@@ -212,6 +214,16 @@ def _init(atlas_dir, h, redundant=True, pitch=None, fiber=True, lean=0.0,
         _W["margin"] = float(coordination.SAFETY_M + float(calib))
     _W["probe"] = allocate.ParkProbe(parks, fl, pens, h_inv=h,
                                      margin=_W["margin"])
+    # THE POSE-AWARE NEIGHBOUR MODEL, off unless asked for.  The solo map's own
+    # assumption is that every OTHER arm is parked, and `frozen` makes the
+    # obstacle set say so: a partner's pose-invariant band is replaced by its
+    # actual capsules at its actual park.  See aris_sixarm/frozen.py for what
+    # this costs in certification.
+    _W["frozen"] = bool(frozen_partners)
+    if _W["frozen"]:
+        frozen.freeze(parks, fl, pens, h)
+    else:
+        frozen.thaw()
     _W["probes"] = {}
     _W["atlas_dir"] = atlas_dir
     _W["redundant"] = bool(redundant)
@@ -394,6 +406,8 @@ def _cell(arm, row, qcol, redundant=True):
     """
     fl, parks, h = _W["fleet"], _W["parks"], _W["h"]
     probe = _W["probe"]
+    if _W.get("frozen"):
+        frozen.observe(arm)          # never check the mover against itself
     if _W.get("rrt", 0.0) > 0.0:
         _park_probe_hook(arm)
     spec = fl[arm]
@@ -619,6 +633,8 @@ def _cell_escalated(arm, row, qcol, rung):
     rung would spend four searches to prove that one at a time.
     """
     fl, h = _W["fleet"], _W["h"]
+    if _W.get("frozen"):
+        frozen.observe(arm)          # never check the mover against itself
     spec = fl[arm]
     x, y = float(row[0]), float(row[1])
     q_draw = np.asarray(row[qcol:qcol + 7], float)
@@ -658,6 +674,15 @@ def _cell_escalated(arm, row, qcol, rung):
             return NO_ROUTE, z0, float("nan")
         for parks, sig in sets:
             probe, _psig = _probe_for(parks)
+            # AND THE POSE-AWARE MODEL FOLLOWS THE PARKS IT IS MODELLING.  An
+            # aside rung MOVES the partners, so a frozen set derived from the
+            # shipped depots would be describing arms that are no longer there
+            # — the obstacle set and the ParkProbe would disagree about the
+            # same six poses.  Re-freeze on the set actually in force.
+            if _W.get("frozen"):
+                frozen.freeze(parks, _W["fleet"], _W["pens"], h)
+                frozen.observe(arm)
+                paper.clear_cache()
             if _W.get("rrt", 0.0) > 0.0:
                 _park_probe_hook(arm, probe, sig)
             q_park = np.asarray(parks[arm], float)
@@ -784,7 +809,8 @@ def sweep(arms, atlas_dir, h, workers, chunk=24, every=1, redundant=True,
     ctx = mp.get_context("fork")
     with ctx.Pool(workers, initializer=_init,
                   initargs=(str(atlas_dir), h, redundant, pitch, fiber,
-                            lean, tries, rrt, rrt_nodes)) as pool:
+                            lean, tries, rrt, rrt_nodes, 1, None, None, None,
+                            FROZEN)) as pool:
         for arm, out in pool.imap_unordered(_chunk, jobs, chunksize=1):
             res[arm].extend(out)
             done += 1
@@ -867,7 +893,7 @@ def rescue(per_arm, arms, atlas_dir, h, workers, rungs=None, chunk=6,
         with ctx.Pool(workers, initializer=_init,
                       initargs=(str(atlas_dir), h, True, pitch, True, lean,
                                 r["tries"], rrt, r["nodes"], r["attempts"],
-                                r["plans"], 5.0, calib)) as pool:
+                                r["plans"], 5.0, calib, FROZEN)) as pool:
             for _ri, out, st in pool.imap_unordered(_rescue_chunk, jobs,
                                                     chunksize=1):
                 got += out
@@ -1643,6 +1669,13 @@ def main():
                          "height study had to re-implement the map.  Nothing "
                          "in aris_sixarm/ is written — write it to its own "
                          "--out and quote it as a projection.")
+    ap.add_argument("--frozen-partners", action="store_true",
+                    help="model every OTHER arm by its ACTUAL park capsules "
+                         "instead of its pose-invariant body band (see "
+                         "aris_sixarm/frozen.py).  A cell certified this way "
+                         "DEPENDS on those arms holding those poses for the "
+                         "whole stroke and both its pen-up legs; the JSON "
+                         "records the dependency.  Off by default.")
     ap.add_argument("--parks", default=None, metavar="JSON",
                     help="a `scripts/height_sweep.py park` result whose depots "
                          "to use.  Needed with --h, because the shipped "
@@ -1652,6 +1685,9 @@ def main():
                          "obstacles for the route layer, so mapping one height "
                          "with another's depots is not that height's map.")
     a = ap.parse_args()
+
+    global FROZEN
+    FROZEN = bool(a.frozen_partners)
 
     fl, parks, h, pitch = rig(a.pitch, a.h, a.calib)
     if a.parks:
@@ -1799,6 +1835,33 @@ def main():
               "v12, and `paper.effective_static_floor` clamps the difference "
               "away rather than contradicting it — which leaves a pose on the "
               "atlas gate with nothing for its own descent to spend."))
+    # THE DEPENDENCY, RECORDED WITH THE RESULT.  A cell certified against a
+    # partner's actual parked capsules is certified ONLY while that partner
+    # holds that pose — for the whole stroke and both its pen-up legs.  That is
+    # an obligation on the conductor, so it travels with the number.
+    if FROZEN:
+        # the workers froze in `_init`; the PARENT has to as well, or the block
+        # it writes names no arms at all
+        frozen.freeze(parks, fl, {a: fl[a].pen for a in fl}, h)
+        frozen_qs = frozen.poses()
+        nums["frozen_dependency"] = dict(
+            model="pose-aware neighbour capsules (aris_sixarm/frozen.py)",
+            arms=sorted(int(k) for k in frozen_qs),
+            poses={str(k): [round(float(v), 6) for v in q]
+                   for k, q in frozen_qs.items()},
+            parks_source=(str(a.parks) if a.parks
+                          else "layout.Q_PARK_PROPOSED"),
+            replaced="body:<aid>_column<k> bands of the named arms only",
+            kept="mounts, plates, drop cluster, runway, and the bands of any "
+                 "arm NOT in this list",
+            floor_m=float(paper.FRAME_FLOOR),
+            obligation=("every cell in this map is certified ONLY while each "
+                        "named arm holds its named pose for the whole stroke "
+                        "and both of its pen-up legs.  The conductor enforces "
+                        "this with its phase freeze — `scene_check` reports "
+                        "'frozen N/N' over the merged timeline, and "
+                        "`allocate.ParkProbe` is what holds a parked partner "
+                        "to the pair margin while another arm draws."))
     if not ladder and a.ladder:
         # A REBUILD DOES NOT RE-WALK THE LADDER, and the rungs a map's cells
         # were actually bought with are provenance, not decoration.  Carried
