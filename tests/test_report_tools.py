@@ -154,25 +154,48 @@ def test_certified_area_gate_accepts_what_fits_and_measures_what_does_not():
     assert flat["inside"]
 
 
-def test_certified_area_rectangle_really_has_no_dead_cell_in_it():
-    """The promise the JSON makes, checked against the map it came from."""
+@pytest.mark.parametrize("name", ["certified_area_h0940.json",
+                                  "certified_area_h0970.json"])
+def test_certified_area_rectangle_really_has_no_dead_cell_in_it(name):
+    """The promise the JSON makes, checked against THE MAP IT CAME FROM.
+
+    THE MAP IS READ OUT OF THE DOCUMENT, not hardcoded here, and that is the
+    whole point of `certified_area.py` writing a `source`.  A certified area is
+    a statement about one map; re-issue the map — a tighter certificate, a
+    finished rung, a different park set — and a rectangle checked against some
+    OTHER map is comparing two different canvases.  Hardcoding a path made this
+    test fail on 2026-09-09 against a rectangle that was in fact clean: the
+    JSON had been re-issued from `fw_h0940_final_map.npz` (the adaptive
+    certificate) and the test was still reading `feasible_workspace_v14_map`,
+    where that one cell was still dead.
+
+    EVERY rectangle in the document is checked, not just the largest, because
+    `placement_proxy` will happily hand a caller the near-square or the
+    landscape one.
+    """
     import certified_area
-    j = ROOT / "out" / "certified_area_h0940.json"
-    m = ROOT / "out" / "feasible_workspace_v14_map.npz"
-    if not (j.exists() and m.exists()):
-        pytest.skip("no certified-area JSON/map in gitignored out/")
+    j = ROOT / "out" / name
+    if not j.exists():
+        pytest.skip(f"no {name} in gitignored out/")
     doc = json.loads(j.read_text())
-    r = doc["rect"]["largest"]
-    live, xs, ys = certified_area.live_from_map(str(m))
-    j0 = int(np.argmin(np.abs(xs - r["x0"])))
-    j1 = int(np.argmin(np.abs(xs - r["x1"])))
-    i0 = int(np.argmin(np.abs(ys - r["y0"])))
-    i1 = int(np.argmin(np.abs(ys - r["y1"])))
-    block = live[i0:i1 + 1, j0:j1 + 1]
-    assert block.all(), (
-        f"{int((~block).sum())} dead cells inside a rectangle the JSON calls "
-        "certified; a drawing placed there would not be drawable")
-    assert block.size == r["cells"]
+    src = doc.get("source")
+    if not src or not Path(src).is_file() or not str(src).endswith(".npz"):
+        pytest.skip(f"{name}: source {src!r} is not a readable map npz "
+                    "(the draw-pose-only variants are sourced from an atlas)")
+    live, xs, ys = certified_area.live_from_map(str(src))
+    for which, r in doc["rect"].items():
+        j0 = int(np.argmin(np.abs(xs - r["x0"])))
+        j1 = int(np.argmin(np.abs(xs - r["x1"])))
+        i0 = int(np.argmin(np.abs(ys - r["y0"])))
+        i1 = int(np.argmin(np.abs(ys - r["y1"])))
+        block = live[i0:i1 + 1, j0:j1 + 1]
+        assert block.all(), (
+            f"{name} [{which}]: {int((~block).sum())} dead cells inside a "
+            f"rectangle the JSON calls certified (source {src}); a drawing "
+            "placed there would not be drawable")
+        assert block.size == r["cells"], (
+            f"{name} [{which}]: rectangle spans {block.size} cells but the "
+            f"JSON says {r['cells']}")
 
 
 def test_recheck_refuses_a_fleet_that_is_not_at_the_height_asked_for():
