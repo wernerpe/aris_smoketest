@@ -3151,6 +3151,52 @@ are measured distances and comparable directly; arm 31's extra entry may be
 the bigger pool rather than the clocking.  Re-running uniform at 50 mm would
 settle it and costs another ~4 900 s, which is not worth it for one cell.
 
+### 4c. THE THREE-LAYER MAP, SAMPLED, BOTH CLOCKINGS — and the atlas was lying
+
+`scripts/height_sweep.py pilot --every 9`, hover and route layers included,
+each clocking on its own atlas and its own searched park set, **the same 1-in-9
+sampling of each arm's certified cells** so the two runs are cell-for-cell
+comparable.  `out/mirrored/pilot_h0970_{uniform,mirrored}.json`.
+
+| all arm-cells | uniform | **mirrored** |
+|---|---:|---:|
+| sampled | 2 596 | 2 597 |
+| **feasible** | **99.384 %** | **99.268 %** |
+| `NO_HOVER` | 0.616 % | 0.655 % |
+| `NO_ROUTE` | **0.000 %** | **0.077 %** |
+
+| arm | col | uniform feasible | **mirrored** | Δ |
+|---|---|---:|---:|---:|
+| 2 | left | 99.06 % | **99.29 %** | **+0.23** |
+| 13 | left | 99.53 % | 98.83 % | **−0.70** (and 0.47 % `NO_ROUTE`) |
+| 17 | right | 99.53 % | 99.53 % | 0.00 |
+| 31 | left | 99.55 % | 99.33 % | −0.22 |
+| 71 | right | 99.55 % | 99.55 % | 0.00 |
+| 97 | right | 99.06 % | 99.06 % | 0.00 |
+
+**THE RIGHT COLUMN IS BIT-IDENTICAL ON ALL THREE ARMS AND ALL THREE LAYERS**,
+which is again the check that the experiment is the experiment: their yaw did
+not move, so nothing about them may.  **Every difference is in the left column,
+the one that turned** — and it is a NET LOSS.
+
+**THIS IS THE MEASUREMENT THE ATLAS COMPARISON COULD NOT MAKE.**  At the
+drawing-pose layer mirrored is a strict superset: +4 cells, nothing lost
+anywhere.  At the layer that decides whether a cell can actually be DRAWN —
+can the arm hover over it, and can it fly there — mirrored is **0.116 pp
+worse**, and it introduces the only `NO_ROUTE` cells in either run.  That is
+the 2026-09-09 what-if's hypothesis (a turned arm's hover and route sets
+degrade because reaching under the opposite base is now behind it) **measured
+for the first time under the model in force, at like-for-like cells** — the
+what-if itself is still not evidence, for the reasons in section 3, but the
+thing it guessed at is real and it is small.
+
+CAVEATS, both of which cut toward "small, and do not over-read it":
+the differences are 3 arm-cells out of 2 596 and two of those are arm 13's
+`NO_ROUTE`; and `NO_ROUTE` at the pilot's 60 s RRT budget is a budget result,
+not a proof of infeasibility — the shipped map spends four escalation rungs on
+exactly these cells and recovers most of them.  Both runs had the same budget,
+so the COMPARISON is sound; the absolute counts are a floor.
+
 ### 5. what was NOT measured
 
 The real three-number mirrored park search (~4 900 s at 4 jobs) — which would
