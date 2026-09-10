@@ -146,7 +146,7 @@ def filter_boxes(boxes):
     return [b for b in boxes if keep_box(b)]
 
 
-def partner_clearance(P, C=None):
+def partner_clearance(P, C=None, floor=None):
     """Observer chain -> clearance to every frozen partner's real capsules.
 
     `P` is (N, 10 or 11, 3) world chain points, exactly what
@@ -185,6 +185,8 @@ def partner_clearance(P, C=None):
             worst = np.minimum(worst, (d - (Rcap[None, :] + r)).min(axis=1))
         if C is None:
             continue
+        if floor is not None and np.all(worst >= float(floor)):
+            continue                     # `max` cannot change a passing row
         for (i, j, r) in lean:
             d = coordination.seg_seg_dist(P[:, i][:, None, :],
                                           P[:, j][:, None, :],
@@ -198,7 +200,7 @@ def partner_clearance(P, C=None):
     return worst if C is None else np.maximum(worst, lean_w)
 
 
-def chain_clearance(P, room, C=None):
+def chain_clearance(P, room, C=None, floor=None):
     """The whole static room, measured. -> (N,).
 
     `room` is what `paper.static_boxes` hands out: real steel as boxes, and —
@@ -215,9 +217,10 @@ def chain_clearance(P, room, C=None):
     """
     from . import envelope
     boxes, cyls = envelope.split(room)
-    d = rig_final.chain_static_clearance(P, boxes, C=C)
+    d = rig_final.chain_static_clearance(P, boxes, C=C, floor=floor)
     if cyls:
-        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls, C=C))
+        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls, C=C,
+                                                       floor=floor))
     if not _CAPS:
         return d
-    return np.minimum(d, partner_clearance(P, C))
+    return np.minimum(d, partner_clearance(P, C, floor))

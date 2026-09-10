@@ -274,7 +274,7 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
         # reach this call it cannot move a swept cell at all.
         C = (link_spheres.centres_world(np.asarray(q, float).reshape(1, 7), Twb)
              if link_spheres.enabled() else None)
-        if frozen.chain_clearance(P10, boxes, C)[0] < floor:
+        if frozen.chain_clearance(P10, boxes, C, floor)[0] < floor:
             return None
     return T
 

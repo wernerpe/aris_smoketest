@@ -88,6 +88,28 @@ capsule argument that does not survive the swap.
 a capsule-swept one can never be confused for one another; atlases already on
 disk keep the signature they were written with.
 
+### What it costs, and the one line that makes it affordable
+
+The first intersection build ran the sphere query everywhere and the h = 0.970
+map came back with an ETA of **42.8 hours** against the shipped run's six.  It
+does not need to.  `max` can only RAISE a number, so a sample whose CAPSULE
+clearance already clears the floor clears it under the intersection too,
+whatever the spheres say — and the capsule value it keeps is still a valid
+lower bound on the metal.  That is `paper.leg_static_lb`'s own contract ("given
+a floor the number is only guaranteed to be on the right side of it") applied
+one level down, and it means the sphere block runs only on the residual: on a
+certified map, the cells that were dead already.
+
+`chain_static_clearance`, `chain_cyl_clearance`, `partner_clearance` and
+`chain_clearance` all take `floor`; `atlas._clears` and `paper`'s leg
+certificates pass theirs.  `paper.near_boxes`' sphere screen also became one
+box round all 64 centres instead of a distance per centre per box — the screen
+only has to be conservative, and the narrow phase behind it is now
+short-circuited.  A test pins that the floor form changes **no verdict** at
+0.030, 0.050, 0.063 and 0.100 m and no value below the floor, and the h = 0.970
+atlas re-swept with it is **bit-identical** to the one without (24 175 strict-GO
+arm-cells, 0 gained, 0 lost) at 52 s for six arms.
+
 ### v18, re-checked
 
 | v18 whole timeline, `--sub 2` | inter-arm min | self | verdict |

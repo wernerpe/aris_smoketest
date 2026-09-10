@@ -408,3 +408,30 @@ def test_pair_clearance_never_tighter_on_a_real_timeline():
     on = SC.check_static(qs, 0.050, h_inv=0.940)["min_clearance"]
     LS.uninstall()
     assert on >= off - 1e-12, f"{on * 1000:.2f} < {off * 1000:.2f} mm"
+
+
+def test_floor_shortcircuit_keeps_every_verdict():
+    """The floor makes the sphere block optional; it must not change an answer.
+
+    `max` can only raise a number, so a sample already clearing the floor
+    clears it under the intersection too and its sphere query can be skipped.
+    The value kept is then the capsule model's, which is still a valid lower
+    bound — the same contract `paper.leg_static_lb` already documents.  What
+    must hold exactly is the VERDICT at the floor, and the value wherever it
+    is below it.
+    """
+    from aris_sixarm import paper
+    spec = FLEET[sorted(FLEET)[0]]
+    boxes = _room(spec)
+    q = _q(300, seed=41)
+    P = paper.world_chain(q, spec, 0.0460262)
+    LS.install()
+    C = LS.centres_world(q, spec.T_world_base())
+    full = frozen.chain_clearance(P, boxes, C)
+    for floor in (0.030, 0.050, 0.063, 0.100):
+        cut = frozen.chain_clearance(P, boxes, C, floor)
+        assert np.array_equal(full >= floor, cut >= floor), f"verdict at {floor}"
+        below = full < floor
+        assert np.allclose(full[below], cut[below], atol=1e-12)
+        assert (cut <= full + 1e-12).all(), "the cut form may not overstate"
+    LS.uninstall()

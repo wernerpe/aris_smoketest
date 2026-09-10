@@ -441,9 +441,16 @@ def near_boxes(P, boxes, slack=NEAR_SLACK, C=None):
         # is the point-to-box distance and nothing else.
         from . import link_spheres
         C = np.asarray(C, float)
-        dc = rig_final._point_box_d(C[:, :, None, :], lo, hi)  # (M,S,B)
-        keep |= (dc - link_spheres.RADII[None, :, None]
-                 <= slack).any(axis=(0, 1))
+        # ONE BOX ROUND ALL THE CENTRES, not a distance per centre per box.
+        # The screen only has to be conservative, and the narrow phase behind
+        # it is now short-circuited by the floor, so a screen that keeps a few
+        # extra boxes is far cheaper than one that is tight: this is O(boxes)
+        # where the per-sphere form was O(samples x 64 x boxes) and was most
+        # of what made the first sphere map 40 h long.
+        clo = C.reshape(-1, 3).min(0) - float(link_spheres.RADII.max())
+        chi = C.reshape(-1, 3).max(0) + float(link_spheres.RADII.max())
+        gap = np.maximum(np.maximum(lo - chi, clo - hi), 0.0)
+        keep |= np.linalg.norm(gap, axis=-1) <= slack
         caps, _ = link_spheres.static_capsules(caps)
     for i, j, r in caps:
         L = np.linalg.norm(P[:, i] - P[:, j], axis=1)         # (M,)
@@ -484,7 +491,7 @@ def leg_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     boxes = near_boxes(P, boxes, C=C)
     if not boxes:
         return np.inf
-    m = float(frozen.chain_clearance(P, boxes, C).min())
+    m = float(frozen.chain_clearance(P, boxes, C, floor).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS:
@@ -764,7 +771,8 @@ def adaptive_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         Q = q0[None, :] + np.asarray(ts, float)[:, None] * dq[None, :]
         P = world_chain(Q, spec, pen_ext, h_inv)
         return frozen.chain_clearance(P, boxes,
-                                      sphere_centres(Q, spec, h_inv)), P
+                                      sphere_centres(Q, spec, h_inv),
+                                      floor), P
 
     return float(adaptive_lb(sample, floor, n, tol)[0])
 
@@ -857,7 +865,7 @@ def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
     bx = near_boxes(P, boxes, C=C)
     if not bx:
         return cz, tz, np.inf
-    m = float(frozen.chain_clearance(P, bx, C).min())
+    m = float(frozen.chain_clearance(P, bx, C, floor).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS or m < float(floor) - EPS:

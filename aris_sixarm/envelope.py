@@ -139,7 +139,7 @@ def sphere_cyl_clearance(C, cyls, radii):
     return d.reshape(len(C), -1).min(axis=1)
 
 
-def chain_cyl_clearance(P, cyls, capsules=None, C=None):
+def chain_cyl_clearance(P, cyls, capsules=None, C=None, floor=None):
     """`rig_final.chain_static_clearance`, against cylinders. (N,C,3) -> (N,).
 
     `C` is the sphere centres when the sphere model is active — same
@@ -161,12 +161,18 @@ def chain_cyl_clearance(P, cyls, capsules=None, C=None):
     if C is None:
         return worst
     from . import link_spheres                     # the intersection, see above
+    sel = slice(None) if floor is None else np.flatnonzero(worst < float(floor))
+    if floor is not None and not len(sel):
+        return worst
     lean, _ = link_spheres.static_capsules(capsules)
-    sph = sphere_cyl_clearance(C, cyls, link_spheres.RADII)
+    sph = sphere_cyl_clearance(np.asarray(C, float)[sel], cyls,
+                               link_spheres.RADII)
     for i, j, rad in lean:
-        sph = np.minimum(sph,
-                         segment_cyl_clearance(P[:, i], P[:, j], cyls) - rad)
-    return np.maximum(worst, sph)
+        sph = np.minimum(sph, segment_cyl_clearance(P[sel, i], P[sel, j],
+                                                    cyls) - rad)
+    out = worst.copy()
+    out[sel] = np.maximum(worst[sel], sph)
+    return out
 
 
 # ==========================================================================

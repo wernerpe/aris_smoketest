@@ -1274,7 +1274,7 @@ def sphere_box_clearance(C, boxes, radii):
     return d.reshape(len(C), -1).min(axis=1)
 
 
-def chain_static_clearance(P, boxes, capsules=None, C=None):
+def chain_static_clearance(P, boxes, capsules=None, C=None, floor=None):
     """(N,10,3) or (N,11,3) world chain points (frames.fk's 9 + tool points)
     -> (N,) min over capsules of (segment-to-box-set distance minus capsule
     radius).  Compare against STATIC_MARGIN.  With `capsules=None` the table
@@ -1305,12 +1305,26 @@ def chain_static_clearance(P, boxes, capsules=None, C=None):
     # is a valid lower bound, and it is never below the shipped capsule number,
     # which is what makes this flag incapable of a regression.  See
     # `aris_sixarm/link_spheres.py`, "WHY THE MODEL IS AN INTERSECTION".
+    # ...AND ONLY WHERE IT CAN CHANGE AN ANSWER.  `max` can only RAISE a
+    # number, so a sample whose capsule clearance already clears `floor`
+    # clears it under the intersection too, whatever the spheres say — and
+    # the capsule value it keeps is still a valid lower bound on the metal.
+    # This is `leg_static_lb`'s own contract ("given a floor the number is
+    # only guaranteed to be on the right side of it") and it is what makes
+    # the flag affordable: the sphere block runs on the residual, which on a
+    # certified map is the cells that were dead already.
     from . import link_spheres
+    sel = slice(None) if floor is None else np.flatnonzero(worst < float(floor))
+    if floor is not None and not len(sel):
+        return worst
     lean, _ = link_spheres.static_capsules(capsules)
-    sph = sphere_box_clearance(C, boxes, link_spheres.RADII)
+    Cs = np.asarray(C, float)[sel]
+    sph = sphere_box_clearance(Cs, boxes, link_spheres.RADII)
     for i, j, r in lean:
-        sph = np.minimum(sph, segment_box_clearance(P[:, i], P[:, j], boxes) - r)
-    return np.maximum(worst, sph)
+        sph = np.minimum(sph, segment_box_clearance(P[sel, i], P[sel, j], boxes) - r)
+    out = worst.copy()
+    out[sel] = np.maximum(worst[sel], sph)
+    return out
 
 
 def box_clearance(points, boxes):
