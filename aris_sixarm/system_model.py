@@ -606,13 +606,18 @@ def reconciliation(h=None):
                        " mm of it is still spare",
              action="confirm at re-certification rather than take it from "
                     "here"),
+        # CLOSED 2026-09-10.  The sheet was re-issued at the height in force
+        # (970.0) and at the corrected datum, so code, model and the paper the
+        # fabricator holds now say the same number.  Kept in the queue as a
+        # zero-delta row rather than deleted, because the item is "do these
+        # three agree" and the answer has been no twice.
         dict(item="mount height",
              code=f"layout.LAYOUT_PROPOSED['h'] = {h / MM} m",
-             model=f"the same {h:.0f} mm — but docs/BUILD_SHEET.md still "
-                   "publishes 850.0 to the fabricator",
-             delta_mm=round(h - 850.0, 2),
-             direction="THE BUILD SHEET IS STALE",
-             action="re-issue docs/BUILD_SHEET.md at the height in force"),
+             model=f"the same {h:.0f} mm, and docs/BUILD_SHEET.md publishes "
+                   f"{h:.1f} to the fabricator (re-issued 2026-09-10)",
+             delta_mm=0.0,
+             direction="agreed",
+             action="none — re-issue the sheet again if h moves"),
         dict(item="base cable pass-through",
              code="not modelled at all — the collision shell for link0 stops "
                   "at the base flange (z = 0)",

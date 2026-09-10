@@ -32,8 +32,9 @@ paper, not 2340.  That earlier sheet's drop posts — 1435.0 at h = 940 and
 `POST_OVER` is the drawing's own over-run of the post past the plate
 underside (`down_plate` lo z minus `down_boom_W` lo z), not a round 35.
 
-    h = 970  ->  688.6 mm     the design height this sheet is issued at
-    h = 940  ->  718.6 mm     layout.LAYOUT_PROPOSED, what ships today
+    h = 970  ->  688.6 mm     layout.LAYOUT_PROPOSED, ADOPTED 2026-09-10, and
+                              the height this sheet is issued at
+    h = 940  ->  718.6 mm     what shipped 2026-08-26 .. 2026-09-09
     h = 850  ->  808.6 mm     what the hardware is built at now
 
 NOTHING HERE IS A SURVEY, and nothing here changes a layout or gate constant.
@@ -67,11 +68,15 @@ IN = 25.4                       # mm per inch
 MM = 1000.0                     # m -> mm
 
 H_DESIGN = 970.0                # mm — the height the certified-workspace work
-                                #      recommends (docs/DECISIONS.md,
+                                #      recommended (docs/DECISIONS.md,
                                 #      "OPEN — FOR PETE: NO HOLES UNDER THE
-                                #      ARMS", 2026-09-08)
+                                #      ARMS", 2026-09-08) and that Pete
+                                #      ADOPTED on 2026-09-10.  It is now also
+                                #      `layout.LAYOUT_PROPOSED["h"]`, so
+                                #      H_DESIGN == H_SHIPPED and the sheet's
+                                #      "design" and "shipped" rows coincide.
 H_TABLE = (970.0, 940.0, 850.0)   # the three heights the sheet tabulates
-H_SHIPPED = SM.H_MOUNT            # 940.0, layout.LAYOUT_PROPOSED["h"]
+H_SHIPPED = SM.H_MOUNT            # 970.0, layout.LAYOUT_PROPOSED["h"]
 H_ASBUILT = 850.0                 # docs/BUILD_SHEET.md §1, the hardware today
 
 # --- canvas and base positions --------------------------------------------
@@ -335,10 +340,12 @@ def write_cut_list(path, h):
     a("| mount plane h | post cut length | total 3-in extrusion | what h is |")
     a("|---:|---:|---:|---|")
     for hh in H_TABLE:
-        what = {970.0: "**the design height of this sheet** — the "
-                       "certified-workspace recommendation",
-                940.0: "`layout.LAYOUT_PROPOSED['h']`, what the software "
-                       "plans against today",
+        what = {970.0: "**the design height of this sheet AND "
+                       "`layout.LAYOUT_PROPOSED['h']`** — adopted 2026-09-10; "
+                       "what the software plans against today, and the only "
+                       "height at which the canvas has no enclosed dead cells",
+                940.0: "what the software planned against 2026-08-26 .. "
+                       "2026-09-09; superseded",
                 850.0: "what the hardware is built at now (verticals "
                        "trimmable)"}[hh]
         b = "**" if abs(hh - h) < 1e-6 else ""

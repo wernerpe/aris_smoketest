@@ -47,7 +47,7 @@
     "provenance": "CODE"
   },
   "mount_plane_mm": {
-    "value": 940.0,
+    "value": 970.0,
     "source": "layout.LAYOUT_PROPOSED['h']",
     "provenance": "CODE",
     "note": "docs/BUILD_SHEET.md still publishes 850.0"
@@ -57,14 +57,14 @@
     "table_top": -2.0,
     "paper_top": 0.0,
     "leg_bottom": -27.38,
-    "post_bottom": 905.02,
-    "mount_plane": 940.0,
-    "plate_top": 952.7,
-    "clamp_top": 1048.4,
+    "post_bottom": 935.02,
+    "mount_plane": 970.0,
+    "plate_top": 982.7,
+    "clamp_top": 1078.4,
     "gusset_bottom": 1496.62,
     "grid_underside": 1623.62,
     "grid_top": 1699.82,
-    "post_length": 718.6
+    "post_length": 688.6
   },
   "cage": {
     "profile_mm": 76.2,
@@ -80,7 +80,7 @@
       317.6,
       76.2
     ],
-    "post_length_mm": 718.6,
+    "post_length_mm": 688.6,
     "post_overrun_mm": 34.98,
     "plate_mm": [
       225.82,
@@ -113,7 +113,7 @@
         596.7,
         605.1066666666667
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 621.85,
       "post_x_mm": [
@@ -127,7 +127,7 @@
         1206.6999999999998,
         605.1066666666667
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 1231.85,
       "post_x_mm": [
@@ -141,7 +141,7 @@
         596.7,
         1815.32
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 621.85,
       "post_x_mm": [
@@ -155,7 +155,7 @@
         1206.6999999999998,
         1815.32
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 1231.85,
       "post_x_mm": [
@@ -169,7 +169,7 @@
         596.7,
         3025.5333333333338
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 621.85,
       "post_x_mm": [
@@ -183,7 +183,7 @@
         1206.6999999999998,
         3025.5333333333338
       ],
-      "base_z_mm": 940.0,
+      "base_z_mm": 970.0,
       "R_world_base": "Ry(180 deg) \u2014 every arm hangs, front toward canvas -x",
       "plate_centre_x_mm": 1231.85,
       "post_x_mm": [
@@ -880,7 +880,7 @@
       "model": "grid underside 1623.62 mm, top 1699.82 mm above the paper (2336.5 above the floor = the drawing's 233,7 cm)",
       "delta_mm": 716.38,
       "direction": "CODE IS CONSERVATIVE \u2014 the schematic boom is modelled 716.4 mm too long, and a longer obstacle never certifies a pose a shorter one refuses",
-      "action": "survey the real room, then re-cut the ladder and re-certify; the fabricator's post length is 718.6 not 1434.98"
+      "action": "survey the real room, then re-cut the ladder and re-certify; the fabricator's post length is 688.6 not 1404.98"
     },
     {
       "item": "drop cluster vs boom column",
@@ -908,11 +908,11 @@
     },
     {
       "item": "mount height",
-      "code": "layout.LAYOUT_PROPOSED['h'] = 0.94 m",
-      "model": "the same 940 mm \u2014 but docs/BUILD_SHEET.md still publishes 850.0 to the fabricator",
-      "delta_mm": 90.0,
-      "direction": "THE BUILD SHEET IS STALE",
-      "action": "re-issue docs/BUILD_SHEET.md at the height in force"
+      "code": "layout.LAYOUT_PROPOSED['h'] = 0.97 m",
+      "model": "the same 970 mm, and docs/BUILD_SHEET.md publishes 970.0 to the fabricator (re-issued 2026-09-10)",
+      "delta_mm": 0.0,
+      "direction": "agreed",
+      "action": "none \u2014 re-issue the sheet again if h moves"
     },
     {
       "item": "base cable pass-through",
@@ -1455,17 +1455,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         567.0067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         528.9067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -1473,7 +1473,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1485,17 +1485,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         643.2067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         605.1067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -1503,7 +1503,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1515,17 +1515,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         567.0067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         528.9067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -1533,7 +1533,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1545,17 +1545,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         643.2067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         605.1067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -1563,7 +1563,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1704,17 +1704,17 @@
       "centre_mm": [
         621.85,
         605.1067,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         508.85,
         528.9067,
-        952.7
+        982.7
       ],
       "hi_mm": [
         734.85,
         681.3067,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -1734,17 +1734,17 @@
       "centre_mm": [
         621.85,
         605.1067,
-        946.35
+        976.35
       ],
       "lo_mm": [
         508.94,
         510.1067,
-        940.0
+        970.0
       ],
       "hi_mm": [
         734.76,
         700.1067,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
@@ -1760,17 +1760,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         567.0067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         528.9067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -1778,7 +1778,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1790,17 +1790,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         643.2067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         605.1067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -1808,7 +1808,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1820,17 +1820,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         567.0067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         528.9067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -1838,7 +1838,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -1850,17 +1850,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         643.2067,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         605.1067,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -1868,7 +1868,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2009,17 +2009,17 @@
       "centre_mm": [
         1231.85,
         605.1067,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         1118.85,
         528.9067,
-        952.7
+        982.7
       ],
       "hi_mm": [
         1344.85,
         681.3067,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -2039,17 +2039,17 @@
       "centre_mm": [
         1231.85,
         605.1067,
-        946.35
+        976.35
       ],
       "lo_mm": [
         1118.94,
         510.1067,
-        940.0
+        970.0
       ],
       "hi_mm": [
         1344.76,
         700.1067,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
@@ -2065,17 +2065,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         1777.22,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         1739.12,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -2083,7 +2083,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2095,17 +2095,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         1853.42,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         1815.32,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -2113,7 +2113,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2125,17 +2125,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         1777.22,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         1739.12,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -2143,7 +2143,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2155,17 +2155,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         1853.42,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         1815.32,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -2173,7 +2173,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2314,17 +2314,17 @@
       "centre_mm": [
         621.85,
         1815.32,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         508.85,
         1739.12,
-        952.7
+        982.7
       ],
       "hi_mm": [
         734.85,
         1891.52,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -2344,17 +2344,17 @@
       "centre_mm": [
         621.85,
         1815.32,
-        946.35
+        976.35
       ],
       "lo_mm": [
         508.94,
         1720.32,
-        940.0
+        970.0
       ],
       "hi_mm": [
         734.76,
         1910.32,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
@@ -2370,17 +2370,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         1777.22,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         1739.12,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -2388,7 +2388,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2400,17 +2400,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         1853.42,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         1815.32,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -2418,7 +2418,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2430,17 +2430,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         1777.22,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         1739.12,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -2448,7 +2448,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2460,17 +2460,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         1853.42,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         1815.32,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -2478,7 +2478,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2619,17 +2619,17 @@
       "centre_mm": [
         1231.85,
         1815.32,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         1118.85,
         1739.12,
-        952.7
+        982.7
       ],
       "hi_mm": [
         1344.85,
         1891.52,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -2649,17 +2649,17 @@
       "centre_mm": [
         1231.85,
         1815.32,
-        946.35
+        976.35
       ],
       "lo_mm": [
         1118.94,
         1720.32,
-        940.0
+        970.0
       ],
       "hi_mm": [
         1344.76,
         1910.32,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
@@ -2675,17 +2675,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         2987.4333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         2949.3333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -2693,7 +2693,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2705,17 +2705,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         463.05,
         3063.6333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         424.95,
         3025.5333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         501.15,
@@ -2723,7 +2723,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2735,17 +2735,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         2987.4333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         2949.3333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -2753,7 +2753,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2765,17 +2765,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         780.65,
         3063.6333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         742.55,
         3025.5333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         818.75,
@@ -2783,7 +2783,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -2924,17 +2924,17 @@
       "centre_mm": [
         621.85,
         3025.5333,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         508.85,
         2949.3333,
-        952.7
+        982.7
       ],
       "hi_mm": [
         734.85,
         3101.7333,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -2954,17 +2954,17 @@
       "centre_mm": [
         621.85,
         3025.5333,
-        946.35
+        976.35
       ],
       "lo_mm": [
         508.94,
         2930.5333,
-        940.0
+        970.0
       ],
       "hi_mm": [
         734.76,
         3120.5333,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",
@@ -2980,17 +2980,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         2987.4333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         2949.3333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -2998,7 +2998,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -3010,17 +3010,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1073.05,
         3063.6333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1034.95,
         3025.5333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1111.15,
@@ -3028,7 +3028,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 71.75,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -3040,17 +3040,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         2987.4333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         2949.3333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -3058,7 +3058,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -3070,17 +3070,17 @@
       "size_mm": [
         76.2,
         76.2,
-        718.6
+        688.6
       ],
       "centre_mm": [
         1390.65,
         3063.6333,
-        1264.32
+        1279.32
       ],
       "lo_mm": [
         1352.55,
         3025.5333,
-        905.02
+        935.02
       ],
       "hi_mm": [
         1428.75,
@@ -3088,7 +3088,7 @@
         1623.62
       ],
       "collision": true,
-      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 718.6 at h = 940 (the original's own is 736.9)",
+      "source": "one of four 3 in drop posts in a 2x2 cluster, pitch 317.6 (x) x 76.2 (y) = down_boom_W/E; length 688.6 at h = 970 (the original's own is 736.9)",
       "status": "RE-CERT-PENDING",
       "escapes_modelled_envelope_mm": 122.05,
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
@@ -3229,17 +3229,17 @@
       "centre_mm": [
         1231.85,
         3025.5333,
-        1000.55
+        1030.55
       ],
       "lo_mm": [
         1118.85,
         2949.3333,
-        952.7
+        982.7
       ],
       "hi_mm": [
         1344.85,
         3101.7333,
-        1048.4
+        1078.4
       ],
       "collision": true,
       "source": "clamp stack 226.0 x 152.4 x 95.7 = down_clamps, sitting on the plate between the post pairs.  ENVELOPE ONLY \u2014 no part number in the drawing",
@@ -3259,17 +3259,17 @@
       "centre_mm": [
         1231.85,
         3025.5333,
-        946.35
+        976.35
       ],
       "lo_mm": [
         1118.94,
         2930.5333,
-        940.0
+        970.0
       ],
       "hi_mm": [
         1344.76,
         3120.5333,
-        952.7
+        982.7
       ],
       "collision": true,
       "source": "down_plate 225.82 x 190.0 x 12.7; the arm bolts to its UNDERSIDE, which IS the mount plane.  Centre offset 25.15 mm in canvas +x from the J1 axis \u2014 DIRECTION INFERRED",

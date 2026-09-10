@@ -15,6 +15,14 @@ stage, and — on a second user mandate — studies TWO FAMILIES:
 
 **Hang all six.  Set them out on a regular 2 x 3 ceiling grid at h = 0.85 m.**
 
+> **THE HEIGHT THIS STUDY RECOMMENDED IS SUPERSEDED.**  0.85 was re-decided to
+> 0.940 on 2026-08-26 under the audited capsules, and to **h = 0.970 m** on
+> 2026-09-10 — see `docs/DECISIONS.md` and the banner in `README.md`.  The
+> GRID this study chose (2 x 3, columns at 0.5967 / 1.2067, rows at 0.6051 /
+> 1.8153 / 3.0255, pitch 0.61) is unchanged and is what ships; only the `h`
+> column of the table below has moved, and every coverage figure in this
+> document was measured at 0.85 with the pre-audit collision model.
+
 | | canvas x (m) | canvas y (m) | base z (m) |
 |---|---:|---:|---:|
 | pair S | **0.5967** / **1.2067** | **0.6051** | 0.850 |
@@ -243,6 +251,13 @@ annulus, not by preference — for a partner to cover the whole of an arm's
 r < 0.20 under-base hole, the two bases must be **>= 0.40** apart (the far lip
 of the hole must clear the partner's inner radius) and **<= 0.64** (the near
 lip must stay inside its outer radius 0.84).  `layout.PAIR_WINDOW`.
+
+> **THAT WINDOW IS THIS STUDY'S, at h = 0.85 and the inline pen.**  At the
+> shipped h = 0.970 and the holder's own tool the annulus is [0.02, 0.75], the
+> under-base hole is 20 mm of radius instead of 200, and `layout.PAIR_WINDOW`
+> is **(0.04, 0.73)**.  0.61 was comfortably inside the old window and is
+> comfortably inside the new one; the window has never been what binds the
+> pitch (the coverage table below is).  See `aris_sixarm/layout.py`.
 
 Each of the three pairs pushed symmetrically about its own midpoint,
 everything else held; 2 cm certified, tilt <= 15, mounts active:

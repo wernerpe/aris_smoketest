@@ -1,32 +1,22 @@
 # Build sheet — all-ceiling rig (6 inverted FR3, 2×3 grid)
 
-> **STOP — THIS SHEET IS STALE IN TWO PLACES. DO NOT CUT STEEL FROM IT.**
-> Nothing below has been edited; the corrections live in
-> `docs/SYSTEM_MODEL.md` and `aris_sixarm/system_model.py`, and re-issuing
-> this sheet is a separate job.
->
-> 1. **§1 says the mounting plane is z = +850.0 mm. The height in force is
->    940.0** (`layout.LAYOUT_PROPOSED["h"]`, adopted 2026-08-26). Every base
->    position, orientation and tolerance below is still right; the one number
->    that moved is the height, and it moved by 90 mm.
-> 2. **§4's ceiling grid at z ≥ 2340 is a provenance bug.** The original
->    drawing's 233,7 cm is FLOOR to top-of-construction, and the paper sits
->    636.68 mm above that floor, so the grid underside belongs at **1623.6**
->    above the paper and its top at **1699.8** — the cage is self-supporting
->    and floor-standing, and there is no surveyed room ceiling anywhere in
->    this project. At h = 940 that makes the drop post **718.6 mm**, not the
->    1435.0 the 2340 datum asks for.
->
-> §4's keep-out envelope is also **not** what the real steel does: the
-> radius-100 column is neither contained by nor contains the 2 × 2 drop-post
-> cluster the drawing actually specifies. All 60 pieces of mount hardware
-> fall outside it, worst 185.55 mm. That is a re-certification, and it is
-> queued.
+**Re-issued 2026-09-10 at h = 970.0 mm and the CORRECTED datum. This sheet
+supersedes the 2026-08-25 issue in two places** — the mounting height (was
+850.0, then 940.0) and the ceiling datum (was a paper-referenced 2340, which
+was a provenance bug). If you are holding a printout that says 850 or 2340,
+throw it away.
 
-Adopted 2026-08-25 (layout `LAYOUT_PROPOSED`, certified 99.98 % coverage at
-commit 820dd3b; URDF `assets/proposed_rig/installation.urdf`, commit 58a7674).
-All dimensions in **mm** unless noted. This sheet is the single source for
-the fabricator; the software mirror is `aris_sixarm/layout.py`.
+The one number that changed most: **the drop posts are 688.6 mm, not 1435.0
+and not 1525.0.** Those lengths are 716.4 mm too long and must not be cut.
+
+Adopted 2026-09-10 (Pete: *"do you have the drawings for the 970 one? let's
+just work with that one."*). Layout `layout.LAYOUT_PROPOSED`; certified
+hole-free block 1.50 × 3.64 m at this height (`out/certified_area_h0970.json`).
+All dimensions in **mm** unless noted. This sheet is the single source for the
+fabricator; the software mirror is `aris_sixarm/layout.py` and
+`aris_sixarm/system_model.py`, and the drawings that go with it are
+`out/drawings/` (`scripts/draw_8020.py --h 0.970`) — plan, elevation and cut
+list, generated from those same modules and agreeing with every number here.
 
 ## 0. Datum — set out first
 
@@ -41,14 +31,51 @@ Mark a rectangle **1803.4 × 3630.6 mm** on the table: this is the canvas
 - Arm positions are measured to the **vertical centreline of the robot base**
   (the joint-1 axis = centre of the base bolt circle), NOT to a plate edge.
 
+**THE DATUM IS THE PAPER, AND THE CAGE IS FLOOR-STANDING.** The original
+drawing's 233,7 cm is FLOOR to top-of-construction, not paper to ceiling, and
+the paper sits 636.68 mm above that floor. There is no surveyed room ceiling
+anywhere in this project; the cage supports itself and stands on the floor.
+The whole z ladder at this height:
+
+| level | mm above the paper |
+|---|---:|
+| grid top (top of steel) | 1699.82 |
+| grid underside (what a drop post hangs from) | 1623.62 |
+| gusset bottom | 1496.62 |
+| clamp top | 1078.40 |
+| plate top | 982.70 |
+| **mount plane (plate underside) = h** | **970.00** |
+| post bottom | 935.02 |
+| paper top | **0.00** |
+| table top | −2.00 |
+| leg bottom | −27.38 |
+| floor | −636.68 |
+
+Cage height floor to top of steel: **2336.5 mm** — which is the original
+drawing's own 233,7 cm, read the way it was written.
+
 ## 1. Mounting height — the one number that matters most
 
 **The surface each robot bolts against (the underside of its mounting plate)
-is at z = +850.0 mm above the paper surface. All six identical.**
+is at z = +970.0 mm above the paper surface. All six identical.**
 
-The arms hang fully upside down below their plates. 850 is a certified
-optimum, not a round-number suggestion — build to **±10 mm** and keep all six
-mutually coplanar.
+The arms hang fully upside down below their plates. Build to **±10 mm** and
+keep all six mutually coplanar within ±3 mm.
+
+**WHY 970 AND NOT 940 OR 850.** 970 is not the coverage optimum — it is
+0.6 pp *worse* than 940 on solo-drawable area (97.718 % against 98.587 %) and
+has more unreachable cells at the rim. It is here because it is the only
+height tested at which the canvas has **no enclosed dead cells at all**: every
+dead cell is out-of-reach rim, where the red is honest, and there is no pocket
+in the middle of the paper that an arm can neither hover over nor route to.
+940 still has 9 such cells in 4 pockets. What that buys the drawing is the
+certified block below.
+
+**THE CERTIFIED DRAWING AREA AT THIS HEIGHT is 1500 × 3640 mm** (x 160…1640,
+y 0…3620), **5.460 m²** — the full length of the canvas, stopping 160 mm short
+of each long edge against the arms' reach. At 940 the same block is
+1060 × 3640 = 3.86 m². It is drawn dashed on the plan. **It is not the whole
+canvas, and artwork is placed inside it.**
 
 ## 2. Base positions (to the joint-1 axis)
 
@@ -91,24 +118,37 @@ all connector panels face the x = 1803.4 long edge.)
 
 Do not improvise per-arm clocking "to point at the middle": the certified
 coverage and every program assume this exact uniform orientation (joint-1
-limits make clocking matter).
+limits make clocking matter). A **mirrored** clocking — the two columns turned
+to face each other — is an open question being measured, not a licence to
+improvise; if it is adopted this section will be re-issued and the plate
+offset in §7 flips with it.
 
 ## 4. Structure keep-out envelope
 
 What the certification modelled — steel must stay inside it:
 
-- **Below the mounting plane (z < 850): nothing but the six arms.** The whole
+- **Below the mounting plane (z < 970): nothing but the six arms.** The whole
   volume between paper and plates, over the canvas plus 1 m margin around it,
   stays empty. No braces, no cable drops, no lights.
 - **Mounting plates**: modelled 226 (x) × 190 (y) × 50 thick, occupying
-  z 850→900, centred on each base axis. Bigger/thicker plates → send
+  z 970→1020, centred on each base axis. Bigger/thicker plates → send
   dimensions for re-certification before fabricating.
-- **Vertical supports (booms)**: from each plate up to the ceiling grid,
-  everything within a **radius-100 column centred on the base axis**,
-  z 900→2340. Route arm cabling up inside/along this column.
-- **Ceiling grid**: cross-members at **z ≥ 2340** are assumed but NOT yet
-  modelled — send the steel design (member sections + routing) before final
-  fabrication and we re-certify (fast: minutes).
+- **Vertical supports (booms)**: from each plate up to the grid, everything
+  within a **radius-100 column centred on the base axis**. Route arm cabling
+  up inside/along this column.
+- **Grid members**: the runway beams' underside is at **1623.62** and the top
+  of steel at **1699.82**. The grid's own cross-members are assumed but NOT
+  yet modelled — send the steel design (member sections + routing) before
+  final fabrication and we re-certify (fast: minutes).
+
+**THE MODELLED ENVELOPE IS NOT WHAT THE REAL STEEL DOES, AND THAT IS QUEUED.**
+The certified obstacle is a single radius-100 column on the base axis; the
+drawing's real drop cluster is a 393.8 × 152.4 mm 2 × 2 post group offset
+25.15 mm off that axis, plus 203.2 mm gussets. Neither contains the other:
+all 60 pieces of mount hardware fall outside the certified envelope, worst
+**185.55 mm**. This blocks final fabrication of the clusters and gussets and
+nothing else — see `system_model.reconciliation()` and open item 6 in
+`out/drawings/8020_cut_list.md`.
 
 Any deviation from this envelope is fine *if declared first* — re-checking a
 proposed steel design against all certified poses is cheap; discovering a
@@ -117,13 +157,50 @@ brace with a moving arm is not.
 ## 5. Levelness, calibration, what absorbs error
 
 - Aim: plates level and mutually coplanar within ±3 mm / ≤0.3° tilt.
-- The planner carries an 80 mm inter-arm safety margin (30 mm of it is
-  calibration allowance), and commissioning includes a pen touch-off
-  calibration per arm that absorbs residual height/level error.
+- The planner carries a **50 mm arm-to-arm safety margin** (30 mm of it is
+  calibration allowance — a real uncertainty about where the bases are, and
+  the reason a base survey is worth doing), and commissioning includes a pen
+  touch-off calibration per arm that absorbs residual height/level error.
 - So: ±10 mm build accuracy is comfortable; just **record as-built numbers**
-  if anything lands outside tolerance.
+  if anything lands outside tolerance. `scripts/asbuilt_layout.py` is what
+  reads that report back in.
 
-## 6. Plan view (not to scale)
+## 6. Steel — cut lengths at this height
+
+The full cut list, with quantities, sections and the open items that block
+each one, is **`out/drawings/8020_cut_list.md`**, generated at h = 0.970 by
+`scripts/draw_8020.py`. The height-dependent cut is the drop post, and it is
+the only one:
+
+```
+drop post cut length = (grid underside − h) + post over-run
+                     = (1623.62 − 970) + 34.98 = 688.6 mm     (24 off)
+```
+
+`34.98` is the drawing's own over-run of the post past the plate underside,
+not a round 35. Cut all 24 to one length.
+
+| member | qty | section | cut |
+|---|---:|---|---:|
+| A perimeter side rail | 2 | 3″ × 3″ T-slot | 4011.64 |
+| B perimeter end rail | 2 | 3″ × 3″ T-slot | 2032.00 |
+| C runway beam | 6 | 3″ × 3″ T-slot | 2032.00 |
+| **D drop post** | **24** | 3″ × 3″ T-slot | **688.60** |
+| E corner leg | 4 | 3″ × 3″ T-slot | 1651.00 |
+| F top gusset | 24 | 8″ × 8″ × 1.5″ gusset | 203.2 × 203.2 × 38.1 |
+| G robot base plate | 6 | — | 225.82 × 190.0 × 12.7 |
+| H plate clamp stack | 6 | — | 226.0 × 152.4 × 95.7 |
+
+Total 3-in T-slot extrusion at h = 970: **47.41 m**. Frame outside
+**2184.4 × 4011.64** (86.00 × 157.94 in), 190.5 mm clear of the canvas on all
+four sides.
+
+Item E is ASSUMED and **mid-span legs are almost certainly required**: a
+4.01 m frame on four corner legs has no precedent (the original spans 2.08 m),
+and any mid-span leg must be checked against the certified flight paths before
+it is welded in.
+
+## 7. Plan view (not to scale)
 
 ```
  y=3630.6 ┌────────────────────────────┐
@@ -137,12 +214,34 @@ brace with a moving arm is not.
       y=0 └────────────────────────────┘
           x=0    596.7  1206.7    x=1803.4
         (reference corner at lower-left; all arms hang from above,
-         fronts facing the x=0 edge)
+         fronts facing the x=0 edge, connector panels the x=1803.4 edge)
 ```
 
-## 7. Open items (not builder-blocking, tracked)
+The plate centre sits **25.15 mm from the J1 axis toward the x = 1803.4 edge**
+— i.e. the same way the connector panels face. **THAT DIRECTION IS AN
+INFERENCE, not a measurement** (the drawing gives it for an arm whose front
+faces +X and every arm here is clocked the other way), and 7.79 mm rides on
+it: the plate nests in a 241.4 mm slot. Measure the real plate, or open the
+post pitch to 381.0 (posts at the axis ± 190.5), which fits either way with
+14.4 mm each side. This is open item 1 on the cut list.
 
-- Ceiling grid steel design → re-certification (§4).
-- Pen holder fingertip-cradle geometry (tool offset verification) — software
-  side, does not affect this sheet.
-- On-site base survey / touch-off calibration at commissioning.
+## 8. Open items (tracked; 5 of 6 block a cut)
+
+Full text with what each one blocks and how it closes is in
+`out/drawings/8020_cut_list.md`.
+
+1. **Plate offset direction** — blocks the drop clusters (post x positions).
+2. **Base cable pass-through** — the plate and the 95.7 clamp stack are solid
+   across the arm's own base cable, and on an INVERTED arm the connector and
+   cable stub point straight UP through both. Blocks the plate and clamp.
+3. **Cage legs** — count and position for a 4.01 m frame. Blocks item E.
+4. **Gusset part and attachment** — no part number on the drawing. Blocks F.
+5. **Room survey** — the room has never been measured. Blocks nothing cut to
+   the corrected datum, and is the reason the datum is restated on every
+   sheet.
+6. **Re-certification of the drop cluster** against the certified poses
+   (§4). Blocks final fabrication of the clusters and gussets.
+
+Software-side, not builder-blocking: pen-holder fingertip-cradle geometry
+(tool offset verification), and on-site base survey / touch-off calibration at
+commissioning.

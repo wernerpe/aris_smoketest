@@ -125,6 +125,28 @@ def test_config_offers_the_rigs_tools_and_pictures(client):
     assert "source" in c["defaults"]
 
 
+def test_the_default_atlas_is_at_the_layouts_own_height(client):
+    """THE FORM MUST NOT OFFER AN ATLAS FROM A HEIGHT THAT NO LONGER SHIPS.
+
+    `gui/server.py` is deliberately ignorant of the planner — it imports
+    nothing that binds a rig at import time — so its default atlas is a
+    STRING, and a string cannot follow `layout.LAYOUT_PROPOSED["h"]` on its
+    own.  This is the thread that ties them: the default's name must carry the
+    height in force, and the directory must exist and have been swept at that
+    height.  When `h` moves, this fails until the default moves with it.
+    """
+    from pathlib import Path
+    from aris_sixarm import layout
+    d = client.get("/api/config").json()["defaults"]["atlas"]
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    assert f"h{round(1000 * h):04d}" in d, (d, h)
+    p = Path(__file__).resolve().parents[1] / d
+    if not (p / "atlas_arm31.npz").is_file():
+        pytest.skip(f"{d} is not in this checkout (out/ is gitignored)")
+    import numpy as np
+    assert abs(float(np.load(p / "atlas_arm31.npz")["base"][2, 3]) - h) <= 1e-9
+
+
 # --------------------------------------------------------------------------
 # a job, end to end
 # --------------------------------------------------------------------------

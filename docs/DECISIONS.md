@@ -2711,3 +2711,190 @@ of 28 keys.  Its inter-arm minimum is **unchanged at 80.59 mm** — the geometry
 did not move — and against the new 50 mm gate it now carries **30.59 mm of
 headroom** instead of 0.59 mm.  A programme certified at 80 passes at 50 by
 construction, and there is a test for that too.
+
+## 2026-09-10 — DECISION: h = 0.970 adopted
+
+Pete, on the fabrication drawings: *"do you have the drawings for the 970 one?
+let's just work with that one."*  The mounting height in force is now
+**0.970 m** — the underside of each mounting plate above the paper — and the
+whole package moved with it in one commit set: layout, park set, system model,
+build sheet, drawings, GUI, and the CSAIL programme re-planned as v19.
+
+### why 970, when 940 covers more
+
+It is not the coverage optimum and it was never claimed to be.  At the 50 mm
+arm-to-arm gate and the tight cylinder envelope:
+
+| | h = 0.940 | **h = 0.970** |
+|---|---|---|
+| solo-drawable | 98.587 % | 97.718 % |
+| `NO_DRAW` (out of reach, rim) | 225 | **378** |
+| `NO_HOVER` / `NO_ROUTE` | 0 / 9 | **0 / 0** |
+| enclosed holes | 4 | **0** |
+| largest hole-free block | 1.06 x 3.64 m = 3.8584 m² | **1.50 x 3.64 m = 5.4600 m²** |
+| near-square hole-free | 1.8960 m² | **3.4352 m²** |
+
+**0.970 buys 1.60 m² of certified block by spending 0.87 pp of coverage at the
+rim**, and it retires the last four enclosed pockets.  That is the trade Pete
+took, and it is the right one for a drawing: a hole in the middle of the paper
+is a knife through every rectangle that contains it, and 378 dead cells against
+the reach limit at the edge are red that a placement simply stays out of.  The
+certified block runs the FULL length of the canvas (y 0.00 .. 3.62) and stops
+160 mm short of each long edge.
+
+`out/certified_area_h0970.json` was **re-derived from its own map**
+(`scripts/certified_area.py --map out/fw_h0970_m50_map.npz --h 0.970`) as part
+of this change and comes back **bit-identical on every number** — same live
+count, same 1.50 x 3.64 largest, same near-square, same zero enclosed holes.
+The only field that differs is the free-text `recipe`, which is a command-line
+argument and not a measurement.  The shipped file IS the one the layout now
+points at.
+
+### what moved in the package
+
+**`layout.LAYOUT_PROPOSED["h"]` 0.940 -> 0.970.**  The GRID did not move: same
+2 x 3, same columns at 0.5967 / 1.2067, same rows, same 0.61 pitch.
+
+**`PROFILES_LAT` gained an `("inv", 0.970)` row, `[0.02, 0.75]`**, measured off
+`out/atlas_proposed_h0970_lat0860` exactly the way the 0.940 row was measured
+off `out/atlas_proposed_h0940` — every arm's certified strict-GO cell, radius
+from its own base, the tightest arm's lips over all six.  **The two rows are at
+DIFFERENT TOOLS and most of the gap is the tool, not the height**: the same
+0.940 rig measured on the holder's atlas reads [0.03, 0.77], so of the inner
+lip's 0.11 m move about 0.10 m is a tip 86 mm off the hand's axis reaching back
+under the base, and 0.01 m is the height.  The outer lip loses 0.02 m going up
+30 mm, which is reach.
+
+**`PAIR_WINDOW` (0.26, 0.73) -> (0.04, 0.73)**, which is that annulus and
+nothing else: the under-base hole a transverse partner has to cover is 20 mm of
+radius now instead of 130.  0.61 was inside the old window and is inside the
+new one, and the window has never been what binds the pitch.
+
+**`PARK_GRID_PROPOSED` re-searched at 0.970** (`scripts/height_sweep.py park
+--h 0.970 --atlas out/atlas_proposed_h0970_lat0860`, output
+`out/park_search_h0970_lat0860.json`), same recipe as the 0.940 search — 24
+bearings x 6 radii x 4 hovers per arm, `certified_ready_pose` gate, static
+gate, ranked on park-vs-(ink AND lift) at 80 mm and tie-broken on the depot's
+own flyability:
+
+| | h = 0.940 | **h = 0.970** |
+|---|---|---|
+| candidates certifying | 473-474 of 576 | **496-497 of 576** |
+| fleet worst park-vs-(ink AND lift) | 93.1 mm | **97.7 mm** |
+| fleet park-vs-park | >= 250 mm (cap) | >= 250 mm (cap) |
+| entries / go-homes flyable | 113/144 | **114/144** |
+
+The fleet got 30 mm of room and spent it going out and up: three arms take the
+0.70 m radius that would not certify at 0.940, five of six park at the 0.30 m
+hover.  Arm 71's 93.1 mm — which set the whole 0.940 fleet's worst on its own —
+is gone; arm 17 is now the binding arm at 97.7 mm, **47.7 mm over the 50 mm
+gate**.  `Q_PARK_PROPOSED` and `PARK_HOVER_PROPOSED` are that grid's
+`certified_park_poses` output; all six poses moved.
+
+**ARM 13 NO LONGER STANDS OFF OUTWARD.**  Its searched bearing is +150 deg
+where its outward ray is -104 deg (dot -0.273, i.e. 106 deg off — across the
+fleet, not into it).  It parks at (0.060, 0.915), the same xy arm 31 uses one
+row up, since 13 and 31 are the same mount on the same column at the same
+triple.  Its best strictly-outward alternative sits on the same 98.4 mm ink
+plateau and reaches 20 of its own 24 cells against this one's 21, so the search
+took the depot that can do its job.  Outwardness was always a means; what keeps
+the six apart is `fleet_park_clearance`, and it proves the broad-phase cap.
+`test_baked_park_poses_are_that_functions_own_output`'s per-arm bar is now "not
+within 45 deg of inward" and the fleet count is still pinned at five of six.
+
+### a real regression the height exposed: rung 1 of the aside ladder
+
+**At 0.970 the FIRST aside park `layout.region_aware_parks` offers is one the
+arm cannot fly to, for five of the six arms.**  The top of the corridor-
+clearance ranking is (r = 0.70, hover = 0.35) — the furthest, highest candidate
+in the grid, which is exactly what maximises clearance from the target's column
+and exactly what a `paper.route` from a 0.20-0.30 m park cannot reach.  Only
+arm 31's rung 1 flies.
+
+**Nothing shipped is broken by this and no code changed.**
+`region_aware_parks` says in its own docstring that it gates the pose and the
+fleet and deliberately does NOT gate flyability, "because it is the expensive
+one and not every caller needs it", and its only consumer,
+`scripts/feasible_workspace._park_sets`, therefore offers **rungs 1..3** to the
+real check and takes the first that flies.  What was wrong was three tests in
+`tests/test_layout.py` that asked rung 1 alone, which held only for as long as
+rung 1 happened to fly.  They now walk the ladder the shipped caller walks
+(`_a_flyable_aside`), which is the property that was always meant.  Recorded
+here rather than papered over: **if a future caller wants a one-shot aside
+park, it has to gate on `repark_route` itself.**
+
+### the inward-park control went back to being an overlap
+
+`test_the_parked_fleet_does_not_park_inside_itself` measures what an
+aimed-at-the-centre park set does.  At 0.940 the four arms that can certify one
+stood **61.3 mm** apart — a refusal at the old 80 mm gate and a 11.3 mm
+clearance at the new 50.  At 0.970 they **INTERPENETRATE by 147.2 mm**.  The
+arms did not change: `certified_ready_pose` aims from 30 mm further up, so each
+arm reaches further IN before its wrist runs out of pose, and four arms
+reaching further into the same middle meet sooner.  The control is back to
+being refused by the gate in force rather than by a gate that has since been
+relaxed, which is the strongest form it can take.
+
+### the system model, the sheet and the drawings
+
+`assets/system_model/` (all four URDF variants + manifest) and
+`assets/proposed_rig/` regenerated at 0.970.  `scripts/check_system_model.py`
+**ALL PASS**, worst pen tip 4.524e-12 m over 25 configs x 6 arms;
+`scripts/check_proposed_rig_urdf.py` **ALL CHECKS PASS**, worst pen tip
+9.351e-10 m.  **The pen tip did not move in the hand frame** — the tool is a
+hand-frame offset and the mount plane is not in it.
+
+What moved, all of it by exactly +30 mm or -30 mm:
+
+| | h = 0.940 | **h = 0.970** |
+|---|---:|---:|
+| mount plane | 940.00 | **970.00** |
+| plate top | 952.70 | **982.70** |
+| clamp stack top | 1048.40 | **1078.40** |
+| post bottom | 905.02 | **935.02** |
+| **drop post cut length** | 718.60 | **688.60** |
+
+The grid is where it was — underside 1623.62, top of steel 1699.82, floor
+-636.68, cage 2336.5 tall — because the datum is the paper and the cage is
+floor-standing.  `drop post = (1623.62 - 970) + 34.98 = 688.6`, 24 off.
+
+**`docs/BUILD_SHEET.md` is re-issued** at 970 and at the corrected datum,
+superseding the 850 mounting height AND the 2340 ceiling, and it carries the
+full z ladder, the certified block, the cut lengths and the six open items.
+`out/drawings/` regenerated at `--h 0.970` and **agrees with the sheet on every
+number** (688.60 post, 1623.62 grid underside, -636.68 floor, 1699.82 top of
+steel, 970.00 mount plane, 5.460 m² certified block) — both read
+`aris_sixarm.system_model`, so agreement is by construction and this is the
+check that the construction works.  `system_model.reconciliation()`'s **"mount
+height" row is CLOSED**: code, model and the paper the fabricator holds now say
+the same number, for the first time since the sheet was written.
+
+### the GUI
+
+The job form's default atlas follows the layout: `out/atlas_proposed_h0940_gated`
+-> `out/atlas_proposed_h0970_lat0860`.  `gui/server.py` is deliberately
+ignorant of the planner so it cannot ASK the layout what `h` is, and the
+default is a string; `test_the_default_atlas_is_at_the_layouts_own_height` is
+the thread that ties them, and it checks the swept base z as well as the name.
+
+**AND THE 3D SCENE CACHE HAD TO BE DELETED BY HAND.**  `out/gui_cache/scene_
+proposed_lateral.{json,bin}` is written once and returned forever — the server
+checks only that the file exists.  The cached copy was from 2026-09-02: base z
+0.940, pen 0.110/0.110, and the pre-2026-09-07 park poses.  After deleting it
+the scene rebuilds at base z **0.970**, pen **0.0460262/0.0860369** and the
+current parks.  **That cache has no invalidation on a model change and it is a
+trap** — anyone changing `h`, the tool or a park pose must clear it.  Not fixed
+here; recorded.
+
+### the certified programme at 970 — v19
+
+Placement chosen by `scripts/placement_proxy.py` against the 0.970 atlas with
+`--certified-area out/certified_area_h0970.json` in force.  **260 of the 325
+offsets that fit the sheet were refused as falling outside the certified
+rectangle** — which is what that flag is for — and 65 of the remainder have a
+ZERO contiguous dead run.  The chosen one, v15/v17/v18's size and rotation
+(90 deg, scale 0.85, target width 1.43089) at **offset (+0.01, -0.10)**, centre
+**(0.9117, 1.7153)**, ties for the largest 5th-percentile clearance to the
+nearest dead cell at **184.4 mm** (v18's was 141 mm) and wins the tie on the
+worst single sample, 63.2 mm.  No placement search was run.
+`out/csail_place_v19_proxy.json`, `out/csail_place_v19_placement.json`.

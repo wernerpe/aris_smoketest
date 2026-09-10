@@ -147,7 +147,11 @@ def test_the_drawings_text_and_its_solids_disagree_about_the_mount_plane():
     """
     assert SM.O_MOUNT == pytest.approx(922.0, abs=0.05)
     assert abs(SM.O_MOUNT - 916.0) == pytest.approx(6.0, abs=0.1)
-    assert SM.H_MOUNT == 940.0, "the rig's own height, not the drawing's"
+    # 970.0 since 2026-09-10 (was 940.0, and 850.0 before that).  The point
+    # of this line is that `H_MOUNT` is READ FROM `layout.LAYOUT_PROPOSED`
+    # and is NOT the drawing's own 916/922 — so it is pinned as a literal,
+    # because reading the layout on both sides would pass at any height.
+    assert SM.H_MOUNT == 970.0, "the rig's own height, not the drawing's"
 
 
 def test_the_paper_datum_is_corroborated_by_two_independent_numbers():
@@ -180,11 +184,24 @@ def test_the_datum_bug_is_modelled_as_a_difference_not_silently_adopted():
 
 
 def test_the_post_length_is_the_originals_again_at_the_corrected_datum():
-    """718.6 against the original's 736.9 — the code datum asks for 1435.0."""
+    """688.6 against the original's 736.9 — the code datum asks for 1405.0.
+
+    THE HEADLINE IS THE ORDER OF MAGNITUDE, NOT THE 48 MM.  At h = 0.940 the
+    corrected post came out 718.60 and landed within 18 mm of the post the
+    original rig actually has, which was the coincidence that made the datum
+    bug obvious.  At the h = 0.970 adopted 2026-09-10 it is 688.60 — 48.3 mm
+    shorter than the built one, and still nowhere near the 1404.98 the buggy
+    paper-referenced ceiling asks for.  The three numbers are pinned together
+    because what this test is about is that they are three DIFFERENT numbers
+    from three different datums, and which of them the fabricator cuts to.
+    """
     z = SM.z_ladder()
-    assert z["post_length"] == pytest.approx(718.60, abs=1e-6)
+    assert z["post_length"] == pytest.approx(688.60, abs=1e-6)
     assert SM.O_POST_L == pytest.approx(736.9, abs=0.05)
-    assert SM.POST_L_CODE == pytest.approx(1434.98, abs=1e-6)
+    assert SM.POST_L_CODE == pytest.approx(1404.98, abs=1e-6)
+    # the corrected post is the one that is plausible; the code datum's is
+    # 716.4 mm too long, and that gap does not move with h
+    assert SM.POST_L_CODE - z["post_length"] == pytest.approx(716.38, abs=0.02)
 
 
 def test_cage_members_come_from_the_drawing_not_from_here():

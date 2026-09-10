@@ -59,15 +59,18 @@ certifies a pose a shorter one refuses — which is why nothing has broken and
 why no certified number is in question. It is **not** conservative for a
 fabricator:
 
-| | drop post length at h = 940 |
+| | drop post length at h = 970 |
 |---|---:|
-| the buggy datum | 1434.98 mm |
-| **the corrected datum** | **718.60 mm** |
+| the buggy datum | 1404.98 mm |
+| **the corrected datum** | **688.60 mm** |
 | the original rig's own | 736.90 mm |
 
-The corrected post is within 18 mm of the one that was actually built. The
-sheet's own UNKNOWN 3 spotted the same thing from the other end ("a grid at
-the ORIGINAL's own beam height gives a 718.6 post").
+The corrected post is 48.3 mm shorter than the one that was actually built,
+and the buggy one is 716.4 mm too long — an error of a different order. (At
+the 940 this table used to be written for, the corrected post was 718.60 mm,
+within 18 mm of the built one, and the sheet's own UNKNOWN 3 had spotted the
+same thing from the other end: "a grid at the ORIGINAL's own beam height gives
+a 718.6 post".)
 
 ### Corroborated straight off the drawing, not only through the extraction
 
@@ -105,10 +108,10 @@ All mm, canvas frame, `z = 0` at the **top surface of the paper**.
   1699.82   grid top  = top of construction  (2336.50 above the floor)
   1623.62   grid underside — the runway beams' soffit, where posts hang
   1496.62   gusset bottom
-  1048.40   clamp stack top
-   952.70   plate top
-   940.00   MOUNT PLANE — the arm bolts to the plate's underside
-   905.02   post bottom (34.98 of post over-runs past the plate)
+  1078.40   clamp stack top
+   982.70   plate top
+   970.00   MOUNT PLANE — the arm bolts to the plate's underside
+   935.02   post bottom (34.98 of post over-runs past the plate)
      0.00   paper top
     -2.00   table top / paper underside
    -27.38   cage leg bottom
@@ -245,12 +248,12 @@ readably, in `model_manifest.json`:
 
 | item | Δ | which way it cuts | action |
 |---|---:|---|---|
-| **ceiling datum** | 716.38 mm | code is **conservative** (booms ~700 mm too long) | survey the room; the fabricator's post is 718.6, not 1435.0 |
+| **ceiling datum** | 716.38 mm | code is **conservative** (booms ~700 mm too long) | survey the room; the fabricator's post is 688.6, not 1435.0 |
 | **drop cluster vs boom column** | 193.80 mm | **neither contains the other** — 393.8 × 152.4 real vs a Ø200 column; measured per body, all 60 pieces escape, worst **185.55 mm** | **RE-CERT REQUIRED before fabrication** |
 | mount plate thickness | 37.30 mm | conservative **in thickness only** — the modelled plate is centred on the J1 axis and the real one sits 25.15 mm off it, so in plan it escapes by **25.06 mm** | re-certify at the true offset |
 | steel below the mount plane | 34.98 mm | model has steel the code does not; 60 mm of the 95 mm chain gap still spare | confirm at re-certification |
 | **base cable pass-through** | 230.70 mm | **neither model has it, and the steel to be cut is not drawn** | §8 |
-| mount height | 90.00 mm | `docs/BUILD_SHEET.md` still publishes 850.0 against the 940.0 in force | re-issue the build sheet |
+| mount height | 0.00 mm | **CLOSED 2026-09-10** — `docs/BUILD_SHEET.md` re-issued at the 970.0 in force, at the corrected datum | none unless `h` moves again |
 | cage legs | 1651.00 mm | model has steel the code does not; stands 190 mm clear of the canvas | confirm once count and position are decided |
 
 **The two that block fabrication are the drop cluster and the cable

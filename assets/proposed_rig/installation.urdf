@@ -24,7 +24,7 @@
   </joint>
   <link name="mount13_plate">
     <visual>
-      <origin xyz="0.5967 0.605106667 0.965" />
+      <origin xyz="0.5967 0.605106667 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -33,7 +33,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 0.605106667 0.965" />
+      <origin xyz="0.5967 0.605106667 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -45,18 +45,18 @@
   </joint>
   <link name="mount13_boom">
     <visual>
-      <origin xyz="0.5967 0.605106667 1.665" />
+      <origin xyz="0.5967 0.605106667 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount13_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 0.605106667 1.665" />
+      <origin xyz="0.5967 0.605106667 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -66,7 +66,7 @@
   </joint>
   <link name="mount17_plate">
     <visual>
-      <origin xyz="1.2067 0.605106667 0.965" />
+      <origin xyz="1.2067 0.605106667 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -75,7 +75,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 0.605106667 0.965" />
+      <origin xyz="1.2067 0.605106667 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -87,18 +87,18 @@
   </joint>
   <link name="mount17_boom">
     <visual>
-      <origin xyz="1.2067 0.605106667 1.665" />
+      <origin xyz="1.2067 0.605106667 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount17_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 0.605106667 1.665" />
+      <origin xyz="1.2067 0.605106667 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -108,7 +108,7 @@
   </joint>
   <link name="mount31_plate">
     <visual>
-      <origin xyz="0.5967 1.81532 0.965" />
+      <origin xyz="0.5967 1.81532 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -117,7 +117,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 1.81532 0.965" />
+      <origin xyz="0.5967 1.81532 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -129,18 +129,18 @@
   </joint>
   <link name="mount31_boom">
     <visual>
-      <origin xyz="0.5967 1.81532 1.665" />
+      <origin xyz="0.5967 1.81532 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount31_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 1.81532 1.665" />
+      <origin xyz="0.5967 1.81532 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -150,7 +150,7 @@
   </joint>
   <link name="mount71_plate">
     <visual>
-      <origin xyz="1.2067 1.81532 0.965" />
+      <origin xyz="1.2067 1.81532 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -159,7 +159,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 1.81532 0.965" />
+      <origin xyz="1.2067 1.81532 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -171,18 +171,18 @@
   </joint>
   <link name="mount71_boom">
     <visual>
-      <origin xyz="1.2067 1.81532 1.665" />
+      <origin xyz="1.2067 1.81532 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount71_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 1.81532 1.665" />
+      <origin xyz="1.2067 1.81532 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -192,7 +192,7 @@
   </joint>
   <link name="mount2_plate">
     <visual>
-      <origin xyz="0.5967 3.025533333 0.965" />
+      <origin xyz="0.5967 3.025533333 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -201,7 +201,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 3.025533333 0.965" />
+      <origin xyz="0.5967 3.025533333 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -213,18 +213,18 @@
   </joint>
   <link name="mount2_boom">
     <visual>
-      <origin xyz="0.5967 3.025533333 1.665" />
+      <origin xyz="0.5967 3.025533333 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount2_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="0.5967 3.025533333 1.665" />
+      <origin xyz="0.5967 3.025533333 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -234,7 +234,7 @@
   </joint>
   <link name="mount97_plate">
     <visual>
-      <origin xyz="1.2067 3.025533333 0.965" />
+      <origin xyz="1.2067 3.025533333 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -243,7 +243,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 3.025533333 0.965" />
+      <origin xyz="1.2067 3.025533333 0.995" />
       <geometry>
         <box size="0.226 0.19 0.05" />
       </geometry>
@@ -255,18 +255,18 @@
   </joint>
   <link name="mount97_boom">
     <visual>
-      <origin xyz="1.2067 3.025533333 1.665" />
+      <origin xyz="1.2067 3.025533333 1.68" />
       <geometry>
-        <cylinder radius="0.1" length="1.35" />
+        <cylinder radius="0.1" length="1.32" />
       </geometry>
       <material name="mount97_boom_mat">
         <color rgba="0.45 0.46 0.48 1.0" />
       </material>
     </visual>
     <collision>
-      <origin xyz="1.2067 3.025533333 1.665" />
+      <origin xyz="1.2067 3.025533333 1.68" />
       <geometry>
-        <box size="0.2 0.2 1.35" />
+        <box size="0.2 0.2 1.32" />
       </geometry>
     </collision>
   </link>
@@ -910,7 +910,7 @@
     <drake:ignored_collision_filter_group name="arm13_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm13_mount_weld" type="fixed">
-    <origin xyz="0.5967 0.605106667 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="0.5967 0.605106667 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm13_panda_link0" />
   </joint>
@@ -1688,7 +1688,7 @@
     <drake:ignored_collision_filter_group name="arm17_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm17_mount_weld" type="fixed">
-    <origin xyz="1.2067 0.605106667 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="1.2067 0.605106667 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm17_panda_link0" />
   </joint>
@@ -2466,7 +2466,7 @@
     <drake:ignored_collision_filter_group name="arm31_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm31_mount_weld" type="fixed">
-    <origin xyz="0.5967 1.81532 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="0.5967 1.81532 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm31_panda_link0" />
   </joint>
@@ -3244,7 +3244,7 @@
     <drake:ignored_collision_filter_group name="arm71_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm71_mount_weld" type="fixed">
-    <origin xyz="1.2067 1.81532 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="1.2067 1.81532 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm71_panda_link0" />
   </joint>
@@ -4022,7 +4022,7 @@
     <drake:ignored_collision_filter_group name="arm2_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm2_mount_weld" type="fixed">
-    <origin xyz="0.5967 3.025533333 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="0.5967 3.025533333 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm2_panda_link0" />
   </joint>
@@ -4800,7 +4800,7 @@
     <drake:ignored_collision_filter_group name="arm97_group_link68" />
   </drake:collision_filter_group>
   <joint name="arm97_mount_weld" type="fixed">
-    <origin xyz="1.2067 3.025533333 0.94" rpy="3.141592654 0 3.141592654" />
+    <origin xyz="1.2067 3.025533333 0.97" rpy="3.141592654 0 3.141592654" />
     <parent link="world" />
     <child link="arm97_panda_link0" />
   </joint>

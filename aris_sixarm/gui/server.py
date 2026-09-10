@@ -204,7 +204,14 @@ DEFAULT_PARAMS = dict(
     rig="proposed", tool="lateral",
     out="gui", title="", inks="auto",
     placement="off", target_width=0.9, offset=[0.0, 0.0], rotate="90",
-    arms="all", atlas="out/atlas_proposed_h0940_gated",
+    # THE ATLAS DEFAULT FOLLOWS THE LAYOUT'S HEIGHT, and it is a STRING here
+    # on purpose: this module never imports the planner (see the module
+    # docstring), so it cannot ask `layout.LAYOUT_PROPOSED["h"]` what the
+    # height is.  Moved to the 0.970 sweep on 2026-09-10 with
+    # `LAYOUT_PROPOSED["h"]`; `tests/test_gui.py` pins the two together so a
+    # height change that misses this line fails rather than silently offering
+    # a stale atlas in the form.
+    arms="all", atlas="out/atlas_proposed_h0970_lat0860",
     max_probes=1, tilt_max_deg=0.0, min_len=0.025,
     band_objective="maximin_sigma", sequencer="opt",
     no_rrt=True, no_verify=True, two_pass=False,

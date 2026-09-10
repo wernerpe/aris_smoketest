@@ -724,6 +724,17 @@ Not modelled: inter-arm collision at 56 % overlap, the grid's own members,
 transport.  `ARIS_RIG=proposed` selects it (`aris_sixarm/layout.py`);
 `out/layout_study.png`, `out/proposed_scene.html`.
 
+> **THE MOUNTING HEIGHT IN FORCE IS h = 0.970 m** (adopted 2026-09-10; was
+> 0.940 from 2026-08-26, and 0.850 before that).  Every "h = 0.940" and
+> "h = 0.850" below is HISTORY — the record of how the height was decided —
+> and not the rig.  0.970 is not the coverage optimum (97.718 % solo-drawable
+> against 0.940's 98.587 %); it is the only height tested at which the canvas
+> has **no enclosed dead cells at all**, so the certified hole-free block runs
+> the full length of the paper: **1.50 × 3.64 m = 5.46 m²** against 0.940's
+> 1.06 × 3.64 m = 3.86 m².  See `docs/DECISIONS.md` (2026-09-09 and
+> 2026-09-10), `docs/BUILD_SHEET.md` (re-issued at 970 and at the corrected
+> datum — the drop post is **688.6 mm**), and `out/certified_area_h0970.json`.
+
 **URDFs: `assets/proposed_rig/`** — `installation.urdf` (six inverted arms on
 the grid, FR3 joint limits, plates + booms, the lateral pen holder as fixed
 links ending in a `pen_tip` frame) and `environment.urdf` (the static geometry

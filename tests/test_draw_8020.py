@@ -111,6 +111,10 @@ def test_the_written_cut_list_says_the_number(tmp_path):
 def test_nothing_here_touches_a_layout_or_gate_constant():
     """The sheet is READ-ONLY against the package: importing it must not have
     moved the mount plane, the pitch, or the certified keep-out."""
-    assert SM.H_MOUNT == pytest.approx(940.0)
+    # 970.0 since 2026-09-10; pinned as a literal for the same reason
+    # `test_the_drawings_text_and_its_solids_disagree_about_the_mount_plane`
+    # pins it — the trap is a sheet that MOVES a package constant on import,
+    # and reading the layout on both sides could not see that.
+    assert SM.H_MOUNT == pytest.approx(970.0)
     assert mounts.MOUNTS.ceiling_z == pytest.approx(2.34)
     assert mounts.MOUNTS.boom_r == pytest.approx(0.10)
