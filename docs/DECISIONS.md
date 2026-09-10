@@ -2718,7 +2718,9 @@ Pete, on the fabrication drawings: *"do you have the drawings for the 970 one?
 let's just work with that one."*  The mounting height in force is now
 **0.970 m** — the underside of each mounting plate above the paper — and the
 whole package moved with it in one commit set: layout, park set, system model,
-build sheet, drawings, GUI, and the CSAIL programme re-planned as v19.
+build sheet, drawings and GUI.  The CSAIL programme is being re-planned as
+v19 at this height (GUI job `20260910-124546-ce72`); its placement is settled
+and recorded below, its numbers are NOT in this entry yet.
 
 ### why 970, when 940 covers more
 
@@ -2898,6 +2900,17 @@ ZERO contiguous dead run.  The chosen one, v15/v17/v18's size and rotation
 nearest dead cell at **184.4 mm** (v18's was 141 mm) and wins the tie on the
 worst single sample, 63.2 mm.  No placement search was run.
 `out/csail_place_v19_proxy.json`, `out/csail_place_v19_placement.json`.
+
+**THE RUN ITSELF IS NOT IN YET.**  GUI job `20260910-124546-ce72`, v18's flag
+set exactly against the 0.970 atlas and the re-searched parks (v18 took
+4 430 s).  `out/finish_v19.sh` waits for it, copies the artifacts to
+`out/csail_schedule_h097_v19.*` and runs the independent whole-timeline
+`scene_check` (`scripts/recheck_timeline.py`) into
+`out/csail_schedule_h097_v19_recheck.json`.  **Until those land, v18 remains
+the shipped certified programme** — 100 % allocated and conducted, makespan
+242.146 s, 3 phases, `scene_check` PASS at inter-arm 80.59 mm and chain
+20.5 mm, and it was planned at h = 0.940.  The numbers to compare v19 against
+are in the 2026-09-07 v18 entry above.
 
 ## 2026-09-10 — OPEN — FOR PETE: should the two columns FACE EACH OTHER?
 
