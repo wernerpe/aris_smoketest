@@ -2993,7 +2993,97 @@ So the hypothesis it tested — that a turned arm's hover set collapses because
 reaching under the opposite base is now behind it — is plausible and
 unmeasured at the model in force.  **It must not be cited as a refutation.**
 
-### 4. what it would take, and what is outstanding
+### 4. MEASURED, at h = 0.970, on a mirrored atlas swept for the purpose
+
+The mirrored fleet (13/31/2 at yaw = pi, 17/71/97 at 0) was swept at 0.970 at
+the holder's tool and re-gated to 63, and every number below is measured
+identically on both clockings.  **The uniform column reproduces the shipped
+`out/certified_area_h0970.json` exactly** (16184 live, 97.718 %, largest
+1.50 x 3.64 = 5.4600 m² at (0.16, 0.00), near-square 3.4352 m²), which is what
+makes the comparison worth reading.
+
+| h = 0.970 | uniform | mirrored | delta |
+|---|---:|---:|---:|
+| strict-GO cells, summed over arms | 23 472 | 23 482 | +10 |
+| union strict-GO | 16 184 (97.718 %) | 16 188 (97.742 %) | **+4 cells** |
+| >= 2-arm | 6 698 (40.442 %) | 6 704 (40.478 %) | +6 cells |
+| >= 3-arm | 2.892 % | 2.892 % | 0 |
+| **largest hole-free block** | **5.4600 m²** | **5.4600 m²** | **0.0000** |
+| near-square hole-free | 3.4352 m² | 3.4352 m² | 0.0000 |
+| landscape hole-free | 1.7928 m² | 1.7928 m² | 0.0000 |
+| park candidates certifying | 2 979 / 3 456 | 2 982 / 3 456 | +3 |
+
+Mirrored is a strict superset — **no cell is lost anywhere** — and the whole
+gain is 4 cells out of 16 562, **+0.0016 m² of canvas and 0.0000 m² of
+certified rectangle**.  Only the LEFT column's atlases moved at all; the right
+column's are bit-identical, as they must be, since its yaw did not change.
+
+**AND THE DEAD WEDGE IS A RED HERRING, MEASURED.**  Joint 1 is +/-157.2024 deg,
+so the wedge is **45.595 deg wide, centred on the base's own -x** — the
+direction opposite the front.  It is invisible on the paper: binning arms 31
+and 71's certified cells by world bearing in 15 deg sectors, **all 24 sectors
+are populated and GO == reach in every one**, and in the wedge direction itself
+the certified poses use |q1| <= 105.2 deg and never approach the stop — the arm
+gets "behind" itself by swinging q1 sideways and rotating the forearm out of
+the shoulder plane (|q3| to 138.2 deg).  The one real azimuthal notch in the
+outer lip is **~80 mm deep and tracks the TRANSVERSE PARTNER, not the wedge**:
+arm 31 notches at world 0 deg (partner 71) and arm 71 at 180 deg (partner 31),
+in opposite world directions, from the same yaw.  A partner's body column is a
+cylinder, so that notch does not move when you turn the base.
+
+The old "atlases are yaw-invariant discs" line survives to 0.04 % — but as an
+empirical near-coincidence of a symmetric layout, not a property.
+`atlas.solve_cell` does take the spec's `T_world_base`, so yaw genuinely enters
+the branch set; what makes it not matter here is that every obstacle box in
+`mounts.obstacles_for` is either an AABB symmetric under a pi flip or a
+radially symmetric cylinder (both fleets carry 30 geometrically identical
+boxes).
+
+**WHAT MIRRORING WOULD COST.**  The shipped park literals do not transfer at
+all: re-seated on mirrored bases the fleet's worst pair goes 250.0 mm ->
+**-100.1 mm** (31-71) and the worst steel clearance 277.3 -> **-131.0 mm**
+(13, 31) — the left column's parked chains swing into the 0.61 m centre gap.
+A mirrored park set plainly EXISTS (a greedy max-steel pick off the certified
+candidates reaches the same 250.0 mm cap), but it has to be searched and
+re-certified.  Beyond that: two handed drop-cluster parts instead of one, and
+the loss of `BUILD_SHEET` section 3's single acceptance check — "command all
+joints to 0, all six must lean the same way" — which is the cheapest
+error-catcher on the build floor.
+
+### RECOMMENDATION: KEEP UNIFORM
+
+**The number that decides it is 0.0000 m².**  The certified hole-free block —
+the thing the height was chosen for and the thing a drawing is placed inside —
+is 5.4600 m² under both clockings, to the cell, and so are the near-square and
+landscape blocks.  Mirroring buys +4 canvas cells and costs a re-searched
+six-arm park set, a re-certification, handed steel and an acceptance check.
+
+**The reach argument for mirroring does not exist, and the intuition behind it
+is measurably false.**  If the rig is to be mirrored it should be mirrored for
+the CABLES and the STEEL, which are real and unmodelled: each column's cables
+would exit toward its own nearest long edge instead of the left column's
+running across the paper, and the plate flip buys 50.3 mm of drop-cluster gap
+(216.20 -> 266.50 mm) and gusset pair clearance (89.20 -> 139.50 mm), which is
+most of what open item 4 is short of.  **That is a fabrication decision, and it
+would be worth about 5 000 s of park search plus a re-certification.**  Said
+plainly so it can be taken on its merits rather than on a workspace argument
+that the measurement does not support.
+
+### 5. what was NOT measured
+
+The real three-number mirrored park search (~4 900 s at 4 jobs) — which would
+decide whether mirrored depots are as FLYABLE, not just as clearable (uniform:
+114/144 entries and go-homes); the three-layer `feasible_workspace` map for
+mirrored (hours) — though at 0.970 the map's live set coincides cell-for-cell
+with the atlas union, so the rectangle above is not merely a proxy; the pen-up
+`paper.route` legs, which ARE genuinely yaw-dependent and none of which were
+measured; and any yaw other than 0 / pi.
+
+Artifacts: `out/mirror_atlas_h0970_lat0860{,_gated63}/`,
+`out/mirror_compare_h0970.{txt,json}`, `out/mirror_certarea_*_h0970.json`,
+`out/mirror_park_{proxy,candidates}_h0970.txt`.
+
+### 6. what it would take to ADOPT it, and what is outstanding
 
 An honest answer needs the mirrored fleet run through the same machinery at
 h = 0.970: an atlas re-swept per clocking (yaw is in the sweep), the
