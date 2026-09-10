@@ -3097,3 +3097,66 @@ it.
 is still uniform yaw = 0, `docs/BUILD_SHEET.md` §3 still says so and still
 says not to improvise it, and per-arm yaw stays where it is — expressible for a
 SURVEY, not a configuration — until the measurement says mirrored wins.
+
+## 2026-09-10 — OPEN: rung 1 of the aside-park ladder is unflyable at 0.970
+
+Found while moving the height (see the adoption entry above), and carried here
+as an open item rather than fixed, because the fix is a design choice and the
+shipped consumer is not broken.
+
+### what it is
+
+`layout.region_aware_parks` returns the best aside park it can find for an arm
+somebody needs to draw under.  Its ranking key is `corridor_clearance` — how
+far the parked chain stands off the target's own column — and at h = 0.970 the
+top of that ranking is **(r = 0.70, hover = 0.35) for five of the six arms**:
+the furthest, highest candidate the grid contains, which is exactly what
+maximises clearance from a column and exactly what a `paper.route` from a
+0.20-0.30 m park cannot reach.  Measured, arm by arm, at the shipped parks:
+
+| arm | rung-1 recipe | corridor clear | `repark_route` |
+|---|---|---:|---|
+| 2 | (0.70, 0.35, -30) | 0.229 m | **REFUSED** |
+| 13 | (0.70, 0.35, -30) | 0.229 m | **REFUSED** |
+| 17 | (0.70, 0.35, 150) | 0.229 m | **REFUSED** |
+| 31 | (0.55, 0.20, 120) | 0.228 m | ok |
+| 71 | (0.70, 0.35, 150) | 0.229 m | **REFUSED** |
+| 97 | (0.70, 0.35, 150) | 0.229 m | **REFUSED** |
+
+At 0.940 rung 1 happened to fly, so nothing noticed.
+
+### why nothing shipped is broken
+
+`region_aware_parks` says in its own docstring that it gates the POSE and the
+FLEET and deliberately does not gate flyability — *"because it is the expensive
+one and not every caller needs it"* — and its only consumer,
+`scripts/feasible_workspace._park_sets`, therefore offers **rungs 1..3** to the
+real check and takes the first that flies.  The three tests in
+`tests/test_layout.py` that asked rung 1 alone now walk the same ladder
+(`_a_flyable_aside`).  The CSAIL draw path does not use aside parks at all —
+`allocate.ParkProbe` prunes against the shipped literals.
+
+### the fix I would propose, and why it is not in this commit
+
+**Make the ranking pay for a route once, lazily, and cache it.**  Concretely:
+give `aside_park_ranking` an optional `route_gate=(spec, q_from, h_inv)` and
+have it walk its own descending list, calling `repark_route` on each candidate
+until one certifies, then return that one first.  Three properties matter and
+the current design has two of them:
+
+1. **it must stay a total order** — the ranking is walked by `rank=k` and a
+   caller asking for rung 2 must get the same pose twice, so the route check
+   has to be a FILTER on a fixed order, never a re-score;
+2. **it must not pay when it cannot help** — a target nobody stands over
+   returns the shipped literals by identity today, and that must not change;
+3. **the cost is real**: `repark_route` is a full `paper.route`, ~1-3 s, and
+   `aside_candidates` is already cached per arm because the map asks this
+   question tens of thousands of times.  A route cache keyed on
+   `(arm, q_from, recipe, h)` is what makes this affordable, and it is the
+   piece that does not exist yet.
+
+That is a change to a function every map cell goes through, measured in hours
+of re-mapping to prove it did not move a certified number — which is not
+something to land in the same box as a height change.  **What a future caller
+must know today: if you want a ONE-SHOT aside park, gate it on
+`repark_route` yourself; rung 1 is not a promise.**
