@@ -52,10 +52,19 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
-def build(h, parks_json):
-    """The fleet and parks for one height. -> (fleet, {arm: q}, h)."""
+def build(h, parks_json, clocking="uniform"):
+    """The fleet and parks for one height and clocking. -> (fleet, parks, src).
+
+    `clocking` names a `layout.CLOCKINGS` entry.  "uniform" is the shipped one
+    and builds exactly the fleet this function has always built; "mirrored"
+    turns the LEFT column to face the right.  It travels the same way the
+    height does — written into every spec by `build_fleet` — so the exhaustive
+    rebinding below carries it with no further help, and the base-z proof at
+    the end is joined by a base-R one for the same reason.
+    """
     import feasible_workspace as fw
     from aris_sixarm import layout
+    clk = layout.CLOCKINGS[clocking]
     lay = layout.paired_grid(spacing=fw.SHIPPED_PITCH, rows=3, h=float(h))
     if parks_json:
         doc = json.loads(Path(parks_json).read_text())
@@ -66,10 +75,12 @@ def build(h, parks_json):
                  for a, v in doc["best"].items()}
         src = f"{Path(parks_json).name} (searched at h = {doc['h']})"
     else:
-        parks = layout.certified_park_poses(layout.build_fleet(lay),
-                                            layout.PARK_GRID_PROPOSED)
-        src = "PARK_GRID_PROPOSED re-derived (the 0.940 recipe)"
-    return layout.build_fleet(lay, q_park=parks), parks, src
+        parks = layout.certified_park_poses(
+            layout.build_fleet(lay, clocking=clk), layout.PARK_GRID_PROPOSED)
+        src = "PARK_GRID_PROPOSED re-derived (the shipped recipe)"
+    if clocking != "uniform":
+        src += f"  [CLOCKING {clocking}: {clk}]"
+    return layout.build_fleet(lay, q_park=parks, clocking=clk), parks, src
 
 
 def prove_h_is_in_the_spec():
@@ -160,12 +171,21 @@ def other_rig_registries():
     return out
 
 
-def audit(h, exempt):
+def audit(h, exempt, clocking="uniform"):
     """Refuse to continue if ANY loaded proposed fleet is not at `h`. -> raises.
 
     Checks the SPECS, not the container, so a mapping this script never saw
     still fails the gate rather than passing it quietly.
+
+    ...AND THE CLOCKING IS AUDITED THE SAME WAY (2026-09-10).  A mirrored
+    re-plan patches a base ROTATION as well as a base height, and a stale
+    reference that happened to be at the right z would sail through a z-only
+    check while planning against fronts pointing the wrong way.  So the
+    expected base +x is derived per arm from the clocking asked for and every
+    surviving spec must match it.
     """
+    from aris_sixarm import layout as _lay
+    clk = _lay.CLOCKINGS[clocking]
     from aris_sixarm import layout
     ids = set(layout.FLEET_PROPOSED)
     stale = []
@@ -184,9 +204,17 @@ def audit(h, exempt):
             for a, s in cur.items():
                 if not hasattr(s, "T_world_base"):
                     break
-                z = float(s.T_world_base()[2, 3])
+                T = np.asarray(s.T_world_base(), float)
+                z = float(T[2, 3])
                 if abs(z - h) > 1e-9:
                     stale.append(f"{mod_name}.{attr}[{a}] z={z}")
+                if getattr(s, "mount", None) == "inv":
+                    yaw = np.radians(float(clk.get(int(a), 0.0)))
+                    want = np.array([-np.cos(yaw), np.sin(yaw), 0.0])
+                    if not np.allclose(T[:3, 0], want, atol=1e-9):
+                        stale.append(f"{mod_name}.{attr}[{a}] front="
+                                     f"{np.round(T[:3, 0], 4).tolist()} "
+                                     f"want {np.round(want, 4).tolist()}")
     if stale:
         raise SystemExit("A FLEET AT THE WRONG HEIGHT SURVIVES THE PATCH: "
                          f"{stale[:12]}\nRefusing to plan.")
@@ -196,6 +224,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--h", type=float, required=True)
     ap.add_argument("--atlas", required=True)
+    ap.add_argument("--clocking", default="uniform",
+                    help="base clocking: 'uniform' (shipped) or 'mirrored' "
+                         "(the LEFT column turned to face the right).  A "
+                         "VARIANT — report only, like --h")
     ap.add_argument("--parks", default=None,
                     help="height_sweep.py park JSON for this height")
     ap.add_argument("--check", action="store_true",
@@ -215,15 +247,16 @@ def main():
     ids, h_ship = set(layout.FLEET_PROPOSED), z_before
     exempt = other_rig_registries()
     old_parks = layout.Q_PARK_PROPOSED
-    new_fleet, new_parks, src = build(a.h, a.parks)
+    new_fleet, new_parks, src = build(a.h, a.parks, a.clocking)
     hits = repoint(new_fleet, new_parks, old_parks, ids, h_ship)
     layout.FLEET_PROPOSED = new_fleet
     layout.Q_PARK_PROPOSED = new_parks
     import feasible_workspace as fw
     layout.PARK_HOVER_PROPOSED = fw.park_hovers(new_fleet, new_parks, a.h)
-    audit(a.h, exempt)
+    audit(a.h, exempt, a.clocking)
 
-    print(f"RE-PLAN AT h = {a.h}  (report only; layout.py untouched)")
+    print(f"RE-PLAN AT h = {a.h} clocking={a.clocking}  "
+          "(report only; layout.py untouched)")
     print(f"  parks: {src}")
     print(f"  rebound {len(hits)} name(s): " + ", ".join(sorted(hits)))
     print(f"  bases: { {x: round(float(new_fleet[x].T_world_base()[2,3]), 4) for x in sorted(new_fleet)} }")

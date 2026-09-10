@@ -573,6 +573,18 @@ def do_park(a):
 
 # ---------------------------------------------------------------------------
 def do_pilot(a):
+    # THE ROUTE LAYER FLIES PAST THE PARKED ARMS, so a pilot run on another
+    # height's or another clocking's depots is not that rig's pilot.  Same
+    # argument `feasible_workspace --parks` carries, and the same refusal on a
+    # search that never certified a fleet.
+    if getattr(a, "parks", None):
+        doc = json.loads(Path(a.parks).read_text())
+        if not doc.get("certifies"):
+            raise SystemExit(f"{a.parks}: that search found no fleet park set "
+                             "clearing the gate; refusing to pilot on it")
+        fw.set_park_override({int(k): v["q"] for k, v in doc["best"].items()})
+        print(f"  parks from {a.parks} (searched at h = {doc['h']})",
+              flush=True)
     fl, parks, h, pitch = fw.rig(None, a.h, None)
     arms = sorted(fl)
     print(f"PILOT h={h} atlas={a.atlas} every={a.every} workers={a.workers} "
@@ -652,6 +664,8 @@ def main():
     p.add_argument("--every", type=int, default=25)
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--out", default=None)
+    p.add_argument("--parks", default=None,
+                   help="a `park` result whose depots to fly against")
     p.set_defaults(fn=do_pilot)
 
     for s_ in (sw, k, p):

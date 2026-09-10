@@ -1020,3 +1020,58 @@ def test_a_clocking_does_not_move_the_neighbour_column_obstacle():
         bu, bm = boxes(uni, aid), boxes(mir, aid)
         assert len(bu) == len(bm) and len(bu) >= 5, aid
         assert bu == bm, aid
+
+
+def test_the_mirrored_audit_would_catch_a_half_patched_fleet():
+    """`replan_at_height.audit` must check the base ROTATION, not just z.
+
+    A mirrored re-plan patches a base rotation as well as a height, and every
+    failure this script exists to prevent has been a stale reference that
+    survived an exhaustive-looking patch.  A z-only audit passes a spec that
+    is at the right height with its front pointing the wrong way — which is
+    exactly the fleet a mirrored run must not plan against.  This drives the
+    audit directly with a deliberately half-patched module.
+    """
+    import sys
+    import types
+    from pathlib import Path
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "replan_at_height", root / "scripts" / "replan_at_height.py")
+    rp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rp)
+
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    mir = layout.build_fleet(layout.LAYOUT_PROPOSED,
+                             clocking=layout.CLOCKING_MIRRORED)
+    uni = layout.build_fleet(layout.LAYOUT_PROPOSED)
+    mod = types.ModuleType("aris_sixarm._audit_probe")
+    sys.modules[mod.__name__] = mod
+    was = layout.FLEET_PROPOSED
+    exempt = rp.other_rig_registries()
+    try:
+        # THE SHIPPED FLEET IS PATCHED TOO, because the real script patches it
+        # before auditing and the audit is right to fail if it did not.
+        layout.FLEET_PROPOSED = mir
+        mod.FLEET = mir
+        rp.audit(h, exempt, "mirrored")          # fully mirrored: satisfied
+
+        # a stale UNIFORM fleet at the right height must NOT pass a mirrored
+        # audit — this is the case a z-only check waved through
+        mod.FLEET = uni
+        with pytest.raises(SystemExit, match="front="):
+            rp.audit(h, exempt, "mirrored")
+
+        # ...and symmetrically, a mirrored leftover fails a UNIFORM audit
+        layout.FLEET_PROPOSED = uni
+        mod.FLEET = mir
+        with pytest.raises(SystemExit, match="front="):
+            rp.audit(h, exempt, "uniform")
+
+        # the uniform path is unchanged: the shipped fleet passes as before
+        mod.FLEET = uni
+        rp.audit(h, exempt, "uniform")
+    finally:
+        layout.FLEET_PROPOSED = was
+        sys.modules.pop(mod.__name__, None)

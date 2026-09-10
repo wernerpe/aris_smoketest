@@ -1743,7 +1743,22 @@ def main():
                          "ready pose for arm 97 at all.  Parked arms are "
                          "obstacles for the route layer, so mapping one height "
                          "with another's depots is not that height's map.")
+    ap.add_argument("--clocking", default="uniform",
+                    choices=sorted(layout.CLOCKINGS),
+                    help="base clocking: 'uniform' is the shipped one "
+                         "(docs/BUILD_SHEET.md section 3); 'mirrored' turns "
+                         "the LEFT column to face the right.  A VARIANT — it "
+                         "is set as a module global BEFORE any pool, like "
+                         "--parks, and nothing is written back")
     a = ap.parse_args()
+
+    # BEFORE THE FIRST `rig()` AND BEFORE ANY POOL, for the reason
+    # `set_park_override` is: a global half-applied across workers gives a map
+    # whose header says one rig and whose routes were flown against another.
+    if a.clocking != "uniform":
+        set_clocking_override(a.clocking)
+        print(f"CLOCKING: {a.clocking} ({layout.CLOCKINGS[a.clocking]}) "
+              "— a variant, not the layout")
 
     global FROZEN, CYLM
     if a.legacy_bands:
