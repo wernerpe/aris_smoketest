@@ -17,6 +17,7 @@ NO ARIS_RIG / ARIS_TOOL ANYWHERE.  A trace is rig-independent, so this test
 says nothing about which rig is active and does not touch the environment.
 """
 import json
+import os
 import time
 
 import pytest
@@ -351,3 +352,81 @@ def test_the_manager_adopts_jobs_from_disk(tmp_path):
     assert got is not None
     assert got.status == "failed"
     assert "restarted" in got.error
+
+
+# --------------------------------------------------------------------------
+# the scene cache, which used to have no expiry at all
+# --------------------------------------------------------------------------
+def test_the_scene_cache_expires_when_the_package_moves(tmp_path, monkeypatch):
+    """A CACHED SCENE MUST NOT OUTLIVE THE CODE THAT BUILT IT (2026-09-10).
+
+    `_ensure_scene` used to test only that the file EXISTED, so after the
+    mounting height went 0.940 -> 0.970 the server went on serving a
+    2026-09-02 scene at base z 0.940, with the 0.110 pen and the superseded
+    park poses, until somebody deleted `out/gui_cache/` by hand.  There was no
+    way for a browser to tell.
+
+    The stamp cannot ask the planner what the height is — this module never
+    imports it, by design — so it hashes the package the scene is built FROM.
+    Three properties, and the middle one is the bug:
+
+      * the same tree gives the same stamp (a cache that never hits is not a
+        cache);
+      * a CHANGED package gives a different one;
+      * rig and tool are in it, so two scenes never share an entry.
+    """
+    from aris_sixarm.gui import server as srv
+    a = srv.scene_stamp("proposed", "lateral")
+    assert a == srv.scene_stamp("proposed", "lateral"), "not reproducible"
+    assert a != srv.scene_stamp("proposed", "inline")
+    assert a != srv.scene_stamp("final6_opt", "lateral")
+
+    # a package edit invalidates it — simulated the way an edit really lands,
+    # by moving a source file's mtime rather than by rewriting one
+    victim = srv.ROOT / "aris_sixarm" / "layout.py"
+    st = victim.stat()
+    try:
+        os.utime(victim, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        assert srv.scene_stamp("proposed", "lateral") != a, \
+            "a changed package must not reuse a cached scene"
+    finally:
+        os.utime(victim, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert srv.scene_stamp("proposed", "lateral") == a, "restore failed"
+
+
+def test_a_stale_scene_entry_is_rebuilt_not_served(tmp_path, monkeypatch):
+    """The stamp is what decides, and a wrong one is not trusted.
+
+    Builds nothing: `_ensure_scene`'s subprocess is the expensive part and is
+    not what is under test.  What is under test is the BRANCH — that a cache
+    entry whose stamp does not match is not returned early.
+    """
+    from aris_sixarm.gui import server as srv
+    monkeypatch.setattr(srv, "CACHE", tmp_path)
+    out = tmp_path / "scene_proposed_lateral.json"
+    out.write_text('{"stale": true}')
+    out.with_suffix(".bin").write_bytes(b"stale")
+
+    calls = []
+
+    class _R:
+        returncode = 0
+        stderr = stdout = ""
+
+    def _fake_run(*a, **k):
+        calls.append(a)
+        out.write_text('{"fresh": true}')
+        return _R()
+
+    monkeypatch.setattr(srv.subprocess, "run", _fake_run)
+
+    # no stamp at all -> rebuild
+    srv._ensure_scene("proposed", "lateral")
+    assert len(calls) == 1, "an unstamped entry must be rebuilt"
+    # ...and it is stamped now, so the next call is free
+    srv._ensure_scene("proposed", "lateral")
+    assert len(calls) == 1, "a current entry must be served from cache"
+    # a stamp from another tree -> rebuild
+    out.with_suffix(".stamp").write_text("deadbeef")
+    srv._ensure_scene("proposed", "lateral")
+    assert len(calls) == 2, "a stale stamp must be rebuilt"

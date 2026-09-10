@@ -89,7 +89,8 @@ def do_sweep(a):
         fl, parks, h, pitch = fw.rig(None, a.h, None)
     except RuntimeError as exc:
         h, pitch = float(a.h), fw.SHIPPED_PITCH
-        fl = layout.build_fleet(layout.paired_grid(spacing=pitch, rows=3, h=h))
+        fl = layout.build_fleet(layout.paired_grid(spacing=pitch, rows=3, h=h),
+                                clocking=fw._CLOCK_OVERRIDE)
         print(f"  parks refused at this height ({exc}); sweeping the BARE "
               "fleet — the atlas does not read them", flush=True)
     arms = sorted(fl)
@@ -468,7 +469,22 @@ def _pk_one_arm(job):
 def do_park(a):
     """The (radius, hover, bearing) search, at `--h`, against `--atlas`."""
     import multiprocessing as mp
-    fl, parks, h, pitch = fw.rig(None, a.h, None)
+    # THE SEARCH DOES NOT READ THE INCUMBENT PARKS — it is what produces them —
+    # so a recipe that does not certify at this height or this CLOCKING must
+    # not block it.  `do_sweep` has taken the same escape since 0.850, and it
+    # is load-bearing for `--clocking mirrored`: the shipped grid re-seated on
+    # mirrored bases parks arms 31 and 71 100.1 mm INSIDE each other and
+    # `certified_park_poses` refuses the fleet, which is precisely the fact
+    # this search exists to repair.
+    try:
+        fl, parks, h, pitch = fw.rig(None, a.h, None)
+    except RuntimeError as exc:
+        h, pitch = float(a.h), fw.SHIPPED_PITCH
+        fl = layout.build_fleet(layout.paired_grid(spacing=pitch, rows=3, h=h),
+                                clocking=fw._CLOCK_OVERRIDE)
+        print(f"  the incumbent park recipe refuses here ({exc}); searching "
+              "against the BARE fleet — the search does not read the parks",
+              flush=True)
     arms = sorted(fl)
     margin = coordination.SAFETY_M + coordination.CALIB_M
     print(f"PARK SEARCH h={h} atlas={a.atlas} tool=({EXT}, {LAT})")
@@ -605,17 +621,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="mode", required=True)
 
-    s = sub.add_parser("sweep", help="the 2 cm atlas at one height")
-    s.add_argument("--h", type=float, required=True)
-    s.add_argument("--out", required=True)
-    s.add_argument("--jobs", type=int, default=6)
-    s.add_argument("--grid", type=float, default=GRID)
-    s.add_argument("--tilt", type=float, default=15.0,
+    sw = sub.add_parser("sweep", help="the 2 cm atlas at one height")
+    sw.add_argument("--h", type=float, required=True)
+    sw.add_argument("--out", required=True)
+    sw.add_argument("--jobs", type=int, default=6)
+    sw.add_argument("--grid", type=float, default=GRID)
+    sw.add_argument("--tilt", type=float, default=15.0,
                    help="the pen-lean cone the gated search may climb, in "
                         "degrees.  15 is the shipped allowance; 20 is Pete's "
                         "pending decision and a wider cone certifies cells a "
                         "perpendicular pen cannot reach.")
-    s.set_defaults(fn=do_sweep)
+    sw.set_defaults(fn=do_sweep)
 
     r = sub.add_parser("report", help="what the atlases say, per height")
     r.add_argument("--case", action="append", required=True,
@@ -638,7 +654,20 @@ def main():
     p.add_argument("--out", default=None)
     p.set_defaults(fn=do_pilot)
 
+    for s_ in (sw, k, p):
+        s_.add_argument("--clocking", default="uniform",
+                        choices=sorted(layout.CLOCKINGS),
+                        help="base clocking: 'uniform' is the shipped one "
+                             "(BUILD_SHEET section 3, every front at canvas "
+                             "-x); 'mirrored' turns the LEFT column to face "
+                             "the right.  A VARIANT — nothing is written back")
+
     a = ap.parse_args()
+    if getattr(a, "clocking", "uniform") != "uniform":
+        fw.set_clocking_override(a.clocking)
+        print(f"CLOCKING: {a.clocking} "
+              f"({layout.CLOCKINGS[a.clocking]}) — a variant, not the layout",
+              flush=True)
     a.fn(a)
 
 

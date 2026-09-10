@@ -128,12 +128,34 @@ SHIPPED_PITCH = 0.61
 # this file already uses for `paper.RRT_SAFE` and `transit.TIME_BUDGET`.
 _PARK_OVERRIDE = None
 
+# ...AND THE CLOCKING IS THE SAME KIND OF GLOBAL, for the same reason.  A
+# comparison run at the mirrored clocking (`layout.CLOCKING_MIRRORED`) must
+# have every worker building the same fleet; `None` is the shipped uniform
+# clocking and is what every call has always got.
+_CLOCK_OVERRIDE = None
+
 
 def set_park_override(parks):
     """Depots every later `rig()` must use, or None for the derived recipe."""
     global _PARK_OVERRIDE
     _PARK_OVERRIDE = (None if parks is None else
                       {int(k): np.asarray(v, float) for k, v in parks.items()})
+
+
+def set_clocking_override(clocking):
+    """The per-arm yaw every later `rig()` must build with, or None.
+
+    `clocking` may be a name out of `layout.CLOCKINGS` ("uniform",
+    "mirrored") or a {arm_id: yaw_deg} dict.  Set ONCE, before any pool.
+    """
+    global _CLOCK_OVERRIDE
+    if clocking is None:
+        _CLOCK_OVERRIDE = None
+        return
+    if isinstance(clocking, str):
+        clocking = layout.CLOCKINGS[clocking]
+    _CLOCK_OVERRIDE = ({int(k): float(v) for k, v in clocking.items()}
+                       or None)
 
 
 def rig(pitch=None, h=None, calib=None):
@@ -163,8 +185,15 @@ def rig(pitch=None, h=None, calib=None):
     """
     h = layout.LAYOUT_PROPOSED["h"] if h is None else float(h)
     pitch = SHIPPED_PITCH if pitch is None else float(pitch)
-    shipped = (abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9
-               and _PARK_OVERRIDE is None)
+    # THE SHIPPED HEIGHT IS READ, NOT SPELLED (2026-09-10).  This tested
+    # `abs(h - 0.940)` against a layout that had moved to 0.970, so the one
+    # path that is supposed to hand back the COMMITTED fleet and the BAKED
+    # park literals had silently stopped firing and every caller was getting a
+    # re-derivation instead.  A literal here is a second place for the height
+    # to live, and it drifted the first time the height moved.
+    shipped = (abs(pitch - SHIPPED_PITCH) < 1e-9
+               and abs(h - float(layout.LAYOUT_PROPOSED["h"])) < 1e-9
+               and _PARK_OVERRIDE is None and _CLOCK_OVERRIDE is None)
     if calib is None:
         if shipped:
             return layout.FLEET_PROPOSED, layout.Q_PARK_PROPOSED, h, pitch
@@ -172,18 +201,23 @@ def rig(pitch=None, h=None, calib=None):
         if _PARK_OVERRIDE is not None:
             parks = _PARK_OVERRIDE
         else:
-            parks = layout.certified_park_poses(layout.build_fleet(lay),
-                                                layout.PARK_GRID_PROPOSED)
-        return layout.build_fleet(lay, q_park=parks), parks, h, pitch
+            parks = layout.certified_park_poses(
+                layout.build_fleet(lay, clocking=_CLOCK_OVERRIDE),
+                layout.PARK_GRID_PROPOSED)
+        return (layout.build_fleet(lay, q_park=parks,
+                                   clocking=_CLOCK_OVERRIDE),
+                parks, h, pitch)
     from aris_sixarm import mounts
     model = mounts.MOUNTS.scaled(calib=float(calib))
     lay = (layout.LAYOUT_PROPOSED if shipped
            else layout.paired_grid(spacing=pitch, rows=3, h=h))
     parks = (_PARK_OVERRIDE if _PARK_OVERRIDE is not None else
              layout.Q_PARK_PROPOSED if shipped else
-             layout.certified_park_poses(layout.build_fleet(lay),
-                                         layout.PARK_GRID_PROPOSED))
-    return (layout.build_fleet(lay, mount_model=model, q_park=parks),
+             layout.certified_park_poses(
+                 layout.build_fleet(lay, clocking=_CLOCK_OVERRIDE),
+                 layout.PARK_GRID_PROPOSED))
+    return (layout.build_fleet(lay, mount_model=model, q_park=parks,
+                               clocking=_CLOCK_OVERRIDE),
             parks, h, pitch)
 
 

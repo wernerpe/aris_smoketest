@@ -163,7 +163,7 @@ class StudySpec(ArmSpec):
 
 
 def study_spec(arm_id, mount, xy, h=0.922, name=None, mount_boxes=(),
-               q_ready=None):
+               q_ready=None, yaw_deg=0.0):
     """One study arm, carrying its base pose EXPLICITLY (z and R).
 
     WHY EXPLICIT, AND NOT THROUGH `h_inv` (2026-08-25).  v2 built these specs
@@ -203,7 +203,12 @@ def study_spec(arm_id, mount, xy, h=0.922, name=None, mount_boxes=(),
         yaw = float(np.arctan2(c[1] - xy[1], c[0] - xy[0]))
         z, R = Z_FLOOR_BASE, rotz(yaw)
     else:
-        yaw = 0.0
+        # `yaw_deg` is the CLOCKING, and 0.0 is the shipped one: with
+        # `R = roty(pi) @ rotz(yaw)` the base's own +x — the arm's front —
+        # lands on `(-cos yaw, sin yaw, 0)`, so yaw = 0 points every front at
+        # canvas -x exactly as docs/BUILD_SHEET.md section 3 specifies, and
+        # yaw = 180 turns that arm to face canvas +x.  See `CLOCKING_MIRRORED`.
+        yaw = float(np.radians(yaw_deg))
         z, R = float(h), roty(np.pi) @ rotz(yaw)
     return StudySpec(arm_id, name or f"{mount}{arm_id}", mount,
                      (float(xy[0]), float(xy[1])), yaw, True,
@@ -223,8 +228,34 @@ def arm_ids(layout):
     return fids, iids
 
 
+# ---------------------------------------------------------------------------
+# CLOCKING — which way each inverted arm's front faces
+# ---------------------------------------------------------------------------
+# `R_world_base = roty(pi) @ rotz(yaw)`, so an arm's front (its base +x) is
+# `(-cos yaw, sin yaw, 0)`: yaw = 0 faces canvas -x, yaw = 180 faces canvas +x.
+#
+# THE SHIPPED CLOCKING IS UNIFORM AND IT IS LOAD-BEARING (BUILD_SHEET 3):
+# every arm at yaw = 0, so every front points at the x = 0 long edge and every
+# connector panel at the x = 1803.4 edge.  Its acceptance check on the build
+# floor is one sentence — command all joints to 0 and all six must lean the
+# same way — and that is the cheapest error-catcher the build has.
+#
+# MIRRORED turns the LEFT column (13, 31, 2) to face canvas +x and leaves the
+# right column alone, so the two columns face each other across the centre
+# line.  It is the LEFT column that moves and not the right: under the shipped
+# clocking the right column ALREADY faces the left, and turning the right
+# column instead would point both outward.  Kept here as a named variant so a
+# comparison run needs no edited constant; NOT the default, and not adopted —
+# see docs/DECISIONS.md 2026-09-10 for what it is worth (+4 canvas cells,
+# 0.0000 m^2 of certified rectangle) and what it would cost (a re-searched park
+# set, handed steel, and that acceptance check).
+CLOCKING_UNIFORM = {}
+CLOCKING_MIRRORED = {13: 180.0, 31: 180.0, 2: 180.0}
+CLOCKINGS = {"uniform": CLOCKING_UNIFORM, "mirrored": CLOCKING_MIRRORED}
+
+
 def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
-                q_park=None):
+                q_park=None, clocking=None):
     """A layout dict -> {arm_id: StudySpec}, each carrying the OTHER arms'
     schematic mount hardware as static obstacle boxes.
 
@@ -239,15 +270,22 @@ def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
     h = float(layout.get("h", 0.922))
     fids, iids = arm_ids(layout)
     q_park = {} if q_park is None else dict(q_park)
+    # `None` and `{}` are the SAME question and both are the shipped uniform
+    # clocking, so a caller that never heard of clockings gets bit-identical
+    # specs to the ones this function has always returned.
+    clk = {} if clocking is None else {int(k): float(v)
+                                       for k, v in clocking.items()}
     bare = {}
     for aid, xy in zip(fids, layout["floor"]):
         bare[aid] = study_spec(aid, "floor", xy, h=h, q_ready=q_park.get(aid))
     for aid, xy in zip(iids, layout["inv"]):
-        bare[aid] = study_spec(aid, "inv", xy, h=h, q_ready=q_park.get(aid))
+        bare[aid] = study_spec(aid, "inv", xy, h=h, q_ready=q_park.get(aid),
+                               yaw_deg=clk.get(aid, 0.0))
     if not with_mounts:
         return bare
     return {aid: study_spec(s.arm_id, s.mount, s.xy, h=h,
                             q_ready=q_park.get(aid),
+                            yaw_deg=clk.get(aid, 0.0),
                             mount_boxes=mounts.obstacles_for(aid, bare, h,
                                                              mount_model))
             for aid, s in bare.items()}

@@ -17,6 +17,7 @@ from the start, and reloading the page is not a way to lose the record.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -38,6 +39,48 @@ RIGS = ("proposed", "final6_opt", "final6", "final", "sixarm")
 TOOLS = ("lateral", "inline")
 
 POLL_S = 0.15          # how often a websocket looks for new events
+
+# ---------------------------------------------------------------------------
+# THE SCENE CACHE HAS TO EXPIRE, AND IT DID NOT (2026-09-10)
+# ---------------------------------------------------------------------------
+# `_ensure_scene` wrote `out/gui_cache/scene_<rig>_<tool>.{json,bin}` once and
+# returned it forever — the only test was that the file EXISTS.  So the moment
+# the mounting height, the tool or a park pose moved, every browser got the old
+# rig with no warning and no way to tell.  Found for real: after h went
+# 0.940 -> 0.970 the served scene was still a 2026-09-02 build at base
+# z = 0.940 with the 0.110 pen and the pre-2026-09-07 parks, and it had to be
+# deleted by hand.
+#
+# THE FIX HAS TO WORK WITHOUT IMPORTING THE PLANNER, which is this module's
+# whole design (see the module docstring): the server cannot ask
+# `layout.LAYOUT_PROPOSED["h"]` what the height is, because importing that
+# binds a rig at import time and the server answers about five.  So the key is
+# a CONTENT stamp over the package the subprocess would import — every .py
+# under `aris_sixarm/`, by size and mtime — plus the rig, the tool and a
+# version scalar.  It is CONSERVATIVE by construction: an edit to an unrelated
+# module rebuilds a scene that would not have changed, which costs one
+# subprocess and is the right way round.  What it can never do is serve a
+# scene built from code that is no longer on disk.
+#
+# `SCENE_CACHE_V` is bumped by hand when the SHAPE of the exported scene
+# changes (`program_schema.export_scene`), which the file stamps cannot see
+# if the change is to a schema this module does not import.
+SCENE_CACHE_V = 1
+
+
+def scene_stamp(rig, tool):
+    """What a cached scene depends on. -> hex digest, no planner import."""
+    h = hashlib.sha256()
+    h.update(f"v{SCENE_CACHE_V}|{rig}|{tool}\n".encode())
+    pkg = ROOT / "aris_sixarm"
+    for f in sorted(pkg.rglob("*.py")):
+        try:
+            st = f.stat()
+        except OSError:                      # vanished mid-walk: rebuild
+            return h.hexdigest() + "-racing"
+        h.update(f"{f.relative_to(ROOT)}|{st.st_size}|{st.st_mtime_ns}\n"
+                 .encode())
+    return h.hexdigest()
 
 
 def create_app(jobs_dir=None):
@@ -258,7 +301,10 @@ def _ensure_scene(rig, tool):
         raise HTTPException(400, f"unknown rig/tool {rig!r}/{tool!r}")
     CACHE.mkdir(parents=True, exist_ok=True)
     out = CACHE / f"scene_{rig}_{tool}.json"
-    if out.exists() and out.with_suffix(".bin").exists():
+    stamp = out.with_suffix(".stamp")
+    want = scene_stamp(rig, tool)
+    if (out.exists() and out.with_suffix(".bin").exists()
+            and stamp.exists() and stamp.read_text().strip() == want):
         return out
     env = dict(os.environ)
     env["ARIS_RIG"] = rig
@@ -272,6 +318,9 @@ def _ensure_scene(rig, tool):
         raise HTTPException(
             500, f"could not build the scene for rig={rig} tool={tool}:\n"
                  + (r.stderr or r.stdout)[-2000:])
+    # LAST, so a half-written scene is never stamped as current: a crash
+    # between the two leaves a cache entry that simply rebuilds next time.
+    stamp.write_text(want)
     return out
 
 

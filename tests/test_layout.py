@@ -927,3 +927,96 @@ def test_conduct_reports_the_parks_it_actually_flew(lateral):
         if a != aid:
             assert np.allclose(on["q_end"][a], q0[a])
     assert "ASIDE" in "\n".join(idle.report(on))
+
+
+# ---------------------------------------------------------------------------
+# CLOCKING (2026-09-10) — a named variant, and the default must not feel it
+# ---------------------------------------------------------------------------
+def test_the_default_clocking_is_bit_identical_to_no_clocking_at_all():
+    """`clocking=None` is what every caller has always passed by not passing.
+
+    The whole safety of adding a variant is that the shipped path does not
+    move: `build_fleet` with no clocking, with `{}`, and with the uniform
+    clocking must produce the SAME base transforms — not equal to a
+    tolerance, the same floats — or every certified number in the repository
+    is measuring a rig that quietly changed.
+    """
+    lay = layout.LAYOUT_PROPOSED
+    a = layout.build_fleet(lay)
+    for alt in (layout.build_fleet(lay, clocking={}),
+                layout.build_fleet(lay, clocking=layout.CLOCKING_UNIFORM)):
+        assert sorted(alt) == sorted(a)
+        for aid in a:
+            assert np.array_equal(np.asarray(a[aid].T_world_base()),
+                                  np.asarray(alt[aid].T_world_base())), aid
+            assert a[aid].yaw == alt[aid].yaw == 0.0, aid
+
+
+def test_mirrored_turns_the_LEFT_column_and_the_two_columns_then_face():
+    """WHICH COLUMN TURNS IS THE WHOLE POINT, and it is the left one.
+
+    `R_world_base = roty(pi) @ rotz(yaw)`, so an arm's front — its base's own
+    +x — lands on `(-cos yaw, sin yaw, 0)`.  At the shipped yaw = 0 every
+    front points canvas -x (docs/BUILD_SHEET.md section 3), which means the
+    RIGHT column ALREADY faces the left across the centre line and the left
+    column faces away over its own rim.  So "make them face each other" turns
+    13/31/2, and turning 17/71/97 instead would point both columns OUTWARD —
+    the opposite change.  This pins the direction, because the question was
+    first asked the other way round.
+    """
+    lay = layout.LAYOUT_PROPOSED
+    uni = layout.build_fleet(lay)
+    mir = layout.build_fleet(lay, clocking=layout.CLOCKING_MIRRORED)
+    cx = 0.5 * (min(s.xy[0] for s in uni.values())
+                + max(s.xy[0] for s in uni.values()))
+    left = sorted(a for a, s in uni.items() if s.xy[0] < cx)
+    right = sorted(a for a, s in uni.items() if s.xy[0] > cx)
+    assert left == [2, 13, 31] and right == [17, 71, 97]
+    assert sorted(layout.CLOCKING_MIRRORED) == left
+
+    def front(fl, aid):
+        return np.asarray(fl[aid].T_world_base())[:3, :3] @ np.array([1., 0, 0])
+
+    # uniform: all six fronts point canvas -x
+    for aid in uni:
+        assert np.allclose(front(uni, aid), [-1, 0, 0], atol=1e-12), aid
+    # mirrored: the left column turned, the right did not move at all
+    for aid in right:
+        assert np.allclose(front(mir, aid), [-1, 0, 0], atol=1e-12), aid
+        assert np.array_equal(np.asarray(uni[aid].T_world_base()),
+                              np.asarray(mir[aid].T_world_base())), aid
+    for aid in left:
+        assert np.allclose(front(mir, aid), [1, 0, 0], atol=1e-12), aid
+    # ...and "facing each other" is the property, stated as one assertion:
+    # each column's front has a positive component toward the other column
+    for aid in left + right:
+        other_cx = (uni[right[0]].xy[0] if aid in left else uni[left[0]].xy[0])
+        toward = np.sign(other_cx - uni[aid].xy[0])
+        assert front(mir, aid)[0] * toward > 0.5, aid
+
+
+def test_a_clocking_does_not_move_the_neighbour_column_obstacle():
+    """Re-clocking CANNOT move what is in the way, and this is why.
+
+    `mounts.arm_column_boxes` builds each neighbour band from the base ORIGIN
+    and the base Z AXIS, carried as an AABB of a cylinder.  A rotation about
+    that same z changes neither, so the obstacle set is bit-identical under
+    any clocking — which is the finding that killed the idea that a turn could
+    open up the middle of the canvas (DECISIONS 2026-09-09, 2026-09-10).
+    """
+    lay = layout.LAYOUT_PROPOSED
+    uni = layout.build_fleet(lay)
+    mir = layout.build_fleet(lay, clocking=layout.CLOCKING_MIRRORED)
+    def boxes(fl, aid):
+        out = []
+        for b in fl[aid].static_obstacles():
+            d = dict(b) if isinstance(b, dict) else {"box": b}
+            out.append({k: (np.asarray(v, float).tolist()
+                            if not isinstance(v, str) else v)
+                        for k, v in sorted(d.items())})
+        return out
+
+    for aid in uni:
+        bu, bm = boxes(uni, aid), boxes(mir, aid)
+        assert len(bu) == len(bm) and len(bu) >= 5, aid
+        assert bu == bm, aid
