@@ -1,5 +1,95 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE INTERSECTION MODEL, RE-CERTIFIED AT BOTH HEIGHTS: TWO CELLS (2026-09-10)
+
+`ARIS_COLLISION_MODEL=spheres` selects the intersection of the shipped capsule
+model with 64 fitted spheres (entries below).  It charges **43.46 mm** of
+fictitious metal where the capsules charge 67.50, and by construction it can
+never report LESS room than they do.  Re-certified end to end at both heights,
+with the parks HELD FIXED at the shipped sets so the link model is the only
+variable, it is worth **two cells at h = 0.940 and nothing at h = 0.970.**
+The default is NOT flipped.
+
+### The drawing-pose layer: redundancy, and not one new cell
+
+`sweep_atlas_model.py` (cylinders + frozen partners) then `regate_atlas.py` to
+the router's 63 mm floor, six arms, at both heights and under both models.
+
+| | strict-GO arm-cells | | cells with a drawer | |
+|---|---|---|---|---|
+| | capsules | intersection | capsules | intersection |
+| h = 0.970 swept | 24 136 | **24 175** (+39) | 16 184 | **16 184 (+0)** |
+| h = 0.970 gated 63 | 24 101 | **24 162** (+61) | 16 184 | **16 184 (+0)** |
+| h = 0.940 swept | 25 177 | **25 255** (+78) | 16 337 | **16 337 (+0)** |
+| h = 0.940 gated 63 | 25 136 | **25 241** (+105) | 16 337 | **16 337 (+0)** |
+
+**Not one arm-cell dropped at either height** — the intersection's guarantee
+showing up as data — and **not one new cell gained.**  The extra 39-105 pairs
+are REDUNDANCY: cells that already had a drawer now have another arm for them.
+The dead canvas is out of REACH, not blocked; at 0.970 the re-decide says so
+outright — of its 378 dead cells, **0** have a drawing pose in the new atlas.
+
+### The map, both heights
+
+`remap_dead_cells.py`, which re-decides only the dead cells and **checks the
+superset property itself**.  Under the intersection that property is a theorem
+rather than luck: clearance never decreases, so no live cell can die.  It
+passed at both heights.
+
+| | h = 0.970 | | h = 0.940 | |
+|---|---|---|---|---|
+| | shipped | intersection | shipped | intersection |
+| live cells | 16 184 | **16 184** | 16 328 | **16 330** (+2) |
+| live % | 97.718 | **97.718** | 98.587 | **98.599** |
+| `NO_DRAW` | 378 | **378** | 225 | **225** |
+| `NO_HOVER` | 0 | **0** | 0 | **0** |
+| `NO_ROUTE` | 0 | **0** | 9 | **7** (-2) |
+| enclosed holes | 0 (0 cells) | **0 (0)** | 4 (9 cells) | **4 (7)** |
+| largest hole-free | 5.4600 m² | **5.4600** | 3.8584 m² | **3.8584** |
+| near-square | 3.4352 m² | **3.4352** | 1.8960 m² | **1.9200** (+1.27 %) |
+| cells LOST | — | **0** | — | **0** |
+| cells GAINED | — | **0** | — | **2** |
+
+**Zero cells lost at either height**, which is the number that had to be zero.
+The two gained at 0.940 are **(0.58, 0.60) and (0.60, 0.60)** — route-dead
+cells that the honest link model can now be flown to.  `NO_ROUTE` 9 -> 7 and
+two of the nine hole cells close; the four holes remain as holes, so the
+largest hole-free rectangle does not move.  The near-square one grows from
+1.58 x 1.20 to **1.60 x 1.20 m**.
+
+Artefacts are under `out/spheres_recert/` and carry `_spheres` in their names;
+the shipped capsule-model `out/certified_area_h09*.json` are UNTOUCHED, because
+the default is not flipped.
+
+### What a full sweep would have cost, and why the shortcut is sound
+
+The full three-layer sweep was attempted at 0.970 and abandoned three times at
+ETAs of **42.8 h, 27 h and 28 h** against the shipped run's six.  Two rounds of
+work took the constant factor down (the floor short-circuit, then the hover
+gate's own floor) and it stayed at ~4.5x, because the ROUTE layer's samples sit
+NEAR obstacles by construction and that is exactly where the short-circuit does
+not fire.  The fix, if a full sweep is ever wanted, is a per-body bounding
+sphere as a broad phase — 8 queries instead of 64 — which is not built.
+
+The shortcut is sound without it: `remap_dead_cells` needs the new atlas to be
+a superset of the old, and under the intersection that is guaranteed, not
+checked-and-hoped.  It re-decides every dead cell with the full ladder.
+
+### The recommendation
+
+**Do not flip the default.**  Two cells at one height, both of them
+route-dead cells at the rim of a hole, do not pay for re-opening every
+certified number in `out/` — and the model's own headline is that it changes
+nothing: the same 5.4600 m² rectangle, the same 378 dead cells, the same v18
+verdict at 80.60 mm against 80.59.
+
+What the flag IS worth is as an INSTRUMENT.  It is a second, independent,
+mesh-faithful envelope that agrees with the shipped one everywhere it has been
+asked, and it says the shipped capsules are not the thing standing between this
+rig and more canvas — reach is.  Keep it off, keep it tested, and reach for it
+when someone next proposes that the collision model is what is costing cells.
+
+
 ## THE LINK MODEL IS AN INTERSECTION, BECAUSE THE SPHERES ALONE MADE IT WORSE (2026-09-09, late)
 
 The entry below shipped 64 fitted spheres behind `ARIS_COLLISION_MODEL` and
