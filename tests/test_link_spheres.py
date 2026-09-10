@@ -435,3 +435,36 @@ def test_floor_shortcircuit_keeps_every_verdict():
         assert np.allclose(full[below], cut[below], atol=1e-12)
         assert (cut <= full + 1e-12).all(), "the cut form may not overstate"
     LS.uninstall()
+
+
+def test_partner_floor_shortcircuit_with_several_partners():
+    """The two-pass fix in `partner_clearance`, pinned.
+
+    `worst` is a running minimum over partners.  A first version decided the
+    short-circuit INSIDE that loop, so a later partner could pull the capsule
+    number under the floor after an earlier one had looked safe — leaving the
+    sphere minimum taken over too few terms, hence too large, hence a `max`
+    that OVERSTATES the clearance.  With five frozen partners the floor form
+    must agree with the exhaustive one wherever it matters, and must never
+    come out above it.
+    """
+    from aris_sixarm import paper
+    arms = sorted(FLEET)
+    aid, others = arms[0], arms[1:]
+    parks = {a: np.array([0.0, -0.4, 0.0, -2.2, 0.0, 1.9, 0.8]) for a in others}
+    LS.install()
+    frozen.freeze(parks, FLEET, {a: 0.110 for a in others}, H_INV_DEFAULT)
+    frozen.observe(aid)
+    spec = FLEET[aid]
+    q = _q(250, seed=51)
+    P = paper.world_chain(q, spec, 0.0460262)
+    C = LS.centres_world(q, spec.T_world_base())
+    full = frozen.partner_clearance(P, C)
+    for floor in (0.030, 0.050, 0.080, 0.120):
+        cut = frozen.partner_clearance(P, C, floor)
+        assert (cut <= full + 1e-12).all(), "the floor form may not overstate"
+        assert np.array_equal(full >= floor, cut >= floor), f"verdict at {floor}"
+        below = full < floor
+        assert np.allclose(full[below], cut[below], atol=1e-12)
+    frozen.thaw()
+    LS.uninstall()

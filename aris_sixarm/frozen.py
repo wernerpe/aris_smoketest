@@ -173,31 +173,44 @@ def partner_clearance(P, C=None, floor=None):
     lean_w = np.full(len(P), np.inf)         # ...and the sphere one
     if C is not None:
         C = np.asarray(C, float)
+    # THE CAPSULE MODEL FIRST, OVER EVERY PARTNER.  The floor short-circuit
+    # below has to see the FINISHED capsule number: `worst` is a running
+    # minimum, so a later partner can pull it under the floor after an earlier
+    # one looked safe, and skipping that earlier partner's sphere terms would
+    # leave `lean_w` a minimum over too few terms — which is larger, and would
+    # make `max(worst, lean_w)` OVERSTATE the clearance.  Two passes, so the
+    # decision is made once and on the complete number.
     for aid in others:
         blk = _CAPS[aid]
-        A, B, R = blk[0], blk[1], blk[2]
-        Acap, Bcap, Rcap = blk[3] if len(blk) > 3 else (A, B, R)
+        Acap, Bcap, Rcap = blk[3] if len(blk) > 3 else (blk[0], blk[1], blk[2])
         for (i, j, r) in caps:
             # (N,1,3) observer segment against (1,C,3) partner segments
             d = coordination.seg_seg_dist(P[:, i][:, None, :],
                                           P[:, j][:, None, :],
                                           Acap[None, :, :], Bcap[None, :, :])
             worst = np.minimum(worst, (d - (Rcap[None, :] + r)).min(axis=1))
-        if C is None:
-            continue
-        if floor is not None and np.all(worst >= float(floor)):
-            continue                     # `max` cannot change a passing row
+    if C is None:
+        return worst
+    sel = slice(None) if floor is None else np.flatnonzero(worst < float(floor))
+    if floor is not None and not len(sel):
+        return worst                     # `max` cannot change a passing row
+    Ps, Cs = P[sel], C[sel]
+    lean_w = np.full(len(Ps), np.inf)
+    for aid in others:
+        A, B, R = _CAPS[aid][0], _CAPS[aid][1], _CAPS[aid][2]
         for (i, j, r) in lean:
-            d = coordination.seg_seg_dist(P[:, i][:, None, :],
-                                          P[:, j][:, None, :],
+            d = coordination.seg_seg_dist(Ps[:, i][:, None, :],
+                                          Ps[:, j][:, None, :],
                                           A[None, :, :], B[None, :, :])
             lean_w = np.minimum(lean_w, (d - (R[None, :] + r)).min(axis=1))
         # the observer's spheres against the partner's own block
-        d = coordination.seg_seg_dist(C[:, :, None, :], C[:, :, None, :],
+        d = coordination.seg_seg_dist(Cs[:, :, None, :], Cs[:, :, None, :],
                                       A[None, None, :, :], B[None, None, :, :])
         d = d - (R[None, None, :] + link_spheres.RADII[None, :, None])
-        lean_w = np.minimum(lean_w, d.reshape(len(P), -1).min(axis=1))
-    return worst if C is None else np.maximum(worst, lean_w)
+        lean_w = np.minimum(lean_w, d.reshape(len(Ps), -1).min(axis=1))
+    out = worst.copy()
+    out[sel] = np.maximum(worst[sel], lean_w)
+    return out
 
 
 def chain_clearance(P, room, C=None, floor=None):
