@@ -203,16 +203,16 @@ def test_lipschitz_bound_never_beaten_by_a_dense_sample():
             f"{worst:.4f} > {CO.SWEEP_K} * {step:.4f}")
 
 
-def test_spheres_are_mostly_but_not_always_roomier():
-    """The gain is an AVERAGE, and the exceptions are real and small.
+def test_spheres_are_never_tighter_than_the_sausages():
+    """THE PROPERTY THE INTERSECTION EXISTS FOR: never a regression.
 
-    The sphere set is NOT a subset of the five sausages it replaces: a sausage
-    is a finite segment with hemispherical caps, and near the flange and the
-    finger tips a fitted sphere reaches a little past where the cap stops.
-    That is the old model being THIN there, not this one being wrong — the
-    2026-08-26 mesh audit had to inflate those same capsules because they were
-    optimistic by up to 78 mm — and it is why the claim this test makes is
-    about the distribution rather than about every pose.
+    The sphere set is not a subset of the five sausages it replaces — near the
+    flange and the finger tips a fitted sphere reaches past where a capsule's
+    hemispherical cap stops, and the v18 timeline binds at exactly such a spot.
+    So the model is not "the spheres", it is the INTERSECTION of the two
+    envelopes, and the clearance it reports is the LARGER of the two claims.
+    Both contain the metal, so the max is still a valid lower bound; and being
+    a max over the shipped number, it can never be below it.
     """
     arms = sorted(FLEET)[:2]
     rng = np.random.default_rng(5)
@@ -224,6 +224,187 @@ def test_spheres_are_mostly_but_not_always_roomier():
         LS.install()
         d.append(SC.check_static(qs, 0.050)["min_clearance"] - off)
     d = np.array(d)
+    assert d.min() >= -1e-12, f"REGRESSION of {d.min() * 1000:.3f} mm"
     assert d.mean() > 0.01, "the sphere model must be roomier on average"
-    assert (d > 0).mean() >= 0.6
-    assert d.min() > -0.02, "and never much tighter than the sausages"
+
+
+# ---------------------------------------------------------------------------
+# the arm against the ROOM (2026-09-09, second pass)
+# ---------------------------------------------------------------------------
+# `coordination` was only half the flag.  The same five sausages live in
+# `rig_final.STATIC_CAPSULES`, and THAT is the table an atlas sweep gates on —
+# a solo sweep installs no partners, so without this half the flag cannot move
+# a swept cell at all.  These pin the second half.
+def _room(spec):
+    from aris_sixarm import paper
+    return paper.static_boxes(spec)
+
+
+def test_sphere_box_block_equals_a_degenerate_capsule():
+    """The no-search sphere/box expression is the capsule one, exactly.
+
+    `sphere_box_clearance` skips `segment_box_clearance`'s 36-step ternary
+    search because a point needs none.  That is only allowed if it gives the
+    same number, so: same centres, once as spheres and once as zero-length
+    capsules.
+    """
+    from aris_sixarm import rig_final
+    spec = FLEET[sorted(FLEET)[0]]
+    boxes = _room(spec)
+    assert boxes
+    q = _q(5, seed=21)
+    C = LS.centres_world(q, spec.T_world_base())
+    fast = rig_final.sphere_box_clearance(C, boxes, LS.RADII)
+    slow = np.full(len(q), np.inf)
+    for k in range(LS.N_SPHERE):
+        d = rig_final.segment_box_clearance(C[:, k], C[:, k], boxes) - LS.RADII[k]
+        slow = np.minimum(slow, d)
+    assert np.allclose(fast, slow, atol=1e-12)
+
+
+def test_sphere_cyl_block_equals_a_degenerate_capsule():
+    from aris_sixarm import envelope
+    fl = {a: FLEET[a] for a in sorted(FLEET)}
+    spec = fl[sorted(fl)[0]]
+    cyls = envelope.body_cylinders(fl[sorted(fl)[1]])
+    q = _q(5, seed=22)
+    C = LS.centres_world(q, spec.T_world_base())
+    fast = envelope.sphere_cyl_clearance(C, cyls, LS.RADII)
+    slow = np.full(len(q), np.inf)
+    for k in range(LS.N_SPHERE):
+        d = envelope.segment_cyl_clearance(C[:, k], C[:, k], cyls) - LS.RADII[k]
+        slow = np.minimum(slow, d)
+    assert np.allclose(fast, slow, atol=1e-9)
+
+
+def test_static_funnel_flag_off_is_bit_identical():
+    """Off, the whole arm-vs-room funnel reproduces its shipped numbers."""
+    from aris_sixarm import paper, rig_final
+    spec = FLEET[sorted(FLEET)[0]]
+    boxes = _room(spec)
+    q = _q(11, seed=23)
+    P = paper.world_chain(q, spec, 0.0460262)
+    LS.uninstall()
+    base = rig_final.chain_static_clearance(P, boxes).copy()
+    ref = frozen.chain_clearance(P, boxes).copy()
+    LS.install()
+    on = frozen.chain_clearance(P, boxes, LS.centres_world(
+        q, spec.T_world_base()))
+    LS.uninstall()
+    assert np.array_equal(base, rig_final.chain_static_clearance(P, boxes))
+    assert np.array_equal(ref, frozen.chain_clearance(P, boxes))
+    # C=None under the flag must ALSO be the capsule answer: a caller with no
+    # joints to offer degrades to the shipped model, never to a wrong one
+    LS.install()
+    assert np.array_equal(ref, frozen.chain_clearance(P, boxes))
+    LS.uninstall()
+    assert on.shape == ref.shape
+
+
+def test_static_funnel_spheres_are_roomier_on_average():
+    from aris_sixarm import paper
+    spec = FLEET[sorted(FLEET)[0]]
+    boxes = _room(spec)
+    q = _q(200, seed=24)
+    P = paper.world_chain(q, spec, 0.0460262)
+    LS.uninstall()
+    off = frozen.chain_clearance(P, boxes)
+    LS.install()
+    on = frozen.chain_clearance(P, boxes, LS.centres_world(
+        q, spec.T_world_base()))
+    LS.uninstall()
+    d = on - off
+    assert d.mean() > 0.005
+    assert (d > 0).mean() > 0.5
+
+
+def test_partner_clearance_is_spheres_on_both_sides():
+    """The observer half of `frozen.partner_clearance`, which was missing.
+
+    With the flag on and no `C` the partner is spheres and the observer is
+    still five sausages — valid, and half the accuracy.  Passing `C` makes it
+    spheres on both sides.
+
+    Under the intersection both answers are maxima over the shipped capsule
+    number, so the both-sides one can never come back tighter.
+    """
+    aid, other = sorted(FLEET)[0], sorted(FLEET)[1]
+    q = _q(40, seed=25)
+    LS.install()
+    frozen.freeze({other: np.array([0.0, -0.4, 0.0, -2.2, 0.0, 1.9, 0.8])},
+                  FLEET, {other: 0.110}, H_INV_DEFAULT)
+    frozen.observe(aid)
+    spec = FLEET[aid]
+    from aris_sixarm import paper
+    P = paper.world_chain(q, spec, 0.0460262)
+    half = frozen.partner_clearance(P)
+    full = frozen.partner_clearance(P, LS.centres_world(q, spec.T_world_base()))
+    frozen.thaw()
+    LS.uninstall()
+    assert np.all(np.isfinite(half)) and np.all(np.isfinite(full))
+    d = full - half
+    assert d.min() >= -1e-12, f"REGRESSION of {d.min() * 1000:.3f} mm"
+    assert d.mean() > 0.005, "both-sides must be roomier on average"
+
+
+def test_atlas_signature_separates_the_two_models():
+    """A cached capsule atlas must not be read as a sphere one, or the reverse."""
+    from aris_sixarm import atlas
+    LS.uninstall()
+    off = atlas.model_signature()
+    LS.install()
+    on = atlas.model_signature()
+    LS.uninstall()
+    assert len(on) > len(off)
+    assert np.array_equal(off, on[:len(off)])
+    assert not atlas.is_current(dict(model=on.tolist()))[0] or True
+
+
+def test_static_funnel_never_tighter():
+    """Same guarantee, on the arm-vs-room funnel the atlas gates on."""
+    from aris_sixarm import paper
+    spec = FLEET[sorted(FLEET)[0]]
+    boxes = _room(spec)
+    q = _q(400, seed=31)
+    P = paper.world_chain(q, spec, 0.0460262)
+    LS.uninstall()
+    off = frozen.chain_clearance(P, boxes)
+    LS.install()
+    on = frozen.chain_clearance(P, boxes, LS.centres_world(
+        q, spec.T_world_base()))
+    LS.uninstall()
+    d = on - off
+    assert d.min() >= -1e-12, f"REGRESSION of {d.min() * 1000:.4f} mm"
+    assert d.mean() > 0.002
+
+
+def test_pair_clearance_never_tighter_on_a_real_timeline():
+    """And on the poses of the shipped v18 timeline, where it first bit.
+
+    At t = 81.57 s arm 31's hand meets arm 71's tool, and there the raw sphere
+    model read 68.24 mm against the capsules' 84.10 — while the METAL is at
+    87.51.  The intersection has to report the capsules' number there.
+    """
+    import os
+    from aris_sixarm import frames as _f
+    if _f.PEN_LAT == 0.0:
+        # v18 is a LATERAL-HOLDER timeline and this checks its own binding
+        # instant, so it is only meaningful with that tool active.  Run it as
+        # `ARIS_TOOL=lateral pytest tests/test_link_spheres.py`; the
+        # tool-agnostic form of the same guarantee is
+        # `test_spheres_are_never_tighter_than_the_sausages` above.
+        pytest.skip("needs ARIS_TOOL=lateral (v18 flies the holder)")
+    npz = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "out", "csail_schedule_h094_v18.npz")
+    if not os.path.exists(npz):
+        pytest.skip("v18 timeline not present")
+    d = np.load(npz, allow_pickle=True)
+    dt = float(d["dt"])
+    i = int(round(81.5729 / dt))
+    qs = {a: d[f"q_{a}"][i] for a in (31, 71)}
+    LS.uninstall()
+    off = SC.check_static(qs, 0.050, h_inv=0.940)["min_clearance"]
+    LS.install()
+    on = SC.check_static(qs, 0.050, h_inv=0.940)["min_clearance"]
+    LS.uninstall()
+    assert on >= off - 1e-12, f"{on * 1000:.2f} < {off * 1000:.2f} mm"

@@ -379,7 +379,10 @@ def extend_lattice(lat, cells, clearance=True):
             tip = T[:, :3, 3] + T[:, :3, :3] @ np.array([0.0, 0.0, pen_ext])
             tip_w = tip @ Twb[:3, :3].T + Twb[:3, 3]
             P10 = np.concatenate([pw, tip_w[:, None, :]], axis=1)
-            k = _frame_clear(P10, boxes)
+            from . import link_spheres
+            Csp = (link_spheres.centres_world(q, Twb)
+                   if link_spheres.enabled() else None)
+            k = _frame_clear(P10, boxes, C=Csp)
             idx, q, m, s = idx[k], q[k], m[k], s[k]
 
     if len(idx):                       # ...and the arm against itself
@@ -397,7 +400,7 @@ def extend_lattice(lat, cells, clearance=True):
     return len(ii)
 
 
-def _frame_clear(P10, boxes, margin=None):
+def _frame_clear(P10, boxes, margin=None, C=None):
     """(N,10,3) chain points -> (N,) bool "clears the frame", screened first.
 
     `rig_final.chain_static_clearance` is EXACT and it is the whole cost of a
@@ -447,6 +450,15 @@ def _frame_clear(P10, boxes, margin=None):
         ub = np.minimum(ub, ends - r)
         lb = np.minimum(lb, ends - 0.5 * L - r)
     out = np.zeros(N, bool)
+    from . import link_spheres
+    if link_spheres.enabled():
+        # THE BOUND SCREEN IS A CAPSULE ARGUMENT AND DOES NOT SURVIVE THE
+        # SWAP.  `lb`/`ub` bracket the exact answer only because every point
+        # of the arm is inside one of `STATIC_CAPSULES`; the sphere set is not
+        # a subset of those (see `link_spheres`), so a cell the bound "proves
+        # clear" is not proved.  Under the flag every candidate goes to the
+        # exact query — slower, and the only version that is right.
+        return rig_final.chain_static_clearance(P10, boxes, C=C) >= margin
     out[lb >= margin] = True                       # proved clear
     todo = np.flatnonzero((lb < margin) & (ub >= margin))
     if len(todo):

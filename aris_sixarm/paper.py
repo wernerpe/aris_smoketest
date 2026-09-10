@@ -388,10 +388,26 @@ def refine_n(P, n, step=STATIC_STEP, cap=REFINE_CAP):
     return (n - 1) * int(np.clip(np.ceil(mv / max(step, 1e-9)), 1, cap)) + 1
 
 
+def sphere_centres(qs, spec, h_inv=H_INV_DEFAULT):
+    """The sphere centres a static gate needs, or None. (N,7) -> (N,S,3)|None.
+
+    One place, because every static funnel in this module builds its chain
+    from a `Q` and then hands it to `frozen.chain_clearance`, and under the
+    sphere model that call needs the centres for the SAME `Q`.  `None` when
+    the flag is off, which is what makes every gate below reduce exactly to
+    the number it shipped with.
+    """
+    from . import link_spheres
+    if not link_spheres.enabled():
+        return None
+    return link_spheres.centres_world(np.asarray(qs, float).reshape(-1, 7),
+                                      spec.T_world_base(h_inv))
+
+
 NEAR_SLACK = 0.35          # m of clearance the broad phase stays exact to
 
 
-def near_boxes(P, boxes, slack=NEAR_SLACK):
+def near_boxes(P, boxes, slack=NEAR_SLACK, C=None):
     """The boxes these configurations could come within `slack` of.
 
     A BROAD PHASE, because the static set is thirty boxes on this rig and a
@@ -416,6 +432,19 @@ def near_boxes(P, boxes, slack=NEAR_SLACK):
     hi = np.stack([np.asarray(b["hi"], float) for b in boxes])
     d = rig_final._point_box_d(P[:, :, None, :], lo, hi)      # (M,K,B)
     keep = np.zeros(len(boxes), bool)
+    if C is not None:
+        # THE SPHERES GET THEIR OWN SCREEN, and they need one: the sphere set
+        # is NOT a subset of the sausages it replaces (a fitted sphere reaches
+        # a little past a capsule's hemispherical cap at the flange and the
+        # finger tips), so a box kept only because some capsule could reach it
+        # is not proof that no sphere can.  A sphere is a point, so its screen
+        # is the point-to-box distance and nothing else.
+        from . import link_spheres
+        C = np.asarray(C, float)
+        dc = rig_final._point_box_d(C[:, :, None, :], lo, hi)  # (M,S,B)
+        keep |= (dc - link_spheres.RADII[None, :, None]
+                 <= slack).any(axis=(0, 1))
+        caps, _ = link_spheres.static_capsules(caps)
     for i, j, r in caps:
         L = np.linalg.norm(P[:, i] - P[:, j], axis=1)         # (M,)
         m = np.minimum(d[:, i, :], d[:, j, :]) - L[:, None]
@@ -449,11 +478,13 @@ def leg_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         boxes = static_boxes(spec)
     if not boxes:
         return np.inf
-    P = world_chain(line_samples(q0, q1, n), spec, pen_ext, h_inv)
-    boxes = near_boxes(P, boxes)
+    Q = line_samples(q0, q1, n)
+    P = world_chain(Q, spec, pen_ext, h_inv)
+    C = sphere_centres(Q, spec, h_inv)
+    boxes = near_boxes(P, boxes, C=C)
     if not boxes:
         return np.inf
-    m = float(frozen.chain_clearance(P, boxes).min())
+    m = float(frozen.chain_clearance(P, boxes, C).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS:
@@ -732,7 +763,8 @@ def adaptive_static_lb(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     def sample(ts):
         Q = q0[None, :] + np.asarray(ts, float)[:, None] * dq[None, :]
         P = world_chain(Q, spec, pen_ext, h_inv)
-        return frozen.chain_clearance(P, boxes), P
+        return frozen.chain_clearance(P, boxes,
+                                      sphere_centres(Q, spec, h_inv)), P
 
     return float(adaptive_lb(sample, floor, n, tol)[0])
 
@@ -812,7 +844,8 @@ def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
     once.  The static term keeps `leg_static_lb`'s early-outs and its broad
     phase, so a leg that is decided coarsely still is.
     """
-    P = world_chain(line_samples(q0, q1, n), spec, pen_ext, h_inv)
+    Q = line_samples(q0, q1, n)
+    P = world_chain(Q, spec, pen_ext, h_inv)
     ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
     cz = float(P[:, ccols, 2].min())
     tz = float(P[:, 9, 2].min())
@@ -820,10 +853,11 @@ def leg_bounds(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
         boxes = static_boxes(spec)
     if not boxes:
         return cz, tz, np.inf
-    bx = near_boxes(P, boxes)
+    C = sphere_centres(Q, spec, h_inv)
+    bx = near_boxes(P, boxes, C=C)
     if not bx:
         return cz, tz, np.inf
-    m = float(frozen.chain_clearance(P, bx).min())
+    m = float(frozen.chain_clearance(P, bx, C).min())
     res = sample_residual(P)
     if floor is not None:
         if m - res >= float(floor) - EPS or m < float(floor) - EPS:
@@ -870,10 +904,11 @@ def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
     chain_z = P[:, ccols, 2].min(axis=1)
     tip_z = P[:, 9, 2]
-    boxes = near_boxes(P, boxes) if boxes else boxes
+    C = sphere_centres(qs, spec, h_inv)
+    boxes = near_boxes(P, boxes, C=C) if boxes else boxes
     if not boxes:
         return chain_z, tip_z, np.full(len(qs), np.inf)
-    return chain_z, tip_z, frozen.chain_clearance(P, boxes)
+    return chain_z, tip_z, frozen.chain_clearance(P, boxes, C)
 
 
 def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
@@ -897,10 +932,11 @@ def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     ccols = list(range(1, 9)) + ([10] if P.shape[1] >= 11 else [])
     cz = Pb[:, :, :, ccols, 2].min(axis=(2, 3))
     tz = Pb[:, :, :, 9, 2].min(axis=2)
-    boxes = near_boxes(P, boxes) if boxes else boxes
+    C = sphere_centres(L.reshape(-1, 7), spec, h_inv)
+    boxes = near_boxes(P, boxes, C=C) if boxes else boxes
     if not boxes:
         return cz, tz, np.full((R, N), np.inf), np.zeros((R, N))
-    sc = frozen.chain_clearance(P, boxes).reshape(R, N, K).min(axis=2)
+    sc = frozen.chain_clearance(P, boxes, C).reshape(R, N, K).min(axis=2)
     res = SWEEP_K * np.linalg.norm(np.diff(Pb, axis=2), axis=4).max(axis=(2, 3))
     return cz, tz, sc, res
 
@@ -1025,7 +1061,7 @@ def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     pw = p @ R.T + t
     tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
     P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
-    return frozen.chain_clearance(P10, boxes)
+    return frozen.chain_clearance(P10, boxes, sphere_centres(qs, spec, h_inv))
 
 
 def frame_clearance(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):

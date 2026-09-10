@@ -82,11 +82,62 @@ rather than switching a safety gate for a 12 % that is negative where it
 matters.  See docs/DECISIONS.md, 2026-09-09.
 
 HOW IT IS SWITCHED.  `ARIS_COLLISION_MODEL=spheres` in the environment, or
-`install()` / `uninstall()` at runtime — the same shape `envelope.install` and
+`install()` / `uninstall()` at runtime.  The value is still spelled "spheres"
+because the spheres are what it ADDS; what it selects is the intersection — the same shape `envelope.install` and
 `frozen.freeze` use, and read at the same point in `feasible_workspace.py`.
 DEFAULT IS OFF.  Turning it on changes what every certified number in this repo
 was earned against, so flipping the default is a re-certification, not a commit
 (docs/DECISIONS.md says what that costs).
+
+WHY THE MODEL IS AN INTERSECTION, AND NOT JUST THE SPHERES (2026-09-09, late).
+The first cut of this module replaced the sausages outright, and measured on
+the shipped v18 timeline that made the arm-to-arm minimum WORSE: 80.59 mm
+became 64.82.  Chased down, the binding instant is t = 81.57 s, arm 31's hand
+against arm 71's tool, and the three numbers there are
+
+    the metal, measured                        87.51 mm
+    the chain capsule (7, 8, 0.104)            84.10 mm   (-3.41)
+    eight fitted hand spheres                  68.24 mm   (-19.27)
+
+The capsule is nearly TIGHT there, because the Franka's hand is very close to
+a cylinder about the wrist axis and a capsule is simply the right primitive
+for a cylinder.  A sphere set is the wrong one: a sphere centred inside the
+metal and grown to touch the surface bulges past a capsule wall that is only a
+millimetre outside it, and no number of spheres fixes that — refitting the
+hand at 12, 16, 24, 32, 48 and 64 spheres leaves it 12-14 mm outside the
+capsule union every time.  Measured directly, the shipped capsules DO contain
+the manufacturer's meshes over the whole joint box (worst escape -0.43 mm, the
+hand), so there was never a hole to close; the two are simply DIFFERENT outer
+envelopes, each tighter than the other somewhere.
+
+So the model is both of them at once.  If the metal is inside union A and
+inside union B then it is inside A n B, and for any external point
+
+    dist(p, A n B)  >=  max( dist(p, A), dist(p, B) )
+
+so the larger of the two claims is still a LOWER bound on the true clearance —
+and, being a maximum over the shipped capsule number, it can never fall below
+it.  That is what makes this flag incapable of a regression, and
+`tests/test_link_spheres.py` pins exactly that on the inter-arm gate, the
+arm-vs-room gate, the frozen-partner gate and on v18's own binding pose.
+
+WHAT THAT COSTS AND WHAT IT KEEPS.  It costs the capsule query, which was
+being done anyway before the flag existed.  It keeps the whole gain, because
+the gain was never at the hand: over 200 random configurations and 40 000
+external query points, the fictitious metal each COMPLETE model charges is
+
+    model                           mean       median     optimistic
+    the shipped chain capsules      67.50 mm   64.64 mm   0.000 %
+    `selfcoll`'s banded capsules    52.93 mm   44.50 mm   0.190 %
+    these 64 spheres alone          44.63 mm   30.15 mm   0.000 %
+    THE INTERSECTION, which ships   43.46 mm   29.52 mm   0.000 %
+
+`scripts/link_sphere_fit.py --part fidelity`.  The intersection is the best of
+the four on both statistics and, by construction, at every single query.  (`selfcoll`'s bands are listed because they were the obvious
+third candidate and they are NOT the answer: fitted about each body's own
+principal axis they are excellent on the long links and poor across the hand,
+and 0.190 % of those queries came back OPTIMISTIC because that table's radii
+were fitted to mesh VERTICES and a triangle can bulge between three of them.)
 
 A SPHERE IS A CAPSULE WITH A ZERO-LENGTH SEGMENT, and that is the whole of the
 wiring.  Every funnel in this package — `coordination.ArmPath`'s boxes and
@@ -261,3 +312,62 @@ def signature():
     return np.concatenate([
         _FRAME.astype(float), _CENTRE.reshape(-1), RADII,
         np.array([float(v) for p in REPLACES for v in p])])
+
+
+# ==========================================================================
+# THE ARM AGAINST THE ROOM, AND AGAINST A PARKED NEIGHBOUR
+# ==========================================================================
+# `coordination` is one of two places the five sausages live.  The other is
+# `rig_final.STATIC_CAPSULES` — the SAME five radii, drawn about the same
+# joint-origin lines, and the table every arm-vs-STRUCTURE gate reduces to:
+# `rig_final.chain_static_clearance` (boxes), `envelope.chain_cyl_clearance`
+# (a neighbour's body column), `frozen.partner_clearance` (a parked partner's
+# real capsules) and, through all three, `frozen.chain_clearance` — which is
+# what `atlas._clears` gates every swept cell on and what `paper`'s leg
+# certificates bound.
+#
+# WITHOUT THIS THE FLAG DOES ALMOST NOTHING TO A MAP.  A six-arm atlas sweep
+# installs no frozen partners: it is a solo sweep whose only collision gate is
+# the chain against the frame steel, so it reads `STATIC_CAPSULES` and nothing
+# else.  Leave that table alone and the atlas comes back bit-identical, the
+# gated atlas comes back bit-identical, and the only thing the sphere model
+# can still move is the inter-arm layer — which is the layer that was already
+# not binding at the rim.  So the same substitution is made here, with the
+# same three properties: the base column is untouched, the tool is untouched,
+# and the block is exact rather than bounded.
+#
+# EXACT, NOT BOUNDED, AND THAT IS THE POINT OF A SPHERE.  A capsule against a
+# box needs `rig_final.segment_box_clearance`'s 36-step ternary search because
+# the distance along the segment is only known to be convex.  A sphere is a
+# point: `_point_box_d` IS the answer, in one expression and with no search.
+# The same holds against a cylinder (`envelope.point_cyl_d`) and against
+# another capsule (a point-to-segment distance).  So the tighter model is also
+# the cheaper one everywhere except sphere-against-sphere, where 64 x 64 norms
+# replace 5 x 5 segment solves.
+STATIC_REPLACES = ((1, 3), (3, 4), (4, 5), (5, 7), (7, 8))
+
+
+def static_capsules(caps):
+    """`caps` minus the moving sausages. -> (tab, idx).  Same shape as above.
+
+    Separate from `moving_capsules` only because the two tables are indexed
+    differently — `rig_final.STATIC_CAPSULES` has no base-column rows at all,
+    it starts at the shoulder — and a single helper that silently accepted
+    either would be a good way to drop the column from one of them.
+    """
+    keep = [k for k, c in enumerate(caps) if (c[0], c[1]) not in STATIC_REPLACES]
+    return tuple(caps[k] for k in keep), keep
+
+
+def centres_for_chain(q, Twb):
+    """The centres a chain-shaped gate needs. (N,7) + base transform -> (N,S,3).
+
+    A convenience with a purpose: every caller of `chain_static_clearance` and
+    friends holds joints somewhere, and this is the one line that turns them
+    into what those gates now take.  `None` in, `None` out, so a caller that
+    has no joints to offer (a replayed chain, a test fixture) degrades to the
+    capsule model rather than to a wrong answer.
+    """
+    if q is None:
+        return None
+    return centres_world(q, Twb)

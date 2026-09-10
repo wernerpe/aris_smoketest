@@ -1258,12 +1258,34 @@ def segment_box_clearance(A, B, boxes, iters=36):
     return out.min(axis=1)
 
 
-def chain_static_clearance(P, boxes, capsules=None):
+def sphere_box_clearance(C, boxes, radii):
+    """(N,S,3) sphere centres -> (N,) min over spheres of (box distance - r).
+
+    NO SEARCH.  `segment_box_clearance` ternary-searches a capsule's axis
+    because the distance along it is only known to be convex; a sphere is a
+    point and `_point_box_d` is already the exact answer.
+    """
+    C = np.asarray(C, float)
+    if not boxes:
+        return np.full(len(C), np.inf)
+    lo = np.stack([b["lo"] for b in boxes])
+    hi = np.stack([b["hi"] for b in boxes])
+    d = _point_box_d(C[:, :, None, :], lo, hi) - np.asarray(radii)[None, :, None]
+    return d.reshape(len(C), -1).min(axis=1)
+
+
+def chain_static_clearance(P, boxes, capsules=None, C=None):
     """(N,10,3) or (N,11,3) world chain points (frames.fk's 9 + tool points)
     -> (N,) min over capsules of (segment-to-box-set distance minus capsule
     radius).  Compare against STATIC_MARGIN.  With `capsules=None` the table
     is selected by the chain's width: 10 points = inline pen
-    (STATIC_CAPSULES), 11 = lateral holder (STATIC_CAPSULES_LAT)."""
+    (STATIC_CAPSULES), 11 = lateral holder (STATIC_CAPSULES_LAT).
+
+    `C` is the arm's sphere centres (N,S,3) when the sphere model is active
+    (`aris_sixarm/link_spheres.py`); the five moving sausages come out of the
+    table and the spheres are measured against the same boxes, exactly.  The
+    tool capsules stay in the table and are measured the way they always were.
+    """
     P = np.asarray(P, float)
     if P.ndim == 2:
         P = P[None]
@@ -1275,7 +1297,20 @@ def chain_static_clearance(P, boxes, capsules=None):
     for i, j, r in capsules:
         d = segment_box_clearance(P[:, i], P[:, j], boxes) - r
         worst = np.minimum(worst, d)
-    return worst
+    if C is None:
+        return worst
+    # THE MODEL IS THE INTERSECTION, SO THE ANSWER IS THE LARGER CLAIM.  Both
+    # unions contain the metal, so the metal is in BOTH — and a point outside
+    # either one is outside the intersection.  `max` of two valid lower bounds
+    # is a valid lower bound, and it is never below the shipped capsule number,
+    # which is what makes this flag incapable of a regression.  See
+    # `aris_sixarm/link_spheres.py`, "WHY THE MODEL IS AN INTERSECTION".
+    from . import link_spheres
+    lean, _ = link_spheres.static_capsules(capsules)
+    sph = sphere_box_clearance(C, boxes, link_spheres.RADII)
+    for i, j, r in lean:
+        sph = np.minimum(sph, segment_box_clearance(P[:, i], P[:, j], boxes) - r)
+    return np.maximum(worst, sph)
 
 
 def box_clearance(points, boxes):

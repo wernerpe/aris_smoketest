@@ -128,8 +128,24 @@ def segment_cyl_clearance(A, B, cyls, iters=36):
     return out.min(axis=1)
 
 
-def chain_cyl_clearance(P, cyls, capsules=None):
-    """`rig_final.chain_static_clearance`, against cylinders. (N,C,3) -> (N,)."""
+def sphere_cyl_clearance(C, cyls, radii):
+    """(N,S,3) sphere centres vs finite cylinders -> (N,).  Exact, no search."""
+    C = np.asarray(C, float)
+    if not cyls:
+        return np.full(len(C), np.inf)
+    p0, zc, z0, z1, r = _pack(cyls)
+    d = point_cyl_d(C.reshape(-1, 1, 3), p0, zc, z0, z1, r)
+    d = d.reshape(C.shape[0], C.shape[1], -1) - np.asarray(radii)[None, :, None]
+    return d.reshape(len(C), -1).min(axis=1)
+
+
+def chain_cyl_clearance(P, cyls, capsules=None, C=None):
+    """`rig_final.chain_static_clearance`, against cylinders. (N,C,3) -> (N,).
+
+    `C` is the sphere centres when the sphere model is active — same
+    substitution, same exactness, and the orange cylinders on the other side
+    of the query are untouched (see `link_spheres`).
+    """
     P = np.asarray(P, float)
     if P.ndim == 2:
         P = P[None]
@@ -142,7 +158,15 @@ def chain_cyl_clearance(P, cyls, capsules=None):
     for i, j, rad in capsules:
         worst = np.minimum(worst,
                            segment_cyl_clearance(P[:, i], P[:, j], cyls) - rad)
-    return worst
+    if C is None:
+        return worst
+    from . import link_spheres                     # the intersection, see above
+    lean, _ = link_spheres.static_capsules(capsules)
+    sph = sphere_cyl_clearance(C, cyls, link_spheres.RADII)
+    for i, j, rad in lean:
+        sph = np.minimum(sph,
+                         segment_cyl_clearance(P[:, i], P[:, j], cyls) - rad)
+    return np.maximum(worst, sph)
 
 
 # ==========================================================================

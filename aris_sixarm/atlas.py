@@ -27,6 +27,7 @@ import numpy as np
 from . import envelope
 from . import frozen
 from . import ik
+from . import link_spheres
 from . import rig_final
 from .fleet import FLEET, SHEET, H_INV_DEFAULT
 from .frames import (fk, rotx, rotz, rot_axis, PEN_EXT, joint_margin,
@@ -91,7 +92,15 @@ def model_signature():
     flat += [v for band in mounts.MOUNTS.column_bands for v in band]
     flat += [rig_final.STATIC_MARGIN, GATE_MARGIN, GATE_SIGMA]
     flat += [SEARCH_POLICY, *GATE_CONE_DEG]
-    return np.concatenate([np.asarray(flat, float), selfcoll.signature()])
+    out = np.concatenate([np.asarray(flat, float), selfcoll.signature()])
+    # ...AND WHICH LINK MODEL SWEPT IT.  A sphere-swept atlas and a
+    # capsule-swept one are different maps of the same rig, and `is_current`
+    # is the only thing standing between a cached one and the wrong answer.
+    # The signature only WIDENS when the flag is on, so every atlas already on
+    # disk keeps the signature it was written with.
+    if link_spheres.enabled():
+        out = np.concatenate([out, link_spheres.signature()])
+    return out
 
 
 def is_current(meta):
@@ -259,7 +268,13 @@ def _clears(q, Twb, legacy_inv, boxes, off, lat, static=None):
         tool_w = [Twb[:3, :3] @ t + Twb[:3, 3] for t in tool_pts]
         P10 = np.vstack([pts_w] + [t[None] for t in tool_w])
         floor = rig_final.STATIC_MARGIN if static is None else float(static)
-        if frozen.chain_clearance(P10, boxes)[0] < floor:
+        # THE SPHERE MODEL ENTERS HERE AND NOWHERE ELSE IN A SWEEP.  A six-arm
+        # atlas run installs no frozen partners and no cylinders — it is a solo
+        # sweep and this is its only collision gate — so if the flag does not
+        # reach this call it cannot move a swept cell at all.
+        C = (link_spheres.centres_world(np.asarray(q, float).reshape(1, 7), Twb)
+             if link_spheres.enabled() else None)
+        if frozen.chain_clearance(P10, boxes, C)[0] < floor:
             return None
     return T
 

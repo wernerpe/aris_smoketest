@@ -1,5 +1,108 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE LINK MODEL IS AN INTERSECTION, BECAUSE THE SPHERES ALONE MADE IT WORSE (2026-09-09, late)
+
+The entry below shipped 64 fitted spheres behind `ARIS_COLLISION_MODEL` and
+claimed the accuracy in litres.  Run against the shipped v18 timeline the
+model then made the arm-to-arm minimum **worse**: 80.59 mm became **64.82**,
+and the certified programme failed its own 80 mm gate by 15 mm.  This entry is
+what that was, and what the model is now.
+
+### The measurement that explains it
+
+The binding instant is t = 81.57 s, arm 31's hand against arm 71's tool:
+
+| | clearance |
+|---|---|
+| the metal, measured against the manufacturer's meshes | **87.51 mm** |
+| the shipped chain capsule `(7, 8, 0.104)` | 84.10 mm (−3.41) |
+| eight fitted hand spheres | 68.24 mm (−19.27) |
+
+**The capsule was nearly tight and the spheres were not**, because a Franka's
+hand is close to a cylinder about the wrist axis and a capsule is the right
+primitive for a cylinder.  A sphere set is the wrong one: a sphere centred in
+the metal and grown to touch the surface bulges past a capsule wall that is a
+millimetre outside it.  Refitting the hand at 12, 16, 20, 24, 32, 40, 48 and 64
+spheres leaves it **12–14 mm outside the capsule union every time** — it is not
+a resolution problem.  Same for link1 (+19 mm at k = 64) and link2 (+19 mm).
+
+**AND THERE WAS NEVER A HOLE IN THE SHIPPED MODEL.**  Checked directly, with no
+spheres involved — mesh points posed by this repo's own FK against
+`coordination.CAPSULES_LAT` over 3 000 random joint-box configurations — the
+shipped capsules **contain** the meshes at every body:
+
+    link1 −1.02   link2 −1.00   link3 −20.46   link4 −14.35
+    link5 −1.44   link6 −19.86  link7 −13.50   hand  −0.43   (mm, negative = inside)
+
+So the two are simply DIFFERENT outer envelopes, each tighter than the other
+somewhere.  `out/spheres_recert/mesh_vs_capsules.json`.
+
+### So the model is both of them at once
+
+If the metal is inside union A and inside union B it is inside A ∩ B, and for
+any external point `dist(p, A ∩ B) ≥ max(dist(p, A), dist(p, B))`.  The larger
+of the two claims is therefore still a **lower** bound on the true clearance —
+and, being a maximum over the shipped capsule number, **it can never fall below
+it.**  The flag became incapable of a regression, and
+`tests/test_link_spheres.py` pins exactly that on the inter-arm gate, the
+arm-vs-room gate, the frozen-partner gate and on v18's own binding pose.
+
+**What it costs is the capsule query, which was being done anyway before the
+flag existed.**  What it keeps is the whole gain, because the gain was never at
+the hand.  Over 200 random configurations and 40 000 external query points, the
+fictitious metal each COMPLETE model charges — base column bands and both tool
+capsules included in all of them, so only the moving links differ
+(`scripts/link_sphere_fit.py --part fidelity`):
+
+| model | mean | median | p95 | optimistic |
+|---|---|---|---|---|
+| the shipped chain capsules | 67.50 mm | 64.64 mm | 127.11 mm | 0.000 % |
+| `selfcoll`'s banded capsules | 52.93 mm | 44.50 mm | 121.54 mm | **0.190 %** |
+| the 64 spheres alone | 44.63 mm | 30.15 mm | 121.54 mm | 0.000 % |
+| **the intersection, which ships** | **43.46 mm** | **29.52 mm** | 121.54 mm | 0.000 % |
+
+`selfcoll`'s bands were the obvious third candidate and they are not the
+answer: fitted about each body's own principal axis they are excellent on the
+long links and poor across the hand (at v18's binding pose they read 49.10 mm
+against the metal's 87.51), and **0.190 % of those queries came back
+OPTIMISTIC** — that table's radii were fitted to mesh VERTICES, and a triangle
+can bulge between three of them.  That is a small, real finding about a shipped
+table; it is a self-collision model with a 20 mm margin and 63.7 mm of measured
+slack, so it is not urgent, but it is written down.
+
+### The other half of the flag, which was missing
+
+The first pass converted `coordination` only.  The same five sausages also live
+in `rig_final.STATIC_CAPSULES`, and **that** is the table an atlas sweep gates
+on — a six-arm sweep installs no frozen partners, so its only collision gate is
+the chain against the frame steel.  Left alone, the flag could not move a swept
+cell at all.  So `rig_final.chain_static_clearance`, `envelope.chain_cyl_
+clearance`, `frozen.partner_clearance` and `frozen.chain_clearance` all now take
+the sphere centres, `atlas._clears` and `paper`'s six static funnels pass them,
+and `paper.near_boxes` gained its own sphere screen (a box kept only because a
+capsule could reach it is not proof that no sphere can).  `tilt._frame_clear`
+drops its bound screen under the flag and goes exact, because that screen is a
+capsule argument that does not survive the swap.
+
+`atlas.model_signature` widens when the flag is on, so a sphere-swept atlas and
+a capsule-swept one can never be confused for one another; atlases already on
+disk keep the signature they were written with.
+
+### v18, re-checked
+
+| v18 whole timeline, `--sub 2` | inter-arm min | self | verdict |
+|---|---|---|---|
+| capsules (shipped) | 80.59 mm, pair 13–31, t = 42.01 s | 21.5 mm | PASS |
+| the 64 spheres alone | **64.82 mm**, pair 31–71, t = 81.57 s | 21.5 mm | **FAIL** |
+| **the intersection** | **80.60 mm**, pair 31–71, t = 81.58 s | 21.5 mm | PASS |
+
+The intersection buys **+0.01 mm** on this timeline, and that is the honest
+headline for it: v18's inter-arm minimum is set at a place where the capsule
+model is already within 3.4 mm of the metal, so there was nothing there to win.
+The gain is in the map, where the binding geometry is an arm against a
+NEIGHBOUR'S BODY and a frame, not against a tool.
+
+
 ## THE MOVING LINKS CAN BE SPHERES, AND THE SHIPPED SPHERE SETS CANNOT (2026-09-09)
 
 Pete: *"for the rest of the robot why not just use the standard collision

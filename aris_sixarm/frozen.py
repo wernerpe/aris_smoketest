@@ -94,18 +94,19 @@ def freeze(parks, fleet, pens, h_inv):
         A, B = np.asarray(A, float)[0][keep], np.asarray(B, float)[0][keep]
         R = np.array([c[2] for c in tab], float)
         if link_spheres.enabled():
-            # ...and under the sphere model the "real upper arm" is 64 fitted
-            # spheres rather than five chain sausages.  Applied AFTER the
-            # known-pose drop so the two filters compose in the one order that
-            # makes sense: band 3 goes because the pose is known, the moving
-            # sausages go because something tighter stands in for them.
-            tab, keep2 = link_spheres.moving_capsules(tab)
+            # ...and under the sphere model the partner carries BOTH blocks:
+            # its shipped capsules and its spheres.  `partner_clearance` asks
+            # each model its own question and keeps the larger answer, which
+            # is the intersection of the two envelopes (see `link_spheres`).
+            tab2, keep2 = link_spheres.moving_capsules(tab)
             SC = link_spheres.centres_world(
                 q, fleet[aid].T_world_base(h_inv))[0]
-            A = np.concatenate([A[keep2], SC])
-            B = np.concatenate([B[keep2], SC])
-            R = np.concatenate([R[keep2], link_spheres.RADII])
-        _CAPS[aid] = (A, B, R)
+            _CAPS[aid] = (np.concatenate([A[keep2], SC]),
+                          np.concatenate([B[keep2], SC]),
+                          np.concatenate([R[keep2], link_spheres.RADII]),
+                          (A, B, R))
+        else:
+            _CAPS[aid] = (A, B, R)
         _POSES[aid] = np.asarray(q, float).reshape(7).copy()
 
 
@@ -145,12 +146,19 @@ def filter_boxes(boxes):
     return [b for b in boxes if keep_box(b)]
 
 
-def partner_clearance(P):
+def partner_clearance(P, C=None):
     """Observer chain -> clearance to every frozen partner's real capsules.
 
     `P` is (N, 10 or 11, 3) world chain points, exactly what
     `rig_final.chain_static_clearance` takes.  -> (N,) surface gap, `inf` when
     the model is off or nobody but the observer is frozen.
+
+    `C` is the OBSERVER's sphere centres (N,S,3) when the sphere model is
+    active.  The partner side is already spheres whenever it is — `freeze`
+    builds its capsule block under the same flag — so passing `C` is what
+    makes the query spheres on BOTH sides instead of one.  Without it the
+    observer is still measured as five sausages, which is valid (they contain
+    the arm) and merely leaves half the accuracy on the table.
     """
     P = np.asarray(P, float)
     if P.ndim == 2:
@@ -160,19 +168,37 @@ def partner_clearance(P):
         return np.full(len(P), np.inf)
     caps = (rig_final.STATIC_CAPSULES_LAT if P.shape[1] >= 11
             else rig_final.STATIC_CAPSULES)
-    worst = np.full(len(P), np.inf)
+    lean = (link_spheres.static_capsules(caps)[0] if C is not None else caps)
+    worst = np.full(len(P), np.inf)          # the shipped capsule model
+    lean_w = np.full(len(P), np.inf)         # ...and the sphere one
+    if C is not None:
+        C = np.asarray(C, float)
     for aid in others:
-        A, B, R = _CAPS[aid]
+        blk = _CAPS[aid]
+        A, B, R = blk[0], blk[1], blk[2]
+        Acap, Bcap, Rcap = blk[3] if len(blk) > 3 else (A, B, R)
         for (i, j, r) in caps:
             # (N,1,3) observer segment against (1,C,3) partner segments
             d = coordination.seg_seg_dist(P[:, i][:, None, :],
                                           P[:, j][:, None, :],
+                                          Acap[None, :, :], Bcap[None, :, :])
+            worst = np.minimum(worst, (d - (Rcap[None, :] + r)).min(axis=1))
+        if C is None:
+            continue
+        for (i, j, r) in lean:
+            d = coordination.seg_seg_dist(P[:, i][:, None, :],
+                                          P[:, j][:, None, :],
                                           A[None, :, :], B[None, :, :])
-            worst = np.minimum(worst, (d - (R[None, :] + r)).min(axis=1))
-    return worst
+            lean_w = np.minimum(lean_w, (d - (R[None, :] + r)).min(axis=1))
+        # the observer's spheres against the partner's own block
+        d = coordination.seg_seg_dist(C[:, :, None, :], C[:, :, None, :],
+                                      A[None, None, :, :], B[None, None, :, :])
+        d = d - (R[None, None, :] + link_spheres.RADII[None, :, None])
+        lean_w = np.minimum(lean_w, d.reshape(len(P), -1).min(axis=1))
+    return worst if C is None else np.maximum(worst, lean_w)
 
 
-def chain_clearance(P, room):
+def chain_clearance(P, room, C=None):
     """The whole static room, measured. -> (N,).
 
     `room` is what `paper.static_boxes` hands out: real steel as boxes, and —
@@ -180,14 +206,18 @@ def chain_clearance(P, room):
     bounding boxes.  Each is measured with its own exact primitive, and a
     frozen partner's real capsules are folded in on top.
 
+    `C` is the arm's sphere centres when the sphere model is active; it is
+    passed straight through to all three, which is the single seam the whole
+    arm-vs-room half of the flag runs through.
+
     With everything off this IS `rig_final.chain_static_clearance` called with
     the identical arguments, so every shipped number is reproduced exactly.
     """
     from . import envelope
     boxes, cyls = envelope.split(room)
-    d = rig_final.chain_static_clearance(P, boxes)
+    d = rig_final.chain_static_clearance(P, boxes, C=C)
     if cyls:
-        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls))
+        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls, C=C))
     if not _CAPS:
         return d
-    return np.minimum(d, partner_clearance(P))
+    return np.minimum(d, partner_clearance(P, C))

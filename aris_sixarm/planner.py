@@ -233,8 +233,11 @@ def _build_lattice_batch(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
             tool_b = tool_points_many(T, pen_ext, pen_lat)   # [tip(,corner)]
             tool_w = [t @ Twb[:3, :3].T + Twb[:3, 3] for t in tool_b]
             P10 = np.concatenate([pw] + [t[:, None, :] for t in tool_w], axis=1)
+            from . import link_spheres
+            Csp = (link_spheres.centres_world(Q, Twb)
+                   if link_spheres.enabled() else None)
             # STRICTLY TIGHTER THAN THE CHECKER, see rig_final.STATIC_PLAN_MARGIN
-            keep &= (rig_final.chain_static_clearance(P10, boxes)
+            keep &= (rig_final.chain_static_clearance(P10, boxes, C=Csp)
                      >= rig_final.STATIC_PLAN_MARGIN)
         # ...AND THE ARM AGAINST ITSELF (2026-08-26).  Nothing in this package
         # checked that until the day the pen was allowed to lean; see
@@ -313,8 +316,13 @@ def _build_lattice_scalar(pts_xy, spec, h_inv, pen_ext, n_q7, clearance,
                         tool_w = [Twb[:3, :3] @ t[0] + Twb[:3, 3]
                                   for t in tool_b]
                         P10 = np.vstack([pw] + [t[None] for t in tool_w])
+                        from . import link_spheres
+                        Csp = (link_spheres.centres_world(
+                            np.asarray(q, float).reshape(1, 7), Twb)
+                            if link_spheres.enabled() else None)
                         # ...and the same floor here as in the batched gate
-                        if (rig_final.chain_static_clearance(P10, boxes)[0]
+                        if (rig_final.chain_static_clearance(
+                                P10, boxes, C=Csp)[0]
                                 < rig_final.STATIC_PLAN_MARGIN):
                             continue
                     from . import selfcoll          # the arm against itself

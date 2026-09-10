@@ -252,6 +252,20 @@ def segment_distance(p0, p1, q0, q1):
 # the spheres stand in for, where the centres go in the world, and the
 # distance arithmetic — and none of it goes through `coordination`,
 # `link_spheres.centres_world` or `link_spheres.moving_capsules`.
+def _full_radii_for(lean):
+    """The full capsule table a lean one came from. -> tuple.
+
+    `_radii_for` strips the five moving sausages when the sphere model is on;
+    the intersection needs them back.  Recovered by matching the lean table
+    against the three shipped ones rather than carried alongside, so a caller
+    cannot hand in a lean table and a mismatched full one.
+    """
+    for full in (RADII, RADII_FINAL, RADII_LAT):
+        if _sphere_rows(full) == tuple(lean):
+            return full
+    return tuple(lean)
+
+
 def _sphere_rows(radii):
     """`radii` minus the moving-link sausages the spheres replace. -> tuple.
 
@@ -279,30 +293,89 @@ def _sphere_centres(q, spec, h_inv):
     return out @ Twb[:3, :3].T + Twb[:3, 3]
 
 
+PAIR_CHUNK = 512     # timeline samples per broadcast.  The (T, C, C) temporary
+#   is what decides this, and C is 69 bodies once the spheres are in: at the
+#   whole v18 timeline in one call that array is three quarters of a gigabyte
+#   and `segment_distance` wants ten of them.
+
+
+def _sphere_pair_min(Ci, Cj, ri, rj):
+    """Sphere-vs-sphere surface gap, minimised over the pair. (...,S,3) -> (...).
+
+    A SEGMENT OF ZERO LENGTH IS A POINT, and the distance between two points is
+    a norm.  Routing 4 096 of these through `segment_distance` is arithmetically
+    identical and about ten times the work, so the degenerate block gets the
+    expression it deserves.  The capsule blocks below still go the long way.
+    """
+    d = np.linalg.norm(Ci[..., :, None, :] - Cj[..., None, :, :], axis=-1) \
+        - ri[:, None] - rj[None, :]
+    return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+
+
+def _sphere_cap_min(C, rs, A, B, rc):
+    """Sphere-vs-capsule gap, minimised. Points to segments, not segment pairs."""
+    d = _pt_seg(C[..., :, None, :], A[..., None, :, :], B[..., None, :, :]) \
+        - rs[:, None] - rc[None, :]
+    return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+
+
+def _cap_cap_min(Ai, Bi, ri, Aj, Bj, rj):
+    """Capsule-vs-capsule gap, minimised — the original expression."""
+    d = segment_distance(Ai[..., :, None, :], Bi[..., :, None, :],
+                         Aj[..., None, :, :], Bj[..., None, :, :]) \
+        - ri[:, None] - rj[None, :]
+    return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+
+
 def pair_clearance(Pi, Pj, radii=RADII, Ci=None, Cj=None):
     """Min capsule clearance between two arms, for chain points (...,10,3).
 
-    Broadcasts over any leading axis, so a whole timeline costs one call.
+    Broadcasts over any leading axis; chunked over it so a whole timeline
+    costs one call without costing a gigabyte.
 
     `Ci`/`Cj` are the two arms' sphere centres (...,S,3) when the sphere model
-    is active; each sphere joins the pair table as a DEGENERATE capsule, which
-    the arithmetic above already handles because a segment of zero length is
-    just a point.  `radii` must then already be `_sphere_rows(...)`.
+    is active.  The answer is then the minimum over three blocks — capsule vs
+    capsule, sphere vs capsule (both ways round, the two arms are not
+    symmetric in what they carry), and sphere vs sphere — which is the same
+    number a single degenerate-capsule table would give and a great deal less
+    arithmetic.  `radii` must already be `_sphere_rows(...)`.
     """
     rr = np.array([c[2] for c in radii])
     Ai, Bi = _cap_ends(Pi, radii)
     Aj, Bj = _cap_ends(Pj, radii)
-    if Ci is not None:
-        from .link_spheres import RADII as SPH_R
-        Ai = np.concatenate([Ai, Ci], axis=-2)
-        Bi = np.concatenate([Bi, Ci], axis=-2)
-        Aj = np.concatenate([Aj, Cj], axis=-2)
-        Bj = np.concatenate([Bj, Cj], axis=-2)
-        rr = np.concatenate([rr, SPH_R])
-    a0, a1 = Ai[..., :, None, :], Bi[..., :, None, :]
-    b0, b1 = Aj[..., None, :, :], Bj[..., None, :, :]
-    d = segment_distance(a0, a1, b0, b1) - rr[:, None] - rr[None, :]
-    return d.reshape(d.shape[:-2] + (-1,)).min(-1)
+    if Ci is None:
+        return _cap_cap_min(Ai, Bi, rr, Aj, Bj, rr)
+    # THE MODEL IS THE INTERSECTION OF THE TWO ENVELOPES, so the answer is the
+    # LARGER of the two claims: both contain the metal, so a point clear of
+    # either is clear of the intersection, and `max` of two valid lower bounds
+    # is a valid lower bound.  Restated here rather than imported, like
+    # everything else in this module.  `radii` arrives ALREADY lean (the caller
+    # took `_sphere_rows`), so the capsule half is rebuilt from the full table.
+    full = _full_radii_for(radii)
+    fr = np.array([c[2] for c in full])
+    Fi, Gi = _cap_ends(Pi, full)
+    Fj, Gj = _cap_ends(Pj, full)
+    cap_side = _cap_cap_min(Fi, Gi, fr, Fj, Gj, fr)
+    from .link_spheres import RADII as SPH_R
+    Ci = np.asarray(Ci, float)
+    Cj = np.asarray(Cj, float)
+    if Ci.ndim == 2:                       # one configuration, no leading axis
+        sph = min(_cap_cap_min(Ai, Bi, rr, Aj, Bj, rr),
+                  _sphere_cap_min(Ci, SPH_R, Aj, Bj, rr),
+                  _sphere_cap_min(Cj, SPH_R, Ai, Bi, rr),
+                  _sphere_pair_min(Ci, Cj, SPH_R, SPH_R))
+        return max(float(cap_side), float(sph))
+    n = Ci.shape[0]
+    out = np.empty(n)
+    for s in range(0, n, PAIR_CHUNK):
+        e = s + PAIR_CHUNK
+        sph = np.minimum(
+            np.minimum(_cap_cap_min(Ai[s:e], Bi[s:e], rr, Aj[s:e], Bj[s:e], rr),
+                       _sphere_pair_min(Ci[s:e], Cj[s:e], SPH_R, SPH_R)),
+            np.minimum(_sphere_cap_min(Ci[s:e], SPH_R, Aj[s:e], Bj[s:e], rr),
+                       _sphere_cap_min(Cj[s:e], SPH_R, Ai[s:e], Bi[s:e], rr)))
+        out[s:e] = np.maximum(cap_side[s:e], sph)
+    return out
 
 
 # ==========================================================================
