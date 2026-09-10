@@ -105,6 +105,60 @@ POST_PITCH_X = SM.POST_PITCH_X                    # 317.6
 POST_SLOT = SM.POST_SLOT                          # 241.4 between the pairs
 PLATE_CLR = SM.PLATE_SIDE_CLEAR                   # 7.79 each side
 PLATE_OFF = abs(SM.PLATE_OFF)                     # 25.15, DIRECTION INFERRED
+
+# ---------------------------------------------------------------------------
+# CLOCKING — which way each column's front, connector and plate offset point
+# ---------------------------------------------------------------------------
+# `aris_sixarm.system_model` is written for the SHIPPED uniform clocking and
+# hard-codes the flip once (`plate_centre_x`): every front faces canvas -x, so
+# every connector and every plate offset go to canvas +x.  A mirrored sheet
+# needs the same arithmetic PER COLUMN, and this is the only place in this
+# script that knows which.
+#
+# `SIGN[side]` is the direction the connector and the plate offset point, in
+# canvas x.  Uniform: +1 for both columns.  Mirrored: the LEFT column turns to
+# face +x, so its connector and plate go to -1, and the right column does not
+# move.  Everything else on the sheet is clocking-invariant, including the
+# certified keep-out — the neighbour column obstacle is built from the base
+# origin and z axis and a turn about that axis cannot move it.
+CLOCKINGS = {
+    "uniform":  {"left": +1.0, "right": +1.0},
+    "mirrored": {"left": -1.0, "right": +1.0},
+}
+CLOCKING = "uniform"          # module state, set once by main()
+
+
+def _side(x_axis):
+    """'left' or 'right' column for a J1 axis at `x_axis` mm."""
+    return "left" if float(x_axis) < 0.5 * (COL_X[0] + COL_X[1]) else "right"
+
+
+def clock_sign(x_axis):
+    """+1 if this arm's connector and plate offset run canvas +x, else -1."""
+    return CLOCKINGS[CLOCKING][_side(x_axis)]
+
+
+def plate_cx(x_axis):
+    """Plate centre x under the clocking in force. -> mm."""
+    return float(x_axis) + clock_sign(x_axis) * PLATE_OFF
+
+
+def post_xs(x_axis):
+    """The two drop-post x centres under the clocking in force."""
+    c = plate_cx(x_axis)
+    return c - POST_PITCH_X / 2, c + POST_PITCH_X / 2
+
+
+def cluster_gap():
+    """Clear x between a transverse pair's two drop clusters. -> mm."""
+    return ((plate_cx(COL_X[1]) - POST_PITCH_X / 2 - P / 2)
+            - (plate_cx(COL_X[0]) + POST_PITCH_X / 2 + P / 2))
+
+
+def gusset_pair_clear():
+    """Clear x between a transverse pair's facing gussets. -> mm."""
+    return ((plate_cx(COL_X[1]) - POST_PITCH_X / 2 - GUSSET[0] / 2)
+            - (plate_cx(COL_X[0]) + POST_PITCH_X / 2 + GUSSET[0] / 2))
 POST_OVER = SM.POST_OVER                          # 34.98 past the plate
 CLUSTER_W, CLUSTER_D = SM.CLUSTER_W, SM.CLUSTER_D  # 393.8 x 152.4
 
@@ -401,11 +455,29 @@ def write_cut_list(path, h):
       f"positions are to the **J1 axis** (the centre of the base bolt "
       f"circle), not to a plate edge; tolerance +/-10 mm per base.")
     a("")
-    a(f"Every arm is clocked identically — `R_world_base = Ry(180)`, the "
-      f"arm's front toward the canvas x = 0 edge, so **all six connector "
-      f"panels face the x = {CW:.1f} edge**.  The plate centre sits "
-      f"{PLATE_OFF} mm from the J1 axis toward that same edge — DIRECTION "
-      f"INFERRED, open item 1.")
+    if CLOCKING == "uniform":
+        a(f"Every arm is clocked identically — `R_world_base = Ry(180)`, the "
+          f"arm's front toward the canvas x = 0 edge, so **all six connector "
+          f"panels face the x = {CW:.1f} edge**.  The plate centre sits "
+          f"{PLATE_OFF} mm from the J1 axis toward that same edge — DIRECTION "
+          f"INFERRED, open item 1.")
+    else:
+        a(f"**MIRRORED CLOCKING — A VARIANT SHEET, NOT THE SHIPPED ONE.**  "
+          f"The LEFT column (13, 31, 2) is clocked `Ry(180) @ Rz(180)` and "
+          f"the RIGHT column (17, 71, 97) `Ry(180)`, so the two columns FACE "
+          f"EACH OTHER across the centre line at x = "
+          f"{0.5 * (COL_X[0] + COL_X[1]):.1f}.  Each column's connector panel "
+          f"and its plate's {PLATE_OFF} mm offset run toward its OWN nearest "
+          f"long edge, so **no cable is dressed across the paper** — and the "
+          f"plate flip opens the steel: cluster-to-cluster gap across a "
+          f"transverse pair **{cluster_gap():.2f} mm** (uniform 216.20) and "
+          f"gusset pair clearance **{gusset_pair_clear():.2f} mm** (uniform "
+          f"89.20), +50.30 on both.  The offset DIRECTION is still inferred "
+          f"(open item 1) and it now matters twice, once per column.  "
+          f"**The certified workspace is NOT re-earned by this sheet**: "
+          f"mirrored measures +4 live cells in 16562 and the SAME certified "
+          f"rectangle, and it needs its own park set — "
+          f"docs/DECISIONS.md 2026-09-10.")
     if ca:
         a("")
         a(f"The certified drawing area at this height is "
@@ -753,17 +825,17 @@ def sheet_topdown(h, out_dir):
         ax.add_line(Line2D([IN_X0, IN_X1], [ry, ry], color="#4d5561",
                            lw=0.45, zorder=5.6))
     for aid, (xa, ya) in ARMS.items():
-        for px in SM.post_x(xa):
+        for px in post_xs(xa):
             for py in (ya - P, ya):
                 member(ax, px - P / 2, py, px + P / 2, py + P, fc=POSTC,
                        ec=INK, lw=0.6, z=6.5)
         # gussets, rotated onto the runway's outboard y faces
-        for px in SM.post_x(xa):
+        for px in post_xs(xa):
             for y0 in (ya - P - GUSSET[1], ya + P):
                 member(ax, px - GUSSET[0] / 2, y0, px + GUSSET[0] / 2,
                        y0 + GUSSET[1], fc="#c3cad3", ec=INK, lw=0.4, z=6.2,
                        alpha=0.9)
-        cx = SM.plate_centre_x(xa)
+        cx = plate_cx(xa)
         member(ax, cx - PLATE[0] / 2, ya - PLATE[1] / 2, cx + PLATE[0] / 2,
                ya + PLATE[1] / 2, fc=PLATEC, ec=INK, lw=0.9, z=6.8)
         cmark(ax, xa, ya, 150, z=7.5)
@@ -771,8 +843,10 @@ def sheet_topdown(h, out_dir):
         ax.text(xa - 195, ya + 120, f"{aid}", ha="center", va="bottom",
                 fontsize=FS_LBL + 2.4, fontweight="bold", color=INK,
                 zorder=8.5)
-        # connector side: base +x is world -x, so the connector faces +x
-        ax.add_patch(FancyArrow(xa + 60, ya, 150, 0, width=12,
+        # connector side: the connector faces AWAY from the front, so it runs
+        # along `clock_sign` — the same direction the plate offset does
+        sg = clock_sign(xa)
+        ax.add_patch(FancyArrow(xa + sg * 60, ya, sg * 150, 0, width=12,
                                 head_width=44, head_length=48,
                                 length_includes_head=True, fc=ORIGC,
                                 ec="none", zorder=8.4))
@@ -819,7 +893,7 @@ def sheet_topdown(h, out_dir):
              "RUNWAY  item C\ntwo 3-in beams side by side (152.4).\n"
              "Seam ON the row line, so every J1\naxis lies on it.",
              ha="right", c=ORIGC, rad=-0.15)
-    s.leader(ax, (SM.post_x(COL_X[1])[1], ROW_Y[1] - P / 2),
+    s.leader(ax, (post_xs(COL_X[1])[1], ROW_Y[1] - P / 2),
              (2410, ROW_Y[1] - 700),
              f"DROP CLUSTER  item D\n4 posts, 2 x 2, pitch "
              f"{POST_PITCH_X} x {P}.\nCut length {post_length(h):.1f} at "
@@ -839,15 +913,15 @@ def sheet_topdown(h, out_dir):
     axb = s.panel(8.02, 5.95, (-350, 350), (-300, 300), DEN_B,
                   "B   DETAIL — ONE DROP CLUSTER IN PLAN",
                   f"at the J1 axis · scale 1 : {DEN_B:.0f}")
-    cxp = SM.plate_centre_x(0.0)          # +25.15 with the inferred direction
+    cxp = plate_cx(COL_X[0]) - COL_X[0]   # +/-25.15, this clocking
     member(axb, -350, -P, 350, P, fc=STEEL, z=4)
     axb.add_line(Line2D([-350, 350], [0, 0], color="#4d5561", lw=0.5,
                         zorder=4.4))
-    for px in SM.post_x(0.0):
+    for px in (v - COL_X[0] for v in post_xs(COL_X[0])):
         for py in (-P, 0):
             member(axb, px - P / 2, py, px + P / 2, py + P, fc=POSTC, ec=INK,
                    lw=0.9, z=6)
-    for px in SM.post_x(0.0):
+    for px in (v - COL_X[0] for v in post_xs(COL_X[0])):
         for y0 in (-P - GUSSET[1], P):
             member(axb, px - GUSSET[0] / 2, y0, px + GUSSET[0] / 2,
                    y0 + GUSSET[1], fc="#c3cad3", ec=INK, lw=0.5, z=5.4)
@@ -868,7 +942,7 @@ def sheet_topdown(h, out_dir):
     axb.text(-150, 0, "front", ha="right", va="center", fontsize=FS_NOTE,
              color="#6a7280")
 
-    pxl, pxr = SM.post_x(0.0)
+    pxl, pxr = (v - COL_X[0] for v in post_xs(COL_X[0]))
     s.dim_h(s.__dict__ and axb, pxl, pxr, 232, f"{POST_PITCH_X}",
             ext_y=(P, P), over=10)
     s.dim_h(axb, pxl + P / 2, pxr - P / 2, 160, f"{POST_SLOT} slot",
@@ -1089,8 +1163,8 @@ def sheet_side(h, out_dir):
     for xa, aid in ((COL_X[0], 31), (COL_X[1], 71)):
         lowest = min(lowest, draw_park(ax, aid, h, 0, 2))
     for xa in COL_X:
-        pxl, pxr = SM.post_x(xa)
-        cxp = SM.plate_centre_x(xa)
+        pxl, pxr = post_xs(xa)
+        cxp = plate_cx(xa)
         # gussets — BEYOND the section plane: they are rotated onto the
         # runway's outboard y faces, so in x-z they project as a square
         # centred on each post, top flush with the top of steel
@@ -1118,10 +1192,10 @@ def sheet_side(h, out_dir):
     # dimensions
     s.dim_v(ax, z["post_bottom"], GRID_U, -300,
             f"{pl:.1f}\nDROP POST  item D  x24",
-            ext_x=(SM.post_x(COL_X[0])[0] - P / 2, IN_X0), over=0,
+            ext_x=(post_xs(COL_X[0])[0] - P / 2, IN_X0), over=0,
             txt_off=-40)
     s.dim_v(ax, 0.0, h, -640, f"{h:.1f}   MOUNT PLANE h",
-            ext_x=(0, SM.post_x(COL_X[0])[0]), over=0, txt_off=-40)
+            ext_x=(0, post_xs(COL_X[0])[0]), over=0, txt_off=-40)
     s.dim_v(ax, FLOOR_Z, 0.0, -800, f"{PAPER_ABOVE_FLOOR}   paper "
             f"above the floor", ext_x=(0, 0), over=0, txt_off=-38)
     s.dim_v(ax, FLOOR_Z, GRID_T, 2600, f"{SM.CAGE_TOTAL_H}   floor to top "
@@ -1143,7 +1217,7 @@ def sheet_side(h, out_dir):
                         (h, f"{h:.2f}   MOUNT PLANE  h", 0),
                         (z["post_bottom"],
                          f"{z['post_bottom']:.2f}   post bottom", -66)):
-        s.ext(ax, SM.post_x(COL_X[1])[1] + P / 2, zz, LX, zz)
+        s.ext(ax, post_xs(COL_X[1])[1] + P / 2, zz, LX, zz)
         ax.add_line(Line2D([LX - 26, LX + 26], [zz, zz], color=DIMC, lw=0.9,
                            zorder=8.5))
         if dy:
@@ -1171,7 +1245,7 @@ def sheet_side(h, out_dir):
              f"{lowest:.0f} mm above the paper.  NOT a certified pose\n"
              f"at h = {h:.0f}, and not a clearance claim.",
              ha="right", c=NOTEC, rad=0.14)
-    s.leader(ax, (SM.post_x(COL_X[1])[1], z["gusset_bottom"] + 60),
+    s.leader(ax, (post_xs(COL_X[1])[1], z["gusset_bottom"] + 60),
              (2530, 1300),
              f"GUSSET  item F  —  BEYOND THE SECTION\n{GUSSET[0]} x "
              f"{GUSSET[2]} x {GUSSET[1]}, four per arm, rotated onto the\n"
@@ -1238,8 +1312,8 @@ def sheet_side(h, out_dir):
     axc = s.panel(9.95, 1.95, (-300, 300), (h - 210, h + 400), DEN_C,
                   "C   DETAIL — THE MOUNT STACK",
                   f"scale 1 : {DEN_C:.0f}")
-    pxl, pxr = SM.post_x(0.0)
-    cxp = SM.plate_centre_x(0.0)
+    pxl, pxr = (v - COL_X[0] for v in post_xs(COL_X[0]))
+    cxp = plate_cx(COL_X[0]) - COL_X[0]
     for px in (pxl, pxr):
         member(axc, px - P / 2, z["post_bottom"], px + P / 2, h + 400,
                fc=POSTC, ec=INK, lw=0.9, z=6)
@@ -1359,13 +1433,29 @@ def main(argv=None):
     ap.add_argument("--h", type=float, default=H_DESIGN,
                     help="mount plane above the paper, m or mm "
                          f"(default {H_DESIGN:.0f} mm)")
-    ap.add_argument("--out", default=os.path.join(_repo(), "out", "drawings"),
-                    help="output directory (default out/drawings)")
+    ap.add_argument("--out", default=None,
+                    help="output directory (default out/drawings, or "
+                         "out/drawings/<clocking> for a variant)")
+    ap.add_argument("--clocking", default="uniform", choices=sorted(CLOCKINGS),
+                    help="'uniform' is the SHIPPED clocking (BUILD_SHEET "
+                         "section 3); 'mirrored' turns the LEFT column to "
+                         "face the right.  A variant sheet — it writes to its "
+                         "own directory and never overwrites the uniform set")
     a = ap.parse_args(argv)
+    global CLOCKING
+    CLOCKING = a.clocking
+    if a.out is None:
+        a.out = os.path.join(_repo(), "out", "drawings")
+        if CLOCKING != "uniform":
+            a.out = os.path.join(a.out, CLOCKING)
     h = a.h * MM if a.h < 10.0 else a.h        # accept 0.97 or 970
     os.makedirs(a.out, exist_ok=True)
     print(f"ARIS 80/20 fabrication drawings — h = {h:.1f} mm, "
-          f"drop post {post_length(h):.1f} mm")
+          f"drop post {post_length(h):.1f} mm, clocking {CLOCKING}")
+    if CLOCKING != "uniform":
+        print(f"  cluster gap {cluster_gap():.2f} mm (uniform 216.20), "
+              f"gusset pair clearance {gusset_pair_clear():.2f} mm "
+              f"(uniform 89.20)")
     sheet_topdown(h, a.out)
     sheet_side(h, a.out)
     p = write_cut_list(os.path.join(a.out, "8020_cut_list.md"), h)

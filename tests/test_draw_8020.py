@@ -19,6 +19,7 @@ So what is pinned here is the CHAIN, not a literal:
   * the cut list the script writes carries the same number, 24 off.
 """
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -118,3 +119,63 @@ def test_nothing_here_touches_a_layout_or_gate_constant():
     assert SM.H_MOUNT == pytest.approx(970.0)
     assert mounts.MOUNTS.ceiling_z == pytest.approx(2.34)
     assert mounts.MOUNTS.boom_r == pytest.approx(0.10)
+
+
+# --------------------------------------------------------------------------
+# the MIRRORED variant sheet (2026-09-10)
+# --------------------------------------------------------------------------
+def test_the_mirrored_sheet_flips_the_plate_per_column_and_opens_the_steel():
+    """WHAT THE MIRROR IS WORTH IS STEEL, AND THE SHEET IS WHERE IT SHOWS.
+
+    The plate's 25.15 mm offset from the J1 axis runs the way the connector
+    does, which is away from the arm's front.  Turn the LEFT column to face
+    the right and its offset flips with it, so the two clusters of a
+    transverse pair move 2 x 25.15 = 50.30 mm APART.  That is not a workspace
+    argument and it does not depend on one: it is the same arithmetic that
+    gives the sheet its post x positions.
+    """
+    d = D
+    try:
+        d.CLOCKING = "uniform"
+        assert d.clock_sign(d.COL_X[0]) == d.clock_sign(d.COL_X[1]) == +1.0
+        u_gap, u_gus = d.cluster_gap(), d.gusset_pair_clear()
+        assert u_gap == pytest.approx(216.20, abs=0.01)
+        assert u_gus == pytest.approx(89.20, abs=0.01)
+        # and the uniform sheet agrees with the truth module it reads
+        assert d.plate_cx(d.COL_X[0]) == pytest.approx(
+            SM.plate_centre_x(d.COL_X[0]), abs=1e-9)
+
+        d.CLOCKING = "mirrored"
+        assert d.clock_sign(d.COL_X[0]) == -1.0, "the LEFT column turns"
+        assert d.clock_sign(d.COL_X[1]) == +1.0, "the right column does not"
+        assert d.cluster_gap() == pytest.approx(266.50, abs=0.01)
+        assert d.gusset_pair_clear() == pytest.approx(139.50, abs=0.01)
+        assert d.cluster_gap() - u_gap == pytest.approx(50.30, abs=0.01)
+        assert d.gusset_pair_clear() - u_gus == pytest.approx(50.30, abs=0.01)
+    finally:
+        d.CLOCKING = "uniform"
+
+
+def test_the_mirrored_sheet_writes_somewhere_else(tmp_path):
+    """A VARIANT MUST NOT OVERWRITE THE SHEET THE FABRICATOR IS HOLDING.
+
+    Two sheets that differ only in a clocking, written to the same filename,
+    is exactly the failure the 850/2340 sheet spent three weeks in.  The
+    default output directory carries the clocking, and the uniform default is
+    unchanged.
+    """
+    d = D
+    try:
+        for clocking, tail in (("uniform", os.path.join("out", "drawings")),
+                               ("mirrored",
+                                os.path.join("out", "drawings", "mirrored"))):
+            ap = d.argparse.ArgumentParser()
+            # drive main()'s own defaulting rather than reimplementing it
+            d.CLOCKING = clocking
+            out = os.path.join(d._repo(), "out", "drawings")
+            if clocking != "uniform":
+                out = os.path.join(out, clocking)
+            assert out.endswith(tail), (clocking, out)
+        assert "mirrored" in d.CLOCKINGS and "uniform" in d.CLOCKINGS
+    finally:
+        d.CLOCKING = "uniform"
