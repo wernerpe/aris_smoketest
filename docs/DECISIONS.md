@@ -2898,3 +2898,99 @@ ZERO contiguous dead run.  The chosen one, v15/v17/v18's size and rotation
 nearest dead cell at **184.4 mm** (v18's was 141 mm) and wins the tie on the
 worst single sample, 63.2 mm.  No placement search was run.
 `out/csail_place_v19_proxy.json`, `out/csail_place_v19_placement.json`.
+
+## 2026-09-10 — OPEN — FOR PETE: should the two columns FACE EACH OTHER?
+
+Pete: *"I think it would make more sense if the arm bases were facing each
+other, no?"*  Recorded here with what is settled, what is measured, and what
+is not — because two of the three are already settled and they point in
+opposite directions.
+
+### 1. which way is "facing", and Pete's guess is the converse
+
+The convention is `docs/BUILD_SHEET.md` §3 and `system_model.plate_centre_x`:
+every inverted arm has `R_world_base = Ry(180) @ Rz(yaw)` with **yaw = 0**, so
+its front (the base's own +x) is `R @ [1,0,0] = (-cos yaw, sin yaw, 0)` —
+**canvas −x**, toward the x = 0 long edge — and the connector panel, which
+faces away from the front, faces the x = 1803.4 edge.  All six.
+
+So under the clocking that ships **the RIGHT column (17, 71, 97) already faces
+the left column**, across the centre line at x = 0.9017, and the LEFT column
+(13, 31, 2) faces away from it, out over the near edge.  Making the two face
+each other therefore means turning the **LEFT** column 180 deg (`yaw = pi`,
+front → canvas +x) and leaving the right column alone — **not** the right
+column, which is the way round the question was put.  Turning the right column
+instead points both columns outward, which is the opposite change.
+
+### 2. what a 180 deg turn changes, and what it provably does not
+
+**IT DOES NOT MOVE THE OBSTACLE.**  `mounts.arm_column_boxes` builds each
+neighbour band from the base ORIGIN and the base Z AXIS as a cylinder carried
+as its AABB.  A rotation about that same z changes neither, so the column
+obstacle is **bit-identical under any clocking** — verified numerically on all
+three rotated variants (2026-09-09, `scripts/reclock_whatif.py`).  Re-clocking
+cannot move what is in the way.
+
+**IT DOES MOVE JOINT 1'S DEAD WEDGE, AND THAT IS THE WHOLE MECHANISM.**  The
+reachable tip set of an arm is a solid of revolution about joint 1 restricted
+to joint 1's range, so a clocking rotates the wedge it cannot swing into.  The
+drawing-pose atlas is NOT a yaw-invariant disc under the current sweeper —
+`atlas.sweep_arm` takes the spec's own `T_world_base`, so yaw enters through
+the q1 range, through the arm's own mount boxes and through where the
+neighbours sit relative to both.  (The "per-arm atlases are yaw-invariant
+disks" line further up this file is from the IKA era and is no longer true of
+this code.)  And the things that were never yaw-invariant even in that era are
+the ones that decide a programme: pen-up legs and `paper.route`, hover sets,
+and the park search, which searches ABSOLUTE bearings in the canvas frame.
+
+**IT FLIPS THE CABLES AND THE PLATE, PER COLUMN, AND BOTH FLIPS ARE GOOD.**
+Under uniform clocking all six connector panels face the x = 1803.4 edge, so
+the LEFT column's cables exit across the canvas centre line.  Mirrored, each
+column's cables exit toward its own nearest long edge — nothing dressed over
+the middle of the paper.  And the plate's 25.15 mm offset from the J1 axis
+flips with the front, which moves the left column's drop cluster 50.3 mm away
+from its transverse partner's:
+
+| | uniform | **mirrored** |
+|---|---:|---:|
+| cluster-to-cluster gap across a pair | 216.20 mm | **266.50 mm** |
+| gusset pair clearance (`GUSSET_PAIR_CLEAR`) | 89.20 mm | **139.50 mm** |
+
+Both are pure arithmetic off `system_model`, and they are a real argument for
+mirroring that has nothing to do with reach: the gusset conflict is one of the
+six open items on the cut list, and 50 mm is most of what it is short of.
+
+### 3. THE 2026-09-09 RE-CLOCK WHAT-IF IS NOT EVIDENCE EITHER WAY
+
+`scripts/reclock_whatif.py` measured 13 of 14 cells feasible at baseline and
+**0 of 14 in every rotated variant**, and it is tempting to read that as
+settled.  It is not, for two reasons stated in its own caveat and one more:
+
+1. Its baseline does not reproduce the shipped map's (13 of 14 against the
+   map's 0 of 14), because it calls `atlas.solve_cell` directly at 63 mm while
+   the shipped atlas is a 50 mm sweep re-gated to 63.
+2. **It ran under the OLD obstacle model** — before the same day's finding that
+   the band was an AABB of a cylinder and "mostly air", and before
+   `PAIR_MARGIN` went to 50 mm and link1's revolution sweep was dropped for a
+   known pose.  Every one of those loosened exactly the constraint a turned
+   arm runs into.
+3. It is 14 cells, chosen because they were the hard ones.
+
+So the hypothesis it tested — that a turned arm's hover set collapses because
+reaching under the opposite base is now behind it — is plausible and
+unmeasured at the model in force.  **It must not be cited as a refutation.**
+
+### 4. what it would take, and what is outstanding
+
+An honest answer needs the mirrored fleet run through the same machinery at
+h = 0.970: an atlas re-swept per clocking (yaw is in the sweep), the
+three-number park search re-run on it, the certified rectangle against
+uniform's 5.4600 m² largest and 3.4352 m² near-square, and the CSAIL plan plus
+whole-timeline `scene_check`.  `scripts/asbuilt_layout.py`'s `load_asbuilt`
+already carries per-arm yaw, so no committed constant has to move to measure
+it.
+
+**NOTHING IN `layout.py` HAS BEEN CHANGED FOR THIS.**  The clocking convention
+is still uniform yaw = 0, `docs/BUILD_SHEET.md` §3 still says so and still
+says not to improvise it, and per-arm yaw stays where it is — expressible for a
+SURVEY, not a configuration — until the measurement says mirrored wins.

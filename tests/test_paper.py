@@ -1045,7 +1045,12 @@ def test_the_default_atlas_gate_is_bit_identical(lateral):
 # tests above — since the holder landed (7f99565).  Fixing that dir is its own
 # re-sweep; these do not need it, they need any current corpus of certified
 # poses to build legs out of.
-FINAL_ATLAS = ROOT / "out/atlas_proposed_h0940_lat0860_gated63"
+# ...AND IT FOLLOWS THE SHIPPED HEIGHT (2026-09-10).  `_final_cells` hands the
+# poses to `layout.FLEET_PROPOSED` and `LAYOUT_PROPOSED["h"]`, so an atlas from
+# another height would put certified-at-0.940 poses on 0.970 bases — which is
+# still a legal configuration and would still test the bound, but it is not the
+# rig, and a corpus that IS the rig exists.
+FINAL_ATLAS = ROOT / "out/atlas_proposed_h0970_lat0860_gated63"
 
 
 def _final_cells(aid, n):
