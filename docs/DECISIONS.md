@@ -3108,6 +3108,49 @@ would be worth about 5 000 s of park search plus a re-certification.**  Said
 plainly so it can be taken on its merits rather than on a workspace argument
 that the measurement does not support.
 
+### 4b. THE MIRRORED PARK SET, SEARCHED (2026-09-10)
+
+`scripts/height_sweep.py park --h 0.970 --clocking mirrored --atlas
+out/mirror_atlas_h0970_lat0860`, the same 24 bearings x 6 radii x 4 hovers per
+arm and the same ranking as the uniform search.
+`out/mirrored/park_search_h0970_mirrored.json`.  **It certifies**, and it is a
+dead heat:
+
+| | uniform | **mirrored** |
+|---|---:|---:|
+| fleet worst park-vs-(ink AND lift) | 97.7 mm | **97.7 mm** |
+| fleet park-vs-park | >= 250.0 mm (cap) | **>= 250.0 mm (cap)** |
+| entries / go-homes flyable | 114/144 (79.2 %) | **115/144 (79.9 %)** |
+| candidates certifying | 496-497 of 576 | 497 of 576 (all six) |
+
+Per arm, the recipe and the clearance it wins:
+
+| arm | col | uniform (r, hover, bearing) | mm | in/out | mirrored | mm | in/out |
+|---|---|---|---:|---|---|---:|---|
+| 2 | left | (0.70, 0.30, +105) | 98.41 | 18/18 | (0.48, 0.30, +150) | **98.41** | 18/18 |
+| 13 | left | (0.62, 0.30, +150) | 98.44 | 21/21 | (0.48, 0.20, −135) | **98.44** | 21/21 |
+| 17 | right | (0.48, 0.30, −30) | 97.67 | 19/19 | (0.48, 0.30, −30) | 97.67 | 19/19 |
+| 31 | left | (0.62, 0.30, +150) | 98.76 | 20/20 | (0.40, 0.30, −150) | 98.63 | **21/21** |
+| 71 | right | (0.55, 0.20, +30) | 98.26 | 19/19 | (0.55, 0.20, +30) | 98.26 | 19/19 |
+| 97 | right | (0.70, 0.30, +75) | 99.88 | 17/17 | (0.70, 0.30, +75) | 99.88 | 17/17 |
+
+**THE RIGHT COLUMN'S THREE ARMS ARE BIT-IDENTICAL**, recipe and clearance
+both, which is the sanity check this table exists for: their yaw did not
+change, so nothing about them may.  The LEFT column's three all found a
+DIFFERENT recipe and landed on the SAME clearance — which is the park
+plateau this file has documented since 2026-08-26 doing exactly what it says:
+a parked arm's own base column is pose-invariant, so the LAYOUT and not the
+pose sets the ceiling, and a clocking cannot move a cylinder about its own
+axis.  The whole difference in the fleet is arm 31 reaching one more of its
+own 24 cells, 20/24 -> 21/24.
+
+CAVEAT, and it is small but real: the uniform search ran at the old 80 mm pair
+margin and this one at the 50 mm in force, so more candidates clear gate 1 and
+the mirrored search had a slightly larger pool to rank.  The `worst` figures
+are measured distances and comparable directly; arm 31's extra entry may be
+the bigger pool rather than the clocking.  Re-running uniform at 50 mm would
+settle it and costs another ~4 900 s, which is not worth it for one cell.
+
 ### 5. what was NOT measured
 
 The real three-number mirrored park search (~4 900 s at 4 jobs) — which would
