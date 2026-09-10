@@ -49,10 +49,21 @@ no boxes; yaw-invariant to the 2 cm probe across 5 bearings):
 
 The `inv` rows above are the 2026-08-25 probe, taken with NO boxes and the
 pre-audit capsules.  The shipped height's row is re-measured off the real
-six-arm atlas under the corrected collision model (`out/atlas_proposed_h0940`,
-every arm's certified strict-GO cell, radius from its own base):
+six-arm atlas under the corrected collision model (every arm's certified
+strict-GO cell, radius from its own base, tightest arm's lips over all six):
 
-    inv      0.940      -                   [0.13, 0.86]
+    inv      0.940      -                   [0.13, 0.86]   h0940, 0.110 pen
+    inv      0.970      -                   [0.02, 0.75]   h0970_lat0860
+
+AND THE TWO ROWS ARE MEASURED AT DIFFERENT TOOLS, which is most of the
+difference between them (2026-09-10).  The 0.940 row came off
+`out/atlas_proposed_h0940`, swept when the pen was 0.110 m straight out of the
+hand; the 0.970 row comes off `out/atlas_proposed_h0970_lat0860`, the HOLDER's
+own pair (`PEN_EXT_HOLDER` / `PEN_LAT_HOLDER` = 0.0460262 / 0.0860369).  A tip
+86 mm off the hand's axis reaches back almost under the base, so the inner lip
+collapses — the same 0.940 rig measured on the holder's atlas reads
+[0.03, 0.77], so ~0.10 m of the inner lip's move is the TOOL and ~0.01 m is
+the height.  The outer lip loses 0.02 m going up 30 mm, which is reach.
 
 The disc model the coarse search covers the canvas with is exactly these
 annuli.  `FLEET_PROPOSED` at the bottom is the study's winner, env-selectable
@@ -77,6 +88,10 @@ PROFILES_LAT = {
     # (per-arm inner lips run 0.057-0.130; the common annulus is what a
     # pair-spacing argument may use).
     ("inv", 0.940): (0.13, 0.86),
+    # THE SHIPPED HEIGHT since 2026-09-10, measured the same way off
+    # `out/atlas_proposed_h0970_lat0860` — the holder's own tool, which is why
+    # the inner lip is 0.02 and not 0.13 (see the module docstring).
+    ("inv", 0.970): (0.02, 0.75),
     ("inv", 1.000): (0.16, 0.78),
 }
 PROFILES_INLINE = {
@@ -306,8 +321,16 @@ def check_spacing(layout, m=mounts.MOUNTS):
 #
 # So the build does not need the search's coordinates; it needs a spacing and
 # a row count.  `paired_grid` is that layout in round numbers.
+#
+# THE HOLE ALL BUT CLOSED AT h = 0.970 ON THE HOLDER'S TOOL (2026-09-10).  The
+# annulus at the shipped height and the shipped pen is [0.02, 0.75], so the
+# under-base hole a partner has to cover is 20 mm of radius instead of 130 and
+# the window opens to 0.04-0.73.  0.61 sits inside it exactly as before and
+# NOTHING ABOUT THE BUILD MOVES: the window has never been the binding
+# constraint on the pitch, and the numbers below (0.65 vs 0.61) are still the
+# measurement that would decide it.
 PAIR_SPACING = 0.61       # m, transverse pair separation (see above)
-PAIR_WINDOW = (0.26, 0.73)  # m, spacings that keep a partner over the hole
+PAIR_WINDOW = (0.04, 0.73)  # m, spacings that keep a partner over the hole
 
 
 def paired_grid(spacing=PAIR_SPACING, rows=3, h=0.850, sheet=SHEET_FINAL6):
@@ -959,7 +982,22 @@ LAYOUT_V1 = dict(
 # margin (dropping calib to zero changes nothing): it is that the two
 # MIDDLE-ROW arms have nowhere over a 1.80 m canvas to stand that is not in
 # somebody's ink.  See README for what would actually move it.
-LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
+#
+# ADOPTED AT 0.970 (Pete, 2026-09-10): "do you have the drawings for the 970
+# one? let's just work with that one."  The height in force is 0.970 m and the
+# 0.940 numbers above are history, kept because they are the reason the GRID
+# has the shape it has.  WHAT BOUGHT THE EXTRA 30 mm is not coverage — 0.970
+# is 0.6 pp WORSE on solo-drawable (97.718 % against 98.587 %) and has 378
+# `NO_DRAW` cells at the rim against 225.  It is that at 0.970, under
+# `PAIR_MARGIN = 0.050` and the tight cylinder envelope, **the canvas has no
+# holes at all**: `NO_HOVER` and `NO_ROUTE` are both zero and every dead cell
+# is out of reach at the rim, where the red is honest.  0.940 still has 9 hole
+# cells in 4 enclosed pockets.  The certified hole-free block is 1.50 x 3.64 m
+# = 5.46 m^2 — the FULL length of the canvas, stopping 160 mm short of each
+# side in x — against 1.06 x 3.64 m = 3.86 m^2 at 0.940.  See DECISIONS
+# 2026-09-09 ("the arm-to-arm gate is 50 mm, and h = 0.970 has no holes left")
+# for the whole table, and `out/certified_area_h0970.json` for the block.
+LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.970)
 
 # RE-SEARCHED AT THE SHIPPED HEIGHT, ON THE OTHER CRITERION, AND OVER THE
 # BEARING TOO (2026-08-26, after the base column became four measured bands).
@@ -1048,9 +1086,47 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.940)
 # after that search and it is **97.8 mm** at the tool of 2026-09-03 (below),
 # and `allocate.ParkProbe` prunes against these poses at allocation time so a
 # span inside one of them never reaches the conductor at all.
-PARK_GRID_PROPOSED = {2: (0.48, 0.20, 150.0), 13: (0.55, 0.20, -120.0),
-                      17: (0.48, 0.20, -30.0), 31: (0.62, 0.30, 150.0),
-                      71: (0.40, 0.10, 30.0), 97: (0.40, 0.35, 45.0)}
+PARK_GRID_PROPOSED = {2: (0.70, 0.30, 105.0), 13: (0.62, 0.30, 150.0),
+                      17: (0.48, 0.30, -30.0), 31: (0.62, 0.30, 150.0),
+                      71: (0.55, 0.20, 30.0), 97: (0.70, 0.30, 75.0)}
+# RE-SEARCHED AT h = 0.970 (2026-09-10) and the grid above is THAT search's
+# output; the 0.940 grid is in the note below.  Nothing about the search
+# changed — same 24 bearings x 6 radii x 4 hovers = 576 candidates per arm,
+# same `certified_ready_pose` gate, same `rig_final.chain_static_clearance >=
+# STATIC_MARGIN`, same park-vs-(ink AND lift) ranking at the conductor's own
+# 0.08 m — only the height and the atlas it is gated against:
+#
+#     scripts/height_sweep.py park --h 0.970 \
+#         --atlas out/atlas_proposed_h0970_lat0860 --jobs 6
+#     out/park_search_h0970_lat0860.json
+#
+# | | h = 0.940 | **h = 0.970** |
+# |---|---|---|
+# | candidates certifying | 473-474 of 576 | **496-497 of 576** |
+# | fleet worst park-vs-(ink AND lift) | 93.1 mm | **97.7 mm** |
+# | fleet park-vs-park | >= 250 mm (cap) | >= 250 mm (cap) |
+# | entries / go-homes flyable | 113/144, 113/144 | **114/144, 114/144** |
+#
+# THE FLEET GOT MORE ROOM AND SPENT IT GOING OUT AND UP.  Three arms move to
+# the 0.70 m radius the 0.940 set could not certify there and five of the six
+# park at the 0.30 m hover; 23 more candidates per arm certify because the
+# whole rig is 30 mm further off the paper.  Arm 71's 93.1 mm — the number
+# that set the 0.940 fleet's worst all on its own — is gone: at 0.970 its best
+# is 98.3 mm and arm 17 is now the binding one at 97.7 mm, 47.7 mm over the
+# 50 mm gate and 17.7 mm over the 80 mm the search was ranked at.
+#
+# AND ARM 13 NO LONGER STANDS OFF OUTWARD, which is the one property of the
+# set that changed shape rather than degree.  Its bearing is +150 deg where
+# its outward ray is -104 deg, so it stands off up-canvas and to the side, at
+# (0.060, 0.915) — the same xy arm 31 uses one row up, since 13 and 31 are the
+# same mount on the same column at the same triple and their base frames
+# differ by a pure translation in canvas y.  Outwardness was always a means
+# (see the note under `certified_park_poses`): what keeps the six apart is
+# `fleet_park_clearance`, and it proves the broad-phase cap, >= 250 mm.  Held
+# to its outward ray arm 13's best certifies too, on the same ink plateau, and
+# reaches fewer of its own cells; the search picked the depot that can do its
+# job.  `test_baked_park_poses_are_that_functions_own_output` pins "five of
+# six outward" rather than six, for exactly this reason.
 # RE-SEARCHED AGAIN 2026-09-07, AT THE HOLDER'S FINAL TOOL, and the grid above
 # is THAT search's output; the 2026-09-03 grid is in the note below.  `7f99565`
 # put the grip at the far end of the Fat finger plates and the bore at the
@@ -1194,22 +1270,36 @@ PARK_GRID_PROPOSED = {2: (0.48, 0.20, 150.0), 13: (0.55, 0.20, -120.0),
 # it is the reason these are not typed by hand.  Every one passes `check_pose`,
 # the fleet's nearest pair is at the broad-phase cap (>= 250 mm), and the worst
 # park-vs-(ink AND lift) is +93.1 mm against the conductor's 80.
+# RE-DERIVED 2026-09-10 AT h = 0.970, from the re-searched grid above and at
+# the same tool — `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
+# PARK_GRID_PROPOSED, pen_lat=PEN_LAT_HOLDER, pen_ext=PEN_EXT_HOLDER)`'s own
+# output and nothing else.  ALL SIX MOVED, because the grid did.  Every one
+# passes `check_pose`, the fleet's nearest pair is at the broad-phase cap
+# (>= 250 mm, arms 2 and 13), and the worst park-vs-(ink AND lift) is
+# +97.7 mm — against a `PAIR_MARGIN` that is now 50 mm.
+#
+# ARMS 13 AND 31 HOLD THE SAME SEVEN JOINT VALUES, for the reason arms 2 and
+# 31 did at 0.940: same mount, same column, same triple, base frames differing
+# by a pure translation in canvas y.  Their pens hover 1.21 m apart.
 Q_PARK_PROPOSED = {
-    2:  (-0.7431, 1.1045, 1.7370, -2.1199, 2.0526, 1.4620, -2.1750),
-    13: (-0.0035, 1.1450, -1.6052, -1.7504, -1.9958, 1.5278, -2.1750),
-    17: (-0.7431, -1.1045, -1.4046, -2.1199, 2.0526, 1.4620, -2.1750),
-    31: (-0.5891, 1.0065, 1.2532, -1.7495, 2.1092, 1.2082, 2.1750),
-    71: (0.8674, -1.2423, 1.1187, -2.1013, -2.0908, 1.7654, -1.7795),
-    97: (0.5752, -1.1079, 1.6776, -2.4046, -1.8232, 1.1650, -2.1750),
+    2:  (0.0003, 1.0443, 1.4169, -1.8606, 2.0498, 1.2968, 2.1750),
+    13: (-0.6162, 1.0125, 1.3275, -1.7335, 2.1074, 1.2793, 2.1750),
+    17: (-0.7230, -1.0365, -1.5768, -2.1834, 2.0188, 1.2693, -2.1750),
+    31: (-0.6162, 1.0125, 1.3275, -1.7335, 2.1074, 1.2793, 2.1750),
+    71: (0.9167, -1.1814, 1.2489, -2.2444, -2.0707, 1.5627, 2.1750),
+    97: (0.0046, -1.0778, 1.7029, -1.8578, -2.0201, 1.3231, -0.5932),
 }
-# where each of them holds the pen (canvas m), for the log and the scene
+# where each of them holds the pen (canvas m), for the log and the scene.
+# Arms 2 and 97 are CLIPPED to the sheet in y: at r = 0.70 their bearings run
+# off the far short edge and `certified_ready_pose` puts the hover point back
+# inside the paper, which is why both read y = 3.581.
 PARK_HOVER_PROPOSED = {
-    2:  (0.181, 3.266),                         # hover 0.20 m
-    13: (0.322, 0.129),                         # hover 0.20 m
-    17: (1.622, 0.365),                         # hover 0.20 m
+    2:  (0.416, 3.581),                         # hover 0.30 m
+    13: (0.060, 0.915),                         # hover 0.30 m
+    17: (1.622, 0.365),                         # hover 0.30 m
     31: (0.060, 2.125),                         # hover 0.30 m
-    71: (1.553, 2.015),                         # hover 0.10 m
-    97: (1.490, 3.308),                         # hover 0.35 m
+    71: (1.683, 2.090),                         # hover 0.20 m
+    97: (1.388, 3.581),                         # hover 0.30 m
 }
 
 

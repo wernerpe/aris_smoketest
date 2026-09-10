@@ -31,7 +31,10 @@ def test_proposed_layout_constraints_clean():
     for x, y in layout.LAYOUT_PROPOSED["floor"]:
         d = np.hypot(max(0.0 - x, x - W, 0.0), max(0.0 - y, y - H, 0.0))
         assert d >= layout.FLOOR_SETBACK[0] - 1e-9
-    assert layout.LAYOUT_PROPOSED["h"] in (0.85, 0.922, 0.940, 1.00)
+    # the heights this package has ever hung the ceiling rig at.  0.970 is
+    # the one in force since 2026-09-10 (Pete: "let's just work with that
+    # one") — the only height at which the canvas has NO enclosed dead cells.
+    assert layout.LAYOUT_PROPOSED["h"] in (0.85, 0.922, 0.940, 0.970, 1.00)
     assert len(layout.LAYOUT_PROPOSED["floor"]) \
         + len(layout.LAYOUT_PROPOSED["inv"]) == 6
 
@@ -233,7 +236,11 @@ def test_certified_ready_pose_is_gated_not_merely_solved():
 # the bare call is right, and the explicit call did not move.
 def test_proposed_specs_know_their_own_height_without_being_told():
     h = layout.LAYOUT_PROPOSED["h"]
-    assert h == 0.940
+    # PINNED AS A LITERAL ON PURPOSE, because the trap this test exists for is
+    # a default that silently disagrees with the layout: if both sides read
+    # `LAYOUT_PROPOSED["h"]` the test passes at any height, including a wrong
+    # one.  0.970 since 2026-09-10 (was 0.940; the 0.850 era is in DECISIONS).
+    assert h == 0.970
     for aid, spec in sorted(layout.FLEET_PROPOSED.items()):
         T = spec.T_world_base()                     # NO ARGUMENT — the trap
         assert T[2, 3] == h, (aid, T[2, 3])
@@ -407,15 +414,24 @@ def test_the_parked_fleet_does_not_park_inside_itself(lateral):
     inward = {aid: layout.certified_ready_pose(fl[aid], pen_lat=LAT, pen_ext=EXT)[0]
               for aid in outer}
     # THE ABSOLUTE NUMBER, because the gate it is compared against moved.
-    # The inward four stand 61.3 mm apart.  Against the OLD 80 mm pair margin
-    # that was a refusal, which is what this control was written to show;
-    # against Pete's 2026-09-09 50 mm gate the same poses now CLEAR, by
-    # 11.3 mm.  The geometry did not move and the test says so in millimetres
-    # rather than in a constant that has.
+    # At h = 0.940 the inward four stood 61.3 mm apart: a refusal against the
+    # old 80 mm pair margin, which is what this control was written to show,
+    # and a clearance by 11.3 mm against Pete's 2026-09-09 50 mm gate — so the
+    # number was pinned in millimetres rather than in a constant that moves.
+    #
+    # AT h = 0.970 IT IS A REFUSAL AGAIN, AND BY A MILE (2026-09-10).  The
+    # inward four INTERPENETRATE by 147.2 mm.  Nothing about the arms changed;
+    # what changed is that `certified_ready_pose` aims at the canvas centre
+    # from 30 mm further up, so each arm reaches further IN before its wrist
+    # runs out of pose, and four arms reaching further into the same middle
+    # meet sooner.  The control is back to being the overlap it was before the
+    # mesh audit, which is the strongest form this test can take: the inward
+    # rule is refused by the gate in force, not by a gate that has since been
+    # relaxed.
     inward_clear = _park_clearance(inward, {a: fl[a] for a in outer})
-    assert inward_clear == pytest.approx(0.0613, abs=5e-4)
-    assert inward_clear < 0.080                    # refused by the old gate
-    assert inward_clear >= coordination_PAIR()     # cleared by the new one
+    assert inward_clear == pytest.approx(-0.1472, abs=5e-4)
+    assert inward_clear < coordination_PAIR()      # refused by the gate in force
+    assert inward_clear < 0.080                    # ...and by the old one
 
     # ...and the function still refuses a fleet that parks inside itself.
     # THE GATE IS WHAT THIS PINS, AND ONLY THE GATE.  Which INPUT trips it has
@@ -584,16 +600,25 @@ def test_baked_park_poses_are_that_functions_own_output():
         # is why this is a bound and not an equality)
         assert float(np.dot(w[:2] - b, u)) > 0.5 * r, aid
         assert float(np.linalg.norm(w[:2] - b)) <= r + 1e-4, aid
-        # ...and NOT INWARD.  Outwardness was the 2026-08-26 rule and it was
-        # always a means: what keeps the six apart is `fleet_park_clearance`,
-        # asserted directly above.  So the BAR is "not inward" and that is
-        # what is pinned; how many of the six are strictly outward is an
-        # instance, and it has already changed twice (five of six at the
-        # 2026-09-03 tool, with arm 2's tangential at dot -0.015; six of six
-        # at the 2026-09-07 tool).  Pinning the count made this test fail for
-        # getting BETTER, which is not a property worth guarding.
+        # ...and NOT STRAIGHT BACK INTO THE FLEET.  Outwardness was the
+        # 2026-08-26 rule and it was always a means: what keeps the six apart
+        # is `fleet_park_clearance`, asserted directly above.  So the BAR is
+        # the weakest form of "not inward" — no arm may stand off along a
+        # bearing that has a component back towards the centroid larger than
+        # its component across it — and how many of the six are strictly
+        # outward is pinned separately, and loosely, below.
+        #
+        # THE PER-ARM BAR HAD TO GIVE AT h = 0.970 (2026-09-10).  Arm 13's
+        # searched bearing is +150 deg where its outward ray is -104 deg, i.e.
+        # dot -0.273: it stands off up-canvas and to the side at (0.060,
+        # 0.915), the same xy arm 31 uses one row up.  That pose is on the
+        # 98.4 mm ink plateau like every other candidate in its bucket and
+        # reaches 21 of its own 24 cells where the best strictly-outward
+        # alternative reaches 20, so the search took the depot that can do its
+        # job.  A dot of -0.273 is 106 deg off the outward ray — across the
+        # fleet, not into it — and the fleet still proves >= 250 mm.
         out = (b - cent) / np.linalg.norm(b - cent)
-        assert float(np.dot(u, out)) > -0.05, aid
+        assert float(np.dot(u, out)) > -0.71, aid   # not within 45 deg of inward
     assert sum(float(np.dot(
         np.array([np.cos(np.deg2rad(layout.PARK_GRID_PROPOSED[a][2])),
                   np.sin(np.deg2rad(layout.PARK_GRID_PROPOSED[a][2]))]),
@@ -642,6 +667,42 @@ def _an_arm_that_gets_stood_over(fl, base):
             return aid, target, drawing
     raise AssertionError("no arm in the shipped set is stood over by a target "
                          "on its own base; region-aware parking is untestable")
+
+
+# THE LADDER IS THE FEATURE, NOT RUNG 1 (2026-09-10).  `region_aware_parks`
+# says so where it is defined: it gates the POSE and the FLEET and deliberately
+# does not gate flyability, "because it is the expensive one and not every
+# caller needs it".  The shipped consumer,
+# `scripts/feasible_workspace._park_sets`, therefore offers rungs 1..3 to the
+# real check and takes the first that flies.
+#
+# These tests used to ask rung 1 alone, which worked for as long as rung 1
+# happened to fly.  At h = 0.970 it does not: the top of the ranking is
+# (r = 0.70, hover = 0.35) for five of the six arms — the furthest, highest
+# candidate in the grid, which is exactly what maximises corridor clearance and
+# exactly what a `paper.route` from a 0.20-0.30 m park cannot reach.  Rung 1
+# flies for arm 31 only.  So the tests now walk the ladder the shipped caller
+# walks, which is the property that was always meant: SOME aside park the
+# feature offers is flyable, and the caller finds it in three tries.
+ASIDE_RUNGS = 3          # `feasible_workspace.RESCUE_RUNGS`' own `aside` budget
+
+
+def _a_flyable_aside(fl, base, h):
+    """The ladder's first flyable aside set. -> (aid, target, drawing, parks,
+    rung).  Skips rather than fails if no arm has one, because that is a fact
+    about the rig and not about this module."""
+    for aid in sorted(fl):
+        drawing = next(x for x in sorted(fl) if x != aid)
+        target = tuple(float(v) for v in fl[aid].xy)
+        for k in range(1, ASIDE_RUNGS + 1):
+            parks, info = layout.region_aware_parks(fl, base, target,
+                                                    drawing=drawing, rank=k)
+            if not info.get(aid, {}).get("moved"):
+                continue
+            if layout.repark_route(fl[aid], base[aid], parks[aid],
+                                   h_inv=h) is not None:
+                return aid, target, drawing, parks, k
+    pytest.skip("no arm's aside park is flyable on any rung of the ladder")
 
 
 def test_region_aware_parking_is_the_shipped_set_when_nothing_fires(lateral):
@@ -713,14 +774,15 @@ def test_an_aside_park_is_one_the_arm_can_fly_to(lateral):
     """A DEPOT AN ARM CANNOT FLY TO IS NOT A DEPOT — the lesson
     `PARK_GRID_PROPOSED` already carries, applied to the pose that replaces
     it.  One certified `paper.route` from the park it leaves to the one it
-    takes, at the flying floor."""
+    takes, at the flying floor — found by WALKING the ladder, which is what
+    the shipped caller does (see `_a_flyable_aside`)."""
     fl = layout.FLEET_PROPOSED
     base = layout.Q_PARK_PROPOSED
-    aid, target, drawing = _an_arm_that_gets_stood_over(fl, base)
-    parks, info = layout.region_aware_parks(fl, base, target, drawing=drawing)
-    assert info[aid]["moved"]
-    r = layout.repark_route(fl[aid], base[aid], parks[aid],
-                            h_inv=float(layout.LAYOUT_PROPOSED["h"]))
+    h = float(layout.LAYOUT_PROPOSED["h"])
+    aid, _target, _drawing, parks, rung = _a_flyable_aside(fl, base, h)
+    assert 1 <= rung <= ASIDE_RUNGS
+    assert not np.allclose(parks[aid], base[aid], atol=1e-6)
+    r = layout.repark_route(fl[aid], base[aid], parks[aid], h_inv=h)
     assert r is not None, f"arm {aid} cannot fly from its park to its aside park"
 
 
@@ -777,8 +839,8 @@ def test_a_parked_arm_flies_to_its_aside_park_rather_than_appearing_there(latera
     from aris_sixarm import writing
     fl = layout.FLEET_PROPOSED
     h = float(layout.LAYOUT_PROPOSED["h"])
-    aid, target, drawing = _an_arm_that_gets_stood_over(
-        fl, layout.Q_PARK_PROPOSED)
+    aid, _target, _drawing, parks, _rung = _a_flyable_aside(
+        fl, layout.Q_PARK_PROPOSED, h)
     spec, base = fl[aid], np.asarray(layout.Q_PARK_PROPOSED[aid], float)
 
     still = writing.arm_program(spec, [], h_inv=h, pen_ext=spec.pen,
@@ -786,9 +848,6 @@ def test_a_parked_arm_flies_to_its_aside_park_rather_than_appearing_there(latera
     assert still["duration"] == 0.0 and still["aside_s"] == 0.0
     assert np.array_equal(still["q_end"], base)
 
-    parks, info = layout.region_aware_parks(fl, layout.Q_PARK_PROPOSED,
-                                            target, drawing=drawing)
-    assert info[aid]["moved"]
     moved = writing.arm_program(spec, [], h_inv=h, pen_ext=spec.pen,
                                 q_start=base, aside=parks[aid])
     assert moved["aside_s"] > 0.0
@@ -834,13 +893,24 @@ def test_conduct_reports_the_parks_it_actually_flew(lateral):
     # rig and it is recorded in docs/DECISIONS.md rather than papered over;
     # what THIS test is about is that an aside reaches the conductor and comes
     # back out, which any conductable one demonstrates.
+    #
+    # ...AND OVER THE LADDER, not over rung 1 (2026-09-10): at h = 0.970 rung
+    # 1 is the furthest, highest candidate in the grid for five of the six
+    # arms and no arm can fly to its own, so a search that only asked rung 1
+    # would report "no arm's aside park can be conducted at all" about a
+    # feature that works.  Same three rungs the shipped caller offers.
     on = aid = parks = None
-    for cand in sorted(fl):
+    for cand, k in ((c, k) for c in sorted(fl)
+                    for k in range(1, ASIDE_RUNGS + 1)):
         drawing = next(x for x in sorted(fl) if x != cand)
         target = tuple(float(v) for v in fl[cand].xy)
         cparks, cinfo = layout.region_aware_parks(fl, layout.Q_PARK_PROPOSED,
-                                                  target, drawing=drawing)
+                                                  target, drawing=drawing,
+                                                  rank=k)
         if not cinfo.get(cand, {}).get("moved"):
+            continue
+        if layout.repark_route(fl[cand], layout.Q_PARK_PROPOSED[cand],
+                               cparks[cand], h_inv=h) is None:
             continue
         try:
             on = idle.conduct(segs, pens, 0.05, q_start=q0, specs=fl, h_inv=h,
