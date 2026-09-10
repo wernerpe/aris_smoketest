@@ -897,7 +897,8 @@ def path_static_lb(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
     return float(out)
 
 
-def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
+def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
+                 floor=None):
     """`chain_tip_z` and `chain_static` off ONE forward-kinematics pass.
 
     -> (chain_z (M,), tip_z (M,), static (M,)).  The cost-matrix screens sample
@@ -916,7 +917,7 @@ def chain_screen(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     boxes = near_boxes(P, boxes, C=C) if boxes else boxes
     if not boxes:
         return chain_z, tip_z, np.full(len(qs), np.inf)
-    return chain_z, tip_z, frozen.chain_clearance(P, boxes, C)
+    return chain_z, tip_z, frozen.chain_clearance(P, boxes, C, floor)
 
 
 def block_screen(L, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
@@ -1052,7 +1053,8 @@ def static_boxes(spec):
     return envelope.swap(frozen.filter_boxes(boxes))
 
 
-def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
+def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
+                 floor=None):
     """Per-configuration clearance to the static set. -> (M,).
 
     The PER-POSE form, which `frame_clearance` then minimises over.  It is the
@@ -1069,7 +1071,8 @@ def chain_static(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
     pw = p @ R.T + t
     tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
     P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
-    return frozen.chain_clearance(P10, boxes, sphere_centres(qs, spec, h_inv))
+    return frozen.chain_clearance(P10, boxes,
+                                  sphere_centres(qs, spec, h_inv), floor)
 
 
 def frame_clearance(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None):
@@ -1104,7 +1107,8 @@ def pose_static_ok(q, spec, pen_ext=None, h_inv=H_INV_DEFAULT,
     if not STATIC_SAFE:
         return True
     return bool(chain_static(np.asarray(q, float).reshape(1, 7), spec, pen_ext,
-                             h_inv, boxes)[0] >= float(floor) - EPS)
+                             h_inv, boxes,
+                             float(floor) - EPS)[0] >= float(floor) - EPS)
 
 
 def effective_static_floor(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
@@ -1130,8 +1134,12 @@ def effective_static_floor(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         return -np.inf
     ends = np.stack([np.asarray(q0, float).reshape(7),
                      np.asarray(q1, float).reshape(7)])
+    # `floor` is passed through on purpose: this clamps everything at or above
+    # it to `floor` anyway, so a value the short-circuit leaves at the capsule
+    # model's number is a value this was going to discard.
     return float(min(float(floor), float(chain_static(ends, spec, pen_ext,
-                                                      h_inv, boxes).min())))
+                                                      h_inv, boxes,
+                                                      float(floor)).min())))
 
 
 def path_frame_clearance(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT,

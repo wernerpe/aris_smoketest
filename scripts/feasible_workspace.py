@@ -376,8 +376,11 @@ def _certified_hovers(spec, q_draw, xy, h, heights=None):
 
     ladder(gate)
     if not out:
+        # the floor is what the very next line compares against, so anything
+        # at or above it is discarded either way (see `chain_static`)
         fl = float(paper.chain_static(np.asarray(q_draw, float).reshape(1, 7),
-                                      spec, spec.pen, h)[0])
+                                      spec, spec.pen, h,
+                                      floor=paper.FRAME_FLOOR)[0])
         if fl < paper.FRAME_FLOOR:
             ladder(writing.static_gate(spec, spec.pen, h, floor=fl))
     return out

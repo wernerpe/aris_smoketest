@@ -450,16 +450,23 @@ def _frame_clear(P10, boxes, margin=None, C=None):
         ub = np.minimum(ub, ends - r)
         lb = np.minimum(lb, ends - 0.5 * L - r)
     out = np.zeros(N, bool)
-    from . import link_spheres
-    if link_spheres.enabled():
-        # THE BOUND SCREEN IS A CAPSULE ARGUMENT AND DOES NOT SURVIVE THE
-        # SWAP.  `lb`/`ub` bracket the exact answer only because every point
-        # of the arm is inside one of `STATIC_CAPSULES`; the sphere set is not
-        # a subset of those (see `link_spheres`), so a cell the bound "proves
-        # clear" is not proved.  Under the flag every candidate goes to the
-        # exact query — slower, and the only version that is right.
-        return rig_final.chain_static_clearance(P10, boxes, C=C) >= margin
     out[lb >= margin] = True                       # proved clear
+    from . import link_spheres
+    if C is not None and link_spheres.enabled():
+        # HALF THE SCREEN SURVIVES THE INTERSECTION, AND IT IS THE USEFUL
+        # HALF.  `lb`/`ub` bracket the CAPSULE answer.  The intersection is
+        # `max(capsule, sphere)`, so `lb >= margin` still PROVES clear — a
+        # maximum over something already at the margin is at the margin.  What
+        # does not survive is the fast REJECT: `ub < margin` bounds only the
+        # capsule half, and the spheres may yet clear it.  So everything that
+        # is not proved goes to the exact query instead of only the straddle
+        # band.
+        todo = np.flatnonzero(lb < margin)
+        if len(todo):
+            out[todo] = (rig_final.chain_static_clearance(
+                P10[todo], boxes, C=np.asarray(C, float)[todo],
+                floor=margin) >= margin)
+        return out
     todo = np.flatnonzero((lb < margin) & (ub >= margin))
     if len(todo):
         out[todo] = (rig_final.chain_static_clearance(P10[todo], boxes)
