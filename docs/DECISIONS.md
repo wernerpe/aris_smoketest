@@ -2901,16 +2901,55 @@ nearest dead cell at **184.4 mm** (v18's was 141 mm) and wins the tie on the
 worst single sample, 63.2 mm.  No placement search was run.
 `out/csail_place_v19_proxy.json`, `out/csail_place_v19_placement.json`.
 
-**THE RUN ITSELF IS NOT IN YET.**  GUI job `20260910-124546-ce72`, v18's flag
-set exactly against the 0.970 atlas and the re-searched parks (v18 took
-4 430 s).  `out/finish_v19.sh` waits for it, copies the artifacts to
-`out/csail_schedule_h097_v19.*` and runs the independent whole-timeline
-`scene_check` (`scripts/recheck_timeline.py`) into
-`out/csail_schedule_h097_v19_recheck.json`.  **Until those land, v18 remains
-the shipped certified programme** — 100 % allocated and conducted, makespan
-242.146 s, 3 phases, `scene_check` PASS at inter-arm 80.59 mm and chain
-20.5 mm, and it was planned at h = 0.940.  The numbers to compare v19 against
-are in the 2026-09-07 v18 entry above.
+**v19 IS IN, AND IT IS THE BETTER PROGRAMME ON EVERY AXIS BUT ONE.**  GUI job
+`20260910-124546-ce72`, v18's flag set exactly against the 0.970 atlas and the
+re-searched parks, 3 709.7 s (v18: 4 430 s).
+`out/csail_schedule_h097_v19.{npz,json}` and the artifacts beside them.
+
+| | v18 (h = 0.940) | **v19 (h = 0.970)** |
+|---|---:|---:|
+| coverage, allocated / conducted | 100.0000 % | **100.0000 %** |
+| left empty / skipped | 0.0000 / 0.0000 m | **0.0000 / 0.0000 m** |
+| traced / drawn | 16.8048 / 16.8708 m | 16.8048 / 16.8458 m |
+| segments | 53 | **46** |
+| phases planned / conducted | 3 / 3 | **2 / 2** |
+| makespan | 242.146 s | **209.875 s** |
+| conducted pause | 220.2 s | **113.6 s** |
+| planner wall clock | 4 430 s | **3 710 s** |
+
+**INDEPENDENT `scene_check`, whole merged timeline**
+(`scripts/recheck_timeline.py`, 5 038 frames re-sampled to 10 075, 6 arms,
+15 pairs): **VERDICT PASS**.
+
+| gate minimum | v18 | **v19** |
+|---|---:|---:|
+| inter-arm | 80.59 mm (gate 80, **+0.59**) | **50.32 mm (gate 50, +0.32)** |
+| — worst pair | 13-31 at t = 42.01 s | 13-31 at t = 65.98 s |
+| self | 21.5 mm (gate 20) | **63.1 mm** (gate 20) |
+| frame | 51.6 mm (gate 50) | 50.6 mm (gate 50) |
+| neighbour base column | 145.8 mm (gate 50) | 131.5 mm (gate 50) |
+| paper chain | 20.5 mm (gate 20) | **26.0 mm** (gate 20) |
+| paper tip | −7.3 mm (floor −10) | −7.9 mm (floor −10) |
+| joint margin, min | 0.1076 | 0.1009 |
+| frozen poses | 6/6 | 6/6 |
+
+**THE ONE THAT GOT WORSE IS THE INTER-ARM CLEARANCE, AND IT IS THE HEADLINE.**
+v19's arms pass **28 mm closer** than v18's — 50.32 mm against 80.59 — and its
+headroom over the gate in force is **+0.32 mm**, thinner than v18's +0.59 mm.
+That is the thinnest margin in the programme and it is now the number to
+watch, in the seat the paper chain occupied in v18 (which improved to 26.0 mm
+and is no longer the binding one).
+
+**AND THAT IS NOT THE HEIGHT — IT IS THE 50 mm GATE, SPENDING ITSELF.**  Both
+programmes sit within a millimetre of whatever gate they were planned under,
+because the allocator packs until the gate stops it.  v18 at 80 mm bought
+three phases and a 242 s makespan; v19 at 50 mm bought two phases and 210 s by
+letting arms 13 and 31 work 28 mm closer together.  **The 32 seconds were paid
+for out of arm-to-arm clearance, not earned by the extra 30 mm of height** —
+`PAIR_MARGIN` still carries `CALIB_M` = 30 mm of unsurveyed-base allowance
+underneath, so the real discretionary air between two arms at t = 65.98 s is
+20.32 mm.  A base survey is what buys that back, and it is the same
+recommendation `mounts.MOUNTS.calib` has carried all along.
 
 ## 2026-09-10 — OPEN — FOR PETE: should the two columns FACE EACH OTHER?
 
