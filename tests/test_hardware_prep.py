@@ -104,16 +104,27 @@ def test_per_arm_height_and_yaw_reach_the_base_transform():
 
 
 def test_the_as_built_height_is_the_one_the_hardware_was_built_at():
-    """0.850 is what stands in the room; 0.940 is what ships in layout.py."""
+    """0.850 is what stands in the room; 0.970 is what ships in layout.py.
+
+    THE GAP IS THE POINT, and it has grown twice: the shipped height went
+    0.850 -> 0.940 (2026-08-26) -> 0.970 (2026-09-10) while the hardware in
+    the room did not move, so the survey reader has to keep reporting a
+    deviation rather than quietly adopting whatever it measures.  The shipped
+    height is pinned as a LITERAL because reading it from the layout on both
+    sides would pass at any height, including one that had silently drifted
+    into agreement with the room.
+    """
     from aris_sixarm import layout
-    assert layout.LAYOUT_PROPOSED["h"] == 0.940
+    assert layout.LAYOUT_PROPOSED["h"] == 0.970
     s = _survey({a: {"z": 0.850} for a in ab.build_sheet_nominal()})
     fleet, meta = ab.build_asbuilt(s)
     assert meta["h_mean"] == pytest.approx(0.850)
     assert all(f.T_world_base()[2, 3] == pytest.approx(0.850)
                for f in fleet.values())
     _, _, ok = ab.deviations(s)
-    assert not ok            # 90 mm is a deviation and must be reported as one
+    assert not ok            # 120 mm is a deviation and must be reported as one
+    # ...and the deviation reported is the whole gap, not a stale 90 mm
+    assert layout.LAYOUT_PROPOSED["h"] - 0.850 == pytest.approx(0.120)
 
 
 def test_the_survey_allowance_is_what_the_survey_buys():
