@@ -1075,3 +1075,42 @@ def test_the_mirrored_audit_would_catch_a_half_patched_fleet():
     finally:
         layout.FLEET_PROPOSED = was
         sys.modules.pop(mod.__name__, None)
+
+
+def test_the_timeline_recheck_refuses_to_measure_a_rig_that_never_ran():
+    """`recheck_timeline` must build the fleet the schedule was PLANNED at.
+
+    The module's own docstring already says a re-plan at another HEIGHT must
+    not be checked against the shipped fleet, because that is measuring a
+    machine that never ran.  A mirrored re-plan is the same statement about a
+    base ROTATION, and it is more dangerous: the numbers that come back look
+    entirely plausible.  So `fleet_for` takes the clocking, proves every
+    inverted arm's front points where that clocking says, and refuses
+    otherwise — and the uniform path still returns the shipped object itself,
+    by identity, so a normal run pays nothing and re-derives nothing.
+    """
+    import importlib.util
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "recheck_timeline", root / "scripts" / "recheck_timeline.py")
+    rt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rt)
+
+    fl, h = rt.fleet_for()
+    assert fl is layout.FLEET_PROPOSED, "the normal run must not re-derive"
+    assert h == float(layout.LAYOUT_PROPOSED["h"])
+    assert rt.fleet_for(clocking="uniform")[0] is layout.FLEET_PROPOSED
+
+    mir, hm = rt.fleet_for(h=float(layout.LAYOUT_PROPOSED["h"]),
+                           clocking="mirrored")
+    assert hm == h
+    for aid in layout.CLOCKING_MIRRORED:
+        assert np.allclose(np.asarray(mir[aid].T_world_base())[:3, 0],
+                           [1, 0, 0], atol=1e-12), aid
+    for aid in (17, 71, 97):
+        assert np.allclose(np.asarray(mir[aid].T_world_base())[:3, 0],
+                           [-1, 0, 0], atol=1e-12), aid
+
+    with pytest.raises(KeyError):
+        rt.fleet_for(clocking="sideways")

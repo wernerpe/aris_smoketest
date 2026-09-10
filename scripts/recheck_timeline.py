@@ -47,29 +47,52 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from aris_sixarm import layout, scene_check                      # noqa: E402
 
 
-def fleet_for(h=None, parks=None):
+def fleet_for(h=None, parks=None, clocking="uniform"):
     """The rig to check against. -> (fleet, h).
 
     `h=None` is the shipped rig, which is what every normal run wants.
+
+    ...AND THE CLOCKING IS HERE FOR THE SAME REASON `--h` IS (2026-09-10).
+    This module's own docstring says a report-only re-plan at another height
+    must not be checked against the shipped fleet, because that is "measuring
+    a machine that never ran".  A mirrored re-plan is the same statement about
+    a base ROTATION: checking `v19m`'s trajectory against uniform bases would
+    hand back inter-arm numbers for a fleet nobody planned, and they would
+    look plausible.  So the clocking is asked for explicitly and PROVED below,
+    exactly as the height is.
     """
-    if h is None:
+    clk = layout.CLOCKINGS[clocking]
+    if h is None and not clk:
         return layout.FLEET_PROPOSED, float(layout.LAYOUT_PROPOSED["h"])
-    lay = layout.paired_grid(spacing=layout.PAIR_SPACING, rows=3, h=float(h))
+    h = float(layout.LAYOUT_PROPOSED["h"]) if h is None else float(h)
+    lay = layout.paired_grid(spacing=layout.PAIR_SPACING, rows=3, h=h)
     if parks:
         doc = json.loads(Path(parks).read_text())
         pk = {int(k): np.asarray(v["q"], float)
               for k, v in doc["best"].items()}
     else:
-        pk = layout.certified_park_poses(layout.build_fleet(lay),
-                                         layout.PARK_GRID_PROPOSED)
-    fl = layout.build_fleet(lay, q_park=pk)
+        pk = layout.certified_park_poses(
+            layout.build_fleet(lay, clocking=clk), layout.PARK_GRID_PROPOSED)
+    fl = layout.build_fleet(lay, q_park=pk, clocking=clk)
     zs = {round(float(s.T_world_base()[2, 3]), 6) for s in fl.values()}
     if zs != {round(float(h), 6)}:
         raise SystemExit(f"fleet is not at h = {h}: {sorted(zs)}")
-    return fl, float(h)
+    # ...and the fronts point where the clocking says, per arm
+    for aid, sp in sorted(fl.items()):
+        if getattr(sp, "mount", None) != "inv":
+            continue
+        yaw = np.radians(float(clk.get(int(aid), 0.0)))
+        want = np.array([-np.cos(yaw), np.sin(yaw), 0.0])
+        got = np.asarray(sp.T_world_base(), float)[:3, 0]
+        if not np.allclose(got, want, atol=1e-9):
+            raise SystemExit(
+                f"arm {aid} front is {np.round(got, 4).tolist()}, the "
+                f"{clocking!r} clocking wants {np.round(want, 4).tolist()}")
+    return fl, h
 
 
-def recheck(npz, sub=2, h=None, parks=None, verbose=True):
+def recheck(npz, sub=2, h=None, parks=None, verbose=True,
+            clocking="uniform"):
     """-> the `scene_check.check_timeline` report for the whole timeline."""
     z = np.load(npz, allow_pickle=False)
     arms = [int(v) for v in z["arms"]]
@@ -78,12 +101,13 @@ def recheck(npz, sub=2, h=None, parks=None, verbose=True):
     pens = {int(x): float(p) for x, p in zip(z["arms"], z["pen_ext"])}
     q = {x: np.asarray(z[f"q_{x}"], float) for x in arms}
     draw = {x: np.asarray(z[f"seg_{x}"]) >= 0 for x in arms}
-    fl, hh = fleet_for(h, parks)
+    fl, hh = fleet_for(h, parks, clocking)
     if verbose:
         M = len(next(iter(q.values())))
         print(f"{npz}: {M} frames, dt={dt:.4f}, margin={1000 * margin:.0f} mm, "
               f"h={hh}, phases={int(z['n_phases'])}, "
-              f"duration={float(z['duration']):.3f} s")
+              f"duration={float(z['duration']):.3f} s"
+              + ("" if clocking == "uniform" else f", CLOCKING {clocking}"))
         print(f"  pens {{{', '.join(f'{k}: {1000 * v:.1f}' for k, v in pens.items())}}} mm")
     return scene_check.check_timeline(q, dt, margin, programs=None, h_inv=hh,
                                       pen_ext=pens, sub=sub, verbose=verbose,
@@ -144,10 +168,16 @@ def main(argv=None):
     ap.add_argument("--h", type=float, default=None,
                     help="check against a fleet at this height instead of the "
                          "shipped one (for report-only re-plans)")
+    ap.add_argument("--clocking", default="uniform",
+                    help="base clocking the schedule was PLANNED at: "
+                         "'uniform' (shipped) or 'mirrored'.  Checking a "
+                         "mirrored plan against uniform bases measures a "
+                         "machine that never ran")
     ap.add_argument("--parks", default=None,
                     help="height_sweep.py park JSON supplying that fleet's depots")
     a = ap.parse_args(argv)
-    rep, margin = recheck(a.npz, a.sub, a.h, a.parks)
+    rep, margin = recheck(a.npz, a.sub, a.h, a.parks,
+                          clocking=a.clocking)
     print()
     for line in summarise(rep, margin):
         print(line)
