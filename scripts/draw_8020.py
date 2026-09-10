@@ -902,11 +902,34 @@ def sheet_topdown(h, out_dir):
              "CORNER LEG  item E\nto the floor — the cage is\n"
              "self-supporting.  MID-SPAN LEGS\nARE PROBABLY REQUIRED "
              "(open item 3).", ha="left", c=WARN, rad=0.12)
-    s.leader(ax, (ARMS[17][0] + 210, ARMS[17][1]), (2410, 640),
-             "CONNECTOR SIDE\nAll six arms are clocked identically,\n"
-             f"yaw = 0, R_world_base = Ry(180): the front\nfaces x = 0 and "
-             f"every connector panel\nfaces the x = {CW:.1f} edge.",
-             ha="right", c=ORIGC, rad=-0.12)
+    if CLOCKING == "uniform":
+        s.leader(ax, (ARMS[17][0] + 210, ARMS[17][1]), (2410, 640),
+                 "CONNECTOR SIDE\nAll six arms are clocked identically,\n"
+                 f"yaw = 0, R_world_base = Ry(180): the front\nfaces x = 0 "
+                 f"and every connector panel\nfaces the x = {CW:.1f} edge.",
+                 ha="right", c=ORIGC, rad=-0.12)
+    else:
+        s.leader(ax, (ARMS[17][0] + 210, ARMS[17][1]), (2410, 700),
+                 "CONNECTOR SIDE — MIRRORED, PER COLUMN\n"
+                 "LEFT 13/31/2: yaw = 180, front faces +x,\n"
+                 "connector and plate toward x = 0.\n"
+                 f"RIGHT 17/71/97: yaw = 0, front faces -x,\n"
+                 f"connector and plate toward x = {CW:.1f}.\n"
+                 "The columns FACE EACH OTHER and every\n"
+                 "cable leaves over its own nearest edge.",
+                 ha="right", c=ORIGC, rad=-0.12)
+        s.leader(ax, (0.5 * (COL_X[0] + COL_X[1]), ROW_Y[1] - 260),
+                 (-1140, 1500),
+                 "WHAT THE MIRROR BUYS, AND IT IS STEEL:\n"
+                 f"cluster gap across a pair {cluster_gap():.2f}\n"
+                 f"  (uniform 216.20)\n"
+                 f"gusset pair clearance {gusset_pair_clear():.2f}\n"
+                 f"  (uniform 89.20)\n"
+                 "+50.30 on both — the plate's 25.15\n"
+                 "offset flips with the front.\n"
+                 "Workspace is unchanged (+4 cells in\n"
+                 "16562, same certified rectangle).",
+                 ha="left", c=WARN, rad=0.12)
 
     # ---------------- panel B: the cluster detail -----------------------
     DEN_B = 5.0
@@ -990,15 +1013,45 @@ def sheet_topdown(h, out_dir):
         (INK, False, "Tolerance +/-10 mm per base; record any as-built "
                      "offset rather than re-centring the others."),
         (None, False, ""),
-        (INK, True, "ORIENTATION — load-bearing, and identical for all six."),
-        (INK, False, "R_world_base = Ry(180), yaw = 0. The flipped base's +x "
-                     "(the arm's front) points toward x = 0, so every "
-                     f"connector panel faces the x = {CW:.1f} long edge. Do "
-                     "not clock any arm differently: the certified coverage "
-                     "and every program assume this exact uniform "
-                     "orientation."),
-        (None, False, ""),
     ]
+    if CLOCKING == "uniform":
+        lines += [
+            (INK, True, "ORIENTATION — load-bearing, and identical for all "
+                        "six."),
+            (INK, False, "R_world_base = Ry(180), yaw = 0. The flipped base's "
+                         "+x (the arm's front) points toward x = 0, so every "
+                         f"connector panel faces the x = {CW:.1f} long edge. "
+                         "Do not clock any arm differently: the certified "
+                         "coverage and every program assume this exact "
+                         "uniform orientation."),
+            (None, False, ""),
+        ]
+    else:
+        lines += [
+            (WARN, True, "ORIENTATION — MIRRORED.  THIS IS A VARIANT SHEET, "
+                         "NOT THE SHIPPED ONE."),
+            (INK, False, "LEFT column 13/31/2: R_world_base = Ry(180) @ "
+                         "Rz(180), front toward +x. RIGHT column 17/71/97: "
+                         "Ry(180), front toward -x. The two columns face each "
+                         f"other across x = {0.5 * (COL_X[0] + COL_X[1]):.1f}, "
+                         "and each column's connector panel and plate offset "
+                         "run toward its OWN nearest long edge — so no cable "
+                         "is dressed across the paper."),
+            (WARN, False, f"It opens the steel: cluster gap "
+                          f"{cluster_gap():.2f} (uniform 216.20) and gusset "
+                          f"pair clearance {gusset_pair_clear():.2f} (uniform "
+                          f"89.20), +50.30 on both. The plate offset "
+                          "DIRECTION is still inferred (open item 1) and now "
+                          "matters twice, once per column — and the two "
+                          "columns need HANDED cluster parts."),
+            (WARN, False, "IT DOES NOT RE-EARN THE WORKSPACE. Mirrored "
+                          "measures +4 live cells in 16562 and the SAME "
+                          "certified rectangle, and it needs its own park "
+                          "set: the shipped literals re-seated on mirrored "
+                          "bases park two arms 100.1 mm inside each other. "
+                          "See docs/DECISIONS.md 2026-09-10."),
+            (None, False, ""),
+        ]
     if ca:
         lines += [
             (GRN, True, f"CERTIFIED DRAWING AREA at h = {h:.0f}: "
