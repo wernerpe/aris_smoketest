@@ -3160,3 +3160,62 @@ of re-mapping to prove it did not move a certified number — which is not
 something to land in the same box as a height change.  **What a future caller
 must know today: if you want a ONE-SHOT aside park, gate it on
 `repark_route` yourself; rung 1 is not a promise.**
+
+## 2026-09-10 — the clocking became askable, and two stale-state bugs fell out
+
+Pete leans toward mirrored on the hardware case (cables outward, +50.3 mm of
+drop-cluster gap), so the variant had to become something the pipeline can be
+RUN at rather than something argued about.  Making it askable turned up two
+bugs of the same family — state that had gone stale and had no way to say so.
+
+### the lever
+
+`layout.build_fleet` takes a `clocking`, `layout.CLOCKINGS` names the two, and
+`clocking=None` / `{}` / `CLOCKING_UNIFORM` all give **bit-identical** base
+transforms to what the function has always returned (pinned with
+`array_equal`, not a tolerance — the whole safety of a variant is that the
+default cannot feel it).  It reaches the three report-only drivers as
+`--clocking`: `feasible_workspace` (set as a module global before the first
+`rig()` and before any pool, the same idiom and the same reason as `--parks`),
+`height_sweep` sweep/park/pilot, and `replan_at_height`.  Nothing is written
+back; `LAYOUT_PROPOSED` is uniform and `docs/BUILD_SHEET.md` section 3 still
+says not to improvise the clocking.
+
+`height_sweep.do_park` also picked up `do_sweep`'s escape hatch, and it is
+load-bearing here: the shipped park recipe re-seated on mirrored bases refuses
+the fleet, which is exactly the fact the search exists to repair, so it must
+not block the search that repairs it.
+
+### bug 1 — `fw.rig`'s "shipped" fast path had drifted off the height
+
+```python
+shipped = (abs(pitch - SHIPPED_PITCH) < 1e-9 and abs(h - 0.940) < 1e-9 ...)
+```
+
+That literal was written when 0.940 was the height.  After 2026-09-10 it never
+matched, so the one branch that is supposed to hand back the **committed**
+fleet and the **baked** park literals had silently stopped firing and every
+caller was getting a re-derivation of them instead.  Nothing failed, because a
+re-derivation agrees to five decimals — which is exactly why it went unseen.
+It reads `layout.LAYOUT_PROPOSED["h"]` now.  **A literal was a second place for
+the height to live, and it drifted the first time the height moved.**
+
+### bug 2 — the GUI scene cache had no expiry at all
+
+`_ensure_scene` wrote `out/gui_cache/scene_<rig>_<tool>.{json,bin}` once and
+returned it forever; the only test was that the file EXISTED.  So from the
+moment the height, the tool or a park pose moved, every browser got the old rig
+with no warning.  Found live: after h went 0.940 -> 0.970 the served scene was
+still a **2026-09-02** build at base z 0.940 with the 0.110 pen and the
+pre-2026-09-07 parks, and it had to be deleted by hand.
+
+The fix has to work **without importing the planner**, which is that module's
+whole design — importing it binds a rig at import time and the server answers
+about five.  So the cache key is a content stamp over every `.py` under
+`aris_sixarm/` (size and mtime), plus rig, tool and a version scalar, written
+only AFTER a successful build so a crash leaves an entry that simply rebuilds.
+It is deliberately CONSERVATIVE: an edit to an unrelated module rebuilds a
+scene that would not have changed, which costs one subprocess and is the right
+way round.  What it can no longer do is serve a scene built from code that is
+gone.  `SCENE_CACHE_V` is the hand-bumped escape for a change to the exported
+scene's SHAPE, which file stamps cannot see.
