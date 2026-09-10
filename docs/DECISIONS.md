@@ -3197,6 +3197,65 @@ not a proof of infeasibility — the shipped map spends four escalation rungs on
 exactly these cells and recovers most of them.  Both runs had the same budget,
 so the COMPARISON is sound; the absolute counts are a floor.
 
+### 4d. THE PROGRAMME AT BOTH CLOCKINGS — v19 against v19m
+
+Same picture, same fixed placement, same flag set; each clocking on its own
+atlas and its own searched park set.  v19m via
+`scripts/replan_at_height.py --clocking mirrored` (report-only: it patches the
+loaded fleet, proves every base z AND every base rotation, and touches nothing
+on disk).  `out/mirrored/csail_schedule_h097_v19m.*`.
+
+| | v18 (0.940, uniform) | **v19 (0.970, uniform)** | **v19m (0.970, mirrored)** |
+|---|---:|---:|---:|
+| coverage, conducted | 100.0000 % | **100.0000 %** | **100.0000 %** |
+| left empty / skipped | 0 / 0 m | 0 / 0 m | 0 / 0 m |
+| drawn | 16.8708 m | 16.8458 m | 16.8358 m |
+| segments | 53 | 46 | **44** |
+| phases conducted | 3 | 2 | 2 |
+| **makespan** | 242.146 s | **209.875 s** | **249.188 s** |
+| conducted pause | 220.2 s | 113.6 s | 155.0 s |
+| min inter-arm (run) | 81.9 mm | 53.3 mm | 51.2 mm |
+| planner wall clock | 4 430 s | 3 710 s | 3 047 s |
+
+**MIRRORED DRAWS THE SAME PICTURE 39.3 SECONDS SLOWER** — 249.188 s against
+v19's 209.875, which is 18.7 % worse and also slower than v18 at the old
+height.  It is not a coverage loss: both reach 100 % with nothing left empty.
+It is pause.  v19m's phase 2 needed 152.3 s against v19's 113.0, and it spends
+155.0 s of conducted pause against 113.6 — the arms wait for each other more.
+Its inter-arm minimum is also 2.1 mm tighter (51.2 against 53.3), so it is not
+buying the time back with clearance either.
+
+That is the same left-column story the pilot told, one layer up: fewer
+certified segments (44 against 46) because the turned column's routes are
+slightly harder, and more waiting because the phase cannot be packed as
+tightly.  **Nothing here is dramatic and none of it is in mirrored's favour.**
+
+**INDEPENDENT `scene_check`, whole merged timeline, EACH AT ITS OWN CLOCKING**
+(`scripts/recheck_timeline.py --clocking mirrored` for v19m — checking it
+against uniform bases would measure a machine that never ran, and the script
+now refuses to):
+
+| gate minimum | v18 | **v19** | **v19m** |
+|---|---:|---:|---:|
+| verdict | PASS | **PASS** | **PASS** |
+| inter-arm | 80.59 (gate 80) | **50.32 (gate 50)** | **50.32 (gate 50)** |
+| — worst pair | 13-31, t = 42.01 s | 13-31, t = 65.98 s | 13-31, t = 55.21 s |
+| self | 21.5 mm | **63.1 mm** | 36.2 mm |
+| frame | 51.6 mm | 50.6 mm | 50.6 mm |
+| neighbour column | 145.8 mm | 131.5 mm | 131.8 mm |
+| paper chain | 20.5 mm | 26.0 mm | 26.0 mm |
+| paper tip | −7.3 mm | −7.9 mm | −8.2 mm |
+| joint margin, min | 0.1076 | 0.1009 | **0.1072** |
+| frozen poses | 6/6 | 6/6 | 6/6 |
+| frames re-sampled | 5 861 | 10 075 | 11 963 |
+
+**BOTH PASS, AND BOTH LAND ON 50.32 mm** — the same +0.32 mm over the gate, on
+the same pair, at different instants.  That is the allocator packing until the
+gate stops it, twice, and it is the clearest evidence in this file that the
+inter-arm number is set by `PAIR_MARGIN` and not by the geometry.  Mirrored's
+self-clearance is a little worse (36.2 against 63.1 mm, arm 31) and its joint
+margin a little better (0.1072 against 0.1009); neither is close to binding.
+
 ### 5. what was NOT measured
 
 The real three-number mirrored park search (~4 900 s at 4 jobs) — which would
