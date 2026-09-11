@@ -1,5 +1,46 @@
 # Decisions — the numbers, and where each one is anchored
 
+## PRIORITY ORDER CLOSES THE ROOM, AND A VACUOUS PASS IS NOT A PASS (2026-09-11, last)
+
+**THE CONTROL, FINISHED.**  `out/staged_csail_h097_v3.json`: the pose-union
+envelope at the adopted stride 1 / cell 0.075 / pad 0, RRT tier ON, refusal loop
+on.  **8 of 18 buckets flew, carrying 5.445 m of 15.838 — 34.4 % of the ink.**
+Planning **2 973.9 s** cold against v2's 1 549.4 s (the tighter room has 3-12x
+the spheres and every clearance query pays), time to first motion **0.294 s**,
+coverage 94.20 %, 3 of 56 pieces unplannable.  v2 at the LOOSE setting flew
+**9** of 18, so the tightening marginally hurt — the sweep's non-monotonicity,
+showing up in the fly.  **Option (1) is closed.**
+
+**AND ITS MAKESPAN, 198.66 s, IS NOT A MAKESPAN.**  It is the sum of eight stage
+durations, two of them zero because nothing flew.  Comparing it with 391.7 s or
+v19's 209.9 s would be comparing a third of a programme with two whole ones.
+
+**A STAGE IN WHICH NOTHING FLEW WAS PASSING BOTH CHECKS.**  Six arms at their
+parks clear everything; stages 6 and 7 of the control were labelled PASS on that
+basis.  `StageResult.ok` now requires `complete` — every bucket that HAS ink
+produced a timeline — and the report prints `flown/with_ink` and says EMPTY.
+This was a defect in the REPORT, not in the rig, and it is the kind that makes a
+run look better than it is.
+
+**THE SIMULTANEOUS TWO-PASS SCHEME IS CIRCULAR AND MEASURABLY WORSE THAN SOLO.**
+On CSAIL stage 0, arm 71's thirteen-piece bucket FLEW in pass 1 against the
+parked fleet and STOPPED FLYING in pass 2.  Each arm is asked to yield to a path
+the other has already abandoned, so nobody yields; no number of iterations
+closes a cycle.
+
+**PRIORITY ORDER CLOSES IT IN ONE SWEEP.**  Actives ordered by ink, busiest
+first (least room to give).  Arm 1 plans against the parked fleet and is then
+FINAL; arm k plans against the parked fleet plus the FINAL trajectories of
+1..k-1.  Every pair (i, k), i < k, is certified against the path arm i actually
+flies, and arm i never moves again — so every pair is certified exactly, with no
+iteration.  **The dependency graph becomes a DAG**: arm k depends on 1..k-1 and
+nothing after, which also bounds a re-plan's blast radius to k+1..n.  It is the
+spatial analogue of `coordination.coordinate`'s priority search with the order
+fixed by ink rather than searched, because a stage has at most three actives.
+The certificate is unchanged: `active_pair_gap` at `PAIR_MARGIN` still closes
+the claim; the order gets the trajectories apart, the check proves it.
+
+
 ## THE ROOM IS WHAT THE NEIGHBOUR ACTUALLY DOES, AND THE CERTIFICATE IS NOW A GRAPH (2026-09-11, last)
 
 The pose-union envelope is measured out (previous entry): tightening it moved

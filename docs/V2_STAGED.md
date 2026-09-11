@@ -774,3 +774,83 @@ the cold/warm planning split — is not in hand, and neither is the recalibrated
 1 000-stroke model. It is running to `out/staged_csail_h097_v4.json`, and the
 union-envelope fly at the adopted tight setting is running alongside it to
 `out/staged_csail_h097_v3.json` as the control.
+
+
+## 16. The control: the union envelope, tightened, with the tier on
+
+`out/staged_csail_h097_v3.json` — the adopted stride 1 / cell 0.075 / pad 0
+envelope, RRT tier **on**, refusal loop on. This is the run §14 promised and it
+closes option (1) for good.
+
+| stage | actives | pieces | ink (m) | stage (s) | active-pair (mm) | solo (mm) | **flown** |
+|---|---|---|---|---|---|---|---|
+| 0 | 13, 71, 2 | 15 | 5.243 | 25.8 | +899.3 | +250.3 | **1 of 3** |
+| 1 | 17, 31, 97 | 12 | 4.136 | 9.8 | +819.5 | +244.1 | **1 of 3** |
+| 2 | 13, 97 | 6 | 1.461 | 48.0 | +977.2 | **+28.2** | 2 of 2 |
+| 3 | 17, 2 | 5 | 1.145 | 29.4 | +870.9 | +96.2 | 2 of 2 |
+| 4 | 31, 97 | 5 | 1.083 | 31.8 | +897.0 | +140.2 | 1 of 2 |
+| 5 | 71, 2 | 4 | 0.923 | 53.9 | +857.0 | +69.8 | 1 of 2 |
+| 6 | 13, 31 | 4 | 0.889 | 0.0 | +639.8 | +256.0 | **0 of 2** |
+| 7 | 17, 71 | 2 | 0.959 | 0.0 | +539.8 | +256.0 | **0 of 2** |
+
+**8 of 18 buckets flew, carrying 5.445 m of the 15.838 m allocated — 34.4 % of
+the ink.** The active-pair gap is enormous everywhere (+539.8 mm at worst)
+precisely *because* two thirds of the ink never got a trajectory: the arms that
+would have been close to each other are the ones standing at their parks.
+
+Three readings, and the third is about this document rather than the rig.
+
+*The tightening did not help and marginally hurt.* v2, at the loose 0.15 m /
+40 mm setting, flew **9** of 18; v3 at the honest tight one flies **8**. That is
+the sweep's non-monotonicity showing up in the fly, and it is why §14 adopted on
+the certificate rather than on the bucket count.
+
+*The cost is real.* Planning is **2 973.9 s** cold (49.6 min), **2 869.6 s**
+charged per stage to its busiest arm, against v2's 1 549.4 s — the tighter room
+has 3–12× the spheres and every clearance query pays for them. Time to first
+motion is unaffected at **0.294 s**, and the refusal loop is unchanged
+(**94.20 %** coverage, 3 of 56 pieces unplannable, all `degenerate:too_short`).
+
+*The makespan is 198.66 s and it is not a makespan.* It is the sum of eight
+stage durations two of which are zero because nothing flew. **Comparing it with
+391.7 s or with v19's 209.9 s would be comparing a third of a programme with two
+whole ones**, and the earlier drafts of this document came close to doing
+exactly that. Which exposes a defect in the report itself: **a stage in which
+nothing flew passed both checks**, because six arms at their parks clear
+everything. Stages 6 and 7 were labelled PASS on that basis. `StageResult.ok`
+now requires `complete` — every bucket that has ink produced a timeline — and
+the stage line prints `flown/with_ink` and says EMPTY rather than PASS.
+
+## 17. Priority order: one sweep, an exact fixed point
+
+The simultaneous two-pass scheme of §15 was measured out on the way past. On
+CSAIL stage 0, arm 71's thirteen-piece bucket **flew in pass 1** against the
+parked fleet and **stopped flying in pass 2**, once its neighbours' trajectories
+became obstacles. The scheme asks every arm to yield to a path the other has
+already abandoned, so nobody actually yields; it is circular, and no number of
+iterations closes a cycle.
+
+**A priority order closes it in one sweep.** The actives of a stage are ordered
+by ink, busiest first, because the busiest arm has the least room to give:
+
+- arm 1 plans against the parked fleet, and its trajectory is then **final**;
+- arm *k* plans against the parked fleet **plus the final trajectories of arms
+  1…*k*−1**.
+
+When arm *k* finishes, every pair (*i*, *k*) with *i* < *k* is certified against
+the path arm *i* actually flies — and arm *i* never moves again. Every pair is
+therefore certified, exactly, with no iteration and no circularity. The
+dependency graph stops being a cycle and becomes a **DAG**: arm *k* depends on
+1…*k*−1 and on nothing after it, which is also what makes a re-plan's blast
+radius finite (re-planning arm *k* invalidates only *k*+1…*n*).
+
+It is the spatial analogue of what `coordination.coordinate` already does in
+time with its priority search, with the order fixed by ink rather than searched,
+because a stage has at most three actives and the busiest is the obvious choice.
+The superseded scheme stays behind `--room-order simultaneous` so the
+measurement that retired it can be reproduced.
+
+**The certificate is unchanged**: the independent whole-timeline
+`active_pair_gap` at `PAIR_MARGIN` is still what closes the claim. The order is
+what gets the trajectories apart; the check is what proves they are.
+
