@@ -854,3 +854,37 @@ measurement that retired it can be reproduced.
 `active_pair_gap` at `PAIR_MARGIN` is still what closes the claim. The order is
 what gets the trajectories apart; the check is what proves they are.
 
+
+## 18. Stage 2's +28.2 mm, attributed at last
+
+Flagged three times without an answer, and now measured: it is **arm 97's
+trajectory passing 28.2 mm from *parked* arm 2, at t = 2.2 s**. Arm 13, the
+other active, is clean at +234.9 mm. `column_failed: [97]` is the same geometry
+seen through the base-column cylinder rather than a second defect.
+
+**It is a genuine active-vs-parked violation, not a modelling artefact**, and it
+is untouched by every pass of this work — the envelope, the tightening and the
+priority room are all about active-vs-*active*.
+
+The mechanism is a **router/checker mismatch**, and it is worth stating because
+it is systematic rather than particular to this leg. `paper.route` certifies a
+pen-up leg at `STATIC_MARGIN` = 50 mm *at the samples it evaluates*;
+`scene_check.check_timeline` re-derives the same leg and additionally subtracts
+the 1-Lipschitz between-sample residual, `0.55 × (step_i + step_j)`. A leg that
+is exactly at the gate at its samples therefore reads roughly 20 mm tighter once
+the sweep between them is charged — which is what 50 → 28.2 mm looks like. The
+checker is right and the router is optimistic by the sweep.
+
+Two fixes, neither implemented: charge the router the same residual (raise its
+floor by the sweep it will be measured against, which is a constant it already
+has in `coordination.SWEEP_K`), or sample the leg finely enough that the
+residual is negligible — the same auto-refinement `check_timeline` already does
+for its frame and paper gates. The first is one number; the second is the
+honest one.
+
+**An earlier attempt at this attribution was wrong and is worth recording as
+such.** It fed the programme's raw waypoints to `check_timeline` at a fixed dt,
+which charges a Lipschitz residual against jumps the timeline never makes, and
+reported two *parked* arms at −437 mm. The rebuild goes through
+`writing.uniform_samples`, exactly as `staged.solo_check` does.
+

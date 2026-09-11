@@ -1,5 +1,36 @@
 # Decisions — the numbers, and where each one is anchored
 
+## STAGE 2's +28.2 mm IS THE ROUTER'S SWEEP, AND IT IS SYSTEMATIC (2026-09-11, last)
+
+Flagged three times without an answer and now attributed: **arm 97's trajectory
+passes 28.2 mm from PARKED arm 2, at t = 2.2 s**.  Arm 13, the other active, is
+clean at +234.9 mm; `column_failed: [97]` is the same geometry through the
+base-column cylinder, not a second defect.  It is a genuine active-vs-PARKED
+violation and it is untouched by every pass of the room work, which is all about
+active-vs-ACTIVE.
+
+**THE MECHANISM IS A ROUTER/CHECKER MISMATCH.**  `paper.route` certifies a leg
+at `STATIC_MARGIN` = 50 mm AT THE SAMPLES IT EVALUATES;
+`scene_check.check_timeline` re-derives it and additionally subtracts the
+1-Lipschitz between-sample residual `0.55 x (step_i + step_j)`.  A leg exactly at
+the gate at its samples reads about 20 mm tighter once the sweep between them is
+charged — which is what 50 -> 28.2 mm looks like.  **The checker is right and
+the router is optimistic by the sweep**, systematically, on every leg.
+
+Two fixes, neither implemented and neither a gate change: charge the router the
+same residual (raise its floor by the sweep it will be measured against —
+`coordination.SWEEP_K` is already that number), or auto-refine the leg's
+sampling until the residual is negligible, which is what `check_timeline`
+already does for its own frame and paper gates.  The second is the honest one.
+
+**AND AN EARLIER ATTEMPT AT THIS ATTRIBUTION WAS WRONG.**  It fed the
+programme's RAW WAYPOINTS to `check_timeline` at a fixed dt, charging a
+Lipschitz residual against jumps the timeline never makes, and reported two
+PARKED arms at -437 mm.  The rebuild goes through `writing.uniform_samples`,
+exactly as `staged.solo_check` does.  Recorded because the wrong number was
+plausible enough to have been quoted.
+
+
 ## PRIORITY ORDER CLOSES THE ROOM, AND A VACUOUS PASS IS NOT A PASS (2026-09-11, last)
 
 **THE CONTROL, FINISHED.**  `out/staged_csail_h097_v3.json`: the pose-union
