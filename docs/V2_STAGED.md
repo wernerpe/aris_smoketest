@@ -419,32 +419,103 @@ Three ways to spend that, cheapest first:
 
 The number `X` is the one thing a measurement has to supply.
 
-## 11. What this pass measured, and what is still running
+## 11. The CSAIL re-run with the envelope room
 
-**Measured, and reproduced by `tests/test_staged.py`:**
+Same command, `traces.zigzag_pattern()`, h = 0.970, the refusal loop on and the
+envelope room installed. **The leg gap is closed and the makespan question is
+now a different one.**
+
+| stage | actives | pieces | ink (m) | stage (s) | **active-pair (mm)** | ink vs ink (mm) | solo (mm) | lift used | flown |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 13, 71, 2 | 15 | 5.243 | 25.8 | **+899.3** | — | +250.3 | no | 1 of 3 |
+| 1 | 17, 31, 97 | 12 | 4.136 | 8.9 | **+826.1** | — | +214.3 | no | 1 of 3 |
+| 2 | 13, 97 | 6 | 1.461 | 48.0 | **+977.2** | +1 055.3 | **+28.2** | no | 2 of 2 |
+| 3 | 17, 2 | 5 | 1.145 | 29.4 | **+870.9** | +1 151.2 | +96.2 | no | 2 of 2 |
+| 4 | 31, 97 | 5 | 1.083 | 31.8 | **+897.0** | — | +140.2 | no | 1 of 2 |
+| 5 | 71, 2 | 4 | 0.923 | 56.5 | **+860.8** | — | +65.3 | no | 1 of 2 |
+| 6 | 13, 31 | 4 | 0.889 | 28.4 | **+626.1** | — | +206.7 | no | 1 of 2 |
+| 7 | 17, 71 | 2 | 0.959 | 0.0 | **+539.8** | — | +256.0 | no | 0 of 2 |
+
+**The active-pair minimum over all eight stages is +539.8 mm, against +8.2 mm
+before.** The two failing stages went +12.9 → **+899.3** and +8.2 → **+826.1**,
+and the **lift lever was never needed** — `lift_used` is false everywhere, so
+routing against the envelopes was sufficient on its own and the row-band hover
+ladder stays in the box as the fallback it was built to be. Seven of the eight
+stages pass both checks; stage 2 still reads **+28.2 mm** on the *parked*
+side, which is the one failure this pass did not touch and is unchanged from §3.
+
+**And the envelope is too conservative to fly the big buckets.** Three of the
+eighteen (stage 0's arm 71 with 13 pieces, stage 1's arm 31 with 11, stage 7's
+arm 71 with 2 — **26 of the 56 pieces**) produced **no timeline at all**:
+`writing.arm_program` refuses the entry leg, and in one case `sequence.solve`
+could find no feasible order before that. The cause is named by the ink check
+itself — the minimum ink-vs-envelope reading is **−28.5 mm**, i.e. the arm's own
+certified drawing pose is already *inside* the inflated bound, and no leg out of
+a pose inside an obstacle can clear it. The conservatism is the 0.15 m sphere
+clustering plus `ENVELOPE_PAD` = 40 mm, both of which were chosen for speed
+rather than tightness.
+
+**So the makespan is not comparable and is not quoted as one.** 228.8 s over a
+programme missing 26 of 56 pieces is a partial number, and the honest statement
+is that the makespan question re-opens once the envelope is tight enough to fly.
+What *is* measurable on the nine buckets that did fly is the barrier cost:
 
 | | |
 |---|---|
-| the envelope, per (stage, arm) | **99–247 bounding spheres** (row bands 200–247, seam bands 99–108), built once and cached; built in **0.0 s** on a warm cache |
-| the refusal loop on CSAIL | **round 0: 54 pieces, 5 refused, 100.00 % · round 1: 56, 4, 98.42 % · round 2: 56, 0, 94.20 %** — converged in three rounds, 1 piece left unplannable |
-| the same loop with whole-atom bans | **80.6 %** — which is why `mask_atoms` cuts |
-| ink vs the (inflated) active envelopes, 48 pieces | median **+230.9 mm**, p05 **+9.4 mm**, min **−28.5 mm**, **5 of 48** under 50 mm |
-| stage 0 with the envelope room, 8-stroke subset | active-pair **+758.9 mm** against **+466.7 mm** without it, both checks PASS |
-| stage 0 park overhead, that subset | **10.19 s** of a 58.4 s stage — **17.5 %** |
+| park → out → back, all flown buckets | **87.7 s** |
+| …on the critical path (the busiest arm of each stage) | **75.3 s** |
+| …as a share of the makespan | **32.9 %** |
+| draw, all flown buckets | 103.9 s |
+| pen-up, all flown buckets | 175.3 s |
 
-**The coverage answer is 94.20 %, not 100 %,** and the 5.8 % is not the loop
-failing to converge — it converged, with zero refusals left. It is ink that
-*has no second stage-compatible drawer*: the staged capability map's redundancy
-is 48.1 % (`docs/V2_TRACES.md` §5), so when the one arm a stretch is offered to
-refuses it, there is nobody to hand it to. Closing that needs the pattern to
-offer the stretch to somebody else, not the loop to try harder.
+**A third of the clock is the barrier**, and pen-up is 1.7× the ink.
 
-**Still running when this pass closed:** the full eight-stage CSAIL re-run with
-the envelope room installed (`out/staged_csail_h097_v2.json`), which is what
-supplies the new per-stage minima, the makespan delta and `X`. Every leg in it
-is cold, because the room changed and the leg store is namespaced on the room.
-The 1 000-stroke staged makespan is a **model** with every term measured
-(`draw` per metre and inter-piece leg from CSAIL, park overhead per (stage,
-arm) from `stage_overhead`, per-stage ink from `traces`) — a real 1 438-piece
-fly is not affordable, because `sequence.cost_matrix` is O(n²) route screens and
-one bucket is 434 pieces.
+**The refusal loop, measured:** round 0 → 54 pieces, 5 refused, 100.00 %;
+round 1 → 56, 4, 98.42 %; round 2 → **56, 0, 94.20 %**, converged, with
+**3 pieces unplannable and all three `degenerate:too_short`**. The 5.8 % of ink
+lost is not the loop giving up — it converged with zero refusals outstanding —
+it is ink with **no second stage-compatible drawer**: the staged map's
+redundancy is 48.1 % (`docs/V2_TRACES.md` §5), so when the one arm a stretch is
+offered to refuses it, there is nobody to hand it to. Closing that needs the
+*pattern* to offer the stretch to somebody else. **The final refusal rate is
+3 of 56, 5.4 %**, against 11.1 % before the loop.
+
+Time to first motion is **0.286 s**. Planning is **1 549 s**, because the room
+changed and every leg in it is cold — the leg store is namespaced on the room,
+by design, so this is the one-off price of the new certificate.
+
+## 12. A thousand lines, staged — the model
+
+A real 1 438-piece fly is not affordable: `sequence.cost_matrix` is O(n²) route
+screens and one bucket is 434 pieces. So the makespan is assembled from terms
+measured on the CSAIL run and the 1 000-stroke set's own per-(stage, arm) ink
+and piece counts from `traces`. **Arithmetic, with every term measured.**
+
+Calibration, from the nine flown buckets: draw **6.56 s/m**, inter-piece pen-up
+leg **5.15 s**, park overhead **9.74 s per (stage, arm)**. Accept rate 81.9 %,
+measured in §5.
+
+| stage | actives | pieces | ink (m) | busiest arm | stage (s) |
+|---|---|---|---|---|---|
+| 0 | 13, 71, 2 | 572 | 258.0 | 2 | 1 327.7 |
+| 1 | 17, 31, 97 | 549 | 257.2 | 97 | 1 313.8 |
+| 2 | 13, 97 | 162 | 36.6 | 13 | 451.5 |
+| 3 | 17, 2 | 146 | 35.0 | 2 | 421.5 |
+| 4 | 31, 97 | 75 | 17.9 | 31 | 417.4 |
+| 5 | 71, 2 | 76 | 15.7 | 71 | 409.8 |
+| 6 | 13, 31 | 91 | 20.7 | 31 | 499.7 |
+| 7 | 17, 71 | 85 | 21.3 | 71 | 477.7 |
+
+**Staged makespan (model): 5 319 s = 88.7 min**, against
+`V2_SCALING_BASELINE` §3.3's ~4 300 s scaling of v19's conducted six-arm
+makespan — **1.24×**, where CSAIL measured 1.87× before this pass.
+
+**And the barrier amortises exactly as the rule predicts.** The park overhead on
+the critical path is **77.9 s, 1.47 % of the makespan**, against CSAIL's
+**32.9 %**. The barrier is a fixed cost per (stage, arm) and the ink is not, so
+**the eight-stage pattern is right at scale and wrong on a small picture** —
+which is the whole case for the adaptive stage count of §10, and it supplies
+its threshold: at 6.56 s/m and 9.74 s of park overhead, **`X` ≈ 1.5 m of ink
+for the busiest arm**. Six of CSAIL's eight stages are under it; none of the
+1 000-line set's are.
+

@@ -73,7 +73,44 @@ a depot leg the router refuses — and `held_karp` says so by raising.  The buck
 falls back to the nearest-neighbour order and reports it, rather than taking the
 run down.
 
-**THE BARRIER COST, AND THE RULE THAT SHOULD REPLACE IT (proposed, not built).**
+**MEASURED, THE WHOLE EIGHT STAGES.**  The active-pair minimum over all eight
+stages goes from **+8.2 mm to +539.8 mm**, and the two stages that failed go
+**+12.9 -> +899.3** and **+8.2 -> +826.1**.  **The lift lever was never needed**
+— `lift_used` is false in every stage, so routing against the envelopes was
+sufficient on its own.  Seven of eight stages pass both checks; stage 2 still
+reads **+28.2 mm** on the PARKED side, which this pass did not touch.
+
+**AND THE ENVELOPE IS TOO CONSERVATIVE TO FLY THE BIG BUCKETS — THE ONE THING
+THIS PASS GOT WRONG.**  Three of eighteen buckets (**26 of the 56 pieces**,
+including both main stages' busiest arms) produced NO timeline: the entry leg is
+refused.  The ink check names the cause itself — minimum ink-vs-envelope
+**-28.5 mm**, i.e. the arm's own certified drawing pose is already inside the
+inflated bound, and no leg out of a pose inside an obstacle can clear it.  The
+conservatism is the 0.15 m sphere clustering plus `ENVELOPE_PAD` = 40 mm, both
+chosen for speed rather than tightness, and both are parameters.  **So the
+228.8 s makespan is a partial programme's and is not quoted as a makespan.**
+The next measurement is the tightness sweep: cluster cell and pad down, against
+the fraction of buckets that fly.
+
+**THE REFUSAL LOOP, MEASURED.**  Round 0: 54 pieces, 5 refused, 100.00 %.
+Round 1: 56, 4, 98.42 %.  Round 2: **56, 0, 94.20 %** — converged, with **3
+pieces unplannable, all three `degenerate:too_short`**.  The final refusal rate
+is **3 of 56 (5.4 %) against 11.1 % before the loop**.  The 5.8 % of ink lost is
+not the loop giving up; it is ink with no second stage-compatible drawer, and
+closing it needs the PATTERN to offer the stretch to somebody else.
+
+**THE BARRIER COST, MEASURED AND AMORTISED.**  On the nine flown buckets the
+park -> out -> back trip is **87.7 s total, 75.3 s on the critical path,
+32.9 % of the makespan**, with pen-up 1.7x the ink.  Modelled at 1 000 strokes
+with every term measured (draw **6.56 s/m**, inter-piece leg **5.15 s**, park
+**9.74 s** per (stage, arm), the set's own per-stage ink from `traces`), the
+staged makespan is **5 319 s** — **1.24x** the ~4 300 s scaling of v19's
+conducted six-arm makespan, where CSAIL measured 1.87x — and the park overhead
+on the critical path falls to **77.9 s, 1.47 %**.  **The barrier is a fixed cost
+per (stage, arm) and the ink is not, so the eight-stage pattern is right at
+scale and wrong on a small picture.**
+
+**THE RULE THAT SHOULD REPLACE IT (proposed, not built).**
 `staged.stage_overhead` measures the park -> out -> back trip per (stage, arm)
 directly.  It is a FIXED cost per (stage, arm) and the ink is not, so the
 eight-stage pattern is right at scale and wrong on a small picture.  The rule:
