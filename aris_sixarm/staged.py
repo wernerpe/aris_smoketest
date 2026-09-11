@@ -626,6 +626,7 @@ class ArmStage:
     depends_on: dict[int, str] = field(default_factory=dict)
     room_kind: str = "parked"          # parked | envelope | trajectory
     priority: int | None = None        # where in the stage's order it planned
+    residue: bool = False              # ran ALONE, after the others parked
     frozen_poses: dict[int, list[float]] = field(default_factory=dict)
     lift_ladder: tuple[float, ...] | None = None
     ink_clearance: list[float] = field(default_factory=list)
@@ -1265,8 +1266,20 @@ class StageResult:
 
     @property
     def duration(self) -> float:
-        """The stage costs its BUSIEST arm: the actives never wait for each other."""
-        return max((a.duration for a in self.arms.values()), default=0.0)
+        """The stage costs its BUSIEST CONCURRENT arm, plus any residue.
+
+        The actives never wait for each other -- that is the whole point of the
+        envelope argument -- so the concurrent part costs its busiest arm.  A
+        RESIDUE bucket is not concurrent with anything: it runs after the others
+        have parked, so it is added rather than maxed.
+        """
+        conc = max((a.duration for a in self.arms.values() if not a.residue),
+                   default=0.0)
+        return conc + sum(a.duration for a in self.arms.values() if a.residue)
+
+    @property
+    def residue_m(self) -> float:
+        return float(sum(a.ink_m for a in self.arms.values() if a.residue))
 
     @property
     def n_pieces(self) -> int:
@@ -1357,7 +1370,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         route_jobs=None, envelopes=True, atlas_dir=ATLAS_DEFAULT,
         refusal_rounds=REFUSAL_ROUNDS, lift_retry=True, env_kw=None,
         trajectory_rooms=False, room_iterations=1,
-        room_order="priority", order_search=6,
+        room_order="priority", order_search=6, residue=True,
         verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
@@ -1466,6 +1479,10 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                     order_search, verbose)
                 rooms.append({int(a): str(v[2]) for a, v in rm.items()})
                 order_rank, orders_tried = rank, tried
+                if residue:
+                    _residue_pass(s, arms, buckets, fl, pens, parks, h_inv,
+                                  opts, leg_cache, leg_cache_root, on_piece,
+                                  verbose)
             else:
                 # THE SUPERSEDED SIMULTANEOUS SCHEME, kept because the
                 # measurement that retired it is worth being able to reproduce:
@@ -1622,6 +1639,46 @@ def _order_search(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
     return arms, o, rm, rank, len(cands)
 
 
+def _residue_pass(s, arms, buckets, fl, pens, parks, h_inv, opts, leg_cache,
+                  leg_cache_root, on_piece, verbose):
+    """Ink that no order could fly CONCURRENTLY is flown ALONE, at the end.
+
+    -> the metres that took this path.
+
+    PETE'S ORIGINAL FINAL PASS, and the honest floor under the whole scheme: a
+    bucket that cannot share the stage with its neighbours does not have to be
+    abandoned, it has to be SERIALISED.  The other actives have finished and are
+    back at their parks by then -- that is what the stage barrier means -- so
+    the residue arm plans against exactly the room pass 1 flies in, the parked
+    fleet, and its timeline is appended to the stage rather than overlapped with
+    anybody's.
+
+    `idle.conduct` IS the tool for this and it reduces to nothing here: with one
+    arm moving the priority search enumerates `sum_k P(1, k)` = ONE order and
+    there is no second mover to schedule against.  So the residue is laid down
+    directly and checked the same way -- `solo_check` against the parked fleet
+    is precisely the certificate a one-mover conduct would produce, and
+    `active_pair_gap` does not see it at all, because nothing else is moving.
+    """
+    done = 0.0
+    for a, st in sorted(arms.items()):
+        if not st.accepted or st.timeline is not None:
+            continue
+        if verbose:
+            print(f"  stage {s} RESIDUE: arm {a} ({len(st.accepted)} pieces, "
+                  f"{st.ink_m:.3f} m) alone, after the others park")
+        alone = plan_bucket(s, a, buckets.get((s, a), []), fl, pens, parks,
+                            h_inv, opts, leg_cache=leg_cache,
+                            leg_cache_root=leg_cache_root, fly=True,
+                            on_piece=on_piece, envelopes=None, verbose=verbose)
+        alone.residue = True
+        alone.priority = st.priority
+        arms[int(a)] = alone
+        if alone.timeline is not None:
+            done += float(alone.ink_m)
+    return done
+
+
 def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
                 leg_cache_root, fly, on_piece, env, ladders, verbose):
     return {a: plan_bucket(s, a, buckets.get((s, a), []), fl, pens, parks,
@@ -1634,8 +1691,9 @@ def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
 
 def _check_stage(sr, acts, fl, pens, parks, h_inv, dt, max_check_poses):
     thaw()              # the CHECK is not allowed to inherit the planner's room
-    sr.pair = (active_pair_gap(sr.arms, fl, pens, h_inv, dt, max_check_poses)
-               if len(sr.arms) > 1
+    conc = {a: st for a, st in sr.arms.items() if not st.residue}
+    sr.pair = (active_pair_gap(conc, fl, pens, h_inv, dt, max_check_poses)
+               if len(conc) > 1
                else dict(min_m=float("inf"), min_ink_m=float("inf"),
                          worst_at=None, per_pair={}, per_pair_ink={},
                          n_samples={}, n_ink={}))
@@ -1760,6 +1818,7 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
                 arm=int(a), q_park=[float(x) for x in np.asarray(st.q_park).ravel()],
                 frozen_partners=[int(x) for x in st.frozen_partners],
                 room_kind=str(st.room_kind),
+                residue=bool(st.residue),
                 priority=(None if st.priority is None else int(st.priority)),
                 trajectory_digest=trajectory_digest(st),
                 depends_on={str(k): str(v) for k, v in st.depends_on.items()},
@@ -1823,6 +1882,9 @@ def summary(res: StagedResult) -> dict:
             complete=bool(sr.complete),
             order=[int(a) for a in sr.order],
             order_rank=int(sr.order_rank),
+            residue_m=round(sr.residue_m, 4),
+            residue_arms=[int(a) for a, st in sorted(sr.arms.items())
+                          if st.residue],
             orders_tried=int(sr.orders_tried),
             buckets_flown=int(sum(1 for st in sr.arms.values()
                                   if st.timeline is not None)),
@@ -1956,6 +2018,9 @@ def main(argv=None):
                          "section 15).  Certifies against a SPECIFIC plan, so "
                          "the dependency is recorded per arm")
     ap.add_argument("--room-iterations", type=int, default=1)
+    ap.add_argument("--no-residue", action="store_true",
+                    help="do not serialise a bucket no order could fly "
+                         "concurrently; leave it stranded instead")
     ap.add_argument("--order-search", type=int, default=6,
                     help="orders a stage may try before keeping the best "
                          "(1 = ink-first only, the pre-search behaviour)")
@@ -2000,7 +2065,8 @@ def main(argv=None):
               env_kw=dict(stride=a.env_stride),
               trajectory_rooms=a.trajectory_rooms,
               room_iterations=a.room_iterations,
-              room_order=a.room_order, order_search=a.order_search)
+              room_order=a.room_order, order_search=a.order_search,
+              residue=not a.no_residue)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))

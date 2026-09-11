@@ -936,3 +936,72 @@ def test_a_borderline_solo_verdict_is_refined_rather_than_believed(rig):
     assert auto["dt"] == staged.CHECK_DT or \
         auto["min_clearance"] >= staged.PAIR_MARGIN
     staged.thaw()
+
+
+def test_a_residue_bucket_is_serialised_not_abandoned(rig):
+    """PETE'S ORIGINAL FINAL PASS, as the floor under the whole scheme.
+
+    A bucket no order can fly CONCURRENTLY does not have to be abandoned; it has
+    to be SERIALISED.  The other actives are back at their parks by then — that
+    is what the stage barrier means — so the residue arm plans against the room
+    pass 1 flies in, and its timeline is APPENDED to the stage rather than
+    overlapped with anybody's.
+    """
+    parks = staged.shipped_parks(rig)
+    conc = _fake_stage(13, np.repeat(parks[13].reshape(1, 7), 3, axis=0),
+                       parks[13])
+    conc.planned = [_inked(0, 13, 1.0)]
+    conc.timeline["duration"] = 40.0
+    res = _fake_stage(71, np.repeat(parks[71].reshape(1, 7), 3, axis=0),
+                      parks[71])
+    res.planned = [_inked(0, 71, 0.4)]
+    res.timeline["duration"] = 10.0
+    res.residue = True
+    sr = staged.StageResult(0, (13, 71), {13: conc, 71: res})
+    # the concurrent part costs its busiest arm; the residue is ADDED
+    assert sr.duration == pytest.approx(50.0)
+    assert sr.residue_m == pytest.approx(0.4)
+    # ...and a residue bucket still counts as flown, so the stage is complete
+    assert sr.flown == 2 and sr.with_ink == 2 and sr.complete is True
+    # with no residue at all the stage costs only its busiest arm
+    res.residue = False
+    assert sr.duration == pytest.approx(40.0)
+    assert sr.residue_m == 0.0
+
+
+def test_the_pair_check_does_not_see_a_residue_arm(rig):
+    """Nothing else is moving while the residue runs, so there is no pair.
+
+    Including it would measure two arms against each other that are never in
+    the air at the same time — which would be a clearance number about a
+    schedule nobody runs, the same error `active_pair_gap` avoids by taking the
+    cross product instead of a merged clock.
+    """
+    parks = staged.shipped_parks(rig)
+    seen = {}
+    conc = _fake_stage(13, np.repeat(parks[13].reshape(1, 7), 3, axis=0),
+                       parks[13])
+    conc.planned = [_inked(0, 13)]
+    res = _fake_stage(71, np.repeat(parks[71].reshape(1, 7), 3, axis=0),
+                      parks[71])
+    res.planned = [_inked(0, 71)]
+    res.residue = True
+    sr = staged.StageResult(0, (13, 71), {13: conc, 71: res})
+    real = staged.active_pair_gap
+
+    def spy(arms, *a, **kw):
+        seen["arms"] = sorted(arms)
+        return real(arms, *a, **kw)
+
+    staged.active_pair_gap = spy
+    try:
+        staged._check_stage(sr, (13, 71), rig, None, parks, 1.0,
+                            staged.CHECK_DT, 200)
+    finally:
+        staged.active_pair_gap = real
+    # only one CONCURRENT arm is left, so the pair check is not run at all
+    assert "arms" not in seen
+    assert sr.pair["min_m"] == float("inf")
+    # both arms still get a solo check, residue or not
+    assert set(sr.solo) == {13, 71}
+    staged.thaw()
