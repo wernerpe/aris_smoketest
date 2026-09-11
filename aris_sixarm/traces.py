@@ -306,15 +306,34 @@ def zigzag_pattern(dead_band_m: float = DEAD_BAND_M) -> Pattern:
     """THE RECOMMENDATION of docs/V2_WORKCELLS.md, as a `Pattern`.
 
     One arm per full-width row band, a 0.40 m dead band in y between bands, the
-    two columns alternating between the two main stages, then four 2-active
-    seam stages that come back for the dead bands.  Verbatim the stage list
-    `workcell_envelopes.py` evaluates as `3-active-rowband-y20+4seams`:
-    +85.8 mm of ink-vs-ink, 97.3 % of the block, 2.51x the serial makespan.
+    two columns alternating between the two main stages, then SIX 2-active seam
+    stages that come back for the dead bands.  Verbatim the stage list
+    `workcell_envelopes.py` evaluates as `3-active-rowband-y20+6seams`:
+    +85.8 mm of ink-vs-ink, 100.0 % of the block, 2.35x the serial makespan,
+    tightest seam stage +194.3 mm.
 
     Stage 0 is 13 / 71 / 2 and stage 1 is 17 / 31 / 97 -- one arm per row,
     columns alternating DOWN THE ROWS, which is the partition that works.  "One
     arm per COLUMN" puts a transverse pair in the air at once and that pair is
     at -262 mm however the paper is cut.
+
+    A SEAM NEEDS AN OUTER ARM *AND* A MIDDLE ARM, which is why stages 6 and 7
+    exist (docs/V2_WORKCELLS.md section 4b, commit 07da40e).  Tip reach over
+    the block is y in [0.000, 1.320] for 13/17, [1.080, 2.560] for 31/71 and
+    [2.280, 3.600] for 2/97, so SEAM1's floor -- y in [2.24, 2.40], 92 cells,
+    2.7 % of the block, and CSAIL stroke 17 entirely -- is reachable only by a
+    MIDDLE arm, and the four-seam version offered SEAM1 to nobody but 2 and 97.
+    The pairing that covers it has to put 31 or 71 on SEAM1 against a ROW-0 arm
+    on SEAM0: 13 against 31 is +194.3 mm and 17 against 71 is +201.1 mm.  The
+    tempting alternative -- crossing 31 and 71 over the two seams to keep six
+    stages -- is -163.1 and -201.5 mm: the transverse pair is unseparable on
+    this rig on either axis.
+
+    The two extra stages cost 6.4 % of the parallel speedup (2.51x -> 2.35x)
+    and buy the last 2.7 % of the block AND lift stage-compatible redundancy
+    from 41.6 % to 47.1 %, which is the atlas's own ceiling.  Arms 13 and 17
+    are offered SEAM0 twice (stages 2 and 6, 3 and 7); `Capability` merges a
+    repeated (arm, region) into one state, so that costs no state and no piece.
     """
     R = [row_band(j, dead_band_m) for j in (0, 1, 2)]
     S = [seam_band(k, dead_band_m) for k in (0, 1)]
@@ -325,13 +344,15 @@ def zigzag_pattern(dead_band_m: float = DEAD_BAND_M) -> Pattern:
         (3, ((17, S[0], "SEAM0"), (2, S[1], "SEAM1"))),
         (4, ((31, S[0], "SEAM0"), (97, S[1], "SEAM1"))),
         (5, ((71, S[0], "SEAM0"), (2, S[1], "SEAM1"))),
+        (6, ((13, S[0], "SEAM0"), (31, S[1], "SEAM1"))),
+        (7, ((17, S[0], "SEAM0"), (71, S[1], "SEAM1"))),
     ]
     cells = tuple(StageCell(s, arm, (rect,), nm)
                   for s, row in plan for (arm, rect, nm) in row)
-    return Pattern(f"zigzag-rowband-y{int(dead_band_m * 50):02d}+4seams", cells,
-                   "docs/V2_WORKCELLS.md recommendation: one arm per full-width "
-                   f"row band, {dead_band_m:.2f} m dead band in y, columns "
-                   "alternating, four 2-active seam stages")
+    return Pattern(f"zigzag-rowband-y{int(dead_band_m * 50):02d}+6seams", cells,
+                   "docs/V2_WORKCELLS.md section 4b recommendation: one arm per "
+                   f"full-width row band, {dead_band_m:.2f} m dead band in y, "
+                   "columns alternating, six 2-active seam stages")
 
 
 def single_stage_pattern() -> Pattern:

@@ -70,27 +70,40 @@ contains no absorbable short piece. It is there for the map, not for the DP.
 `traces.StageCell(stage, arm, region)` is the work-cell object V2_WORKCELLS §5
 lists as missing: *"this arm may only draw here, during this stage"*. The
 default `zigzag_pattern()` is verbatim the stage list
-`scripts/workcell_envelopes.py` evaluates as `3-active-rowband-y20+4seams`:
+`scripts/workcell_envelopes.py` evaluates as `3-active-rowband-y20+6seams`:
 
-| stage | arms and cells |
-|---|---|
-| 0 | 13 → R0, 71 → R1, 2 → R2 |
-| 1 | 17 → R0, 31 → R1, 97 → R2 |
-| 2 | 13 → SEAM0, 97 → SEAM1 |
-| 3 | 17 → SEAM0, 2 → SEAM1 |
-| 4 | 31 → SEAM0, 97 → SEAM1 |
-| 5 | 71 → SEAM0, 2 → SEAM1 |
+| stage | arms and cells | ink-vs-ink |
+|---|---|---|
+| 0 | 13 → R0, 71 → R1, 2 → R2 | +85.8 mm |
+| 1 | 17 → R0, 31 → R1, 97 → R2 | +85.8 mm |
+| 2 | 13 → SEAM0, 97 → SEAM1 | +250.0 mm |
+| 3 | 17 → SEAM0, 2 → SEAM1 | +250.0 mm |
+| 4 | 31 → SEAM0, 97 → SEAM1 | +250.0 mm |
+| 5 | 71 → SEAM0, 2 → SEAM1 | +238.6 mm |
+| **6** | **13 → SEAM0, 31 → SEAM1** | **+194.3 mm** |
+| **7** | **17 → SEAM0, 71 → SEAM1** | **+201.1 mm** |
 
 with `R0 = y ∈ [0.000, 1.010]`, `R1 = [1.410, 2.220]`, `R2 = [2.620, 3.620]`,
 `SEAM0 = [1.010, 1.410]`, `SEAM1 = [2.220, 2.620]`, all at the full block width
 `x ∈ [0.16, 1.64]` — one arm per full-width **row** band, a **0.40 m** dead band
-in y, the two columns alternating down the rows, then four 2-active seam stages.
-+85.8 mm of ink-vs-ink, 2.51× the serial makespan.
+in y, the two columns alternating down the rows, then **six** 2-active seam
+stages. +85.8 mm of ink-vs-ink, 2.35× the serial makespan.
 
-Stages 4 and 5 re-offer arms 97 and 2 *exactly* what stages 2 and 3 do, so
-`capability()` folds them into one state each (14 cells → 12 states); splitting a
-seam's ink between two interchangeable stages would be noise in the load table
-and an arbitrary choice in the DP.
+**Stages 6 and 7 are the seam correction** (V2_WORKCELLS §4b, commit `07da40e`;
+this module's own stages 6 and 7 are the document's stages 7 and 8). A seam
+needs an outer arm *and* a middle arm: SEAM1's floor, `y ∈ [2.24, 2.40]`, is
+reachable only by 31 or 71, and the four-seam version offered SEAM1 to nobody
+but 2 and 97. That hole — 2.31 % of the block, and CSAIL stroke 17 entirely — is
+what §5 of this document found from the other end, and it is now closed. Every
+number below is the eight-stage pattern; the deltas against the superseded
+six-stage figures are marked where they matter.
+
+Stages 4 and 5 re-offer arms 97 and 2 *exactly* what stages 2 and 3 do, and
+stages 6 and 7 re-offer arms 13 and 17 the same way, so `capability()` folds
+them into one state each (18 cells → 14 states); splitting a seam's ink between
+two interchangeable stages would be noise in the load table and an arbitrary
+choice in the DP. Only **two** of the four new cells are new states — 31 and 71
+on SEAM1 — which is exactly the coverage the correction was for.
 
 `single_stage_pattern()` is the control: every arm everywhere in the block, no
 cells at all. **It is not a runnable pattern** — six arms drawing at once never
@@ -107,7 +120,8 @@ allocated as **46 segments**.
 |---|---|---|---|---|---|---|
 | **v19, as shipped** | **46** | — | — | — | 100.2 % (`coverage`, drawn/traced) | 3 713 s job |
 | **single stage** (no cells) | **40** | 1 (1 overlap) | 0 | 0 | 100.0 % | 17 |
-| **zigzag + 4 seams** | **50** | 8 (0 overlap, 8 hard) | 6 | 10 | 94.8 % | 25 |
+| **zigzag + 6 seams** | **54** | 15 (1 overlap, 14 hard) | 8 | **0** | **100.0 %** | 30 |
+| *(superseded: zigzag + 4 seams)* | *50* | *8 (0 / 8)* | *6* | *10* | *94.8 %* | *25* |
 
 **And it is 40 on v19's own map too.** v19 ran against
 `out/atlas_proposed_h0970_lat0860` — the *un*-regated sweep — with
@@ -132,8 +146,12 @@ once:** 40 is what the *atlas* permits at 2 cm resolution, which is the
 allocator's own prefilter and not a plan. Each of the 40 still has to be
 accepted by `plan_stroke`, and a piece that refuses would split again.
 
-**Staged, the logo costs 10 pieces and 5.2 % of its ink**, and the reason is one
-specific asymmetry, not staging in general — see §5.
+**Staged, the logo costs 14 pieces and none of its ink.** The four extra pieces
+over the six-stage version are the price of the 5.2 % of ink (stroke 17 and
+0.868 m) that the six-stage version simply could not draw; the gap count goes
+from 10 to **zero**. ARCHITECTURE_V2 predicted exactly this — "the correction is
+known and costs four pieces, 50 → 54, for the 5.2 % of ink the six-stage version
+could not draw" — and this is the run that confirms it.
 
 ## 4. A thousand lines
 
@@ -143,12 +161,22 @@ survive clipping), and a 1 000-curve scribble.
 
 | set | pattern | lines | atoms | **pieces** | hand-overs (ovl / hard / same arm) | gaps | covered | **ms** |
 |---|---|---|---|---|---|---|---|---|
-| strokes, 660.3 m | zigzag | 1 000 | 2 885 | **1 661** | 533 (134 / 399 / 301) | 315 | 97.05 % | 814 |
-| strokes | single | 1 000 | 2 614 | **1 254** | 254 (234 / 20 / 0) | 0 | 100 % | 574 |
-| hatch, 1 368.6 m | zigzag | 992 | 4 142 | **2 129** | 1 032 (716 / 316 / 180) | 304 | 97.45 % | 930 |
-| hatch | single | 992 | 4 105 | **1 869** | 877 (855 / 22 / 0) | 0 | 100 % | 696 |
-| scribble, 213.4 m | zigzag | 1 000 | 1 597 | **1 148** | 131 (13 / 118 / 84) | 79 | 97.71 % | 439 |
-| scribble | single | 1 000 | 1 551 | **1 024** | 24 (19 / 5 / 0) | 0 | 100 % | 288 |
+| strokes, 660.3 m | zigzag | 1 000 | 3 130 | **1 756** | 756 (216 / 540 / 412) | **0** | **100 %** | 888 |
+| strokes | single | 1 000 | 2 614 | **1 254** | 254 (234 / 20 / 0) | 0 | 100 % | 558 |
+| hatch, 1 368.6 m | zigzag | 992 | 4 495 | **2 170** | 1 178 (764 / 414 / 247) | **0** | **100 %** | 1 005 |
+| hatch | single | 992 | 4 105 | **1 869** | 877 (855 / 22 / 0) | 0 | 100 % | 703 |
+| scribble, 213.4 m | zigzag | 1 000 | 1 693 | **1 166** | 166 (19 / 147 / 104) | **0** | **100 %** | 478 |
+| scribble | single | 1 000 | 1 551 | **1 024** | 24 (19 / 5 / 0) | 0 | 100 % | 286 |
+
+**The deltas against the superseded six-stage pattern**, zigzag rows only: the
+1 000-stroke set goes 1 661 → **1 756** pieces (+5.7 %) and 97.05 → **100 %**;
+the hatch 2 129 → **2 170** (+1.9 %) and 97.45 → **100 %**; the scribble
+1 148 → **1 166** (+1.6 %) and 97.71 → **100 %**. Every gap — 315, 304 and 79
+stretches with no drawer at all — becomes **zero**. The atom counts rise
+(2 885 → 3 130, 4 142 → 4 495, 1 597 → 1 693) because two more states mean two
+more ways for the capability set to change along a line, and the DP cost rises
+with them: 814 → 888 ms on the 1 000-stroke set, still **under a second**, of
+which the DP itself is 10 ms.
 
 Load, metres of ink per arm, and the theoretical stage makespan (a stage costs
 its busiest arm, because within a stage the three actives are static keep-outs
@@ -156,12 +184,20 @@ for each other and need no conductor; the sequence costs the sum):
 
 | set | pattern | 2 | 13 | 17 | 31 | 71 | 97 | makespan |
 |---|---|---|---|---|---|---|---|---|
-| strokes | zigzag | 123.5 | 105.3 | 101.6 | 94.5 | 92.6 | 124.8 | 281.9 m |
+| strokes | zigzag | 113.4 | 105.3 | 101.6 | 115.2 | 113.9 | 113.1 | 302.2 m |
 | strokes | single | 113.8 | 104.9 | 102.9 | 113.4 | 113.8 | 113.9 | 113.9 m |
-| hatch | zigzag | 243.4 | 238.8 | 219.0 | 181.0 | 205.2 | 253.4 | 586.4 m |
+| hatch | zigzag | 211.4 | 238.8 | 219.0 | 228.8 | 231.0 | 247.0 | 623.7 m |
 | hatch | single | 204.7 | 243.0 | 217.4 | 226.0 | 232.8 | 253.2 | 253.2 m |
-| scribble | zigzag | 37.6 | 38.0 | 37.9 | 28.9 | 28.8 | 37.5 | 96.1 m |
+| scribble | zigzag | 33.7 | 38.0 | 37.9 | 35.3 | 35.0 | 33.7 | 101.0 m |
 | scribble | single | 34.7 | 37.4 | 37.4 | 34.8 | 34.7 | 34.7 | 37.4 m |
+
+The two extra stages move the load **onto the middle arms**, which is the ink
+they could not be given before: 31 goes 94.5 → 115.2 m and 71 92.6 → 113.9 m on
+the 1 000-stroke set, and the six arms' loads are now within 13 % of each other
+where they were within 35 %. The stage makespan rises with the stage count
+(281.9 → 302.2 m), which is the same 6.4 % of parallel speedup
+V2_WORKCELLS §4b charged the correction: two more stages each cost their
+busiest arm, and stages 6 and 7 only pick up what stages 2–5 could not.
 
 Per-stage loads are in the tool's own output; for the hatch the two main stages
 carry 527.8 m and 544.0 m and the four seam stages 101.0 / 89.6 / 31.2 / 47.2 m.
@@ -179,10 +215,10 @@ like:
 
 | set | single | zigzag | extra | of the extra, same arm in a later stage |
 |---|---|---|---|---|
-| CSAIL | 40 | 50 | +10 | 6 of 8 hand-overs |
-| strokes | 1 254 | 1 661 | +407 | 301 of 533 |
-| hatch | 1 869 | 2 129 | +260 | 180 of 1 032 |
-| scribble | 1 024 | 1 148 | +124 | 84 of 131 |
+| CSAIL | 40 | 54 | +14 | 8 of 15 hand-overs |
+| strokes | 1 254 | 1 756 | +502 | 412 of 756 |
+| hatch | 1 869 | 2 170 | +301 | 247 of 1 178 |
+| scribble | 1 024 | 1 166 | +142 | 104 of 166 |
 
 Most of what staging costs is **an arm handing a line over to itself**, one
 stage later, because the line crossed out of its row band into the dead band and
@@ -198,16 +234,28 @@ unstaged, the makespan is one arm's load (113.9 m for the strokes set) because
 nothing is serialised — but nothing clears, either. Staged, the makespan is
 281.9 m, 2.5× worse on paper and the only one of the two that can actually run.
 
-**A staged hand-over is cheaper than it looks in one more way**: 43.5 % of the
-certified block keeps ≥ 2 stage-compatible drawers under the zigzag (mean 1.457
-per cell) against the atlas's own ceiling of 48.1 % (mean 1.524), measured cell
-by cell with the same capability map. V2_WORKCELLS' 41.6 % / 1.41, measured at
-`--stride 2` with charge-to-first-stage accounting, is the same number.
+**A staged hand-over is cheaper than it looks in one more way**, and under the
+eight-stage pattern it is as cheap as it can possibly be: **48.1 % of the
+certified block keeps ≥ 2 stage-compatible drawers (mean 1.524 per cell), which
+is the atlas's own ceiling to three decimal places** — the staged and unstaged
+capability maps now give the identical figure, measured cell by cell over the
+13 650 certified cells of the block. The six-stage version was 43.5 % / 1.457.
+V2_WORKCELLS' 41.6 % → 47.1 %, measured at `--stride 2` with
+charge-to-first-stage accounting, is the same movement. **The staging now throws
+away none of the redundancy the atlas offers**, which is what makes a faulted
+arm's ink re-queueable rather than lost.
 
-### The one real defect in the recommended pattern
+### The one real defect in the recommended pattern — FIXED, 2026-09-11
 
-The zigzag leaves **2.31 % of the certified block with no drawer at all**, and it
-is not spread around the rim as V2_WORKCELLS §4 suggests. It is a single strip:
+**This section is kept as the record of how the hole was found and closed.**
+Under the eight-stage pattern the zigzag leaves **0.00 % of the certified block
+with no drawer**, every gap count in §3 and §4 is zero, and the block coverage
+figures below all read 100.00 %. What follows is the six-stage measurement that
+prompted stages 6 and 7.
+
+The six-stage zigzag left **2.31 % of the certified block with no drawer at
+all**, and it was not spread around the rim as V2_WORKCELLS §4 suggests. It was
+a single strip:
 
 ```
    SEAM0  y ∈ [1.010, 1.410]   100.00 % covered
@@ -225,10 +273,14 @@ and stroke 17 entirely** — 0.429 m that no stage can draw.
 
 Adding two more seam stages that offer SEAM1 to arms 31 and 71 takes the block
 from 97.69 % to **100.00 %** and the CSAIL logo from 94.84 % to 100 % (at 54
-pieces instead of 50). **Those two stages are not proposed here**: whether 31 or
-71 in SEAM1 clears its partner in SEAM0 is a `scripts/workcell_envelopes.py`
-question and this module measures no clearances. But the hole has a name and a
-cheap-looking fix, and it is worth one run of that script to find out.
+pieces instead of 50). **That is now the shipped pattern.**
+`scripts/workcell_envelopes.py` answered the clearance question it raised
+(V2_WORKCELLS §4b): 13 on SEAM0 against 31 on SEAM1 is **+194.3 mm** and 17
+against 71 is **+201.1 mm**, both comfortably past the 50 mm gate; the tempting
+alternative of crossing 31 and 71 over the two seams to stay at six stages is
+−163.1 / −201.5 mm, because a transverse pair is unseparable in y as well as in
+x. `zigzag_pattern()` has returned the eight-stage pattern since commit
+`19bd490`'s successor, and every number in this document is that pattern's.
 
 ## 6. Open questions
 
@@ -243,7 +295,12 @@ the least-loaded state. Free balance, no pieces given up:
 | strokes | single | 1 254 pcs, spread 29.4 % | **1 254 pcs, spread 10.0 %** | 1 255 pcs, spread 9.8 % |
 | scribble | single | 1 024 pcs, spread 79.1 % | **1 024 pcs, spread 7.5 %** | 1 024 pcs, spread 7.5 % |
 | hatch | single | 1 869 pcs, spread 20.4 % | **1 869 pcs, spread 21.1 %** | 2 011 pcs, spread 13.0 % |
-| hatch | zigzag | 2 129 pcs, spread 32.4 % | **2 129 pcs, spread 32.4 %** | 2 175 pcs, spread 29.1 % |
+| hatch | zigzag | 2 170 pcs, spread 24.1 % | **2 170 pcs, spread 15.5 %** | 2 224 pcs, spread 11.5 % |
+
+(The zigzag row is the eight-stage pattern, re-run 2026-09-11; the six-stage
+figures were 2 129 pcs at 32.4 / 32.4 / 29.1 %. The correction is worth 16.9
+points of free balance on the staged hatch, because the two extra stages give
+the middle arms somewhere to put ink that the free tie-break can then use.)
 
 (spread = max − min arm load, as a percentage of the mean.) Where the capability
 sets leave slack — scribbles and scattered strokes, where many atoms genuinely

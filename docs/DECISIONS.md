@@ -1,5 +1,56 @@
 # Decisions — the numbers, and where each one is anchored
 
+## EIGHT STAGES IN THE CODE, AND A WORK CELL THE ALLOCATOR ACCEPTS (2026-09-11, later)
+
+Build item 3 of docs/ARCHITECTURE_V2.md, landed — both halves.
+
+**`traces.zigzag_pattern` ships the eight-stage pattern.**  It returned the
+six-stage one superseded by docs/V2_WORKCELLS.md §4b (commit `07da40e`); it now
+adds `13 → SEAM0 + 31 → SEAM1` and `17 → SEAM0 + 71 → SEAM1`, and its name is
+`zigzag-rowband-y20+6seams`.  Eighteen cells, but only **14 states**: 13 and 17
+were already offered SEAM0 in stages 2 and 3, so `capability()` merges them and
+they cost neither a state nor a piece; the two genuinely new states are 31 and
+71 on SEAM1, which is the whole of what the correction buys.
+
+**Every number in docs/V2_TRACES.md is re-run against it.**  The deltas:
+
+| | 6 stages | **8 stages** |
+|---|---|---|
+| CSAIL logo | 50 pieces, 10 gaps, 94.8 % | **54 pieces, 0 gaps, 100.0 %** |
+| 1 000 strokes | 1 661 pieces, 315 gaps, 97.05 % | **1 756, 0, 100 %** |
+| 1 000-line hatch | 2 129, 304, 97.45 % | **2 170, 0, 100 %** |
+| 1 000 scribbles | 1 148, 79, 97.71 % | **1 166, 0, 100 %** |
+| DP wall time, 1 000 strokes | 814 ms | **888 ms** (DP itself still 10 ms) |
+| ≥ 2 stage-compatible drawers | 43.5 %, mean 1.457 | **48.1 %, mean 1.524** |
+| stage makespan, 1 000 strokes | 281.9 m | **302.2 m** |
+
+**The logo's correction is exactly what ARCHITECTURE_V2 predicted** — "four
+pieces, 50 → 54, for the 5.2 % of ink the six-stage version could not draw" —
+and the 1 000-line answers, which nobody had, are **+5.7 %, +1.9 % and +1.6 %**
+pieces for the last 2.7 % of the block.  Two numbers are worth more than the
+piece count.  The staged capability map now reaches **the atlas's own ceiling**,
+48.1 % / 1.524 to three decimals, identical to the unstaged control: the staging
+throws away NONE of the redundancy the atlas offers, so nothing a faulted arm
+was drawing is unrecoverable for want of a stage that offers it.  And the load
+moves onto the middle arms — 31 goes 94.5 → 115.2 m and 71 92.6 → 113.9 m on the
+1 000-stroke set — which is worth **16.9 points of free balance** on the staged
+hatch (spread 32.4 % → 15.5 % at the same tie-break, same piece count).
+
+**`allocate.atlas_cells` and `allocate.prefilter` take a work cell.**  "This arm
+may draw inside this region during this stage, and nowhere else" arrives in four
+shapes — a `traces.Pattern` plus a stage id, an iterable of `StageCell`, a plain
+`{arm: rect}` mapping, or `None` for the unrestricted allocator this repo has
+always had — and `work_cell_regions` normalises all four in one place.  **An arm
+the object does not mention may draw nowhere**, which is the only reading
+consistent with the envelope argument: a stage names its actives and everybody
+else is parked, and the opposite reading would hand a parked arm ink while its
+neighbour's envelope was certified without it.  Regions are half-open at the
+high edge, exactly as `rect_contains` is, so a point on a seam belongs to one
+cell and not to two.  It is a filter on the CELLS and not on the strokes: a
+stroke that leaves the region is still probed for the part that does not,
+because cutting at a boundary is `traces.plan_lines`' job and it does it to
+0.01 mm.
+
 ## THE LEG CACHE IS A CONTENT KEY, AND IT SURVIVES THE PROCESS (2026-09-11, later)
 
 Build item 1 of docs/ARCHITECTURE_V2.md, landed.  Two halves, and the first one

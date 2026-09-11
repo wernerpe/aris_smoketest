@@ -262,7 +262,7 @@ def test_the_seam_stages_are_the_only_drawers_of_the_dead_band():
 
 def test_the_zigzag_is_one_arm_per_row_with_the_columns_alternating():
     pat = T.zigzag_pattern()
-    assert pat.n_stages == 6
+    assert pat.n_stages == 8            # two main stages, six seam stages
     assert {c.arm for c in pat.stage(0)} == {13, 71, 2}
     assert {c.arm for c in pat.stage(1)} == {17, 31, 97}
     for s in (0, 1):                       # one arm per row, columns alternating
@@ -282,13 +282,38 @@ def test_the_zigzag_is_one_arm_per_row_with_the_columns_alternating():
 
 
 def test_the_duplicate_seam_stages_are_one_state():
-    """Stages 4 and 5 re-offer arms 97 and 2 exactly what stages 2 and 3 do."""
+    """Stages 4 and 5 re-offer arms 97 and 2 exactly what stages 2 and 3 do,
+    and stages 6 and 7 re-offer arms 13 and 17 exactly what stages 2 and 3 do.
+
+    The seam correction of docs/V2_WORKCELLS.md section 4b adds two stages and
+    four cells, but only TWO of those four are new states: 31 on SEAM1 and 71
+    on SEAM1, which are what covers y in [2.24, 2.40].  The other two are 13
+    and 17 back on SEAM0, which they were already offered in stages 2 and 3, so
+    they merge and cost neither a state nor a piece."""
     cov = T.coverage_from_rects({a: [T.BLOCK] for a in T.ARMS},
                                 extent=(0.0, 0.0, 2.0, 3.8))
     cap = T.capability(cov, T.zigzag_pattern())
-    assert len(T.zigzag_pattern().cells) == 14
-    assert cap.n_states == 12
-    assert sorted(cap.merged) == [(4, 2), (5, 3)]
+    assert len(T.zigzag_pattern().cells) == 18
+    assert cap.n_states == 14
+    assert sorted(cap.merged) == [(4, 2), (5, 3), (6, 2), (7, 3)]
+
+
+def test_the_two_extra_seam_stages_put_a_middle_arm_on_seam1():
+    """The whole point of stages 6 and 7 (docs' 7 and 8): SEAM1's floor is
+    reachable only by a MIDDLE arm, and the four-seam version offered SEAM1 to
+    nobody but 2 and 97."""
+    pat = T.zigzag_pattern()
+    assert {c.arm for c in pat.stage(6)} == {13, 31}
+    assert {c.arm for c in pat.stage(7)} == {17, 71}
+    seam1 = T.seam_band(1)
+    on_seam1 = {c.arm for c in pat.cells if c.stage >= 2 and c.region[0] == seam1}
+    assert on_seam1 == {2, 97, 31, 71}
+    # ...and no stage ever puts a same-row (transverse) pair in the air: that
+    # pair is at -262 mm however the paper is cut (docs/V2_WORKCELLS.md 1-2)
+    for s in range(pat.n_stages):
+        rows = [T.ROW_OF[c.arm] for c in pat.stage(s)]
+        assert len(rows) == len(set(rows)), f"stage {s} has a same-row pair"
+    assert pat.name.endswith("+6seams")
 
 
 # ---------------------------------------------------------------------------
@@ -463,3 +488,77 @@ def test_the_synthetic_sets_land_inside_the_certified_block(kind):
     assert P[:, 1].min() >= T.BLOCK[1] - 1e-9
     assert P[:, 1].max() <= T.BLOCK[3] + 1e-9
     assert T.synthetic(kind, 50, seed=1)[0].tolist() == lines[0].tolist()
+
+
+# ---------------------------------------------------------------------------
+# 9.  THE WORK CELL, ON THE ALLOCATOR'S OWN PREFILTER (build item 3a)
+# ---------------------------------------------------------------------------
+def test_a_work_cell_normalises_from_every_shape_it_arrives_in():
+    from aris_sixarm import allocate
+    pat = T.zigzag_pattern()
+    assert allocate.work_cell_regions(None) is None
+    # a Pattern, with the stage named
+    got = allocate.work_cell_regions(pat, 0)
+    assert sorted(got) == [2, 13, 71]
+    assert got[13] == (T.row_band(0),)
+    # an iterable of StageCell, filtered to one stage
+    assert allocate.work_cell_regions(pat.cells, 1) == \
+        allocate.work_cell_regions(pat, 1)
+    # a plain mapping, one rect or several
+    r = (0.2, 0.3, 0.4, 0.5)
+    assert allocate.work_cell_regions({13: r}) == {13: (r,)}
+    assert allocate.work_cell_regions({13: (r, r)}) == {13: (r, r)}
+    # a stage names its actives; everybody else may draw NOWHERE
+    assert 17 not in allocate.work_cell_regions(pat, 0)
+
+
+def test_a_point_is_in_exactly_one_of_two_abutting_work_cells():
+    """Half-open at the high edge, exactly as `rect_contains` is."""
+    from aris_sixarm import allocate
+    lo, hi = (0.0, 0.0, 1.0, 1.0), (1.0, 0.0, 2.0, 1.0)
+    xy = [(0.5, 0.5), (1.0, 0.5), (1.5, 0.5), (2.0, 0.5)]
+    a = allocate.in_work_cell(xy, (lo,))
+    b = allocate.in_work_cell(xy, (hi,))
+    assert list(a) == [True, False, False, False]
+    assert list(b) == [False, True, True, False]
+    assert not (a & b).any()
+    assert not allocate.in_work_cell(xy, ()).any()
+
+
+def test_the_prefilter_returns_only_cells_inside_the_work_cell(tmp_path):
+    """`atlas_cells` with a work cell is the atlas INTERSECTED with the region.
+
+    Written against a synthetic two-arm atlas rather than a shipped one, so the
+    property is pinned whether or not `out/` holds a current sweep.
+    """
+    import numpy as np
+    from aris_sixarm import allocate, atlas as A
+    g = 0.02
+    xs, ys = np.meshgrid(np.arange(0.10, 0.90, g), np.arange(0.10, 0.90, g))
+    n = xs.size
+    row = np.zeros((n, max(A.FLATCOL, A.LEANCOL) + 1))
+    row[:, 0], row[:, 1] = xs.ravel(), ys.ravel()
+    row[:, 2] = 0.30
+    row[:, A.FLATCOL] = 0.30
+    row[:, A.LEANCOL] = -1.0
+    for aid in (13, 17):
+        np.savez(tmp_path / f"atlas_arm{aid}.npz", data=row, grid=g,
+                 h=0.97, pen=0.11)
+    full = allocate.atlas_cells((13, 17), str(tmp_path))
+    assert full is not None and len(full[13][1]) == n
+    box = (0.20, 0.20, 0.50, 0.50)
+    cut = allocate.atlas_cells((13, 17), str(tmp_path),
+                               work_cells={13: box, 17: (0.50, 0.20, 0.80, 0.50)})
+    assert 0 < len(cut[13][1]) < len(full[13][1])
+    for ix, iy in cut[13][1]:
+        x, y = ix * g, iy * g
+        assert box[0] - 1e-9 <= x < box[2] - 1e-9
+        assert box[1] - 1e-9 <= y < box[3] - 1e-9
+    assert not (cut[13][1] & cut[17][1])        # abutting cells never overlap
+    # an arm the work cell does not name draws nowhere
+    only13 = allocate.atlas_cells((13, 17), str(tmp_path), work_cells={13: box})
+    assert only13[17][1] == set()
+    # ...and a stage of the real pattern restricts every arm it names
+    staged = allocate.atlas_cells((13, 17), str(tmp_path),
+                                  work_cells=T.zigzag_pattern(), stage=0)
+    assert staged[17][1] == set() and len(staged[13][1]) <= len(full[13][1])

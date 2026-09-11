@@ -3683,8 +3683,76 @@ def where(dropped, sheet, nx=3, ny=3):
 # ===========================================================================
 # 7. the whole allocation
 # ===========================================================================
-def atlas_cells(arms, atlas_dir, tilt_max_deg=0.0):
+def work_cell_regions(work_cells, stage=None):
+    """Whatever the caller called a work cell -> {arm: ((x0,y0,x1,y1), ...)}.
+
+    "This arm may draw inside this region during this stage, and nowhere else"
+    (docs/ARCHITECTURE_V2.md section 2b) arrives in four shapes and they all
+    mean the same thing, so they are normalised in one place rather than in
+    every enumerator:
+
+      * `None` -> `None`, the unrestricted allocator this repo has always had;
+      * a `traces.Pattern` (anything with `.cells`), with `stage` naming which
+        stage of it is being allocated -- `stage=None` takes stage 0, because a
+        pattern with one stage is the common case and guessing is worse;
+      * an iterable of `traces.StageCell` (anything with `.arm` and `.region`),
+        filtered to `stage` when one is given;
+      * a plain mapping {arm: rect} or {arm: (rect, ...)}, which is what a
+        caller with no pattern object in hand writes down.
+
+    AN ARM THE OBJECT DOES NOT MENTION MAY DRAW NOWHERE.  A stage names its
+    active arms and everybody else is parked, so "absent" is an empty region
+    and not "unrestricted" -- the opposite reading would let a parked arm be
+    handed ink while its neighbour's envelope was certified without it.
+    """
+    if work_cells is None:
+        return None
+    cells = getattr(work_cells, "cells", None)
+    if cells is not None:                       # a Pattern
+        work_cells = cells
+        stage = 0 if stage is None else stage
+    if isinstance(work_cells, dict):
+        out = {}
+        for a, r in work_cells.items():
+            r = tuple(r)
+            out[int(a)] = (r,) if r and np.isscalar(r[0]) else tuple(
+                tuple(float(v) for v in one) for one in r)
+        return out
+    out = {}
+    for c in work_cells:
+        if stage is not None and int(getattr(c, "stage", stage)) != int(stage):
+            continue
+        a = int(c.arm)
+        out[a] = out.get(a, ()) + tuple(
+            tuple(float(v) for v in r) for r in c.region)
+    return out
+
+
+def in_work_cell(xy, region):
+    """Points inside a region (a union of half-open rects). -> (N,) bool.
+
+    Half-open at the high edge, exactly as `traces.rect_contains` is, so a
+    point on a seam belongs to one region and not to two.
+    """
+    p = np.asarray(xy, float).reshape(-1, 2)
+    if not region:
+        return np.zeros(len(p), bool)
+    hit = np.zeros(len(p), bool)
+    for x0, y0, x1, y1 in region:
+        hit |= ((p[:, 0] >= x0 - 1e-9) & (p[:, 0] < x1 - 1e-9) &
+                (p[:, 1] >= y0 - 1e-9) & (p[:, 1] < y1 - 1e-9))
+    return hit
+
+
+def atlas_cells(arms, atlas_dir, tilt_max_deg=0.0, work_cells=None, stage=None):
     """-> {arm: (grid_m, {(ix, iy)})}, or None if any arm's atlas is missing.
+
+    `work_cells` restricts each arm to a region of paper for this stage (see
+    `work_cell_regions`): the atlas says where an arm CAN draw and the work
+    cell says where it MAY, and the prefilter is where the two meet.  This is
+    build item 3 of docs/ARCHITECTURE_V2.md and it is the enabling change for
+    everything stage-local -- the allocator cannot be asked for a stage's
+    allocation until it can be told what the stage is.
 
     The atlas is a 2 cm sweep of the paper; a cell counts if the pen reached it
     PERPENDICULAR with the planner's own permissive joint margin — plus, when
@@ -3709,6 +3777,7 @@ def atlas_cells(arms, atlas_dir, tilt_max_deg=0.0):
     if atlas_dir is None:
         return None
     from .atlas import load
+    regions = work_cell_regions(work_cells, stage)
     per_arm = atlas_dir if isinstance(atlas_dir, dict) else None
     grids = {}
     for a in arms:
@@ -3728,6 +3797,8 @@ def atlas_cells(arms, atlas_dir, tilt_max_deg=0.0):
             rows = arr[flat | lean]
         else:                       # a pre-2026-08-26 sweep: the old reading
             rows = arr[(arr[:, 8] <= 0.0) & (arr[:, 2] >= 0.15)]
+        if regions is not None:
+            rows = rows[in_work_cell(rows[:, :2], regions.get(int(a), ()))]
         grids[a] = (g, {(int(round(x / g)), int(round(y / g)))
                         for x, y in rows[:, :2]})
     return grids
@@ -3790,7 +3861,7 @@ def _pad_to(m, shape):
 
 
 def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R,
-              tilt_max_deg=0.0):
+              tilt_max_deg=0.0, work_cells=None, stage=None):
     """-> {(stroke_id, arm): True} where the atlas says probing is worth it.
 
     A stroke with no reachable cell near any of its points cannot be planned by
@@ -3798,8 +3869,14 @@ def prefilter(strokes, arms, atlas_dir=None, radius=PREFILTER_R,
     `tilt_max_deg` is the run's cone: with it open the atlas's LEANED
     certifications count as reachable too, because the planner can now reach
     them (`lateral.plan_adaptive`'s lean ladder).
+
+    `work_cells` (and `stage`) restrict each arm to its region for one stage;
+    see `atlas_cells`.  It is a filter on the CELLS and not on the strokes, so
+    a stroke that leaves the region is still probed for the part of it that
+    does not -- cutting a stroke at a region boundary is `traces.plan_lines`'
+    job and it does it exactly, to 0.01 mm.
     """
-    grids = atlas_cells(arms, atlas_dir, tilt_max_deg)
+    grids = atlas_cells(arms, atlas_dir, tilt_max_deg, work_cells, stage)
     if grids is None:
         return None
     ok = {}
