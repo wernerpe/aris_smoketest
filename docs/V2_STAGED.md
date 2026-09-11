@@ -519,3 +519,67 @@ its threshold: at 6.56 s/m and 9.74 s of park overhead, **`X` ≈ 1.5 m of ink
 for the busiest arm**. Six of CSAIL's eight stages are under it; none of the
 1 000-line set's are.
 
+## 13. How tight the envelope has to be — the probe, and what it says so far
+
+**The binding test is one leg, not a whole timeline.** Every bucket that failed
+in §11 failed on `writing.arm_program`'s *"entry at segment 0 cannot clear the
+paper plane"*, which is a single `paper.route` from the park to the first hover.
+So the sweep prices exactly that, plus the exit leg, plus the ink-vs-envelope
+minimum that explains it — three numbers per (stage, arm) instead of a fly. The
+pieces are planned once with no envelope in the room, because `plan_stroke`
+never consults the static set and a piece's joints therefore do not depend on
+the setting; only the verdict about them does.
+
+**Measured, at the shipped setting** (stride 2, cluster cell 0.15 m, pad
+40 mm), on the 56-piece refusal-loop output:
+
+| setting | spheres (mean) | buckets whose park↔hover legs route | ink vs envelope, min |
+|---|---|---|---|
+| **stride 2, cell 0.15 m, pad 40 mm (shipped)** | 145 | **9 of 13** | **−30.6 mm** |
+
+That is the §11 failure reproduced in 1.4 s instead of 27 minutes, and it
+confirms the diagnosis: four buckets cannot get out of their park at all, and
+the ink minimum is negative, i.e. the arm's own certified drawing pose is
+already inside the bound.
+
+**Why the cell is the lever and the pad is not, exactly.** A cluster sphere is
+drawn round the endpoints of every capsule whose *midpoint* fell in its cell, so
+
+> `radius ≤ (cell × √3 / 2) + (half the longest capsule) + (the capsule radius)
+> + (the pad)`
+
+and the only term the caller controls is the first. At the shipped 0.15 m cell
+it is **0.130 m**; at 0.05 m it is **0.043 m**. Against a real capsule radius of
+about 0.06 m, that is the difference between a bound three times the thing it
+bounds and one a third larger — an order more than the 40 mm pad is worth.
+`tests/test_staged.py` pins the decomposition.
+
+**And `pad = 0` is only legal at stride 1.** The pad exists to cover the poses a
+stride skips: at stride 2 three cells in four are not read and the pad is the
+only thing standing in for them, while at stride 1 every strict-GO cell of the
+region is read (`2 × cells + 1` poses, pinned by a test) and the envelope is
+then the exact object `scripts/workcell_envelopes.py` measures. **So the
+setting the arithmetic points at is stride 1, cell 0.05 m, pad 0** — tighter by
+roughly 130 mm of radius and with no conservatism left to justify.
+
+**What is NOT measured, and it is the headline of this pass.** The sweep did not
+complete: each setting re-routes 26 legs cold under a new store namespace, and
+several fall through the shape ladder to the RRT, which is minutes rather than
+seconds per leg. So I have the baseline row and the arithmetic, and I do **not**
+have the measured "fraction of buckets that fly" at the tighter settings, the
+active-pair minimum under them, or a full eight-stage fly. **The complete CSAIL
+table of §11 therefore still stands as the last measured one**, with 26 of 56
+pieces unflown, and the makespan is still not quoted.
+
+**One real fix came out of the attempt.** The pose cache and the sphere cache
+were filed under one key, so sweeping the clustering re-solved every hover —
+the same family of bug as `id(spec)` in `paper.py`, found the same way, by a
+sweep that should have taken seconds and took minutes.
+`staged.cached_envelope_poses` splits them, and the sweep's per-setting cost is
+now the legs alone.
+
+**Next, in order:** run the sweep with the leg store pre-warmed per setting (or
+with `paper.RRT_SAFE` off for the probe, since a leg the ladder settles is the
+one that matters for "does it fly"); adopt the winning setting as the default;
+then the full eight-stage fly and the makespan.
+

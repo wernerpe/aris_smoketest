@@ -1,5 +1,53 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE ENVELOPE'S CONSERVATISM IS THE CLUSTER CELL, AND THE SWEEP IS NOT DONE (2026-09-11, last)
+
+Follow-up to the previous entry, which closed the active-pair leg gap
+(+8.2 -> +826.1 mm) and reported that the envelope was then too conservative to
+fly three of eighteen buckets.  **Partial: the arithmetic is settled and the
+measurement is not.**
+
+**THE PROBE.**  Every failing bucket failed on one `paper.route` — the park to
+the first hover — so the sweep prices that leg, the exit leg and the
+ink-vs-envelope minimum instead of a fly.  The pieces are planned once with no
+envelope, because `plan_stroke` never consults the static set.  At the shipped
+setting (stride 2, cell 0.15 m, pad 40 mm) the probe reproduces §11's failure in
+**1.4 s** instead of 27 minutes: **9 of 13 buckets can route their park-hover
+legs, and the ink minimum is -30.6 mm**.
+
+**THE CELL IS THE LEVER AND THE PAD IS NOT, AND THE BOUND SAYS SO EXACTLY.**  A
+cluster sphere is drawn round the endpoints of every capsule whose MIDPOINT fell
+in its cell, so `radius <= cell*sqrt(3)/2 + half the longest capsule + the
+capsule radius + the pad`.  The first term is **0.130 m at the shipped 0.15 m
+cell and 0.043 m at 0.05 m**, against a real capsule radius of about 0.06 —
+the difference between a bound three times the thing it bounds and one a third
+larger, and an order more than the 40 mm pad is worth.  Pinned by a test.
+
+**AND `pad = 0` IS ONLY LEGAL AT STRIDE 1.**  The pad covers the poses a stride
+skips; at stride 2 three cells in four are unread and the pad is all that stands
+in for them, while at stride 1 every strict-GO cell is read (`2*cells + 1`
+poses, pinned) and the envelope is exactly the object
+`scripts/workcell_envelopes.py` measures.  **The setting the arithmetic points
+at is stride 1, cell 0.05 m, pad 0.**  It is NOT yet adopted as the default,
+because it has not been measured.
+
+**WHAT IS NOT MEASURED.**  The sweep did not complete: each setting re-routes 26
+legs cold under a new store namespace and several fall through the shape ladder
+to the RRT, which is minutes a leg.  So there is no measured fly fraction at the
+tighter settings, no active-pair minimum under them, and no full eight-stage
+fly.  **§11's table stands as the last measured one, with 26 of 56 pieces
+unflown, and the makespan stays unquoted.**  The two-pass swept-capsule room
+(building the room from the other actives' ACTUAL pass-1 trajectories) was not
+started: the cell arithmetic is a 130 mm lever against an inflation the two-pass
+scheme would have to beat, and it is the cheaper thing to finish first.
+
+**ONE REAL FIX CAME OUT OF THE ATTEMPT.**  The envelope's POSES and the SPHERES
+that bound them were filed under one cache key, so a sweep over the clustering
+re-solved every hover — 9 ms a cell over thousands of cells, for an answer that
+depends on neither.  `staged.cached_envelope_poses` splits them.  Same family as
+`id(spec)` in `paper.py`, found the same way: by a sweep that should have been
+seconds and was minutes.
+
 ## THE LEG GAP IS CLOSED BY THE ENVELOPE, AND THE REFUSAL LOOP BY CUTTING THE ATOM (2026-09-11, last)
 
 Follow-up to the previous entry, which measured two pen-up legs at +12.9 mm and
