@@ -931,6 +931,205 @@ def phase_aside_parks(fleet, base_parks, ink_by_arm, disc=ASIDE_DISC_R,
     return parks, info
 
 
+# ===========================================================================
+# PER-STAGE PARK SETS — a park ranked against an ENVELOPE, not against an xy
+# ===========================================================================
+# `region_aware_parks` above ranks a candidate by how far it stands off one
+# TARGET POINT's column, which is the right question for "somebody is drawing
+# under your boom".  A stage asks a different one: not "how far from that
+# point" but "how far from EVERYTHING the active arms could be told to do",
+# and the answer is a minimum over an envelope — every certified drawing pose
+# in the arm's work cell, every hover above one, and the arm's own park.
+#
+# THE NUMBER THIS EXISTS TO MOVE.  docs/V2_WORKCELLS.md §5 measured the shipped
+# `Q_PARK_PROPOSED` against exactly that and got **+4.7 mm** (13 against 17),
+# against a 50 mm gate — and identically for every pattern measured, so the
+# choice of pattern cannot move it and no stage can run until it does.  The
+# shipped set was searched against the ALLOCATED ink of one programme, which it
+# clears by 97.7 mm; a work cell is what an arm could be told to draw, not what
+# one run happened to hand it.
+#
+# WHAT IS CERTIFIED HERE, EXACTLY.  For one stage the pose set is: each ACTIVE
+# arm's drawing and hover poses over its own region, plus that arm's park; and
+# each PARKED arm's park, and nothing else.  The certificate is that every pair
+# of those sets clears `PAIR_MARGIN`.  The active-vs-active half is
+# `scripts/workcell_envelopes.py`'s ink-vs-ink (+85.8 mm for the recommended
+# pattern); this function is responsible for every pair that contains a park.
+# What it is NOT is the pen-up LEG: an envelope is a union over poses and the
+# joint-space line between two of them is not in it.  That gap is closed by one
+# `scene_check.check_timeline` per arm per stage (build item 6); `flyable`
+# below reports the weaker, cheaper thing — that `paper.route` certifies a way
+# from the park into the cell against the steel and the arm's own metal.
+STAGE_PARK_RANK = 8        # candidates walked down before an arm gives up
+
+
+def _stage_path(arm, Q, fleet, h_inv, known_pose=True):
+    """One arm's pose stack as an `ArmPath`, with link1's sweep band dropped.
+
+    EVERY POSE IN A STAGE ENVELOPE IS A KNOWN POSE, so it does not pay for the
+    revolution of the upper arm about an unknown q1 — the real upper arm is
+    already carried by its own capsule.  Same treatment, same reason and the
+    same 8-60 mm as `scripts/workcell_envelopes.py`'s `drop_sweep_band`, so the
+    numbers here are comparable with the +4.7 mm they are meant to beat.
+    """
+    from . import coordination as co
+    spec = fleet[arm]
+    p = co.ArmPath(arm, np.asarray(Q, float).reshape(-1, 7), 0.01, h_inv,
+                   spec.pen, spec)
+    if known_pose:
+        keep = [k for k in range(len(p.r)) if k not in co.FROZEN_SWEEP_BANDS]
+        p.A = np.ascontiguousarray(p.A[:, keep])
+        p.B = np.ascontiguousarray(p.B[:, keep])
+        p.r = np.ascontiguousarray(p.r[keep])
+        p._box, p._tiles, p._key = None, {}, None
+    return p
+
+
+def stage_envelopes(pattern, cell_poses, stage):
+    """The ACTIVE arms' work-cell pose stacks for one stage. -> {arm: (N, 7)}.
+
+    `cell_poses` is `{arm: dict(x, y, q_draw, q_hover)}` — one certified
+    drawing pose and one hover per cell — which is exactly what
+    `scripts/workcell_envelopes.arm_cells` returns.  An arm the stage does not
+    name is parked and has no envelope here; its park is a pose, not a set.
+    """
+    out = {}
+    for c in pattern.stage(stage):
+        d = cell_poses.get(int(c.arm))
+        if d is None:
+            continue
+        x = np.asarray(d["x"], float)
+        y = np.asarray(d["y"], float)
+        m = np.zeros(len(x), bool)
+        for x0, y0, x1, y1 in c.region:
+            m |= ((x >= x0 - 1e-9) & (x < x1 - 1e-9) &
+                  (y >= y0 - 1e-9) & (y < y1 - 1e-9))
+        if not m.any():
+            continue
+        Q = np.vstack([np.asarray(d["q_draw"], float)[m],
+                       np.asarray(d["q_hover"], float)[m]])
+        out[int(c.arm)] = np.ascontiguousarray(Q)
+    return out
+
+
+def stage_parks(pattern, cell_poses, fleet=None, h_inv=None, gate=None,
+                sheet=SHEET_FINAL6, pen_lat=None, grid=None,
+                rank=STAGE_PARK_RANK, cands=None, verbose=False):
+    """A certified park for every arm, in every stage. -> ({stage: {arm: q}}, report).
+
+    The search is `aside_candidates`' three-number machinery — the same
+    (radius, hover, bearing) recipes `PARK_GRID_PROPOSED` speaks, so a stage
+    park can be written down and re-derived exactly like a shipped one — ranked
+    against the stage's ENVELOPES instead of against a target xy, with each
+    arm's own shipped park prepended so the incumbent is always in the running
+    and always wins a tie.
+
+    Deterministic: candidates are enumerated in a fixed order and ranked by
+    `(-clearance, index)`, which is a total order; the arms are then served
+    worst-constrained first and a park-versus-park conflict walks the LOSER
+    down its own ranking rather than re-ranking anybody.
+    """
+    from . import coordination as co
+    from .frames import PEN_LAT_HOLDER
+    fleet = FLEET_PROPOSED if fleet is None else fleet
+    h_inv = float(LAYOUT_PROPOSED["h"]) if h_inv is None else float(h_inv)
+    gate = co.PAIR_MARGIN if gate is None else float(gate)
+    grid = PARK_GRID_PROPOSED if grid is None else dict(grid)
+    pen_lat = PEN_LAT_HOLDER if pen_lat is None else float(pen_lat)
+    arms = sorted(fleet)
+
+    if cands is None:
+        cands = {a: aside_candidates(fleet[a], sheet=sheet, pen_lat=pen_lat,
+                                     extra=(grid[a],) if a in grid else ())
+                 for a in arms}
+    QC = {a: np.vstack([q.reshape(1, 7) for q, _ in cands[a]]) for a in arms}
+    CP = {a: _stage_path(a, QC[a], fleet, h_inv) for a in arms}
+
+    parks, report = {}, []
+    for s in range(pattern.n_stages):
+        env = stage_envelopes(pattern, cell_poses, s)
+        active = sorted(env)
+        paths = {a: _stage_path(a, env[a], fleet, h_inv) for a in active}
+        # SCORE EVERY CANDIDATE OF EVERY ARM AGAINST EVERY OTHER ARM'S
+        # ENVELOPE, in one matrix per (arm, active) pair rather than one per
+        # candidate: the broad phase is per-path, so asking about 73 poses at
+        # once costs barely more than asking about one.
+        score, binding = {}, {}
+        for a in arms:
+            sc = np.full(len(QC[a]), np.inf)
+            bd = [None] * len(QC[a])
+            for b in active:
+                if b == a:
+                    continue
+                M = co.clearance_matrix(CP[a], paths[b]).min(axis=1)
+                worse = M < sc
+                sc = np.minimum(sc, M)
+                for i in np.nonzero(worse)[0]:
+                    bd[int(i)] = int(b)
+            score[a], binding[a] = sc, bd
+        order = {a: sorted(range(len(QC[a])),
+                           key=lambda i, a=a: (-float(score[a][i]), i))
+                 for a in arms}
+        # WORST-CONSTRAINED FIRST: the arm whose best candidate is tightest has
+        # the least room to give, so it chooses before anybody boxes it in.
+        pick, seq = {}, sorted(arms, key=lambda a: (float(score[a][order[a][0]]), a))
+        for a in seq:
+            took = None
+            for i in order[a][:int(rank)]:
+                if float(score[a][i]) < gate:
+                    break              # descending: nothing below it helps
+                q = QC[a][i]
+                bad = False
+                for b, qb in pick.items():
+                    m = float(co.clearance_matrix(
+                        _stage_path(a, q[None, :], fleet, h_inv),
+                        _stage_path(b, np.asarray(qb)[None, :], fleet,
+                                    h_inv)).min())
+                    if m < gate:
+                        bad = True
+                        break
+                if bad:
+                    continue
+                took, pick[a] = i, q
+                break
+            if took is None:                    # nothing certified: keep the
+                took = 0                        # incumbent and say so below
+                pick[a] = QC[a][0]
+            parks.setdefault(s, {})[a] = np.asarray(pick[a], float)
+            report.append(dict(stage=s, arm=int(a), candidate=int(took),
+                               recipe=[float(v) for v in cands[a][took][1]],
+                               active=a in active,
+                               env_clear_m=float(score[a][took]),
+                               binding=binding[a][took],
+                               certified=bool(score[a][took] >= gate)))
+        if verbose:
+            w = min(r["env_clear_m"] for r in report if r["stage"] == s)
+            print(f"  stage {s}: active {active}, worst park-vs-envelope "
+                  f"{1000 * w:+.1f} mm")
+    return parks, report
+
+
+def park_pair_clearance(parks, fleet=None, h_inv=None):
+    """The worst park-vs-park clearance of one stage's set. -> (m, (a, b)).
+
+    `fleet_park_clearance` with the stage envelope's own pose treatment, so it
+    is comparable with `stage_parks`' own numbers rather than 8-60 mm apart
+    from them.
+    """
+    import itertools
+    from . import coordination as co
+    fleet = FLEET_PROPOSED if fleet is None else fleet
+    h_inv = float(LAYOUT_PROPOSED["h"]) if h_inv is None else float(h_inv)
+    P = {a: _stage_path(a, np.asarray(q, float).reshape(1, 7), fleet, h_inv)
+         for a, q in parks.items() if a in fleet}
+    worst, pair = np.inf, None
+    for a, b in itertools.combinations(sorted(P), 2):
+        m = float(co.clearance_matrix(P[a], P[b]).min())
+        if m < worst:
+            worst, pair = m, (a, b)
+    return worst, pair
+
+
 def repark_route(spec, q_from, q_to, h_inv=None, pen_ext=None, q_home=None):
     """A certified pen-up move from one park to another. -> dict | None.
 

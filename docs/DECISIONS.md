@@ -1,5 +1,74 @@
 # Decisions — the numbers, and where each one is anchored
 
+## PER-STAGE PARKS, AND WHY +4.7 mm IS NOT A PARK PROBLEM (2026-09-11, later)
+
+Build item 2 of docs/ARCHITECTURE_V2.md.  `layout.stage_parks(pattern,
+cell_poses)` searches a park for every arm in every stage, ranked against that
+stage's **envelopes** rather than against a target *xy* — `aside_candidates`'
+same (radius, hover, bearing) recipes, so a stage park can be written down and
+re-derived exactly like a shipped one, with each arm's shipped park prepended so
+the incumbent is always in the running and always wins a tie.  Every candidate
+of every arm is scored against every active arm's envelope in one clearance
+matrix per (arm, active) pair, the arms are served worst-constrained first, and
+a park-versus-park conflict walks the loser down its own ranking.
+`out/stage_parks_h0970.json` carries the set with its provenance (atlas, stride,
+`cache_signature`, every arm's `spec_signature`, and the recipe grid).
+
+**Measured, eight stages, 65 candidates an arm, gate 50 mm** (worst park against
+any ACTIVE arm's work-cell envelope; `*` marks an active arm, whose own park is
+held to the same test against the other actives):
+
+| stage | active | worst | binding arm | park-vs-park | flyable |
+|---|---|---|---|---|---|
+| 0 | 13, 71, 2 | **+4.7 mm** | 17 | +250.0 | 3/3 |
+| 1 | 17, 31, 97 | **+4.7 mm** | 13 | +250.0 | 3/3 |
+| 2 | 13, 97 | **+55.4 mm** | 17 | +250.0 | 2/2 |
+| 3 | 17, 2 | +37.1 mm | 97 | +250.0 | 2/2 |
+| 4 | 31, 97 | +34.9 mm | 71 | +250.0 | 2/2 |
+| 5 | 71, 2 | +37.1 mm | 97 | +136.9 | 2/2 |
+| 6 | 13, 31 | **+55.4 mm** | 17 | +250.0 | 2/2 |
+| 7 | 17, 71 | **+95.7 mm** | 13 | +250.0 | 2/2 |
+
+**THE SEARCH FINDS NOTHING BETTER THAN THE SHIPPED SET IN ANY STAGE, AND THAT IS
+THE RESULT.**  Per ARM it does improve — arm 31 in stage 0 goes from the
+shipped +45.4 mm to **+57.7 mm** — but the *binding* arm's number does not move
+by a millimetre in any of the eight stages, and the reason is structural rather
+than a search that ran out of candidates.  **All 65 candidate parks of arm 17
+score identically, +4.7 mm, against arm 13's stage-0 envelope.**  Decomposed,
+the binding pair is arm 13's ink against arm 17's **moving links** (the base
+column alone is +68.6 mm), and those moving links are the upper arm, which is
+within `ELBOW_R` = 0.117 m of arm 17's own base whatever pose it holds.  A
+full-width row band handed to one arm of a transverse pair reaches under the
+other arm's shoulder, and **no park can take a shoulder somewhere else**.  This
+is V2_WORKCELLS §1's "the elbow, not the pen" applied to a park instead of to
+ink: the transverse pair is unseparable, and a park set is not the lever.
+
+So V2_WORKCELLS §5 and ARCHITECTURE_V2 §2b are corrected on one point.  The
++4.7 mm is real and it is the blocker, but it is **not** "the shipped parks were
+searched against the wrong thing" — searching them against the right thing gives
+the same number.  **The lever is the work cell, not the park**: what moves +4.7
+mm is eroding the active arm's row band in *x* away from its transverse
+partner's base column, which hands paper to a seam stage exactly as the 0.40 m
+*y* dead band does.  That measurement — the *x* frontier for a park, the analogue
+of V2_WORKCELLS §2's frontier for ink — is the next one, and it is cheap: the
+machinery is in this commit.
+
+**Three stages of eight clear the gate as they stand** (2, 6 and 7, at +55.4 to
++95.7 mm), and two of those three are the new seam stages.  Stages 3, 4 and 5
+miss by 13-15 mm, which is a different and much smaller problem than stages 0
+and 1's 45 mm.
+
+**Park-vs-park is at the 250 mm broad-phase cap in seven stages of eight** and
++136.9 mm in the eighth, so no stage's parks are anywhere near each other.
+**Flyability is 18 of 18**: every active arm's park has a `paper.route` into the
+nearest certified cell of its own work cell, against the steel and its own
+metal.  **Two of the 42 transitions leave the arm inside its next cell; 14
+need a repark and all 14 route** (modes: direct, home, fold_home, two 40 cm
+lifts and one `rrt1`) — the remaining 26 are arms whose park does not change
+between consecutive stages.  Both route checks are `paper.route`, i.e. against
+the static set and self, NOT against the other arms: closing that is build
+item 6's one `scene_check.check_timeline` per arm per stage.
+
 ## EIGHT STAGES IN THE CODE, AND A WORK CELL THE ALLOCATOR ACCEPTS (2026-09-11, later)
 
 Build item 3 of docs/ARCHITECTURE_V2.md, landed — both halves.

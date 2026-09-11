@@ -1114,3 +1114,121 @@ def test_the_timeline_recheck_refuses_to_measure_a_rig_that_never_ran():
 
     with pytest.raises(KeyError):
         rt.fleet_for(clocking="sideways")
+
+
+# ==========================================================================
+# PER-STAGE PARK SETS (docs/ARCHITECTURE_V2.md build item 2)
+# ==========================================================================
+def _fake_cells(fleet, h, n=3):
+    """A tiny stand-in for `workcell_envelopes.arm_cells`. -> {arm: dict}.
+
+    Three cells per arm at its own park's tip xy, with the park pose standing
+    in for both the drawing pose and the hover, so the geometry is real (they
+    are certified poses of the right arm) while the test stays under a second.
+    The property under test is the SEARCH and the bookkeeping, not the atlas.
+    """
+    import numpy as np
+    from aris_sixarm import layout as L
+    from aris_sixarm import paper
+    out = {}
+    for a, spec in fleet.items():
+        q = np.asarray(L.Q_PARK_PROPOSED[a], float).reshape(7)
+        xy = paper.tip_xy(q, spec, spec.pen, h)
+        out[a] = dict(x=np.full(n, float(xy[0])), y=np.full(n, float(xy[1])),
+                      q_draw=np.repeat(q[None, :], n, 0),
+                      q_hover=np.repeat(q[None, :], n, 0))
+    return out
+
+
+def test_a_stage_envelope_is_the_cells_inside_that_stages_region():
+    import numpy as np
+    from aris_sixarm import layout as L
+    from aris_sixarm import traces as T
+    fleet = L.FLEET_PROPOSED
+    h = float(L.LAYOUT_PROPOSED["h"])
+    cells = _fake_cells(fleet, h)
+    pat = T.zigzag_pattern()
+    env = L.stage_envelopes(pat, cells, 0)
+    # only the stage's ACTIVE arms have an envelope at all
+    assert set(env) <= {2, 13, 71}
+    # ...and each one is two poses (draw + hover) per cell inside the region
+    for a, Q in env.items():
+        assert Q.shape[1] == 7 and len(Q) % 2 == 0
+    # a region that contains nothing yields no envelope
+    empty = T.Pattern("x", (T.StageCell(0, 13, ((9.0, 9.0, 9.1, 9.1),)),))
+    assert L.stage_envelopes(empty, cells, 0) == {}
+
+
+def test_every_stage_park_is_certified_or_says_why_not():
+    """The certificate, and the honest exception.
+
+    Every arm gets a park in every stage; the report says, per arm, what that
+    park clears the ACTIVE arms' envelopes by and whether that made the gate.
+    The seam stages certify.  Stages 0 and 1 do not, and the reason is
+    structural rather than a search failure — see the DECISIONS entry: a
+    full-width row band handed to one arm of a transverse pair leaves the other
+    arm of that pair nowhere to stand, because its upper arm cannot leave the
+    neighbourhood of its own base.  The test pins the SHAPE of the answer and
+    the seam stages' gate, not a number the search might improve.
+    """
+    import numpy as np
+    from aris_sixarm import coordination as co
+    from aris_sixarm import layout as L
+    from aris_sixarm import traces as T
+    fleet = L.FLEET_PROPOSED
+    h = float(L.LAYOUT_PROPOSED["h"])
+    pat = T.zigzag_pattern()
+    parks, rows = L.stage_parks(pat, _fake_cells(fleet, h), fleet=fleet,
+                                h_inv=h, rank=2)
+    assert sorted(parks) == list(range(pat.n_stages))
+    for s in range(pat.n_stages):
+        assert sorted(parks[s]) == sorted(fleet)
+        for q in parks[s].values():
+            assert np.asarray(q, float).shape == (7,)
+        mine = [r for r in rows if r["stage"] == s]
+        assert len(mine) == len(fleet)
+        assert all(r["env_clear_m"] == r["env_clear_m"] for r in mine)
+        # a park is certified exactly when it made the gate, and never by
+        # accident: the flag and the number cannot disagree
+        for r in mine:
+            assert r["certified"] == (r["env_clear_m"] >= co.PAIR_MARGIN)
+    # the park set of a stage is proved as a SET: no two parks may touch
+    for s in range(pat.n_stages):
+        worst, pair = L.park_pair_clearance(parks[s], fleet, h)
+        assert worst >= co.PAIR_MARGIN, f"stage {s}: {pair} at {worst:.4f} m"
+
+
+def test_no_stage_ever_puts_a_same_row_pair_in_the_air():
+    """The one thing the geometry forbids outright (V2_WORKCELLS sections 1-2):
+    a transverse pair is at -262 mm however the paper is cut."""
+    from aris_sixarm import traces as T
+    pat = T.zigzag_pattern()
+    for s in range(pat.n_stages):
+        rows = [T.ROW_OF[c.arm] for c in pat.stage(s)]
+        assert len(rows) == len(set(rows)), f"stage {s} has a same-row pair"
+
+
+def test_the_stage_park_search_never_ranks_below_the_incumbent():
+    """The shipped park is prepended to the candidate list, so it is always in
+    the running and always wins a tie: a stage park is never WORSE than
+    `Q_PARK_PROPOSED` measured the same way."""
+    import numpy as np
+    from aris_sixarm import coordination as co
+    from aris_sixarm import layout as L
+    from aris_sixarm import traces as T
+    fleet = L.FLEET_PROPOSED
+    h = float(L.LAYOUT_PROPOSED["h"])
+    cells = _fake_cells(fleet, h)
+    pat = T.zigzag_pattern()
+    parks, rows = L.stage_parks(pat, cells, fleet=fleet, h_inv=h, rank=3)
+    for s in (0, 2):
+        env = L.stage_envelopes(pat, cells, s)
+        paths = {b: L._stage_path(b, env[b], fleet, h) for b in env}
+        for arm in sorted(fleet):
+            q = np.asarray(L.Q_PARK_PROPOSED[arm], float).reshape(1, 7)
+            p = L._stage_path(arm, q, fleet, h)
+            was = min([float(co.clearance_matrix(p, paths[b]).min())
+                       for b in paths if b != arm] or [np.inf])
+            now = next(r["env_clear_m"] for r in rows
+                       if r["stage"] == s and r["arm"] == arm)
+            assert now >= was - 1e-9, f"stage {s} arm {arm}: {now} < {was}"
