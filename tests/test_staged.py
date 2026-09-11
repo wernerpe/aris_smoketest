@@ -14,6 +14,8 @@ refusal loop -- so the end-to-end test asserts about the pieces that WERE
 accepted and about the checks they passed, and reports the refusals rather than
 requiring there to be none.
 """
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -493,3 +495,89 @@ def test_run_installs_the_envelope_room_for_every_active_arm(rig, toy):
     assert res.envelope_s >= 0.0
     staged.plan_memo_clear()
     staged.thaw()
+
+
+# ---------------------------------------------------------------------------
+# 5.  HOW TIGHT THE ENVELOPE HAS TO BE, AND WHY THE CERTIFICATE SURVIVES IT
+# ---------------------------------------------------------------------------
+ATLAS = pathlib.Path(staged.ATLAS_DEFAULT)
+needs_atlas = pytest.mark.skipif(
+    not (ATLAS / "atlas_arm13.npz").exists(),
+    reason=f"no swept atlas at {ATLAS}")
+
+
+def test_the_sphere_radius_is_the_whole_conservatism_and_it_is_the_cell():
+    """WHY THE CELL IS THE LEVER AND THE PAD IS NOT.
+
+    A cluster sphere's radius is (half-diagonal of the cell it bounds) +
+    (the capsule radius) + (the pad).  At the 0.15 m cell the first term alone
+    is 0.13 m against a real capsule radius of about 0.06 — the bound is three
+    times the thing it bounds — and at 0.05 m it is 0.043.  So shrinking the
+    cell buys an order more than zeroing the pad, which is what the sweep in
+    docs/V2_STAGED.md section 13 measured and what this pins.
+    """
+    rng = np.random.default_rng(3)
+    A = rng.uniform(-0.4, 0.4, (600, 3))
+    B = A + rng.normal(0, 0.02, (600, 3))
+    R = np.full(600, 0.06)
+    big = staged.cluster_capsules(A, B, R, cell=0.15, pad=0.0)[1].max()
+    small = staged.cluster_capsules(A, B, R, cell=0.05, pad=0.0)[1].max()
+    assert small < big
+    # The bound, stated exactly: a sphere is drawn round the ENDPOINTS of every
+    # capsule whose MIDPOINT fell in the cell, so its radius is at most the
+    # cell's half-diagonal plus half the longest capsule plus the capsule
+    # radius.  The first term is the only one the caller controls, and it is
+    # 0.13 m at the 0.15 m cell against 0.043 m at 0.05 m.
+    half = 0.5 * float(np.max(np.linalg.norm(B - A, axis=1)))
+    for cell in (0.15, 0.10, 0.05):
+        r = staged.cluster_capsules(A, B, R, cell=cell, pad=0.0)[1]
+        assert r.max() <= cell * np.sqrt(3) / 2 + half + 0.06 + 1e-9
+    assert (staged.cluster_capsules(A, B, R, 0.05, 0.0)[1].max()
+            < staged.cluster_capsules(A, B, R, 0.15, 0.0)[1].max() - 0.05)
+    # ...and zeroing the pad can only shrink, never grow
+    assert staged.cluster_capsules(A, B, R, 0.05, 0.0)[1].max() < \
+        staged.cluster_capsules(A, B, R, 0.05, 0.04)[1].max()
+
+
+@needs_atlas
+def test_stride_one_needs_no_pad_because_it_skips_no_pose(rig):
+    """`ENVELOPE_PAD` EXISTS ONLY TO COVER THE CELLS A STRIDE SKIPS.
+
+    At stride 1 the envelope reads EVERY strict-GO cell of the region, so there
+    is no skipped pose for a pad to stand in for and `pad = 0` is not an
+    optimism — it is the exact object `scripts/workcell_envelopes.py` measures.
+    At stride 2 three cells in four are skipped and the pad is the only thing
+    covering them, which is why the two settings are swept together.
+    """
+    from aris_sixarm import atlas as atlas_mod
+    region = (traces_mod_row := T.row_band(1),)
+    arr, meta = atlas_mod.load(ATLAS, 71)
+    arr = arr[atlas_mod.strict_go(arr)]
+    inside = T.rect_contains(region, arr[:, 0], arr[:, 1])
+    n_cells = int(inside.sum())
+    Q1 = staged.envelope_poses(71, region, str(ATLAS), rig[71], 1.0,
+                               staged.shipped_parks(rig)[71], stride=1)
+    assert len(Q1) == 2 * n_cells + 1        # a draw, a hover, and the park
+    Q2 = staged.envelope_poses(71, region, str(ATLAS), rig[71], 1.0,
+                               staged.shipped_parks(rig)[71], stride=2)
+    assert len(Q2) < len(Q1)                 # ...three cells in four skipped
+    assert np.allclose(Q1[-1], Q2[-1])       # both end at the same park
+
+
+@needs_atlas
+def test_stage_envelope_is_deterministic_and_cached(rig, tmp_path):
+    """The same setting gives the same spheres, from cache or from scratch."""
+    region = (T.seam_band(0),)
+    kw = dict(stride=2, cluster=0.10, pad=0.0, cache_dir=str(tmp_path))
+    parks = staged.shipped_parks(rig)
+    c1, r1 = staged.stage_envelope(13, region, str(ATLAS), rig[13], 1.0,
+                                   parks[13], {13: rig[13].pen}, **kw)
+    assert list(tmp_path.glob("*.npz")), "nothing was cached"
+    c2, r2 = staged.stage_envelope(13, region, str(ATLAS), rig[13], 1.0,
+                                   parks[13], {13: rig[13].pen}, **kw)
+    assert np.array_equal(c1, c2) and np.array_equal(r1, r2)
+    # a different setting is a different file and a different answer
+    c3, r3 = staged.stage_envelope(13, region, str(ATLAS), rig[13], 1.0,
+                                   parks[13], {13: rig[13].pen},
+                                   **dict(kw, cluster=0.05))
+    assert len(c3) > len(c1) and r3.max() < r1.max()

@@ -327,6 +327,40 @@ def envelope_poses(arm, region, atlas_dir, spec, h_inv, park,
     return Q
 
 
+def _env_sig(**kw) -> str:
+    return hashlib.sha256(json.dumps(kw, sort_keys=True).encode()).hexdigest()
+
+
+def cached_envelope_poses(arm, region, atlas_dir, spec, h_inv, park,
+                          stride=ENVELOPE_STRIDE, cache_dir=ENVELOPE_DIR,
+                          verbose=False) -> np.ndarray:
+    """`envelope_poses`, filed on disk. -> Q (N, 7).
+
+    THE POSES ARE THE EXPENSIVE HALF AND THEY DO NOT DEPEND ON THE CLUSTERING.
+    One `writing.lifted_config` per certified cell is about 9 ms and a row band
+    has a few hundred to a few thousand of them; the spheres that bound them
+    are a hundredth of that.  Keying the two together made a sweep over the
+    cluster cell re-solve every hover, which is a cache-key bug and not a cost.
+    """
+    sig = _env_sig(what="poses", atlas=str(atlas_dir), arm=int(arm),
+                   region=[[float(v) for v in r] for r in region],
+                   park=[round(float(x), 9)
+                         for x in np.asarray(park, float).ravel()],
+                   cache=paper.cache_signature(), stride=int(stride),
+                   lift=float(writing.LIFT_Z))
+    p = Path(cache_dir) / f"q{sig[:24]}.npz"
+    if p.exists():
+        try:
+            return np.asarray(np.load(p)["q"], float)
+        except Exception:
+            pass
+    Q = envelope_poses(arm, region, atlas_dir, spec, h_inv, park, stride,
+                       verbose)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(p, q=Q)
+    return Q
+
+
 def stage_envelope(arm, region, atlas_dir, spec, h_inv, park, pens,
                    stride=ENVELOPE_STRIDE, cluster=ENVELOPE_CLUSTER,
                    pad=ENVELOPE_PAD, cache_dir=ENVELOPE_DIR, verbose=False):
@@ -334,15 +368,17 @@ def stage_envelope(arm, region, atlas_dir, spec, h_inv, park, pens,
 
     Cached on disk under the atlas, the rig, the tool and the region, because
     it is a property of the STAGE and not of the picture: one build per rig and
-    pattern, re-read by every run and every arm that has to avoid it.
+    pattern, re-read by every run and every arm that has to avoid it.  The
+    POSES are cached separately and more coarsely (`cached_envelope_poses`), so
+    a sweep over the clustering costs the clustering and not the IK.
     """
-    sig = hashlib.sha256(json.dumps(dict(
-        atlas=str(atlas_dir), arm=int(arm),
-        region=[[float(v) for v in r] for r in region],
-        park=[round(float(x), 9) for x in np.asarray(park, float).ravel()],
-        cache=paper.cache_signature(), stride=int(stride),
-        cluster=float(cluster), pad=float(pad),
-        lift=float(writing.LIFT_Z)), sort_keys=True).encode()).hexdigest()
+    sig = _env_sig(what="spheres", atlas=str(atlas_dir), arm=int(arm),
+                   region=[[float(v) for v in r] for r in region],
+                   park=[round(float(x), 9)
+                         for x in np.asarray(park, float).ravel()],
+                   cache=paper.cache_signature(), stride=int(stride),
+                   cluster=float(cluster), pad=float(pad),
+                   lift=float(writing.LIFT_Z))
     p = Path(cache_dir) / f"{sig[:24]}.npz"
     if p.exists():
         try:
@@ -350,8 +386,8 @@ def stage_envelope(arm, region, atlas_dir, spec, h_inv, park, pens,
             return np.asarray(z["c"], float), np.asarray(z["r"], float)
         except Exception:
             pass
-    Q = envelope_poses(arm, region, atlas_dir, spec, h_inv, park, stride,
-                       verbose)
+    Q = cached_envelope_poses(arm, region, atlas_dir, spec, h_inv, park,
+                              stride, cache_dir, verbose)
     path = coordination.ArmPath(int(arm), Q, 0.01, h_inv,
                                 float(pens.get(arm, spec.pen)), spec)
     keep = [k for k in range(len(path.r))
