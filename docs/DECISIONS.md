@@ -1,5 +1,130 @@
 # Decisions — the numbers, and where each one is anchored
 
+## A PARKED PARTNER IS NOT AN ENVELOPE — AND THE LEGS ARE (2026-09-11, last)
+
+A correction to docs/V2_WORKCELLS.md §5 and docs/ARCHITECTURE_V2.md §2b, and
+the thing build item 4 measured on the way past.  **There are TWO safety
+questions inside a stage and they were being asked with one tool.**
+
+**BETWEEN TWO ACTIVE ARMS** the poses are not yet chosen when the stage is
+designed, so the criterion has to be the ENVELOPE one — the union over every
+pose either arm could hold anywhere inside its work cell.  That is what the
+0.40 m dead band was chosen for (+85.8 mm) and it is settled.
+
+**BETWEEN AN ACTIVE ARM AND A PARKED PARTNER it is the wrong test, and the
++4.7 mm is its artefact.**  A parked arm is not a union over poses; it is ONE
+known, measured, barrier-verified pose.  The tool for that is the per-stroke
+SOLO certification this repo already ships — `frozen.freeze` puts the
+partner's REAL capsules into the static set and the planner chooses poses and
+legs that clear 50 mm against them, cell by cell and leg by leg.  The certified
+3-layer map at h = 0.970 with the shipped parks frozen is already **100 % of
+the block at the 50 mm gate**, so the parked half of the problem needs **no
+park search, no cell erosion and no gate change**.  Measured end to end
+(docs/V2_STAGED.md), the active-vs-parked minimum over the eight stages of the
+CSAIL logo is **+28.2 to +140.2 mm**, seven of eight stages clearing the gate.
+
+**THE RELAXATION OF `PAIR_MARGIN` FOR A STATIONARY PARTNER IS THEREFORE OFF THE
+TABLE.**  The previous entry left it open — "whether a stationary partner at a
+verified park is owed the same 50 mm as a mover is a question for whoever signs
+the gate".  It is not a question that needs answering: the 50 mm is met against
+the partner's real capsules without relaxing anything, and the number that was
+missing it was a measurement of an object (the parked arm's whole envelope)
+that does not exist at run time.  `PAIR_MARGIN` = 50 mm stands, unqualified,
+for movers and for parked arms alike.
+
+**AND THE REAL GAP IS SOMEWHERE ELSE: THE PEN-UP LEGS.**  Re-measured from the
+trajectories the planner actually produced, with no assumption about how the
+asynchronous actives line up in time (the minimum over the CROSS PRODUCT of the
+two arms' pose sets, `staged.active_pair_gap`):
+
+| stage | actives | ink vs ink | WHOLE trajectory | binding pair, and what they were doing |
+|---|---|---|---|---|
+| 0 | 13, 71, 2 | **+273.5 mm** | **+12.9 mm** | 2 – 71, **both in a pen-up leg** |
+| 1 | 17, 31, 97 | **+338.8 mm** | **+8.2 mm** | 31 – 97, **both in a pen-up leg** |
+| 2–7 | the seams | — | +263.7 … +1 055.3 mm | — |
+
+**Ink against ink is never the problem — +273.5 mm at worst, against the
++85.8 mm the dead band was chosen for.**  What binds is two legs flying into
+each other, and it is exactly the hole docs/ARCHITECTURE_V2.md §2f named in
+advance: *"an envelope is a union over POSES ... and the pen-up leg between two
+hovers is a PATH, whose interior is not in the envelope."*  Each arm's legs
+were certified against the PARKED fleet, which is the right room at a barrier
+and the wrong one mid-stage, and nothing in the pipeline has ever asked whether
+one active arm's leg crosses another's.
+
+**WHAT THIS DOES NOT MEAN.**  It is not a defect in the dead band, in the
+pattern or in the planner, and it is not a reason to re-open §4b.  The cells
+are right; only the paths between them are unaccounted for.  Two cheap levers,
+neither measured yet: one `scene_check.check_timeline` per arm per stage
+against the other ACTIVES' work-cell envelopes as static boxes (§2f's own
+prescription, and a leg that fails is re-routed rather than the stage
+re-designed), or a per-stage flying height that separates the row bands in z —
+`writing.HOVER_LADDER` is already a ladder and z is a free parameter, which
+makes it a much cheaper lever than the x erosion measured out earlier today.
+
+## STAGE ASSIGNMENT, WIRED END TO END (2026-09-11, last)
+
+Build item 4 of docs/ARCHITECTURE_V2.md, landed as `aris_sixarm/staged.py` and
+`tests/test_staged.py`, measured in **docs/V2_STAGED.md**.  Per (stage, arm)
+bucket: freeze the five partners at their parks, plan every piece through
+`stroke_api.plan_stroke` (the funnel `scripts/csail_allocate.py` uses), order
+the accepted ones with `allocate.sequence_arm`, and lay the timeline down with
+`writing.arm_program` — park → hover → draw → … → park, every pen-up a
+`paper.route` against the frozen room and the persistent store.  No balancer,
+no split, no merge (the DP already minimised the pieces exactly) and no
+conductor.
+
+**THE CSAIL LOGO AT v19's PLACEMENT, h = 0.970**, 54 pieces in 30 ms of DP:
+
+| | |
+|---|---|
+| **time to first motion** | **0.309 s** (against v19's 3 712.4 s, and Pete's budget of 10) |
+| staged makespan | **391.7 s** against v19's conducted **209.9 s** — **1.87× worse** |
+| planning, all eight stages, serial | **221.2 s cold / 38.4 s warm** — **5.8×**, bought entirely by item 1's leg store |
+| …charged per stage to its busiest arm | 213.2 s cold / **34.8 s** warm |
+| the two independent checks | 100.5 s |
+| pieces refused by `plan_stroke` | **6 of 54, 11.1 %** — 4 `empty_fiber`, 1 `sheet_collapse`, 1 `too_short` |
+
+Both runs produce a **byte-identical makespan** (391.732 s), which is the check
+that the leg store changes nothing but the clock.
+
+**THE MAKESPAN IS THE HONEST DISAPPOINTMENT AND IT IS STRUCTURAL.**  A stage
+costs its busiest arm and the barrier makes the sequence cost the SUM of eight
+of those, and every stage pays a full park → out → back trip for every active
+arm whatever it has to draw: stage 5 is 0.923 m of ink for 58.6 s of clock.
+`traces.py` predicted the shape (2.35× the serial makespan in ink metres
+against a three-arm ceiling of 3×) and the seam stages are where it is paid.
+It buys a programme that needs **no conducting at all** against one that needed
+407.3 s of it, and a first motion 12 000× sooner.
+
+**WHAT IS NOT BUILT, DELIBERATELY.**  (1) **The refusal loop** — a refused
+piece is dropped rather than split and re-entered into the DP with a capability
+map re-derived from the refusal; 11.1 % of the ink is what it is worth.  (2)
+**The seam stages are not conducted** — §2d sends the six 2-active stages
+through `idle.conduct` and this module plans them asynchronously like the
+others and reports the clearance instead; on this logo they are effectively
+solo, so it did not bind.  (3) **The typed programme is not
+`program_schema.Bundle`** — `Segment` carries no joint vector and `_from_dict`
+refuses unknown AND missing keys, so a stage id and a per-piece hover are a
+`SCHEMA_VERSION` bump rather than an extension.  `staged.programme()` writes a
+SUPERSET of what item 5 has to absorb (stage id, barrier list, per-piece
+`q_first`/`q_last` and `hover_in`/`hover_out`, the pen-up leg blocks, the joint
+trajectory) under its own `STAGED_SCHEMA_VERSION`, and folding the two together
+is item 5's job.  (4) The **1 000-line refusal fraction** did not finish inside
+the pass; the logo's 11.1 % is the only measured figure.
+
+**ONE THING THE CHECK HAD TO BE TAUGHT.**  `scene_check.check_timeline` gates
+each arm against `spec.static_obstacles()`, which contains the OTHER arms'
+pose-invariant `body:<aid>_column<k>` bands — and in a stage timeline every arm
+those bands stand for is present as its own capsules, so the band is the same
+arm counted twice in its most conservative form.  `staged.drop_bands` removes
+exactly those and nothing else (mounts, plates, the drop cluster and the runway
+all stay, and so does the band of any arm not in the timeline), which is
+`frozen.filter_boxes` applied to the check instead of to the planner and the
+same convention `scene_check.neighbour_columns` already uses for the cylinder
+version of the same object.  Left in, arm 71's stage-0 timeline is refused by a
+band belonging to an arm standing 0.25 m clear of it.
+
 ## THE +4.7 mm IS NOT A PARK PROBLEM, AND IT IS NOT A CELL PROBLEM EITHER (2026-09-11, last)
 
 Report-only follow-up to the per-stage park search, asked for by the coordinator
