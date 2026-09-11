@@ -1,5 +1,74 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE +4.7 mm IS NOT A PARK PROBLEM, AND IT IS NOT A CELL PROBLEM EITHER (2026-09-11, last)
+
+Report-only follow-up to the per-stage park search, asked for by the coordinator
+and measured at `--stride 2` on `out/atlas_proposed_h0970_lat0860_gated63`.  Two
+levers were on the table and **both are measured out**; the pattern data ships
+unchanged and the knob ships off.
+
+**Lever 1 — erode the active arm's cell in x, away from its transverse
+partner's base.**  The clearance-versus-erosion curve is **flat, then it
+plateaus below the gate**:
+
+| stage | active → cell | parked | 0.00 m | 0.40 m | **0.74 m** | erosion for 50 mm |
+|---|---|---|---|---|---|---|
+| 0 | 13 → R0 | 17 | +4.7 mm | +10.9 | **+26.6** | **1.04 m** |
+| 0 | 2 → R2 | 97 | +13.7 | +13.7 | +26.6 | 1.04 m |
+| 1 | 17 → R0 | 13 | +4.7 | +4.7 | +59.9 | 0.76 m |
+| 1 | 31 → R1 | 71 | +11.9 | +11.9 | +26.8 | 1.04 m |
+| 3, 5 | 2 → SEAM1 | 97 | +37.1 | +37.1 | +39.5 | 0.80 m |
+| 4 | 31 → SEAM0 | 71 | +34.9 | +34.9 | +36.5 | 0.84 m |
+| 2, 6, 7 | the rest | — | +55.4 … +107.4 | — | — | already clear |
+
+**0.74 m is the free limit** — exactly half the 1.48 m block, where the two
+columns (which erode from opposite sides) still tile the row band and coverage
+is still 100.00 %.  **At the free limit the worst stage is +26.6 mm and the gate
+is 50.**  Getting to 50 costs **1.04 m of a 1.48 m block**, and then:
+
+| erosion | block covered | ≥ 2 stage-compatible drawers | mean | speedup |
+|---|---|---|---|---|
+| **0.00 m (shipped)** | **100.00 %** | **48.1 %** (ceiling) | 1.524 | **2.40×** |
+| 0.40 m | 100.00 % | 48.1 % | 1.524 | 2.40× |
+| 0.76 m | 98.51 % | 11.7 % | 1.117 | 2.44× |
+| 0.84 m | 87.85 % | 11.9 % | 1.119 | 2.74× |
+| **1.04 m (the frontier)** | **61.20 %** | **10.7 %** | 1.107 | 3.90× |
+
+The rising speedup is an artefact and is labelled as one: the stage sum falls
+because there is less ink, not because it is drawn faster.  **At the frontier
+the pattern loses 38.8 % of the block and three quarters of its redundancy** —
+the two things the eight-stage pattern was adopted for.  **Eroding in y is
+worse**: 0.77 m of a 1.01 m row band for 13 → R0, and 0.78 m of a 0.81 m band
+for 31 → R1, which leaves 30 mm of paper.
+
+**Lever 2 — park the partner retracted, and keep the cell.**  The stage-park
+search ranked 65 poses an arm, all of them reaching *out* over the paper at 0.20
+or 0.35 m.  Re-run over **24 bearings × 8 radii (0.30–0.78 m) × 6 hover heights
+(0.20–0.95 m)** — **485 to 492 certified poses an arm, 7.5× the grid, the whole
+reachable height range** — the binding numbers are **+4.7 → +4.7, +13.7 → +13.7,
++11.9 → +11.9, +37.1 → +37.1, +34.9 → +34.9**, and **zero** of ~490 poses clear
+the gate in any failing stage (against 228–268 of ~490 in every stage that
+already cleared).  Only 17 in stage 1 moves at all, +4.7 → +8.9 mm.  The binding
+element is **pose-invariant to within 4 mm over the arm's entire certified pose
+space**, which is the strongest possible confirmation of the shoulder argument.
+
+**THE RECOMMENDATION: neither.**  `traces.zigzag_pattern(park_erode_m=…)` and
+`traces.park_erode` ship so the frontier can be re-measured and Pete can see the
+trade; **the default is 0.0 and the pattern is unchanged**.  At no erosion is
+the trade worth taking.
+
+**What is left is not geometry**, and the cheapest candidate changes no code at
+all: **`PAIR_MARGIN` = 50 mm is the gate for two arms IN MOTION.**  A parked arm
+holds one known, measured, barrier-verified pose, and DECISION 2026-09-09
+already settled that *a known pose stops paying for a sweep*.  Whether a
+stationary partner at a verified park is owed the same 50 mm as a mover is a
+question for whoever signs the gate — and if it is not, five of eight stages
+pass at once and the other three miss by **13–15 mm**.  Two further candidates,
+neither measured here: a park search whose candidates are *outside* the
+certified block (three of six shipped parks already are, and
+`certified_ready_pose` only searches over the paper), and a five-arm stage that
+simply does not have a same-row partner in it.
+
 ## PER-STAGE PARKS, AND WHY +4.7 mm IS NOT A PARK PROBLEM (2026-09-11, later)
 
 Build item 2 of docs/ARCHITECTURE_V2.md.  `layout.stage_parks(pattern,

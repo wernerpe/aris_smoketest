@@ -181,6 +181,101 @@ Three of the six park *outside* the certified block, which is by design (`layout
 | 13 | **+4.7 mm** | 17 |
 | 17 | **+4.7 mm** | 13 |
 
+### The x-erosion frontier for a park — measured 2026-09-11, and it is not a lever
+
+The obvious fix for +4.7 mm is to take the paper under the parked partner's
+shoulder away from the arm that is drawing. Measured, per stage, as the smallest
+erosion of the ACTIVE arm's cell in x away from its transverse partner's base at
+which the partner's shipped park clears the active arm's envelope by 50 mm
+(`traces.park_erode`, the per-cell clearance of every certified cell in the
+region against the parked pose, at `--stride 2`):
+
+| stage | active → cell | parked | at 0.00 m | 0.40 m | **0.74 m** | erosion for 50 mm |
+|---|---|---|---|---|---|---|
+| 0 | 13 → R0 | 17 | +4.7 mm | +10.9 | **+26.6** | **1.04 m** |
+| 0 | 2 → R2 | 97 | +13.7 | +13.7 | **+26.6** | 1.04 m |
+| 0 | 71 → R1 | 31 | +45.4 | +45.4 | +58.0 | 0.44 m |
+| 1 | 17 → R0 | 13 | +4.7 | +4.7 | **+59.9** | 0.76 m |
+| 1 | 31 → R1 | 71 | +11.9 | +11.9 | **+26.8** | 1.04 m |
+| 3, 5 | 2 → SEAM1 | 97 | +37.1 | +37.1 | **+39.5** | 0.80 m |
+| 4 | 31 → SEAM0 | 71 | +34.9 | +34.9 | **+36.5** | 0.84 m |
+| 2, 6, 7 | the rest | — | +55.4 … +107.4 | — | — | **already clear** |
+
+**The curve is flat, and then it plateaus below the gate.** Nothing is bought at
+all until 0.40 m, and by 0.74 m — which is exactly half the 1.48 m block, the
+largest erosion that costs *no* coverage, because the two columns erode from
+opposite sides and still tile the row band — the worst stage is at **+26.6 mm**
+and three more sit at +36.5 to +39.5 mm. **The 50 mm gate is never reached by
+an erosion that is free.** What the block costs at each erosion, recomputed over
+the 13 650 certified cells with the eight-stage pattern:
+
+| erosion | block covered | ≥ 2 stage-compatible drawers | mean drawers | speedup |
+|---|---|---|---|---|
+| **0.00 m (shipped)** | **100.00 %** | **48.1 %** (the ceiling) | 1.524 | **2.40×** |
+| 0.40 m | 100.00 % | 48.1 % | 1.524 | 2.40× |
+| 0.74 m (free limit) | 98.51 %† | 11.7 % | 1.117 | 2.44× |
+| 0.84 m | 87.85 % | 11.9 % | 1.119 | 2.74× |
+| **1.04 m (the frontier)** | **61.20 %** | **10.7 %** | 1.107 | 3.90× |
+
+† 98.51 % at 0.76 m, the first erosion past the tiling point; 0.74 m itself is
+100.00 %. The speedup column *rises* with erosion and that is an artefact worth
+stating plainly: the stage sum falls because there is less ink, not because it is
+drawn faster. **At the frontier the pattern draws 61 % of the block and keeps a
+tenth of its redundancy** — it fails the two things the eight-stage pattern was
+adopted for. Eroding in **y** toward the partner's base is worse still: 0.77 m of
+a 1.01 m row band for 13 → R0, and 0.78 m of a 0.81 m band for 31 → R1, which
+leaves 30 mm of paper.
+
+### The alternative — a retracted park — does not work either
+
+The stage-park search ranked 65 candidates an arm: 12 bearings × 3 radii
+(0.55–0.70 m) × 2 hover heights (0.20, 0.35 m), all of them *reaching out over
+the paper*. A shoulder cannot leave its base, but an arm can fold itself up and
+away, and that is a family the grid never contained. Searched over **24 bearings
+× 8 radii (0.30–0.78 m) × 6 hover heights (0.20–0.95 m)** — 485 to 492 certified
+poses an arm, **7.5× the grid, spanning the whole reachable height range** — the
+binding number **does not move**:
+
+| stage | active | parked | shipped park | best of 490 poses |
+|---|---|---|---|---|
+| 0 | 13 → R0 | 17 | +4.7 mm | **+4.7 mm** (0 of 488 clear the gate) |
+| 0 | 2 → R2 | 97 | +13.7 | **+13.7** (0 of 488) |
+| 1 | 17 → R0 | 13 | +4.7 | +8.9 (0 of 485) |
+| 1 | 31 → R1 | 71 | +11.9 | **+11.9** (0 of 492) |
+| 3, 5 | 2 → SEAM1 | 97 | +37.1 | **+37.1** (0 of 488) |
+| 4 | 31 → SEAM0 | 71 | +34.9 | **+34.9** (0 of 492) |
+
+Every seam stage that already cleared has 228–268 poses that clear; every stage
+that did not has **zero**, at any height, at any retraction. That is as strong a
+confirmation of the shoulder argument as this rig can give: the binding element
+is pose-invariant to within 4 mm over the arm's whole certified pose space.
+
+### The recommendation
+
+**Neither. Ship `park_erode_m = 0.0` — the pattern unchanged.** The knob exists
+(`traces.zigzag_pattern(park_erode_m=…)`, `traces.park_erode`) so the frontier
+can be re-measured and so Pete can see the trade, but at no erosion is the trade
+worth taking: the free erosion does not clear the gate and the clearing erosion
+costs 38.8 % of the block and three quarters of the redundancy.
+
+**What is left is not geometry.** Three candidates, in cost order, none of them
+this pass's to decide:
+
+1. **A parked arm is not a moving arm.** `PAIR_MARGIN` = 50 mm is the gate for
+   two arms in motion; a parked arm holds one known, measured, barrier-verified
+   pose, and DECISION 2026-09-09 already established that *a known pose stops
+   paying for a sweep*. Whether a stationary partner at a verified park deserves
+   the same 50 mm as a mover is a question for whoever signs the gate — and if
+   it does not, five of the eight stages pass immediately, three of them by
+   13–15 mm. **This is the cheapest thing to ask and it changes no code.**
+2. **Park the partner off the certified block.** Three of the six shipped parks
+   already are; the 490-pose family is `certified_ready_pose`, which searches
+   over the paper. A park search whose candidate set is the region *outside* the
+   block has not been run.
+3. **Do not have a same-row partner in the stage at all** — a five-arm stage,
+   which costs a sixth of the fleet and is a scheduling answer, not a geometric
+   one.
+
 **The shipped park set is not stage-compatible.** It was searched (DECISIONS 2026-09-10) against the *allocated* ink of one programme and it clears that by 97.7 mm; against everything an arm could be *told* to draw inside a work cell it clears by 4.7 mm. This is the single blocker between the recommended pattern's +85.8 mm of ink-vs-ink and its +4.7 mm once parks are counted, and it is why the pattern table has two clearance columns.
 
 **Is there a certified route from an arm's last hover to its stage park?** Not answered here and not answerable from an envelope: a route is a *path* and this document measures *sets of poses*. What is answerable and is answered: the park pose itself is a member of every envelope the script builds, so the numbers above already include "the arm is standing at its park while its neighbour works". The leg from the last hover to the park would be certified by `paper.route` + `scene_check.check_timeline` against the other arms' envelopes as static boxes, which is a new call, not a new capability.

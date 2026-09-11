@@ -302,7 +302,37 @@ def seam_band(k: int, dead_band_m: float = DEAD_BAND_M) -> Rect:
     return (BLOCK[0], Y_CUT[k] - h, BLOCK[2], Y_CUT[k] + h)
 
 
-def zigzag_pattern(dead_band_m: float = DEAD_BAND_M) -> Pattern:
+def park_erode(rect: Rect, arm: int, erode_m: float) -> Rect:
+    """`rect` given back in x on the side the arm's TRANSVERSE PARTNER stands.
+
+    THE PARK EROSION, AND WHY IT IS A PARAMETER AND NOT A CONSTANT.  Measured
+    2026-09-11 (DECISIONS): a parked arm's UPPER ARM cannot leave the
+    neighbourhood of its own base — `ELBOW_R` = 0.117 m — so when its
+    same-row partner is handed a full-width band, the partner's ink reaches
+    under that shoulder and clears it by 4.7 mm at every park either arm can
+    hold.  The only geometric lever left is to take the paper under the
+    shoulder away from the partner, which is what this does: an arm in column 0
+    gives back the HIGH-x end (its partner stands at x = 1.2067) and an arm in
+    column 1 the LOW-x end.
+
+    `0.0` — the default, and unchanged until Pete decides — is the pattern as
+    shipped.  The measured frontier is **1.04 m of a 1.48 m block**, which is
+    why this is offered rather than adopted; see the recommendation in
+    docs/V2_WORKCELLS.md §5.
+    """
+    e = float(erode_m)
+    if e <= 0.0:
+        return rect
+    x0, y0, x1, y1 = rect
+    if COL_OF[arm] == 0:                    # partner at high x: give back there
+        x1 = max(x0, x1 - e)
+    else:
+        x0 = min(x1, x0 + e)
+    return (x0, y0, x1, y1)
+
+
+def zigzag_pattern(dead_band_m: float = DEAD_BAND_M,
+                   park_erode_m: float = 0.0) -> Pattern:
     """THE RECOMMENDATION of docs/V2_WORKCELLS.md, as a `Pattern`.
 
     One arm per full-width row band, a 0.40 m dead band in y between bands, the
@@ -347,12 +377,18 @@ def zigzag_pattern(dead_band_m: float = DEAD_BAND_M) -> Pattern:
         (6, ((13, S[0], "SEAM0"), (31, S[1], "SEAM1"))),
         (7, ((17, S[0], "SEAM0"), (71, S[1], "SEAM1"))),
     ]
-    cells = tuple(StageCell(s, arm, (rect,), nm)
+    cells = tuple(StageCell(s, arm, (park_erode(rect, arm, park_erode_m),), nm)
                   for s, row in plan for (arm, rect, nm) in row)
-    return Pattern(f"zigzag-rowband-y{int(dead_band_m * 50):02d}+6seams", cells,
+    name = f"zigzag-rowband-y{int(dead_band_m * 50):02d}+6seams"
+    if park_erode_m > 0:
+        name += f"-parkx{int(round(park_erode_m * 100)):03d}"
+    return Pattern(name, cells,
                    "docs/V2_WORKCELLS.md section 4b recommendation: one arm per "
                    f"full-width row band, {dead_band_m:.2f} m dead band in y, "
-                   "columns alternating, six 2-active seam stages")
+                   "columns alternating, six 2-active seam stages"
+                   + (f", cells eroded {park_erode_m:.2f} m in x toward each "
+                      "arm's transverse partner's base" if park_erode_m > 0
+                      else ""))
 
 
 def single_stage_pattern() -> Pattern:

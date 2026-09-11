@@ -562,3 +562,35 @@ def test_the_prefilter_returns_only_cells_inside_the_work_cell(tmp_path):
     staged = allocate.atlas_cells((13, 17), str(tmp_path),
                                   work_cells=T.zigzag_pattern(), stage=0)
     assert staged[17][1] == set() and len(staged[13][1]) <= len(full[13][1])
+
+
+def test_the_park_erosion_gives_back_the_side_the_partner_stands_on():
+    """`park_erode` is the x-erosion frontier's knob, and it is off by default.
+
+    An arm in column 0 gives back the HIGH-x end of its cell (its transverse
+    partner stands at x = 1.2067) and an arm in column 1 the LOW-x end, so the
+    two columns' eroded cells still tile the row band until the erosion passes
+    half its width.  Measured 2026-09-11: the frontier is 1.04 m of a 1.48 m
+    block, which is why this is a parameter and not the default.
+    """
+    r = (0.16, 0.0, 1.64, 1.0)
+    assert T.park_erode(r, 13, 0.0) == r            # off by default
+    assert T.park_erode(r, 13, 0.40) == pytest.approx((0.16, 0.0, 1.24, 1.0))
+    assert T.park_erode(r, 17, 0.40) == pytest.approx((0.56, 0.0, 1.64, 1.0))
+    for a in T.ARMS:                                 # never inverted
+        x0, _, x1, _ = T.park_erode(r, a, 2.0)
+        assert x0 <= x1
+    # the shipped pattern is unchanged, name included
+    assert T.zigzag_pattern().name == "zigzag-rowband-y20+6seams"
+    assert T.zigzag_pattern(park_erode_m=0.0) == T.zigzag_pattern()
+    eroded = T.zigzag_pattern(park_erode_m=0.40)
+    assert eroded.name == "zigzag-rowband-y20+6seams-parkx040"
+    assert eroded.n_stages == T.zigzag_pattern().n_stages
+    for c, e in zip(T.zigzag_pattern().cells, eroded.cells):
+        assert c.stage == e.stage and c.arm == e.arm and c.name == e.name
+        w0 = c.region[0][2] - c.region[0][0]
+        assert e.region[0][2] - e.region[0][0] == pytest.approx(w0 - 0.40)
+    # ...and the two columns still tile the row band up to half its width
+    lo = T.park_erode(T.row_band(0), 13, 0.74)
+    hi = T.park_erode(T.row_band(0), 17, 0.74)
+    assert lo[2] == pytest.approx(hi[0])
