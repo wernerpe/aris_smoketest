@@ -610,6 +610,8 @@ pad to stand in for.
 | 1 | 0.075 | 20 | 754 | 7 of 13 | +7.8 mm | 107.7 |
 | 1 | 0.075 | 0 | 754 | 7 of 13 | +27.8 mm | 116.6 |
 | 1 | 0.05 | 40 | 1926 | 7 of 13 | -0.1 mm | 218.0 |
+| 1 | 0.05 | 20 | 1926 | 7 of 13 | +19.9 mm | 250.1 |
+| 1 | 0.05 | 0 | 1926 | 7 of 13 | +39.9 mm | 222.8 |
 
 **What the sweep says, in three readings.**
 
@@ -629,8 +631,8 @@ A setting that flies only by not looking is not a setting.
 
 At the 0.15 m cell, dropping the pad from 40 mm to 0 moves the ink minimum
 from **−46.3 mm** to **−6.3 mm** and buys exactly **one** bucket. Shrinking the
-cell from 0.15 to 0.075 at pad 0 moves it from −6.3 mm to **+27.8 mm** — a
-**74 mm** swing end to end, exactly the term the radius decomposition named —
+cell from 0.15 to 0.05 at pad 0 moves it from −6.3 mm to **+39.9 mm** — an
+**86 mm** swing end to end, exactly the term the radius decomposition named —
 and buys **none**.
 
 **So the residual refusal is not the envelope's conservatism.** The same six
