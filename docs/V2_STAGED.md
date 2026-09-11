@@ -888,3 +888,74 @@ which charges a Lipschitz residual against jumps the timeline never makes, and
 reported two *parked* arms at −437 mm. The rebuild goes through
 `writing.uniform_samples`, exactly as `staged.solo_check` does.
 
+
+## 19. The priority room, measured: 97.6 % of the ink flies
+
+`out/staged_csail_h097_v5.json` — priority-ordered trajectory rooms, RRT tier
+on, refusal loop on. **This is the run the whole room line of work was for.**
+
+| stage | actives (priority order) | pieces | ink (m) | stage (s) | **active-pair (mm)** | ink vs ink (mm) | solo (mm) | **flown** | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 71, 13, 2 | 15 | 5.243 | 107.2 | **+269.3** | +411.1 | +80.7 | 2 of 3 | **FAIL** |
+| 1 | 31, 97, 17 | 12 | 4.136 | 89.8 | **+158.5** | +417.5 | +60.9 | 2 of 2 | PASS |
+| 2 | 13, 97 | 6 | 1.461 | 48.0 | +977.2 | +1 055.3 | **+28.2** | 2 of 2 | **FAIL** |
+| 3 | 2, 17 | 5 | 1.145 | 29.4 | +870.9 | +1 151.2 | +96.2 | 2 of 2 | PASS |
+| 4 | 31, 97 | 5 | 1.083 | 31.8 | +897.0 | — | +140.2 | 1 of 1 | PASS |
+| 5 | 71, 2 | 4 | 0.923 | 58.6 | +623.8 | — | +72.5 | 1 of 1 | PASS |
+| 6 | 31, 13 | 4 | 0.889 | 26.5 | +263.7 | — | +71.2 | 1 of 1 | PASS |
+| 7 | 71, 17 | 2 | 0.959 | 23.6 | +525.3 | — | +80.9 | 1 of 1 | PASS |
+
+**12 of 13 ink-carrying buckets fly, carrying 15.455 m of 15.840 — 97.6 % of
+the ink**, against the union envelope's 8 of 18 and 34.4 %. **Six of eight
+stages pass both checks.**
+
+| | v3, union envelope | **v5, priority rooms** |
+|---|---|---|
+| ink buckets flown | 8 of 13 | **12 of 13** |
+| ink in a certified trajectory | 5.445 m (34.4 %) | **15.455 m (97.6 %)** |
+| stages passing both checks | 4 of 8 (two vacuously) | **6 of 8** |
+| makespan | 198.7 s (a third of a programme) | **415.0 s (a real one)** |
+| planning, serial | 2 973.9 s | **263.8 s** |
+| planning, per stage's busiest arm | 2 869.6 s | **89.7 s** |
+| check | 42.6 s | 82.4 s |
+| time to first motion | 0.294 s | **0.287 s** |
+
+**Planning is 11× faster than the control and 32× faster per arm**, which was
+not the point but is the largest single number in the table. Two reasons: the
+trajectory rooms are 10–1 001 spheres against the union's 1 157–1 377, and the
+first arm of every stage plans **free** — a third of the buckets pay nothing for
+the room at all.
+
+**The makespan is 415.0 s and it is real** — one bucket of 0.385 m is missing
+out of 15.840 m. Against **391.7 s** for the un-separated v1 programme it is
+**+5.9 %**, which is what routing three arms around each other costs; against
+v19's conducted **209.9 s** it is **1.98×**, the barrier cost that §10's
+adaptive-stage rule is aimed at. Park overhead is **92.7 s on the critical path,
+22.3 % of the makespan**.
+
+**The two failures are both known and neither is the room.** Stage 0 loses its
+*third* arm — 0.385 m, the greedy order's expected weak spot, since the last arm
+has the least freedom left. Stage 2 is §18's router-sweep mismatch at +28.2 mm,
+which is active-vs-**parked** and untouched by any of this.
+
+### The 1 000-stroke model, recalibrated
+
+Terms measured on v5: draw **13.59 s/m**, inter-piece leg **4.18 s**, park
+overhead **10.66 s** per (stage, arm), accept rate 81.9 %.
+
+**Staged makespan (model): 6 380 s = 106.3 min**, against
+`V2_SCALING_BASELINE` §3.3's ~4 300 s scaling of v19's conducted six-arm
+makespan — **1.48×**. Park overhead on the critical path falls to **85.3 s,
+1.34 %** of the makespan, against CSAIL's 22.3 %: **the barrier amortises**, and
+the eight-stage pattern is right at scale and wrong on a small picture, exactly
+as §10 argued. The draw rate is nearly double the v3 calibration (13.59 against
+6.56 s/m) because v5 actually draws the long buckets that v3 never flew — the
+earlier figure was calibrated on the short ones that happened to survive.
+
+**Two caveats, stated.** The model is arithmetic with measured terms, not a run:
+a real 1 438-piece fly is unaffordable because `sequence.cost_matrix` is O(n²)
+route screens and one bucket is 434 pieces. And it assumes the priority order
+scales — at 572 pieces in a stage-0 bucket the *last* arm in the order faces a
+much larger obstacle than it does here, which is precisely where the one
+remaining failure already is.
+

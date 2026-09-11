@@ -1,5 +1,57 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE PRIORITY ROOM FLIES 97.6 % OF THE INK (2026-09-11, last)
+
+`out/staged_csail_h097_v5.json`, priority-ordered trajectory rooms, RRT tier on.
+**12 of 13 ink-carrying buckets fly, carrying 15.455 m of 15.840 — 97.6 % of the
+ink — and six of eight stages pass both checks.**
+
+| | v3, union envelope | **v5, priority rooms** |
+|---|---|---|
+| ink buckets flown | 8 of 13 | **12 of 13** |
+| ink certified | 5.445 m (34.4 %) | **15.455 m (97.6 %)** |
+| stages passing | 4 of 8 (two vacuously) | **6 of 8** |
+| makespan | 198.7 s (a third of a programme) | **415.0 s (a real one)** |
+| planning, serial | 2 973.9 s | **263.8 s** |
+| planning, per stage's busiest arm | 2 869.6 s | **89.7 s** |
+| time to first motion | 0.294 s | **0.287 s** |
+
+**PLANNING IS 11x FASTER THAN THE CONTROL AND 32x PER ARM**, which was not the
+point and is the largest number in the table: the trajectory rooms are 10-1 001
+spheres against the union's 1 157-1 377, and the FIRST ARM OF EVERY STAGE PLANS
+FREE, so a third of the buckets pay nothing for the room at all.
+
+**THE MAKESPAN IS 415.0 s AND IT IS REAL** (one 0.385 m bucket missing of
+15.840 m).  Against the un-separated v1 programme's 391.7 s it is **+5.9 %** —
+what routing three arms around each other costs — and against v19's conducted
+209.9 s it is **1.98x**, which is the barrier, not the rooms.  Park overhead is
+92.7 s on the critical path, **22.3 %** of the makespan.
+
+**BOTH REMAINING FAILURES ARE KNOWN AND NEITHER IS THE ROOM.**  Stage 0 loses
+its THIRD arm (0.385 m) — the greedy order's expected weak spot, since the last
+arm has the least freedom left; the fix is to SEARCH the order rather than fix
+it by ink (three actives is six permutations, which is
+`coordination.coordinate`'s priority search with a tiny n), or to hand the loser
+to the conductor.  Stage 2 is the router-sweep mismatch of the previous entry,
+active-vs-PARKED, untouched by any of this.
+
+**THE 1 000-STROKE MODEL, RECALIBRATED** on v5 (draw **13.59 s/m**, inter-piece
+leg **4.18 s**, park **10.66 s** per (stage, arm)): **6 380 s = 106.3 min**,
+**1.48x** the ~4 300 s conducted scaling, with park overhead on the critical
+path down to **85.3 s, 1.34 %** against CSAIL's 22.3 %.  **The barrier
+amortises** — the eight-stage pattern is right at scale and wrong on a small
+picture.  The draw rate nearly doubled against the v3 calibration (13.59 vs
+6.56 s/m) because v5 actually draws the long buckets v3 never flew: the earlier
+figure was calibrated on the short ones that happened to survive, and is
+withdrawn.
+
+**CAVEATS.**  The model is arithmetic with measured terms, not a run — a real
+1 438-piece fly is unaffordable (`sequence.cost_matrix` is O(n^2) route screens
+and one bucket is 434 pieces).  And it assumes the priority order scales: at 572
+pieces in a stage-0 bucket the LAST arm faces a far larger obstacle than it does
+here, which is exactly where the one remaining failure already is.
+
+
 ## STAGE 2's +28.2 mm IS THE ROUTER'S SWEEP, AND IT IS SYSTEMATIC (2026-09-11, last)
 
 Flagged three times without an answer and now attributed: **arm 97's trajectory
