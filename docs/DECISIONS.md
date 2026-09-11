@@ -1,5 +1,58 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE ORDER SEARCH, THE RESIDUE, AND THE ROUTER THAT WAS NOT WRONG (2026-09-11, last)
+
+Three things built to close §19's two failures, and **one of the two diagnoses
+is corrected here.**
+
+**(1) THE ORDER SEARCH.**  The greedy ink-first order's weak spot is the arm
+that plans LAST: it has the least freedom left.  A stage has at most three
+actives, so the whole order space is SIX permutations — cheap, where a six-arm
+priority search is 720.  Ink-first is tried first, so a stage that did not need
+the search pays one comparison; `order_rank` records which order was taken.
+
+**(2) THE ROUTER WAS NOT THE OPTIMISTIC ONE, AND THE PREVIOUS ENTRY IS
+CORRECTED.**  `paper.leg_bounds` already subtracts `sample_residual` and falls
+through to `adaptive_static_lb` in the undecided band; `FRAME_FLOOR` = 53 mm is
+already `STATIC_MARGIN` plus the checker's residual, and `paper.py`'s header
+explains both that and the `TIP_SWEEP_PAD` version of the same argument.  The
+28.2 mm comes from two other places and the split is measured:
+
+| dt | frames | stage 2, arm 97 |
+|---|---|---|
+| 0.05 | 961 | **28.23 mm** |
+| 0.02 | 2 400 | 36.58 mm |
+| 0.01 | 4 799 | **39.38 mm** |
+
+**ELEVEN MILLIMETRES WAS THE CHECKER'S SAMPLING.**  `check_timeline` auto-refines
+its frame and paper gates and does NOT refine its INTER-ARM gate — it subtracts
+`0.55 x (step_i + step_j)` at whatever rate it was handed.  A verdict under the
+margin is now looked at again (three halvings or 40 000 frames, best bound
+kept), which is `block_screen`'s own rule applied to the gate that lacked it.
+
+**THE OTHER TEN MILLIMETRES ARE A POSE, NOT A PATH.**  The number converges to
+~40 mm, not 50.  `effective_static_floor` CLAMPS the floor to what the leg's own
+endpoints have — deliberately, with a docstring: a floor above the endpoints is
+not a constraint but a contradiction that prices every edge `inf`.  Arm 97 holds
+a pose ~40 mm from parked arm 2, and **no routing fixes a pose**.  The lever is
+a different hover, or a different park for arm 2 in stage 2 — build item 2's
+per-stage parks, now for a reason that did not exist when §14 measured that item
+as unnecessary.  The previous entry's "the router is optimistic by its own
+sweep" was half right, and the wrong half is the important one.
+
+**(3) THE RESIDUE PHASE.**  A bucket no order can fly concurrently is
+SERIALISED, not abandoned: planned alone against the parked fleet and APPENDED
+to the stage, because the other actives are back at their parks by then.  **That
+is Pete's original final pass**, and it is the floor under the whole scheme —
+the worst case of the room work is the one-arm-at-a-time programme the
+installation started from.  `idle.conduct` reduces to nothing with one mover
+(`sum_k P(1, k)` = one order, no second mover), so the residue is laid down
+directly and `solo_check` against the parked fleet IS the certificate a
+one-mover conduct would produce.  `StageResult.duration` is the busiest
+CONCURRENT arm plus the sum of the residues, and `active_pair_gap` never sees a
+residue arm, because nothing else is in the air.
+
+
 ## THE PRIORITY ROOM FLIES 97.6 % OF THE INK (2026-09-11, last)
 
 `out/staged_csail_h097_v5.json`, priority-ordered trajectory rooms, RRT tier on.

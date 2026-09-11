@@ -959,3 +959,84 @@ scales — at 572 pieces in a stage-0 bucket the *last* arm in the order faces a
 much larger obstacle than it does here, which is precisely where the one
 remaining failure already is.
 
+
+## 20. Closing the two failures — and correcting one of the two diagnoses
+
+§19 left exactly two defects: stage 0 stranding its *third* arm (0.385 m), and
+stage 2's +28.2 mm against parked arm 2. Three things were built for them, and
+**the second one's diagnosis was wrong and is corrected here.**
+
+### (1) The order search
+
+The greedy ink-first order has a known weak spot: **the arm that plans last has
+the least freedom left.** A stage has at most three actives, so the whole order
+space is **six permutations** — cheap, where a six-arm priority search (720
+orders, `∑ₖ P(n, k)`) is not. Ink-first is tried first, so a stage that did not
+need the search pays one comparison and nothing else; `order_rank` records which
+order was taken and `orders_tried` what it cost. `--order-search 1` is the
+pre-search behaviour.
+
+### (2) The router was not the optimistic one
+
+The instruction for this pass was to make `paper.route` refine its sampling
+until its residual-inclusive bound clears the floor. **It already does**, and
+saying so is more useful than building it again:
+
+- `paper.leg_bounds` computes `sample_residual(P)` and returns `m − res` when
+  that clears, falling through to `adaptive_static_lb` — real adaptive
+  subdivision — in the undecided band;
+- `FRAME_FLOOR` = **53 mm** is already `STATIC_MARGIN` plus the checker's
+  residual, and `paper.py`'s own header explains both that and the `TIP_SWEEP_PAD`
+  version of the same argument.
+
+So where does 28.2 mm come from? **Two places, and I measured which.**
+`check_timeline` auto-refines its frame and paper gates and does **not** refine
+its **inter-arm** gate — it subtracts `0.55 × (stepᵢ + stepⱼ)` at whatever rate
+the timeline was handed in at. Refining stage 2's arm 97:
+
+| dt | frames | min clearance |
+|---|---|---|
+| 0.05 (as reported in §18) | 961 | **28.23 mm** |
+| 0.02 | 2 400 | 36.58 mm |
+| 0.01 | 4 799 | **39.38 mm** |
+
+**Eleven millimetres of the deficit was the sampling**, and that half is now
+fixed: a verdict under the margin is looked at again, up to three halvings or
+40 000 frames, keeping the best bound found. That is `block_screen`'s own rule
+— *"a cell between the bounds has to be LOOKED AT rather than believed either
+way"* — applied to the one gate that lacked it, and it costs nothing on a run
+that passes.
+
+**The other ten millimetres are real, and they are not routing.** The number
+converges to ~40 mm, not 50. `paper.effective_static_floor` **clamps the floor
+to what the leg's own endpoints have**, deliberately and with a docstring
+explaining why: *"a move is never asked to keep more clearance than its own
+endpoints have"*, because a floor above the endpoints is not a constraint but a
+contradiction that prices every edge `inf`. Arm 97 holds a **pose** about 40 mm
+from parked arm 2, and **no amount of routing fixes a pose**. The lever is a
+different hover or a different park for arm 2 in stage 2 — which is build item
+2's per-stage parks, for real this time and for a reason that did not exist when
+that item was written out in §14.
+
+§18 called this "the router is optimistic by its own sweep". That was half
+right and the wrong half is the important one: the router's *sweep* is
+accounted; the router's *floor* is clamped by a pose it did not choose.
+
+### (3) The residue phase
+
+A bucket no order can fly concurrently does not have to be abandoned — it has to
+be **serialised**. It is planned alone against the parked fleet (the room pass 1
+always flies in) and its timeline is *appended* to the stage rather than
+overlapped, because the other actives are back at their parks by then, which is
+what the barrier means. **That is Pete's original final pass**, and it is the
+floor under the whole scheme: the worst case of the room work is the
+one-arm-at-a-time programme the installation started from.
+
+`idle.conduct` is the named tool and it **reduces to nothing here**: with one
+arm moving the priority search enumerates `∑ₖ P(1, k)` = one order and there is
+no second mover to schedule against. So the residue is laid down directly and
+checked identically — `solo_check` against the parked fleet *is* the certificate
+a one-mover conduct would produce — and `active_pair_gap` never sees it, because
+nothing else is in the air. `StageResult.duration` is accordingly the busiest
+**concurrent** arm plus the sum of the residues.
+
