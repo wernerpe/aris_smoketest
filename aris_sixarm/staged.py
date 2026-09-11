@@ -453,6 +453,78 @@ def freeze_stage(arm, parks, envelopes=None, specs=None, pens=None,
     return tuple(sorted(sets))
 
 
+# ---------------------------------------------------------------------------
+# 2d.  THE OTHER ACTIVE ARMS, AS WHAT THEY ACTUALLY DO
+# ---------------------------------------------------------------------------
+# MEASURED, 2026-09-11 (docs/V2_STAGED.md §14): tightening the pose-union
+# envelope from a 0.15 m cluster cell with a 40 mm pad to 0.075 m with none
+# moves the ink-vs-envelope minimum by 74 mm, moves every park clear of the
+# gate, and moves the number of buckets that fly BY NOTHING -- the same six
+# refuse at every cell from 0.10 m down, with the RRT tier on as well as off.
+#
+# SO THE UNION IS THE WRONG OBJECT, not a badly bounded one.  An arm's work-cell
+# envelope is every pose it COULD hold anywhere in its cell, and two arms in
+# adjacent row bands own overlapping airspace between the parks and the paper;
+# no bound on a set that large leaves a neighbour room to fly through it.  What
+# the neighbour actually holds is a few hundred poses out of that union -- one
+# trajectory -- and THAT is a room a leg can be routed around.
+#
+# WHAT IT COSTS IN CERTIFICATION, AND IT IS NOT FREE.  A pose-union envelope is
+# a property of the STAGE: it is true whatever the neighbour is asked to draw,
+# so an arm's plan survives its neighbour being re-planned.  A trajectory room
+# is a property of the neighbour's SPECIFIC PLAN, so an arm's certificate is
+# void the moment that plan changes.  That dependency is recorded explicitly --
+# `ArmStage.depends_on` carries a digest of each neighbour's trajectory -- so a
+# re-plan invalidates its neighbours' certificates by name rather than silently.
+def trajectory_digest(st: "ArmStage", dt=CHECK_DT) -> str:
+    """A digest of the trajectory an arm's neighbours were certified against."""
+    if st.timeline is None:
+        Q = np.asarray(st.q_park, float).reshape(1, 7)
+    else:
+        Q = np.asarray(writing.uniform_samples(st.timeline, dt)["q"], float)
+    return hashlib.sha256(np.round(Q, 9).tobytes()).hexdigest()[:16]
+
+
+def trajectory_room(st: "ArmStage", specs=None, pens=None, h_inv=H_INV_DEFAULT,
+                    dt=CHECK_DT, cluster=ENVELOPE_CLUSTER, max_n=None):
+    """One arm's ACTUAL stage timeline, as swept bounding spheres.
+    -> (centres, radii, digest).
+
+    The same reduction the pose-union envelope uses (`cluster_capsules`, which
+    CONTAINS what it replaces), over the poses the arm actually holds instead of
+    the poses it could hold.  The pad is not a guess here: it is
+    `scene_check.check_timeline`'s own 1-Lipschitz between-sample residual,
+    `SWEEP_FRAC x` the largest step any capsule endpoint takes between two
+    samples of the timeline, so the spheres cover the motion BETWEEN the samples
+    and not only at them.
+    """
+    fl = FLEET if specs is None else specs
+    pens = {a: fl[a].pen for a in fl} if pens is None else pens
+    spec = fl[st.arm]
+    Q = _samples(st, dt, max_n or 10 ** 9)
+    path = coordination.ArmPath(int(st.arm), Q, dt, h_inv,
+                                float(pens.get(st.arm, spec.pen)), spec)
+    keep = [k for k in range(len(path.r))
+            if k not in coordination.FROZEN_SWEEP_BANDS]
+    A3 = np.asarray(path.A, float)[:, keep]
+    B3 = np.asarray(path.B, float)[:, keep]
+    step = 0.0
+    if len(A3) > 1:
+        step = max(float(np.max(np.linalg.norm(np.diff(A3, axis=0), axis=2))),
+                   float(np.max(np.linalg.norm(np.diff(B3, axis=0), axis=2))))
+    R = np.tile(np.asarray(path.r, float)[keep], len(A3))
+    c, r = cluster_capsules(A3.reshape(-1, 3), B3.reshape(-1, 3), R, cluster,
+                            SWEEP_FRAC * step)
+    return c, r, trajectory_digest(st, dt)
+
+
+def stage_rooms(arms: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT,
+                dt=CHECK_DT, cluster=ENVELOPE_CLUSTER) -> dict:
+    """{arm: (centres, radii, digest)} from one stage's ACTUAL timelines."""
+    return {int(a): trajectory_room(st, specs, pens, h_inv, dt, cluster)
+            for a, st in arms.items()}
+
+
 def ink_vs_envelope(plan: dict, spec, h_inv=H_INV_DEFAULT, pen=None) -> float:
     """The clearance of one certified piece's INK against the live frozen room.
 
@@ -538,6 +610,8 @@ class ArmStage:
     hovers: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
     frozen_partners: tuple[int, ...] = ()
     envelope_partners: tuple[int, ...] = ()
+    depends_on: dict[int, str] = field(default_factory=dict)
+    room_kind: str = "parked"          # parked | envelope | trajectory
     frozen_poses: dict[int, list[float]] = field(default_factory=dict)
     lift_ladder: tuple[float, ...] | None = None
     ink_clearance: list[float] = field(default_factory=list)
@@ -621,6 +695,17 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                                           h_inv, leg_cache, leg_cache_root)
         st.envelope_partners = tuple(sorted(int(a) for a in envelopes
                                             if int(a) != int(arm)))
+        # THE CERTIFICATE NAMES WHAT IT DEPENDS ON.  A pose-union envelope is a
+        # property of the stage and survives a neighbour re-planning; a
+        # TRAJECTORY room does not, so the digest of the trajectory each
+        # neighbour was holding rides on the result and `programme()` writes it
+        # out.  A re-plan of one arm changes its digest, and every neighbour
+        # whose `depends_on` still names the old one is stale by inspection.
+        st.depends_on = {int(a): (str(v[2]) if len(v) > 2 else "")
+                         for a, v in envelopes.items() if int(a) != int(arm)}
+        st.room_kind = ("trajectory" if any(len(v) > 2
+                                            for v in envelopes.values())
+                        else "envelope")
     else:
         st.frozen_partners = freeze_partners(arm, parks, fl, pens, h_inv,
                                              leg_cache, leg_cache_root)
@@ -1132,6 +1217,7 @@ class StageResult:
     solo: dict = field(default_factory=dict)
     wall_s: float = 0.0
     lift_used: bool = False
+    room_passes: list = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -1205,6 +1291,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         measure_ttfm=True, dt=CHECK_DT, max_check_poses=MAX_CHECK_POSES,
         route_jobs=None, envelopes=True, atlas_dir=ATLAS_DEFAULT,
         refusal_rounds=REFUSAL_ROUNDS, lift_retry=True, env_kw=None,
+        trajectory_rooms=False, room_iterations=1,
         verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
@@ -1247,6 +1334,13 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
 
     env: dict[int, dict] = {}
     env_s = 0.0
+    # PASS 1 IS SOLO AGAINST THE PARKED FLEET, ALWAYS.  With trajectory rooms
+    # the pose-union envelope is not merely unnecessary, it is the thing being
+    # replaced: building pass 1 against it would start the iteration from the
+    # room that does not fly, and there would be no pass-1 trajectory to derive
+    # a room from.
+    if trajectory_rooms:
+        envelopes = False
     if envelopes and atlas_dir:
         t0 = time.perf_counter()
         for s in want:
@@ -1286,8 +1380,31 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         arms = _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts,
                            leg_cache, leg_cache_root, fly, on_piece,
                            env.get(s), None, verbose)
+        # THE TRAJECTORY ROOM, AND WHY IT IS TWO PASSES.  Pass 1 is every active
+        # planned SOLO against the parked fleet, which is the room that flies
+        # but does not separate the actives.  Pass 2 re-plans each active
+        # against what the OTHERS ACTUALLY DID in pass 1 -- a few hundred poses
+        # instead of the whole work-cell union -- and pass 3 repeats it on pass
+        # 2's trajectories.  It is a fixed-point iteration and it is NOT the
+        # certificate: re-planning A moves A, which is a room B was certified
+        # against, so the claim is only ever closed by the INDEPENDENT
+        # whole-timeline pair check below.  The iteration is what gets the
+        # trajectories apart; `active_pair_gap` is what proves they are.
+        rooms = []
+        if fly and trajectory_rooms:
+            for it in range(max(1, int(room_iterations))):
+                rm = stage_rooms(arms, fl, pens, h_inv, dt)
+                rooms.append({int(a): str(v[2]) for a, v in rm.items()})
+                if verbose:
+                    print(f"  stage {s} room pass {it + 1}: "
+                          + "  ".join(f"{a}={len(v[1])}sph" for a, v in
+                                      sorted(rm.items())))
+                arms = _plan_stage(s, acts, buckets, fl, pens, parks, h_inv,
+                                   opts, leg_cache, leg_cache_root, fly,
+                                   on_piece, rm, None, verbose)
         plan_s += time.perf_counter() - t1
-        sr = StageResult(int(s), acts, arms, wall_s=time.perf_counter() - t1)
+        sr = StageResult(int(s), acts, arms, wall_s=time.perf_counter() - t1,
+                         room_passes=rooms)
         if check and fly:
             t2 = time.perf_counter()
             _check_stage(sr, acts, fl, pens, parks, h_inv, dt, max_check_poses)
@@ -1464,6 +1581,9 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
             one["arms"][str(a)] = dict(
                 arm=int(a), q_park=[float(x) for x in np.asarray(st.q_park).ravel()],
                 frozen_partners=[int(x) for x in st.frozen_partners],
+                room_kind=str(st.room_kind),
+                trajectory_digest=trajectory_digest(st),
+                depends_on={str(k): str(v) for k, v in st.depends_on.items()},
                 n_pieces=len(pieces), ink_m=float(st.ink_m),
                 duration_s=float(st.duration),
                 refused=[dict(line=int(p.piece.line), piece=int(p.piece.k),
@@ -1520,6 +1640,14 @@ def summary(res: StagedResult) -> dict:
             solo_min_mm=(None if not sr.solo else round(1000 * min(
                 r.get("min_clearance", np.nan) for r in sr.solo.values()), 2)),
             lift_used=bool(sr.lift_used),
+            buckets=len(sr.arms),
+            buckets_flown=int(sum(1 for st in sr.arms.values()
+                                  if st.timeline is not None)),
+            buckets_with_ink=int(sum(1 for st in sr.arms.values()
+                                     if st.accepted)),
+            room_kind=next((st.room_kind for st in sr.arms.values()), "parked"),
+            depends_on={str(a): st.depends_on
+                        for a, st in sr.arms.items() if st.depends_on},
             ink_vs_envelope_mm=(None if not any(
                 st.ink_clearance for st in sr.arms.values()) else round(
                 1000 * min(min(st.ink_clearance) for st in sr.arms.values()
@@ -1546,6 +1674,13 @@ def summary(res: StagedResult) -> dict:
                 ink_m=res.summary_dp.get("ink_m"),
                 gaps=res.summary_dp.get("gaps"),
                 stage_overhead=stage_overhead(res),
+                buckets_flown=int(sum(1 for s_ in res.stages
+                                      for st in s_.arms.values()
+                                      if st.timeline is not None)),
+                buckets_total=int(sum(len(s_.arms) for s_ in res.stages)),
+                buckets_with_ink=int(sum(1 for s_ in res.stages
+                                         for st in s_.arms.values()
+                                         if st.accepted)),
                 all_ok=bool(all(s.ok for s in res.stages)))
 
 
@@ -1631,6 +1766,13 @@ def main(argv=None):
                          "behaviour, which leaves the legs uncertified against "
                          "each other)")
     ap.add_argument("--no-lift-retry", action="store_true")
+    ap.add_argument("--trajectory-rooms", action="store_true",
+                    help="build each active arm's room from the OTHER actives' "
+                         "ACTUAL pass-1 trajectories rather than from their "
+                         "pose-union work-cell envelopes (docs/V2_STAGED.md "
+                         "section 15).  Certifies against a SPECIFIC plan, so "
+                         "the dependency is recorded per arm")
+    ap.add_argument("--room-iterations", type=int, default=1)
     ap.add_argument("--refusal-rounds", type=int, default=REFUSAL_ROUNDS)
     ap.add_argument("--env-stride", type=int, default=ENVELOPE_STRIDE)
     ap.add_argument("--route-jobs", type=int, default=6,
@@ -1662,7 +1804,9 @@ def main(argv=None):
               envelopes=not a.no_envelopes, atlas_dir=a.atlas,
               refusal_rounds=a.refusal_rounds,
               lift_retry=not a.no_lift_retry,
-              env_kw=dict(stride=a.env_stride))
+              env_kw=dict(stride=a.env_stride),
+              trajectory_rooms=a.trajectory_rooms,
+              room_iterations=a.room_iterations)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))

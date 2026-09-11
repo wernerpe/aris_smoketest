@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from aris_sixarm import fleet as fleet_mod
-from aris_sixarm import frames, frozen, paper
+from aris_sixarm import frames, frozen, paper, writing
 from aris_sixarm import staged
 from aris_sixarm import traces as T
 
@@ -630,3 +630,110 @@ def test_the_adopted_envelope_setting_is_the_one_the_docs_quote():
     assert staged.ENVELOPE_PAD == 0.0
     # ...and pad 0 is only honest at stride 1, which is the pairing adopted
     assert not (staged.ENVELOPE_PAD == 0.0 and staged.ENVELOPE_STRIDE > 1)
+
+
+# ---------------------------------------------------------------------------
+# 6.  THE ROOM BUILT FROM WHAT THE NEIGHBOUR ACTUALLY DID
+# ---------------------------------------------------------------------------
+def _fake_stage(arm, Q, park):
+    """An `ArmStage` carrying a hand-made timeline, for the room tests."""
+    st = staged.ArmStage(0, arm, np.asarray(park, float).reshape(7))
+    Q = np.asarray(Q, float).reshape(-1, 7)
+    st.timeline = dict(q=Q, t=np.arange(len(Q)) * staged.CHECK_DT,
+                       seg=np.full(len(Q), -1), u=np.zeros(len(Q)),
+                       duration=float(len(Q) * staged.CHECK_DT))
+    return st
+
+
+def test_a_leg_that_crosses_the_UNION_but_not_the_TRAJECTORY_now_routes(rig):
+    """THE WHOLE CASE FOR OPTION (2), as a routing question.
+
+    The pose-union envelope of an arm is every pose it COULD hold anywhere in
+    its work cell; what it actually holds in a stage is one trajectory.  A leg
+    refused by the first and accepted by the second is the difference between
+    the two objects, and it is the difference the CSAIL run turns on.
+    """
+    parks = staged.shipped_parks(rig)
+    spec = rig[13]
+    q0 = parks[13]
+    # a hover the arm can hold, over its own row band
+    h, z = writing.lifted_or_lower(spec, spec.q_seed, (0.60, 0.50),
+                                   pen_ext=spec.pen)
+    assert h is not None
+    kw = dict(pen_ext=spec.pen, tip_floor=paper.travel_floor(z, z))
+
+    # 1. the UNION: a wall of spheres straddling the straight line park -> hover
+    mid = 0.5 * (np.asarray(paper.static_boxes(spec)[0]["lo"], float)[:3] * 0)
+    from aris_sixarm import coordination as co
+    P0 = co.chain_world(q0.reshape(1, 7), spec, 1.0, spec.pen)[0]
+    P1 = co.chain_world(np.asarray(h, float).reshape(1, 7), spec, 1.0,
+                        spec.pen)[0]
+    tips = np.linspace(P0[9], P1[9], 9)          # along the leg the pen flies
+    union = (tips, np.full(len(tips), 0.30))     # 0.30 m spheres: a wall
+    staged.freeze_stage(13, parks, {71: union}, rig, leg_cache=False)
+    blocked = paper.route(spec, q0, h, **kw)
+    staged.thaw()
+
+    # 2. the TRAJECTORY: one sphere, off to the side, out of the leg's way
+    thin = (tips[:1] + np.array([0.0, 0.0, 2.5]), np.array([0.05]))
+    staged.freeze_stage(13, parks, {71: thin}, rig, leg_cache=False)
+    clear = paper.route(spec, q0, h, **kw)
+    staged.thaw()
+
+    assert blocked is None, "the union wall did not block the leg"
+    assert clear is not None, "the thin room refused a leg nothing is near"
+
+
+def test_the_dependency_digest_moves_when_the_neighbour_replans(rig):
+    """AN ARM'S CERTIFICATE NAMES THE NEIGHBOUR PLAN IT WAS MADE AGAINST.
+
+    A pose-union envelope is a property of the stage and survives a neighbour
+    being re-planned; a trajectory room does not.  So the digest of each
+    neighbour's trajectory rides on the result, and a neighbour that re-plans
+    changes it — which is what makes the staleness visible instead of silent.
+    """
+    parks = staged.shipped_parks(rig)
+    Qa = np.repeat(parks[71].reshape(1, 7), 5, axis=0)
+    a = _fake_stage(71, Qa, parks[71])
+    d0 = staged.trajectory_digest(a)
+    assert len(d0) == 16
+    # the same trajectory gives the same digest...
+    assert staged.trajectory_digest(_fake_stage(71, Qa.copy(), parks[71])) == d0
+    # ...and a re-plan that moves one sample by a millirad does not
+    Qb = Qa.copy()
+    Qb[2, 0] += 1e-3
+    d1 = staged.trajectory_digest(_fake_stage(71, Qb, parks[71]))
+    assert d1 != d0
+    # the room carries the digest, and the room moves with it
+    c0, r0, h0 = staged.trajectory_room(a, rig)
+    c1, r1, h1 = staged.trajectory_room(_fake_stage(71, Qb, parks[71]), rig)
+    assert h0 == d0 and h1 == d1
+    assert len(c0) and len(c1)
+    # ...and a bucket planned against it records WHICH plan it trusted
+    st = staged.plan_bucket(0, 13, [], rig, parks=parks, fly=False,
+                            leg_cache=False, envelopes={71: (c0, r0, h0)})
+    assert st.depends_on == {71: d0}
+    assert st.room_kind == "trajectory"
+    staged.thaw()
+
+
+def test_the_room_iteration_reaches_a_fixed_point_on_a_still_fleet(rig):
+    """The iteration converges when nothing moves, which is the base case.
+
+    A stage whose arms hold their parks re-derives the same rooms and the same
+    digests on every pass; a fixed point is digests that stop changing, and the
+    CERTIFICATE is never the fixed point — it is `active_pair_gap` on the final
+    trajectories, which is checked here too.
+    """
+    parks = staged.shipped_parks(rig)
+    arms = {a: _fake_stage(a, np.repeat(parks[a].reshape(1, 7), 4, axis=0),
+                           parks[a]) for a in (13, 71, 2)}
+    seen = []
+    for _ in range(3):
+        rm = staged.stage_rooms(arms, rig)
+        seen.append({a: v[2] for a, v in rm.items()})
+    assert seen[0] == seen[1] == seen[2], seen
+    # the parks clear each other by a wide margin, so the independent check
+    # agrees with the rooms rather than merely not contradicting them
+    gap = staged.active_pair_gap(arms, rig)
+    assert gap["min_m"] >= staged.PAIR_MARGIN, gap
