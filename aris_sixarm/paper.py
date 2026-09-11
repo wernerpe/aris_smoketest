@@ -206,6 +206,331 @@ _SELF = {}                 # (pen, tool, self floor, n, q0, q1) -> self LB
 #   once instead of once per shape is most of what makes the static gate
 #   affordable at all.
 
+# ===========================================================================
+# A MEMO KEY IS A CONTENT SIGNATURE, NOT AN ADDRESS
+# ===========================================================================
+# Every key above used to begin with `id(spec)` — a CPython object address.
+# That is correct within one process and meaningless outside it, in BOTH
+# directions: two runs of the same rig file the same question under different
+# keys, and (the dangerous half) an address freed and reused by a later spec
+# files a different arm's answer under the same key.  Within a process the
+# registry keeps every spec alive so only the first half ever bit, and nothing
+# that mattered ever crossed a process.  A PERSISTED cache is exactly the thing
+# that crosses one, so the address has to go first (docs/ARCHITECTURE_V2.md
+# build item 1).
+#
+# `spec_signature` is the replacement: a digest of everything about an arm that
+# can change a route's answer — which arm it is, where its base is bolted and
+# how it is turned, its tool, the ready pose the depot shapes fly through, and
+# the static set it must clear, the neighbour base columns included.  Two
+# EQUAL specs share a signature by construction, which is the property `id`
+# never had, and a spec that differs anywhere the router can feel differs here.
+#
+# What is deliberately NOT in it: `h_inv`, the pen extension and the floors are
+# already separate members of every key, and the process-global gates
+# (`STATIC_SAFE`, `SELF_SAFE`, the RRT tier) are too.  The constants that are
+# global and NOT in a key — the collision model, the search policy, the frame
+# floor, the tool transform — are what `cache_signature` below carries, because
+# they namespace the whole STORE rather than one entry in it.
+_SPEC_SIG = {}             # id(spec) -> (weakref | None, signature)
+
+
+def _digest(*parts):
+    """A stable 16-byte hex digest of the parts. -> str."""
+    import hashlib
+    h = hashlib.blake2b(digest_size=16)
+    for p in parts:
+        h.update(p if isinstance(p, bytes) else repr(p).encode())
+        h.update(b"\x1e")
+    return h.hexdigest()
+
+
+def _round_tuple(v):
+    return tuple(round(float(x), 12) for x in np.asarray(v, float).ravel())
+
+
+def _box_sig(boxes):
+    """The static set as a canonical, order-independent tuple."""
+    out = []
+    for b in boxes or ():
+        if isinstance(b, dict):
+            out.append((str(b.get("name", "")), _round_tuple(b["lo"]),
+                        _round_tuple(b["hi"])))
+        elif hasattr(b, "lo") and hasattr(b, "hi"):
+            out.append((str(getattr(b, "name", "")), _round_tuple(b.lo),
+                        _round_tuple(b.hi)))
+        else:
+            out.append(repr(b))
+    return tuple(sorted(map(repr, out)))
+
+
+def spec_signature(spec):
+    """A CONTENT signature for one arm spec. -> 32-char hex.
+
+    Memoised on the spec's address AND validated against a weak reference to
+    it, so a recycled address cannot serve the previous spec's signature —
+    which is the failure `id(spec)` keys had no defence against at all.  A spec
+    that cannot be weak-referenced (an exotic subclass with `__slots__`) simply
+    pays for the digest every time; correctness does not depend on the memo.
+    """
+    import weakref
+    k = id(spec)
+    hit = _SPEC_SIG.get(k)
+    if hit is not None:
+        ref, sig = hit
+        if ref is not None and ref() is spec:
+            return sig
+    sig = _digest(int(getattr(spec, "arm_id", -1)),
+                  str(getattr(spec, "rig", "sixarm")),
+                  str(getattr(spec, "mount", "")),
+                  _round_tuple(spec.xy), round(float(spec.yaw), 12),
+                  None if getattr(spec, "z", None) is None
+                  else round(float(spec.z), 12),
+                  None if getattr(spec, "R", None) is None
+                  else _round_tuple(spec.R),
+                  None if getattr(spec, "pen_ext", None) is None
+                  else round(float(spec.pen_ext), 12),
+                  getattr(spec, "unit", None),
+                  _round_tuple(spec.q_seed),
+                  _box_sig(spec.static_obstacles()
+                           if hasattr(spec, "static_obstacles") else ()))
+    try:
+        ref = weakref.ref(spec)
+    except TypeError:
+        ref = None
+    _SPEC_SIG[k] = (ref, sig)
+    return sig
+
+
+def cache_signature():
+    """What the whole STORE was certified under. -> 32-char hex.
+
+    The analogue of `atlas.model_signature` for pen-up legs, and it CONTAINS
+    that signature: a route is certified against the same capsules, the same
+    neighbour columns and the same self model the atlas was swept under, plus
+    the router's own floors and tiers and the tool transform the tip hangs on.
+    Any of those moving makes every stored entry a different question, so they
+    namespace the store rather than sitting in a key — a build that changes one
+    writes into a new directory and reads nothing of the old one.
+
+    THE GATE FLOOR IS IN HERE TWICE, ON PURPOSE.  `rig_final.STATIC_MARGIN` is
+    what the atlas was swept at (50 mm) and `FRAME_FLOOR` is what the router
+    flies at (63 mm); docs/ARCHITECTURE_V2.md item 1 asks for the floor a leg
+    was certified at to be recorded, and the two differ by 13 mm.
+    """
+    from . import atlas as _atlas
+    return _digest(np.round(_atlas.model_signature(), 12).tobytes(),
+                   float(_atlas.SEARCH_POLICY),
+                   round(float(rig_final.STATIC_MARGIN), 12),
+                   round(float(rig_final.STATIC_PLAN_MARGIN), 12),
+                   round(float(FRAME_FLOOR), 12),
+                   round(float(TIP_CLEAR), 12), round(float(CHAIN_CLEAR), 12),
+                   round(float(TIP_SWEEP_PAD), 12),
+                   int(SAMPLES), round(float(STATIC_STEP), 12),
+                   round(float(SWEEP_K), 12),
+                   _round_tuple(VIA_HEIGHTS), _round_tuple(SKIRT_HEIGHTS),
+                   _round_tuple(SKIRT_PADS), round(float(SKIRT_STEP), 12),
+                   round(float(_frames.PEN_EXT), 12),
+                   round(float(_frames.PEN_EXT_HOLDER), 12),
+                   round(float(_frames.PEN_LAT_HOLDER), 12),
+                   round(float(_frames.TCP_D), 12),
+                   bool(STATIC_SAFE), bool(SELF_SAFE), bool(RRT_SAFE))
+
+
+# ===========================================================================
+# THE PERSISTENT LEG STORE
+# ===========================================================================
+# `docs/V2_SCALING_BASELINE.md` measured a pen-up leg at 62 ms median and
+# 4.2 s p95 COLD and 3.1 ms on a hit, and the whole allocation at 2 899.7 s
+# cold against 79.4 s warm — 36.5x — every byte of which dies with the process.
+# This is that warmth, written down.
+#
+# WHY A FILE PER ENTRY.  The store is read by six forked workers and written by
+# all of them, and the three candidate shapes are one big file (needs a lock),
+# sqlite (needs a lock manager, and its own opinion about fork), or a file per
+# entry.  An entry is WRITE-ONCE — a route's answer is a function of its key
+# and nothing later can improve it — so a file per entry needs no lock at all:
+# a writer builds the whole file under a unique temporary name and `os.replace`
+# makes it visible atomically, and a racing writer either loses the race and is
+# a no-op, or wins it with byte-identical content.  A reader sees a complete
+# file or no file.  That is the entire concurrency argument, and it survives a
+# worker killed halfway through a write.
+#
+# WHY JSON AND NOT .npz.  `float.__repr__` round-trips exactly, so a route read
+# back is bit-identical to the one written — which is the property item 1(c)
+# has to prove, because THE CERTIFICATE MUST NOT DEPEND ON THE CACHE.  A `.npz`
+# would round-trip exactly too and cost a zip container per 400-byte answer.
+#
+# The store is OPT-IN (`disk_cache_open`, or `ARIS_LEG_CACHE` in the
+# environment) so that a test, a bench and every published number keep the
+# behaviour they were earned with, and `--no-leg-cache` turns it back off from
+# a script that opts in by default.
+_DISK = None               # Path of the open store's signature directory
+_DISK_STATE = None         # the dynamic obstacle state it was opened under
+CACHE_STATS = dict(mem_hit=0, disk_hit=0, miss=0, write=0, collide=0,
+                   skip_dynamic=0)
+
+
+def _dyn_state():
+    """The obstacle state a stored route would NOT be able to see.
+
+    `frozen` models a partner known to be holding a pose and `envelope` swaps a
+    body band for its cylinder; both change `static_boxes` without changing any
+    memo key, because both are process-global and were never meant to outlive a
+    run.  The in-memory memos are cleared when they move (`clear_cache`); a
+    store cannot be, so the store simply refuses to answer while the state is
+    not the one it was opened under.
+    """
+    return (bool(frozen.active()), tuple(sorted(frozen.frozen_ids())),
+            bool(envelope.active()))
+
+
+def disk_cache_open(path=None, signature=None):
+    """Open (creating if need be) the persistent leg store. -> Path | None.
+
+    `path` is the ROOT; entries live under `<root>/<cache signature>/`, so two
+    builds with different collision models, floors or tools coexist and neither
+    reads the other.  `None` takes `ARIS_LEG_CACHE` from the environment and
+    falls back to `out/leg_cache`.
+    """
+    import json
+    import os
+    from pathlib import Path
+    global _DISK, _DISK_STATE
+    if path is None:
+        path = os.environ.get("ARIS_LEG_CACHE") or "out/leg_cache"
+    sig = cache_signature() if signature is None else str(signature)
+    root = Path(path) / sig[:16]
+    root.mkdir(parents=True, exist_ok=True)
+    man = root / "MANIFEST.json"
+    if not man.exists():
+        _atomic_write(man, json.dumps(dict(
+            cache_signature=sig,
+            frame_floor_m=float(FRAME_FLOOR),
+            static_margin_m=float(rig_final.STATIC_MARGIN),
+            tip_clear_m=float(TIP_CLEAR), chain_clear_m=float(CHAIN_CLEAR),
+            static_safe=bool(STATIC_SAFE), self_safe=bool(SELF_SAFE),
+            rrt_safe=bool(RRT_SAFE), samples=int(SAMPLES),
+            pen_lat_holder=float(_frames.PEN_LAT_HOLDER),
+            pen_ext_holder=float(_frames.PEN_EXT_HOLDER),
+        ), indent=1).encode())
+    _DISK, _DISK_STATE = root, _dyn_state()
+    return root
+
+
+def disk_cache_close():
+    """Stop consulting and writing the store.  The memos are left alone."""
+    global _DISK, _DISK_STATE
+    _DISK, _DISK_STATE = None, None
+
+
+def disk_cache_dir():
+    """The open store's directory, or None."""
+    return _DISK
+
+
+def _atomic_write(path, data):
+    """Write `data` to `path` so that no reader ever sees a partial file."""
+    import os
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{id(data):x}.tmp")
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _entry_path(key):
+    """Where one memo key's answer lives. -> Path | None.
+
+    Sharded on the first byte of the digest so no directory holds more than a
+    few hundred entries; the digest is of the key's own `repr`, which is
+    faithful because every member of a key is a float, a bool, a str or the
+    `bytes` of a rounded pose.
+    """
+    if _DISK is None:
+        return None
+    if _dyn_state() != _DISK_STATE:
+        CACHE_STATS["skip_dynamic"] += 1
+        return None
+    h = _digest(key)
+    return _DISK / h[:2] / f"{h}.json"
+
+
+def _disk_load(key):
+    """The stored answer for a key, or `NOT_CACHED`."""
+    import json
+    p = _entry_path(key)
+    if p is None:
+        return NOT_CACHED
+    try:
+        raw = p.read_bytes()
+    except (OSError, ValueError):
+        return NOT_CACHED
+    try:
+        d = json.loads(raw)
+    except ValueError:                       # a file this build cannot read
+        return NOT_CACHED
+    if d is None:
+        return None
+    return dict(vias=[np.asarray(v, float).reshape(7) for v in d["vias"]],
+                mode=str(d["mode"]), chain_z=float(d["chain_z"]),
+                tip_z=float(d["tip_z"]), tried=int(d["tried"]))
+
+
+def _disk_store(key, out):
+    """File one answer, write-once and atomically.  Never raises."""
+    import json
+    p = _entry_path(key)
+    if p is None:
+        return
+    if p.exists():
+        CACHE_STATS["collide"] += 1
+        return
+    if out is None:
+        blob = b"null"
+    else:
+        blob = json.dumps(dict(
+            vias=[[float(x) for x in np.asarray(v, float).reshape(7)]
+                  for v in out["vias"]],
+            mode=str(out["mode"]), chain_z=float(out["chain_z"]),
+            tip_z=float(out["tip_z"]), tried=int(out["tried"]))).encode()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(p, blob)
+        CACHE_STATS["write"] += 1
+    except OSError:                          # a full or read-only disk is not
+        pass                                 # a reason to refuse a route
+
+
+def cache_report():
+    """Hit rates and the store's size on disk. -> dict."""
+    n = bytes_ = 0
+    if _DISK is not None:
+        for p in _DISK.rglob("*.json"):
+            if p.name == "MANIFEST.json":
+                continue
+            n += 1
+            try:
+                bytes_ += p.stat().st_size
+            except OSError:
+                pass
+    asked = CACHE_STATS["mem_hit"] + CACHE_STATS["disk_hit"] + \
+        CACHE_STATS["miss"]
+    return dict(dir=None if _DISK is None else str(_DISK),
+                entries=n, bytes=bytes_, asked=asked,
+                hit_rate=(0.0 if not asked else
+                          (CACHE_STATS["mem_hit"] + CACHE_STATS["disk_hit"])
+                          / asked),
+                memo=len(_CACHE), **dict(CACHE_STATS))
+
 
 _ON_CLEAR = []             # memos elsewhere that are derived from these two
 
@@ -254,13 +579,34 @@ NOT_CACHED = object()      # `None` is a legitimate answer ("no route exists")
 
 
 def cache_route(key, out):
-    """File a route computed elsewhere under `route_key`'s key."""
+    """File a route computed elsewhere under `route_key`'s key.
+
+    Reaches the persistent store too, which is the point of the public form:
+    the crossings of one cost matrix are screened in parallel and the parent
+    files what the workers hand back, so this is where most of a run's routes
+    enter the cache at all.
+    """
     _CACHE[key] = out
+    _disk_store(key, out)
 
 
 def cached_route(key):
-    """The memoised answer for that key, or `NOT_CACHED`."""
-    return _CACHE.get(key, NOT_CACHED)
+    """The memoised answer for that key, or `NOT_CACHED`.
+
+    Memory first, then the store; a store hit is promoted into memory so the
+    second ask in this process costs a dict lookup rather than a `stat`.
+    """
+    out = _CACHE.get(key, NOT_CACHED)
+    if out is not NOT_CACHED:
+        CACHE_STATS["mem_hit"] += 1
+        return out
+    out = _disk_load(key)
+    if out is not NOT_CACHED:
+        CACHE_STATS["disk_hit"] += 1
+        _CACHE[key] = out
+        return out
+    CACHE_STATS["miss"] += 1
+    return NOT_CACHED
 
 
 def _pose_bytes(q):
@@ -299,8 +645,11 @@ def _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor, q_home=True,
     # planner, a path with it — and a run that turned it off must not read the
     # run that left it on.  The probe, when there is one, rides along: it is a
     # fourth obstacle and a route certified without it is not the same route.
-    return (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv),
-            _pose_bytes(q0), _pose_bytes(q1),
+    # ...AND `id(spec)` IS NOW `spec_signature(spec)`, which is the whole of
+    # build item 1(a): the same key in two processes, and in two runs a week
+    # apart, for the same arm bolted in the same place with the same tool.
+    return (spec_signature(spec), ext_of(pen_ext), float(_frames.PEN_LAT),
+            float(h_inv), _pose_bytes(q0), _pose_bytes(q1),
             round(float(tip_floor), 9), round(float(chain_floor), 9),
             bool(STATIC_SAFE), bool(q_home), bool(SELF_SAFE), _rrt_key(rrt))
 
@@ -315,7 +664,8 @@ def key_maker(spec, q_rows, q_cols, pen_ext=None, h_inv=H_INV_DEFAULT):
     """
     rb = [_pose_bytes(q) for q in q_rows]
     cb = [_pose_bytes(q) for q in q_cols]
-    base = (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv))
+    base = (spec_signature(spec), ext_of(pen_ext), float(_frames.PEN_LAT),
+            float(h_inv))
 
     def key(a, b, tip_floor, chain_floor):
         # `True` for the depot, because every caller of the BLOCK form is the
@@ -1379,7 +1729,8 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         the cluster profile costing seconds and costing minutes.  Nothing about
         the answer changes; a test pins the memo against the direct call.
         """
-        k = (id(sp), ext_of(pe), float(_frames.PEN_LAT), float(hi), float(z),
+        k = (spec_signature(sp), ext_of(pe), float(_frames.PEN_LAT),
+             float(hi), float(z),
              round(float(margin), 9), gate is not None,
              np.round(np.asarray(ref, float), 9).tobytes(),
              np.round(np.asarray(xy, float), 9).tobytes())
@@ -1402,12 +1753,14 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     ck = _key(spec, q0, q1, pen_ext, h_inv, tip_floor, chain_floor,
               q_home is not None, rrt) if cache \
         else None
-    if ck is not None and ck in _CACHE:
-        return _CACHE[ck]
+    if ck is not None:
+        hit = cached_route(ck)
+        if hit is not NOT_CACHED:
+            return hit
 
     gate_floor = static_floor if STATIC_SAFE else FRAME_FLOOR
-    lk = (id(spec), ext_of(pen_ext), float(_frames.PEN_LAT), float(h_inv),
-          round(float(gate_floor), 9), int(n))
+    lk = (spec_signature(spec), ext_of(pen_ext), float(_frames.PEN_LAT),
+          float(h_inv), round(float(gate_floor), 9), int(n))
     # THE SELF MEMO IS NOT KEYED ON THE ARM, and that is a property of the
     # question rather than an optimisation: self-collision is one arm against
     # its own metal in its own base frame, so two arms holding the same joints
@@ -1466,7 +1819,7 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         out = dict(vias=[np.asarray(v, float).reshape(7) for v in seq],
                    mode=name, chain_z=float(cz), tip_z=float(tz), tried=tried)
         if ck is not None:
-            _CACHE[ck] = out
+            cache_route(ck, out)
         return out
 
     ok, cz, tz = legs_ok([], frame=STATIC_SAFE)
@@ -1648,7 +2001,7 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                 return done(seq, f"rrt{len(seq)}", cz, tz, tried)
             transit._STATS["recert_failed"] += 1
     if ck is not None:
-        _CACHE[ck] = None
+        cache_route(ck, None)
     return None
 
 

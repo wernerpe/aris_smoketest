@@ -1,5 +1,65 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE LEG CACHE IS A CONTENT KEY, AND IT SURVIVES THE PROCESS (2026-09-11, later)
+
+Build item 1 of docs/ARCHITECTURE_V2.md, landed.  Two halves, and the first one
+is the one that mattered.
+
+**`id(spec)` is gone from every memo key in `paper.py`.**  `_key`, `key_maker`,
+the hover memo and the leg memo all began with a CPython object address, so two
+EQUAL specs missed each other and nothing could ever be filed across a process
+boundary.  They now begin with **`paper.spec_signature(spec)`** — a digest of
+which arm it is, where its base is bolted and how it is turned, its tool, the
+ready pose the depot shapes fly through, and the static set it must clear, the
+neighbours' base columns included.  A test pins that two equal specs share a
+route bought by either, and that moving the base, the height, the ready pose or
+the column boxes moves the key.  The memo of the signature itself is validated
+against a **weak reference** to the spec, so a recycled address cannot serve the
+previous spec's answer — a failure mode the old keys had no defence against at
+all.
+
+**`paper.cache_signature()` namespaces the STORE**, exactly as
+`atlas.model_signature` namespaces an atlas, and it CONTAINS that signature:
+collision model, search policy, `STATIC_MARGIN` (50 mm, what the atlas was swept
+at) and `FRAME_FLOOR` (63 mm, what the router flies at) — **both**, because the
+13 mm between them is the difference between an optimistic prefilter and a
+certificate — plus the tip/chain floors, the sample count, the shape ladder's
+heights, the tool transform, and the three tier flags.  Move any of them and the
+build writes into a new directory and reads nothing of the old one.
+
+**The store is a file per entry, JSON, write-once, `os.replace`d into place.**
+That is the whole concurrency argument for six forked workers: an answer is a
+function of its key, so a racing writer either loses and is a no-op or wins with
+byte-identical content, and a reader sees a complete file or no file.  No lock,
+no lock manager, and nothing to repair after a worker is killed mid-write.  JSON
+rather than `.npz` because `float.__repr__` round-trips exactly and a 400-byte
+answer does not want a zip container.
+
+**Measured, on 13 real park → hover legs of the proposed rig at h = 0.970**
+(six arms, shipped parks, hovers over certified cells spread across the block;
+`out/atlas_proposed_h0970_lat0860_gated63`):
+
+| run | wall | median | p95 |
+|---|---|---|---|
+| cold, cache off | 46.56 s | 2 633 ms | 8 648 ms |
+| cold, cache on (writes) | 46.50 s | 2 629 ms | 8 636 ms |
+| **warm, a SECOND process** | **0.042 s** | **3.16 ms** | **3.39 ms** |
+
+**1 118× on the wall clock, 834× at the median**, and the warm median of
+**3.16 ms** is the 3.1 ms docs/V2_SCALING_BASELINE.md predicted for a hit.  The
+whole store for those 13 legs is **2 165 bytes**.  Writing costs nothing
+measurable (46.50 against 46.56 s).  And the certificate does not depend on the
+cache: the three runs' routes — mode, `tried`, both floors and every via — are
+**bit-identical**, compared as JSON, including across the process boundary.
+
+**It is OPT-IN.**  `paper.disk_cache_open()` (or `ARIS_LEG_CACHE`, default
+`out/leg_cache`) turns it on; `scripts/csail_allocate.py` opts in by default and
+`--no-leg-cache` is the escape hatch.  Every published number keeps the
+behaviour it was earned with unless a caller asks.  The store also refuses to
+answer while `frozen` or `envelope` is in a state it was not opened under —
+both change `static_boxes` without changing any memo key, and the in-memory
+memos are cleared when they move where a store cannot be.
+
 ## THE V2 ARCHITECTURE, ASSEMBLED (2026-09-11, last)
 
 The four measurement passes of today answer four different questions and

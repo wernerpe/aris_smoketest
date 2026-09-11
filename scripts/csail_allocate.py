@@ -562,6 +562,13 @@ def add_args(ap):
                          "a ladder leg pays and the assembled path by the same "
                          "legs_ok.  Pass this to reproduce a pre-2026-08-27 "
                          "number (see aris_sixarm/paper.RRT_SAFE)")
+    ap.add_argument("--no-leg-cache", action="store_true",
+                    help="do not read or write the PERSISTENT pen-up leg "
+                         "cache; every route is certified from cold (see "
+                         "aris_sixarm/paper.disk_cache_open)")
+    ap.add_argument("--leg-cache", default=None, metavar="DIR",
+                    help="root of the persistent pen-up leg cache "
+                         "(default $ARIS_LEG_CACHE, else out/leg_cache)")
     ap.add_argument("--rrt-budget", type=float, default=None, metavar="SECONDS",
                     help="per-plan time budget for that planner "
                          "(default transit.TIME_BUDGET)")
@@ -798,6 +805,23 @@ def run_allocation(a, verbose=False, split=None, px=None, share=None):
     budget = getattr(a, "rrt_budget", None)
     if budget:
         transit.TIME_BUDGET = float(budget)
+    # THE FOURTH FLAG IN THE SAME PLACE, AND THE ONLY ONE THAT SURVIVES THE
+    # PROCESS.  Every route certified above is filed under a CONTENT key
+    # (`paper.spec_signature`) inside a directory named for the collision
+    # model, floors and tool it was certified under (`paper.cache_signature`),
+    # so the 2 899.7 s cold / 79.4 s warm split of docs/V2_SCALING_BASELINE.md
+    # is available to the NEXT run rather than only to a second allocation in
+    # the same interpreter.  `--no-leg-cache` is the escape hatch: the flags
+    # above are in the key, but a build whose geometry moved without moving a
+    # constant is exactly what it is for.
+    if not bool(getattr(a, "no_leg_cache", False)):
+        root = paper.disk_cache_open(getattr(a, "leg_cache", None) or None)
+        rep = paper.cache_report()
+        print(f"  pen-up legs are cached ACROSS RUNS in {root} "
+              f"({rep['entries']} entries, {rep['bytes'] / 1e6:.1f} MB)")
+    else:
+        paper.disk_cache_close()
+        print("  !! the persistent pen-up leg cache is OFF (--no-leg-cache)")
     print(f"  ...and where the ladder is exhausted, the pen-up is PLANNED in "
           f"configuration space (transit.py, {transit.TIME_BUDGET:.1f} s x "
           f"{transit.ATTEMPTS} attempts, edges certified at the ladder's "

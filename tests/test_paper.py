@@ -9,6 +9,7 @@ modelled between poses.  A trimmed copy of that exact timeline is checked in as
 that `scene_check` now REFUSES it.  If that test ever goes green-by-passing,
 the gate has been weakened back to where it was.
 """
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1287,3 +1288,200 @@ def test_the_frozen_partners_capsules_actually_bind(thawed):
     both = thawed.chain_clearance(P31[None], kept)
     boxes_only = rig_final.chain_static_clearance(P31[None], kept)
     assert both[0] <= boxes_only[0] + 1e-12
+
+
+# ==========================================================================
+# THE PERSISTENT LEG CACHE (docs/ARCHITECTURE_V2.md build item 1)
+# ==========================================================================
+def _equal_spec(spec):
+    """A DIFFERENT object that is an EQUAL spec. -> ArmSpec.
+
+    The whole of item 1(a) in one helper: under the old `id(spec)` keys these
+    two miss each other, which is why a cache could never cross a process.
+    A deep copy rather than `dataclasses.replace`, because a rig VARIANT spec
+    (`rig_final6.Arm6Spec`) carries private attributes that are not fields and
+    that `replace` would drop.
+    """
+    import copy
+    return copy.deepcopy(spec)
+
+
+def _with(spec, **kw):
+    """A deep copy of a FROZEN spec with some fields moved."""
+    import copy
+    out = copy.deepcopy(spec)
+    for k, v in kw.items():
+        object.__setattr__(out, k, v)
+    return out
+
+
+def test_a_route_key_is_content_and_not_an_address(six):
+    """Two EQUAL specs file the same question under the same key."""
+    spec = FLEET[2]
+    twin = _equal_spec(spec)
+    assert twin is not spec
+    q0, q1 = _hover(spec, PROBE_XY[0], writing.LIFT_Z), \
+        _hover(spec, PROBE_XY[1], writing.LIFT_Z)
+    assert paper.spec_signature(twin) == paper.spec_signature(spec)
+    assert paper.route_key(twin, q0, q1) == paper.route_key(spec, q0, q1)
+    # and the memo is genuinely shared: a route bought by one is free to the
+    # other, which is the property the whole store rests on
+    paper.clear_cache()
+    out = paper.route(spec, q0, q1)
+    assert paper.route(twin, q0, q1) is out
+
+
+def test_a_different_arm_or_a_moved_base_is_a_different_signature(six):
+    """Layout is IN the signature: move the base, get a different key."""
+    spec = FLEET[2]
+    sig = paper.spec_signature(spec)
+    assert sig != paper.spec_signature(FLEET[97])
+    assert paper.spec_signature(
+        _with(spec, xy=(spec.xy[0] + 0.01, spec.xy[1]))) != sig
+    if spec.z is not None:
+        assert paper.spec_signature(_with(spec, z=spec.z + 0.001)) != sig
+    assert paper.spec_signature(
+        _with(spec, q_ready=tuple(np.asarray(spec.q_seed, float) + 0.01))) != sig
+    # ...and so is the static set the arm was certified against
+    assert paper.spec_signature(_with(spec, column_boxes=())) != sig
+
+
+def test_the_tool_is_in_the_route_key_not_only_in_the_store(six):
+    """`frames.PEN_LAT` moves the tip, so it moves the key."""
+    from aris_sixarm import frames
+    spec = FLEET[2]
+    q0, q1 = _hover(spec, PROBE_XY[0], writing.LIFT_Z), \
+        _hover(spec, PROBE_XY[1], writing.LIFT_Z)
+    before = frames.ACTIVE_TOOL
+    k0 = paper.route_key(spec, q0, q1)
+    try:
+        frames.activate_tool("lateral")
+        k1 = paper.route_key(spec, q0, q1)
+    finally:
+        frames.activate_tool(before)
+        paper.clear_cache()
+    assert k0 != k1
+
+
+def test_the_store_signature_moves_with_every_gate_it_names(six):
+    """A build that changes a floor, a gate or a tool constant writes into a
+    different store and reads nothing of the old one."""
+    from aris_sixarm import frames
+    base = paper.cache_signature()
+    for mod, name in ((paper, "FRAME_FLOOR"), (paper, "TIP_CLEAR"),
+                      (paper, "CHAIN_CLEAR"), (paper, "SAMPLES"),
+                      (frames, "PEN_EXT"), (frames, "PEN_LAT_HOLDER"),
+                      (frames, "TCP_D")):
+        old = getattr(mod, name)
+        try:
+            setattr(mod, name, old + (1 if isinstance(old, int) else 0.001))
+            assert paper.cache_signature() != base, f"{name} is not in it"
+        finally:
+            setattr(mod, name, old)
+    for name in ("STATIC_SAFE", "SELF_SAFE", "RRT_SAFE"):
+        old = getattr(paper, name)
+        try:
+            setattr(paper, name, not old)
+            assert paper.cache_signature() != base, f"{name} is not in it"
+        finally:
+            setattr(paper, name, old)
+    assert paper.cache_signature() == base
+
+
+def test_the_store_round_trips_a_route_bit_for_bit(six, tmp_path):
+    """A stored route is the route, to the last bit — the certificate must not
+    depend on the cache."""
+    spec = FLEET[2]
+    pairs = [(_hover(spec, a, writing.LIFT_Z), _hover(spec, b, writing.LIFT_Z))
+             for a, b in zip(PROBE_XY[:4], PROBE_XY[1:5])]
+    paper.clear_cache()
+    cold = [paper.route(spec, q0, q1) for q0, q1 in pairs]
+    try:
+        paper.disk_cache_open(tmp_path)
+        # fill the store from the answers already in hand
+        for (q0, q1), out in zip(pairs, cold):
+            paper.cache_route(paper.route_key(spec, q0, q1), out)
+        paper.clear_cache()                 # the memo is gone; the store is not
+        warm = [paper.route(spec, q0, q1) for q0, q1 in pairs]
+    finally:
+        paper.disk_cache_close()
+        paper.clear_cache()
+    assert any(o is not None for o in cold)
+    for a, b in zip(cold, warm):
+        if a is None:
+            assert b is None
+            continue
+        assert a["mode"] == b["mode"] and a["tried"] == b["tried"]
+        assert a["chain_z"] == b["chain_z"] and a["tip_z"] == b["tip_z"]
+        assert len(a["vias"]) == len(b["vias"])
+        for va, vb in zip(a["vias"], b["vias"]):
+            assert np.array_equal(np.asarray(va, float), np.asarray(vb, float))
+
+
+def test_the_store_is_opt_in_and_can_be_switched_off(six, tmp_path):
+    """`--no-leg-cache`'s mechanism: closed, nothing is read or written."""
+    spec = FLEET[2]
+    q0, q1 = _hover(spec, PROBE_XY[0], writing.LIFT_Z), \
+        _hover(spec, PROBE_XY[2], writing.LIFT_Z)
+    assert paper.disk_cache_dir() is None
+    paper.clear_cache()
+    paper.route(spec, q0, q1)
+    assert not list(tmp_path.rglob("*.json"))
+    try:
+        root = paper.disk_cache_open(tmp_path)
+        assert root.exists() and (root / "MANIFEST.json").exists()
+        paper.clear_cache()
+        paper.route(spec, q0, q1)
+        n = len([p for p in root.rglob("*.json") if p.name != "MANIFEST.json"])
+        assert n >= 1
+        paper.disk_cache_close()
+        paper.clear_cache()
+        before = dict(paper.CACHE_STATS)
+        paper.route(spec, q0, q1)
+        assert paper.CACHE_STATS["disk_hit"] == before["disk_hit"]
+    finally:
+        paper.disk_cache_close()
+        paper.clear_cache()
+
+
+def test_two_processes_share_the_store(six, tmp_path):
+    """The point of the whole item: a route bought in one process is free in
+    the next.  Runs the second process for real, so `id(spec)` cannot help it.
+    """
+    import subprocess
+    import sys
+    script = """
+import json, sys, time
+import numpy as np
+from aris_sixarm import fleet as fleet_mod, paper, writing
+fleet_mod.activate("final6_opt")
+spec = fleet_mod.FLEET[2]
+paper.disk_cache_open(sys.argv[1])
+xy = [(0.80, 1.60), (0.90, 1.70), (0.95, 1.55), (0.95, 1.93)]
+def hov(p):
+    q, _ = writing.lifted_config(spec, np.asarray(spec.q_seed, float), p,
+                                 z=writing.LIFT_Z, pen_ext=0.110)
+    return q
+H = [hov(p) for p in xy]
+t0 = time.time()
+out = [paper.route(spec, a, b) for a, b in zip(H[:-1], H[1:])]
+print(json.dumps(dict(t=time.time() - t0, stats=dict(paper.CACHE_STATS),
+                      modes=[None if o is None else o["mode"] for o in out],
+                      vias=[None if o is None else
+                            [[float(x) for x in v] for v in o["vias"]]
+                            for o in out])))
+"""
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(ROOT)
+    runs = []
+    for _ in range(2):
+        p = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
+                           capture_output=True, text=True, env=env,
+                           cwd=str(ROOT))
+        assert p.returncode == 0, p.stderr[-2000:]
+        runs.append(json.loads(p.stdout.strip().splitlines()[-1]))
+    cold, warm = runs
+    assert cold["stats"]["disk_hit"] == 0 and cold["stats"]["write"] > 0
+    assert warm["stats"]["disk_hit"] > 0 and warm["stats"]["miss"] == 0
+    assert cold["modes"] == warm["modes"]
+    assert cold["vias"] == warm["vias"]     # bit-identical across processes
