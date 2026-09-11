@@ -737,3 +737,39 @@ def test_the_room_iteration_reaches_a_fixed_point_on_a_still_fleet(rig):
     # agrees with the rooms rather than merely not contradicting them
     gap = staged.active_pair_gap(arms, rig)
     assert gap["min_m"] >= staged.PAIR_MARGIN, gap
+
+
+def test_run_with_trajectory_rooms_records_the_dependency_graph(rig, toy):
+    """The two-pass path, end to end, and the graph it leaves behind.
+
+    Pass 1 is solo against the parked fleet — `trajectory_rooms` forces that,
+    because building pass 1 against the pose-union envelope would start the
+    iteration from the room that does not fly and leave no trajectory to derive
+    a room from. Pass 2 re-plans against the others' realised trajectories, and
+    every arm comes back naming the digest of every OTHER active's plan.
+    """
+    res = staged.run([STROKE_IN_ROW], coverage=toy_coverage(), stages=[0],
+                     route_jobs=1, leg_cache=False, trajectory_rooms=True,
+                     room_iterations=1, refusal_rounds=0, measure_ttfm=False,
+                     verbose=False)
+    sr = res.stages[0]
+    assert sr.actives == (2, 13, 71)
+    assert len(sr.room_passes) == 1
+    digests = sr.room_passes[0]
+    assert set(digests) == {2, 13, 71}
+    assert len(set(digests.values())) == 3, "three arms, three distinct rooms"
+    for a, st in sr.arms.items():
+        assert st.room_kind == "trajectory"
+        # an arm depends on every OTHER active and never on itself
+        assert set(st.depends_on) == {x for x in (2, 13, 71) if x != a}
+        for b, h in st.depends_on.items():
+            assert h == digests[b]
+    # the certificate is still the independent check, not the iteration
+    assert sr.pair["min_m"] >= staged.PAIR_MARGIN
+    doc = staged.programme(res, trajectories=False)
+    arm = doc["stages"][0]["arms"]["13"]
+    assert arm["room_kind"] == "trajectory"
+    assert set(arm["depends_on"]) == {"2", "71"}
+    assert len(arm["trajectory_digest"]) == 16
+    staged.plan_memo_clear()
+    staged.thaw()
