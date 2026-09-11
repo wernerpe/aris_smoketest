@@ -581,3 +581,52 @@ def test_stage_envelope_is_deterministic_and_cached(rig, tmp_path):
                                    parks[13], {13: rig[13].pen},
                                    **dict(kw, cluster=0.05))
     assert len(c3) > len(c1) and r3.max() < r1.max()
+
+
+@needs_atlas
+def test_the_shipped_envelope_contains_the_capsules_of_every_pose_in_it(rig):
+    """THE CERTIFICATE, ON A REAL ENVELOPE AT THE SHIPPED SETTING.
+
+    `test_cluster_capsules_contains_every_capsule_it_replaces` pins the
+    reduction on a synthetic cloud.  This pins the thing that actually goes into
+    the room: the spheres `stage_envelope` builds at the module's own defaults
+    must contain the link capsules of EVERY pose of the envelope — every
+    certified drawing pose in the cell, every hover, and the park — or a leg
+    certified against them is certified against the wrong object.
+
+    Checked capsule by capsule, both endpoints, radius included.
+    """
+    from aris_sixarm import coordination as co
+    region = (T.seam_band(0),)
+    parks = staged.shipped_parks(rig)
+    Q = staged.cached_envelope_poses(13, region, str(ATLAS), rig[13], 1.0,
+                                     parks[13], stride=staged.ENVELOPE_STRIDE)
+    c, r = staged.stage_envelope(13, region, str(ATLAS), rig[13], 1.0,
+                                 parks[13], {13: rig[13].pen})
+    assert len(Q) > 10 and len(c) > 1
+    path = co.ArmPath(13, Q, 0.01, 1.0, rig[13].pen, rig[13])
+    keep = [k for k in range(len(path.r))
+            if k not in co.FROZEN_SWEEP_BANDS]
+    A = np.asarray(path.A, float)[:, keep].reshape(-1, 3)
+    B = np.asarray(path.B, float)[:, keep].reshape(-1, 3)
+    R = np.tile(np.asarray(path.r, float)[keep], len(Q))
+    # a stride > 1 reads a SUBSET of the cells, so the containment claim is
+    # about the poses the envelope was built from — which is exactly what the
+    # pad exists to widen beyond (see `test_stride_one_needs_no_pad...`)
+    for i in range(0, len(A), max(1, len(A) // 400)):
+        dA = np.min(np.linalg.norm(c - A[i], axis=1) + R[i] - r)
+        dB = np.min(np.linalg.norm(c - B[i], axis=1) + R[i] - r)
+        assert dA <= 1e-9 and dB <= 1e-9, (i, dA, dB)
+
+
+def test_the_adopted_envelope_setting_is_the_one_the_docs_quote():
+    """The defaults are a measurement's conclusion, so they are pinned.
+
+    If these move, `docs/V2_STAGED.md` section 13's sweep table and the
+    `docs/DECISIONS.md` entry that adopts them are describing a different room.
+    """
+    assert staged.ENVELOPE_STRIDE == 1
+    assert staged.ENVELOPE_CLUSTER == 0.075
+    assert staged.ENVELOPE_PAD == 0.0
+    # ...and pad 0 is only honest at stride 1, which is the pairing adopted
+    assert not (staged.ENVELOPE_PAD == 0.0 and staged.ENVELOPE_STRIDE > 1)

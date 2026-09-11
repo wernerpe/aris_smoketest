@@ -248,9 +248,9 @@ def thaw():
 # above each of those, and its park.  That is exactly the pose stack
 # `scripts/workcell_envelopes.py` measured +85.8 mm with, and `frozen.py` will
 # take it unchanged now that `freeze_sets` accepts more than one pose.
-ENVELOPE_STRIDE = 2         # cells of the 2 cm atlas: read at 4 cm, as shipped
-ENVELOPE_CLUSTER = 0.15     # m, the grid the capsules are bounded on
-ENVELOPE_PAD = 0.04         # m, the conservatism for the cells the stride skips
+ENVELOPE_STRIDE = 1         # every certified cell: a skipped pose needs a pad
+ENVELOPE_CLUSTER = 0.075    # m, the grid the capsules are bounded on
+ENVELOPE_PAD = 0.0          # m; ZERO is honest only at stride 1 (see below)
 ENVELOPE_DIR = "out/stage_envelopes"
 
 
@@ -268,18 +268,28 @@ def cluster_capsules(A, B, R, cell=ENVELOPE_CLUSTER, pad=0.0):
     A = np.asarray(A, float).reshape(-1, 3)
     B = np.asarray(B, float).reshape(-1, 3)
     R = np.asarray(R, float).reshape(-1)
+    if not len(A):
+        return np.zeros((0, 3)), np.zeros(0)
     key = np.floor(0.5 * (A + B) / float(cell)).astype(np.int64)
     _, inv = np.unique(key, axis=0, return_inverse=True)
-    cen, rad = [], []
-    for k in range(int(inv.max()) + 1 if len(inv) else 0):
-        sel = inv == k
-        pts = np.vstack([A[sel], B[sel]])
-        c = 0.5 * (pts.min(0) + pts.max(0))
-        rad.append(float(np.max(np.linalg.norm(pts - c, axis=1))
-                         + R[sel].max() + float(pad)))
-        cen.append(c)
-    return (np.asarray(cen, float).reshape(-1, 3),
-            np.asarray(rad, float).reshape(-1))
+    n = int(inv.max()) + 1
+    # VECTORISED, AND IT HAS TO BE.  A stride-1 row band is a few hundred
+    # thousand capsule endpoints in tens of thousands of cells, and a
+    # `inv == k` scan per cell is O(cells x endpoints) -- minutes per arm, which
+    # is what made the first sweep look like it had hung.  `np.minimum.at` and
+    # friends do the same grouping in one pass each.
+    P = np.vstack([A, B])
+    g = np.concatenate([inv, inv])
+    lo = np.full((n, 3), np.inf)
+    hi = np.full((n, 3), -np.inf)
+    np.minimum.at(lo, g, P)
+    np.maximum.at(hi, g, P)
+    cen = 0.5 * (lo + hi)
+    rad = np.zeros(n)
+    np.maximum.at(rad, g, np.linalg.norm(P - cen[g], axis=1))
+    rmax = np.zeros(n)
+    np.maximum.at(rmax, g, np.concatenate([R, R]))
+    return cen, rad + rmax + float(pad)
 
 
 def envelope_poses(arm, region, atlas_dir, spec, h_inv, park,
