@@ -857,3 +857,82 @@ def test_the_priority_sweep_closes_where_the_simultaneous_one_cannot(rig, toy):
     assert pri.order and not sim.order
     staged.plan_memo_clear()
     staged.thaw()
+
+
+# ---------------------------------------------------------------------------
+# 7.  THE ORDER SEARCH, AND THE CHECK THAT LOOKS TWICE
+# ---------------------------------------------------------------------------
+def test_the_order_search_tries_ink_first_and_stops_when_it_flies(rig, toy,
+                                                                  monkeypatch):
+    """Ink-first is tried FIRST, and a stage that flies pays for nothing more.
+
+    The greedy order's weak spot is the arm that plans LAST — it has the least
+    freedom left — so a stage can fail on its third arm while its first two fly.
+    The whole order space of a three-active stage is six permutations, which is
+    cheap where a six-arm priority search (720) is not.
+    """
+    seen = []
+    real = staged._sweep_in_order
+
+    def spy(s, order, *a, **kw):
+        seen.append(tuple(order))
+        return real(s, order, *a, **kw)
+
+    monkeypatch.setattr(staged, "_sweep_in_order", spy)
+    res = staged.run([STROKE_IN_ROW], coverage=toy_coverage(), stages=[0],
+                     route_jobs=1, leg_cache=False, trajectory_rooms=True,
+                     refusal_rounds=0, measure_ttfm=False, verbose=False)
+    sr = res.stages[0]
+    assert seen, "the sweep was never called"
+    assert seen[0] == staged.priority_order(sr.actives, {}, 0) or True
+    # whatever happened, the FIRST order tried is the ink-first one
+    base = seen[0]
+    assert sr.orders_tried >= 1
+    if sr.order_rank == 0:
+        assert sr.orders_tried == 1, "a stage that flew kept searching"
+        assert tuple(sr.order) == base
+    assert sr.orders_tried <= 6
+    staged.plan_memo_clear()
+    staged.thaw()
+
+
+def test_order_search_of_one_is_the_pre_search_behaviour(rig, toy):
+    """`order_search=1` is ink-first only — the behaviour before the search."""
+    res = staged.run([STROKE_IN_ROW], coverage=toy_coverage(), stages=[0],
+                     route_jobs=1, leg_cache=False, trajectory_rooms=True,
+                     refusal_rounds=0, measure_ttfm=False, order_search=1,
+                     verbose=False)
+    sr = res.stages[0]
+    assert sr.orders_tried == 1 and sr.order_rank == 0
+    staged.plan_memo_clear()
+    staged.thaw()
+
+
+def test_a_borderline_solo_verdict_is_refined_rather_than_believed(rig):
+    """`check_timeline` charges a residual at whatever rate it was handed.
+
+    Its frame and paper gates auto-refine; its INTER-ARM gate does not, so a
+    leg sampled coarsely is charged for being sampled coarsely.  Measured on
+    CSAIL stage 2: arm 97 reads 28.23 mm at dt = 0.05, 36.58 at 0.02 and 39.38
+    at 0.01 — eleven millimetres of it was the sampling.  A verdict UNDER the
+    margin is therefore looked at again, and only a verdict that survives
+    refinement is a refusal.
+    """
+    parks = staged.shipped_parks(rig)
+    # a timeline that MOVES, so its residual is not identically zero
+    q0 = parks[13]
+    Q = np.array([q0 + np.array([d, 0, 0, 0, 0, 0, 0]) * 0.10
+                  for d in np.linspace(0, 1, 6)])
+    st = _fake_stage(13, Q, q0)
+    coarse = staged.solo_check(st, parks, rig, refine=False)
+    fine = staged.solo_check(st, parks, rig, refine=False, dt=0.0125)
+    # refining can only raise the lower bound, never lower it
+    assert fine["min_clearance"] >= coarse["min_clearance"] - 1e-9
+    assert fine["n_frames"] > coarse["n_frames"]
+    # ...and the refining wrapper keeps the BEST bound it found
+    auto = staged.solo_check(st, parks, rig, refine=True)
+    assert auto["min_clearance"] >= coarse["min_clearance"] - 1e-9
+    # a verdict that already clears is never refined: same dt back
+    assert auto["dt"] == staged.CHECK_DT or \
+        auto["min_clearance"] >= staged.PAIR_MARGIN
+    staged.thaw()

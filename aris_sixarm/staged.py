@@ -976,9 +976,13 @@ def drop_bands(spec, owners: Iterable[int]):
     return dataclasses.replace(spec, **kw) if kw else spec
 
 
+REFINE_MAX = 3              # halvings of dt a borderline verdict may buy
+REFINE_FRAMES = 40000       # ...and the frame count at which it stops trying
+
+
 def solo_check(st: ArmStage, parks: dict[int, np.ndarray], specs=None,
                pens=None, h_inv=H_INV_DEFAULT, margin=PAIR_MARGIN,
-               dt=CHECK_DT, sub=2, bands=False) -> dict:
+               dt=CHECK_DT, sub=2, bands=False, refine=True) -> dict:
     """One active arm's whole stage timeline against the PARKED fleet and the steel.
 
     `scene_check.check_timeline` with the five partners held at their parks for
@@ -1016,9 +1020,32 @@ def solo_check(st: ArmStage, parks: dict[int, np.ndarray], specs=None,
     # informational and not a gate.  Everything else in the report -- inter-arm
     # (real capsules), steel, paper, self, joint limits -- is the verdict.
     rep["column_is_gate"] = bool(bands)
-    rep["full_ok"] = bool(rep["ok"])   # check_timeline's own verdict, which
-    #                                     also gates the column CYLINDER
-    if not bands:
+    rep["dt"] = float(dt)
+    # A BORDERLINE VERDICT IS LOOKED AT MORE CLOSELY, NOT BELIEVED.
+    # `check_timeline` subtracts a 1-Lipschitz residual, `0.55 x (step_i +
+    # step_j)`, computed at whatever rate the timeline was handed in at -- and
+    # unlike its own frame and paper gates, its INTER-ARM gate does not refine.
+    # So a leg sampled coarsely is charged for being sampled coarsely.  Measured
+    # on CSAIL stage 2, arm 97 reads 28.23 mm at dt = 0.05, 36.58 at 0.02 and
+    # 39.38 at 0.01: ELEVEN MILLIMETRES OF THAT WAS THE SAMPLING.  Refining only
+    # where the verdict binds is `block_screen`'s own rule -- "a cell between
+    # the bounds has to be LOOKED AT rather than believed either way" -- and it
+    # costs nothing on the runs that pass.
+    if refine and float(rep["min_clearance"]) < float(margin) \
+            and int(rep.get("n_frames", 0)) < REFINE_FRAMES:
+        for _ in range(REFINE_MAX):
+            dt *= 0.5
+            fine = solo_check(st, parks, specs, pens, h_inv, margin, dt, sub,
+                              bands, refine=False)
+            better = float(fine["min_clearance"]) > float(rep["min_clearance"])
+            rep, fine = (fine, rep) if better else (rep, fine)
+            if float(rep["min_clearance"]) >= float(margin) or \
+                    int(rep.get("n_frames", 0)) >= REFINE_FRAMES:
+                break
+    if "full_ok" not in rep:           # check_timeline's own verdict, which
+        rep["full_ok"] = bool(rep["ok"])  # also gates the column CYLINDER
+    if not bands and not rep.get("_regated"):
+        rep["_regated"] = True
         rep["ok"] = bool(
             float(rep["min_clearance"]) >= float(margin)
             and not rep.get("frame_failed") and not rep.get("paper_failed")
@@ -1233,6 +1260,8 @@ class StageResult:
     lift_used: bool = False
     room_passes: list = field(default_factory=list)
     order: tuple[int, ...] = ()
+    order_rank: int = 0        # 0 = the ink-first order was enough
+    orders_tried: int = 0
 
     @property
     def duration(self) -> float:
@@ -1328,7 +1357,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         route_jobs=None, envelopes=True, atlas_dir=ATLAS_DEFAULT,
         refusal_rounds=REFUSAL_ROUNDS, lift_retry=True, env_kw=None,
         trajectory_rooms=False, room_iterations=1,
-        room_order="priority",
+        room_order="priority", order_search=6,
         verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
@@ -1428,12 +1457,15 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         # whole-timeline pair check below.  The iteration is what gets the
         # trajectories apart; `active_pair_gap` is what proves they are.
         rooms, order = [], ()
+        order_rank, orders_tried = 0, 0
         if fly and trajectory_rooms:
             if room_order == "priority":
-                arms, order, rm = _priority_stage(
+                arms, order, rm, rank, tried = _order_search(
                     s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
-                    leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER, verbose)
+                    leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER,
+                    order_search, verbose)
                 rooms.append({int(a): str(v[2]) for a, v in rm.items()})
+                order_rank, orders_tried = rank, tried
             else:
                 # THE SUPERSEDED SIMULTANEOUS SCHEME, kept because the
                 # measurement that retired it is worth being able to reproduce:
@@ -1450,7 +1482,9 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                                        fly, on_piece, rm, None, verbose)
         plan_s += time.perf_counter() - t1
         sr = StageResult(int(s), acts, arms, wall_s=time.perf_counter() - t1,
-                         room_passes=rooms, order=tuple(order))
+                         room_passes=rooms, order=tuple(order),
+                         order_rank=int(order_rank),
+                         orders_tried=int(orders_tried))
         if check and fly:
             t2 = time.perf_counter()
             _check_stage(sr, acts, fl, pens, parks, h_inv, dt, max_check_poses)
@@ -1517,6 +1551,14 @@ def _priority_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
     give and there are at most three actives in a stage.
     """
     order = priority_order(acts, buckets, s)
+    return _sweep_in_order(s, order, buckets, fl, pens, parks, h_inv, opts,
+                           leg_cache, leg_cache_root, on_piece, dt, cluster,
+                           verbose)
+
+
+def _sweep_in_order(s, order, buckets, fl, pens, parks, h_inv, opts, leg_cache,
+                    leg_cache_root, on_piece, dt, cluster, verbose):
+    """One stage, planned in the given order. -> (arms, order, rooms)."""
     fixed: dict[int, tuple] = {}
     arms: dict[int, ArmStage] = {}
     for k, a in enumerate(order):
@@ -1536,6 +1578,48 @@ def _priority_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
                   + (f", avoiding {sorted(st.depends_on)}" if st.depends_on
                      else ", free"))
     return arms, order, fixed
+
+
+def _order_search(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
+                  leg_cache_root, on_piece, dt, cluster, max_orders, verbose):
+    """Try the stage's orders until one flies every ink bucket.
+
+    -> (arms, order, rooms, rank, tried).
+
+    THE GREEDY ORDER IS A HEURISTIC AND IT HAS A KNOWN WEAK SPOT: the arm that
+    plans LAST has the least freedom left, so a stage can fail on its third arm
+    while its first two fly.  Measured on CSAIL stage 0, that is exactly what
+    happened -- 2 of 3, with 0.385 m stranded.
+
+    A stage has at most three actives, so the whole order space is six
+    permutations and searching it is cheap where searching a six-arm priority
+    order is not (`idle._conduct`'s `sum_k P(n, k)` is 720 for six and 15 for
+    three).  Ink-first is tried FIRST, so a stage that did not need the search
+    pays one extra comparison and nothing else, and `rank` records which order
+    was taken so a stage that needed a non-ink-first one says so.
+    """
+    import itertools
+    base = priority_order(acts, buckets, s)
+    cands = [base] + [o for o in itertools.permutations(base) if o != base]
+    cands = cands[:max(1, int(max_orders))]
+    best = None
+    for rank, o in enumerate(cands):
+        arms, _, rm = _sweep_in_order(s, o, buckets, fl, pens, parks, h_inv,
+                                      opts, leg_cache, leg_cache_root,
+                                      on_piece, dt, cluster, verbose)
+        stranded = [st for st in arms.values()
+                    if st.accepted and st.timeline is None]
+        flown = float(sum(st.ink_m for st in arms.values()
+                          if st.timeline is not None))
+        if verbose:
+            print(f"  stage {s} order {rank} {list(o)}: "
+                  f"{flown:.3f} m flown, {len(stranded)} stranded")
+        if not stranded:
+            return arms, o, rm, rank, rank + 1
+        if best is None or flown > best[3]:
+            best = (arms, o, rm, flown, rank)
+    arms, o, rm, _, rank = best
+    return arms, o, rm, rank, len(cands)
 
 
 def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
@@ -1738,6 +1822,8 @@ def summary(res: StagedResult) -> dict:
             buckets=len(sr.arms),
             complete=bool(sr.complete),
             order=[int(a) for a in sr.order],
+            order_rank=int(sr.order_rank),
+            orders_tried=int(sr.orders_tried),
             buckets_flown=int(sum(1 for st in sr.arms.values()
                                   if st.timeline is not None)),
             buckets_with_ink=int(sum(1 for st in sr.arms.values()
@@ -1870,6 +1956,9 @@ def main(argv=None):
                          "section 15).  Certifies against a SPECIFIC plan, so "
                          "the dependency is recorded per arm")
     ap.add_argument("--room-iterations", type=int, default=1)
+    ap.add_argument("--order-search", type=int, default=6,
+                    help="orders a stage may try before keeping the best "
+                         "(1 = ink-first only, the pre-search behaviour)")
     ap.add_argument("--room-order", choices=("priority", "simultaneous"),
                     default="priority",
                     help="'priority' (default): the actives choose in ink order "
@@ -1911,7 +2000,7 @@ def main(argv=None):
               env_kw=dict(stride=a.env_stride),
               trajectory_rooms=a.trajectory_rooms,
               room_iterations=a.room_iterations,
-              room_order=a.room_order)
+              room_order=a.room_order, order_search=a.order_search)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))
