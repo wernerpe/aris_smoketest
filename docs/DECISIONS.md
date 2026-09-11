@@ -1,5 +1,91 @@
 # Decisions — the numbers, and where each one is anchored
 
+## WHAT ONE STROKE COSTS, AND WHY THE 3 712 s IS NOT THE OPTIMISER (2026-09-11)
+
+The v2 goal — fault tolerant, 1 000 strokes, moving inside 10 s — needs a
+baseline that separates what scales linearly with the picture from what is
+global optimisation.  `docs/V2_SCALING_BASELINE.md` is that baseline and
+`scripts/profile_stroke_costs.py` is the measurement.  **No planner semantics
+or constants changed.**
+
+**WHERE THE 3 712.4 s WENT** (GUI job `out/gui_jobs/20260910-124546-ce72`, the
+v19 run; there is no `out/h097_v19.log` — the job directory is the record):
+
+| bucket | seconds | share |
+|---|---:|---:|
+| global optimisation (balance, split, merge, tours, the unsplit A/B) | 1 968.8 | 53.0 % |
+| intrinsically per-stroke (prefilter, probe, replan) | 1 078.0 | 29.0 % |
+| conduction (`idle.conduct`) | 407.3 | 11.0 % |
+| checks (flycheck, guarantee, `scene_check`) | 231.9 | 6.2 % |
+| trace, export, un-bracketed | 26.3 | 0.7 % |
+
+**THE MEASUREMENT THAT REFRAMES IT.**  v19 allocates the same 39 strokes twice
+— once splitting, once not, so the conductor can rule on whether the cuts paid.
+The second allocation runs in the same process against the caches the first one
+filled.  Same six substages: **2 899.7 s cold, 79.4 s warm — 36.5x.**  `replan`
+alone, re-planning the *same spans on the same arms*, is **63.6x** cheaper the
+second time (845.5 s → 13.3 s).
+
+**So the dominant term is not the optimiser.  It is first-touch certification of
+pen-up geometry, and every byte of it is thrown away when the process exits.**
+`paper._CACHE`, `paper._LEGS`, `paper._LIFTS`, `paper._SELF`, `writing._HOVERS`
+and `sequence._PRICED` are module-global dicts with no serialiser.  The atlas —
+1.9 MB, 2 cm grid, ~4 200 rows per arm — holds **one certified drawing pose per
+cell at z = 0 and nothing else**: no hovers, no routes, no legs.
+
+**THE PER-CALL PRICES** (`scripts/profile_stroke_costs.py`, proposed rig,
+lateral holder, h = 0.970, medians / p95 in ms):
+
+| | median | p95 |
+|---|---:|---:|
+| `lifted_or_lower` (the 5-rung hover ladder), cold | 9.0 | 10.5 |
+| `lifted_or_lower`, memo hit | 0.0 | 0.0 |
+| `paper.route` park → hover, COLD | 61.8 | 4 152.7 |
+| `paper.route`, `_CACHE` hit | 3.1 | 3.3 |
+| `paper.leg_bounds` (one leg, 33 samples) | 4.8 | 5.0 |
+| `free_cells`, 10 s of timeline, broad phase rejects | 0.3 | 1.8 |
+| `free_cells`, same, every capsule pair live | 4 995.5 | 5 080.4 |
+| `free_cells`, 30 s / 6 arms, every capsule pair live | 27 879.0 | 29 098.6 |
+
+`free_cells` is `O(Ni x Nj)`: 3x the window is **9.00x the cells and 5.6x the
+wall clock** (the shortfall is the `CAPSULE_TILE = 32` broad phase doing better
+on a more finely sampled path — a real longer timeline covers more workspace
+and will track the cell count more closely).  Within one 30 s window the
+fifteen pairs run 196.8 ms to 29 906.9 ms, a **152x spread**.  `scene_check` by
+contrast is *not* pair-dominated — 2.5x the pairs costs 1.46x the time
+(0.128 -> 0.187 s per second of timeline) — which is why it stays affordable
+where the conduct does not.
+
+A leg costs **≈ 32 ms per ladder shape certified** (`route`'s own `tried`
+counter: `direct` = 1 shape ≈ 9 ms; `traverse30@25cm` = 51 shapes ≈ 1 665 ms;
+falling through to the RRT = 88 shapes ≈ 4 200 ms).
+
+**THE STREAMING PREDICTION.**  Greedy assignment with no global balance removes
+**~2 883 s, 77.7 %** of the run.  Time to first motion — one stroke's plan plus
+one park → hover leg — is **under a second at the median** and inside 5 s at the
+p95, so **the 10 s goal is not a planner-speed problem**; it is a question of
+what gates the start, and today that is the whole allocation.
+
+**WHAT DOES NOT STREAM: THE CONDUCT.**  407.3 s, of which 76.5 % is 2 380
+priority-DP solves at **131 ms each** (collision images are the other 20.9 %,
+85.0 s — the reverse of the pre-`FAST_PLANNING` split).  The search is
+`sum_k P(n, k)` in the arm count and each solve is linear in the horizon, so a
+1 000-stroke timeline is ~8 400 s of conducting — longer than the drawing.
+**A rolling window instead of a whole phase is the one structural change v2
+cannot avoid.**
+
+**FAULT RECOVERY: FOUR GAPS, NAMED.**  (1) Only the two *endpoints* of a span
+have a certified hover (`allocate.PlacedIndex._hovers` does `k in (0, -1)`), so
+a reflex stop at s = 0.4 has nowhere certified to go.  (2) Neither
+`program_schema.Bundle` nor `<stem>_program.json` carries a hover, so
+re-queueing a stroke to another arm means re-planning and then re-conducting.
+(3) Nothing in `aris_sixarm/execute/` knows which stroke is in flight —
+`seg_<arm>` is in the `.npz` and unread.  (4) `Governor` is one clock for the
+whole fleet by design, so "arm 71 faulted, let the other five carry on" needs a
+certificate that does not exist.  There is no e-stop, reflex handler or
+watchdog in this repo at all (`docs/HARDWARE_LADDER.md:51`); the failure model
+is stop-and-refuse.
+
 ## THE INTERSECTION MODEL, RE-CERTIFIED AT BOTH HEIGHTS: TWO CELLS (2026-09-10)
 
 `ARIS_COLLISION_MODEL=spheres` selects the intersection of the shipped capsule
