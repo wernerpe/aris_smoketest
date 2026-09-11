@@ -1,5 +1,57 @@
 # Decisions — the numbers, and where each one is anchored
 
+## v6: EVERY BUCKET FLIES, 100 % OF THE INK, SEVEN OF EIGHT STAGES (2026-09-11, last)
+
+`out/staged_csail_h097_v6.json` — priority rooms + order search + residue, RRT
+tier on, borderline verdicts refined.  **13 of 13 ink buckets fly, 15.840 m of
+15.840 (100.0 %), seven of eight stages pass both checks.**
+
+| | v3 union envelope | v5 priority rooms | **v6 + search + residue** |
+|---|---|---|---|
+| ink buckets flown | 8 of 13 | 12 of 13 | **13 of 13** |
+| ink certified | 34.4 % | 97.6 % | **100.0 %** |
+| stages passing | 4 of 8 (two vacuous) | 6 of 8 | **7 of 8** |
+| makespan | 198.7 s (partial) | 415.0 s | **432.6 s** |
+| planning per stage's busiest arm | 2 869.6 s | 89.7 s | **20.6 s** |
+| time to first motion | 0.294 s | 0.287 s | **0.280 s** |
+
+**THE MAKESPAN IS 432.6 s** — **+10.4 % on the un-separated v1 (391.7 s)**, so
+the whole cost of making three arms provably safe from one another is a tenth of
+the clock; **2.06x** v19's conducted 209.9 s, which is the barrier and not the
+rooms.  Park overhead 92.7 s on the critical path, 21.4 %.
+
+**NO STAGE NEEDED A NON-INK-FIRST ORDER**, and that is the finding, not a
+non-result.  Stage 0 tried all six and kept rank 0 because NO order flies it:
+arms 2 and 71 are mutually exclusive there whatever the order (71-first flies
+4.858 m, anything else 1.190 m).  So the search's real job was picking the
+cheapest sacrifice, and **its value is that it LICENSES the residue** — it
+proves the residue was not an order away from being avoidable.  Every other
+stage flew on the first order and paid one comparison.
+
+**THE RESIDUE IS 0.385 m, 2.4 % OF THE INK, AND COSTS 17.6 s** (a 16.4 %
+premium on stage 0, 4.1 % on the programme).  Pete's original final pass, used
+exactly once, for the one bucket nothing could fly concurrently.
+
+**PLANNING PER ARM COLLAPSES TO 20.6 s**, 139x the union envelope's 2 869.6 s.
+Serial planning rises to 769.0 s, which is the six extra stage-plans stage 0's
+search paid for — the right trade, since what an arm waits for is the per-arm
+figure.
+
+**THE ONE FAILURE IS STAGE 2 AND IT IS FULLY ATTRIBUTED.**  Solo +40.4 mm: the
+refinement recovered 12.2 mm of checker sampling and the remaining 9.6 mm is a
+POSE — arm 97 holds a configuration ~40 mm from parked arm 2.  Every mechanism
+of this pass is active-vs-active; this is active-vs-parked.  **8/8 is not
+reachable without a different park or hover for arm 2 in stage 2** — build item
+2, now with a concrete reason.
+
+**THE 1 000-STROKE MODEL, RECALIBRATED** (draw 13.81 s/m, leg 4.18 s, park
+10.93 s per (stage, arm)): **6 437 s = 107.3 min, 1.50x** the ~4 300 s conducted
+scaling, park overhead on the critical path **1.36 %** against CSAIL's 21.4 % —
+the barrier amortises.  Arithmetic with measured terms, and it assumes the
+priority order and the residue scale: at 572 pieces in a stage-0 bucket the
+residue could be far more than 2.4 %, which is what the next scaling pass owes.
+
+
 ## THE ORDER SEARCH, THE RESIDUE, AND THE ROUTER THAT WAS NOT WRONG (2026-09-11, last)
 
 Three things built to close §19's two failures, and **one of the two diagnoses

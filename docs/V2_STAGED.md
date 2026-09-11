@@ -1040,3 +1040,78 @@ a one-mover conduct would produce — and `active_pair_gap` never sees it, becau
 nothing else is in the air. `StageResult.duration` is accordingly the busiest
 **concurrent** arm plus the sum of the residues.
 
+
+## 21. v6, measured: every bucket flies, 100 % of the ink, seven of eight stages
+
+`out/staged_csail_h097_v6.json` — priority rooms + order search + residue phase,
+RRT tier on, borderline verdicts refined.
+
+| stage | order | orders tried | pieces | ink (m) | stage (s) | active-pair | solo | residue | flown | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 71, 13, 2 | **6** | 15 | 5.243 | 124.8 | +269.3 | +80.7 | **0.385 m (arm 2)** | 3/3 | **PASS** |
+| 1 | 31, 97, 17 | 1 | 12 | 4.136 | 89.8 | +158.5 | +60.9 | — | 2/2 | **PASS** |
+| 2 | 13, 97 | 1 | 6 | 1.461 | 48.0 | +977.2 | **+40.4** | — | 2/2 | **FAIL** |
+| 3 | 2, 17 | 1 | 5 | 1.145 | 29.4 | +870.9 | +96.2 | — | 2/2 | **PASS** |
+| 4 | 31, 97 | 1 | 5 | 1.083 | 31.8 | +897.0 | +140.2 | — | 1/1 | **PASS** |
+| 5 | 71, 2 | 1 | 4 | 0.923 | 58.6 | +623.8 | +72.5 | — | 1/1 | **PASS** |
+| 6 | 31, 13 | 1 | 4 | 0.889 | 26.5 | +263.7 | +71.2 | — | 1/1 | **PASS** |
+| 7 | 71, 17 | 1 | 2 | 0.959 | 23.6 | +525.3 | +80.9 | — | 1/1 | **PASS** |
+
+**13 of 13 ink buckets fly. 15.840 m of 15.840 — 100.0 % of the allocated ink.
+Seven of eight stages pass both checks.**
+
+| | v3 union envelope | v5 priority rooms | **v6 + search + residue** |
+|---|---|---|---|
+| ink buckets flown | 8 of 13 | 12 of 13 | **13 of 13** |
+| ink in a certified trajectory | 34.4 % | 97.6 % | **100.0 %** |
+| stages passing | 4 of 8 (two vacuous) | 6 of 8 | **7 of 8** |
+| makespan | 198.7 s (partial) | 415.0 s | **432.6 s** |
+| planning, serial | 2 973.9 s | 263.8 s | 769.0 s |
+| planning, per stage's busiest arm | 2 869.6 s | 89.7 s | **20.6 s** |
+| time to first motion | 0.294 s | 0.287 s | **0.280 s** |
+
+**The makespan is 432.6 s**: +4.2 % on v5 (415.0 s) and **+10.4 % on the
+un-separated v1 programme (391.7 s)** — the whole cost of making three arms
+provably safe from one another is a tenth of the clock. Against v19's conducted
+**209.9 s** it is **2.06×**, which is the barrier, not the rooms; park overhead
+is 92.7 s on the critical path, **21.4 %** of the makespan.
+
+**No stage needed a non-ink-first order.** Stage 0 tried all six and kept
+rank 0, because *no* order flies it — arms 2 and 71 are mutually exclusive there
+whatever the order, and the search's real job turned out to be picking the
+cheapest sacrifice (keep arm 71's 4.053 m concurrent, serialise arm 2's
+0.385 m). Every other stage flew on the first order and paid one comparison.
+**The order search is therefore worth keeping for what it proves, not for what
+it finds**: it is what licenses the residue, by showing the residue was not an
+order away from being avoidable.
+
+**The residue is 0.385 m — 2.4 % of the ink — and costs 17.6 s** (124.8 against
+v5's 107.2 s for stage 0), a 16.4 % premium on that stage and 4.1 % on the
+programme. That is Pete's original final pass, used exactly once, for the one
+bucket nothing could fly concurrently.
+
+**Planning per arm collapses to 20.6 s** — 139× the union envelope's 2 869.6 s —
+because the order search's cost is serial-per-stage while the figure that
+matters is what one arm waits for. Serial planning rises to 769.0 s, which is
+the six extra stage-plans stage 0's search paid for.
+
+**The one failure is stage 2 and it is fully attributed** (§20): solo +40.4 mm
+after refinement recovered 12.2 mm of checker sampling, still 9.6 mm short of
+the gate, because arm 97 *holds a pose* ~40 mm from parked arm 2. All three of
+this pass's mechanisms are active-vs-active; this is active-vs-parked. **8/8 is
+not reachable without a different park or hover for arm 2 in stage 2** — build
+item 2, with a concrete reason at last.
+
+### The 1 000-stroke model, recalibrated on v6
+
+Terms: draw **13.81 s/m**, inter-piece leg **4.18 s**, park **10.93 s** per
+(stage, arm), accept rate 81.9 %.
+
+**Staged makespan (model): 6 437 s = 107.3 min**, **1.50×** the ~4 300 s scaling
+of v19's conducted six-arm makespan. Park overhead on the critical path falls to
+**87.5 s, 1.36 %** against CSAIL's 21.4 % — **the barrier amortises**, and the
+eight-stage pattern is right at scale and wrong on a small picture, as §10
+argued. Arithmetic with measured terms, not a run, and it assumes the priority
+order and the residue scale: at 572 pieces in a stage-0 bucket the residue could
+be far more than 2.4 %, and that is the number the next scaling pass owes.
+
