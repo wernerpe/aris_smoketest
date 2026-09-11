@@ -3596,3 +3596,122 @@ on `allocate.atlas_cells`); per-stage parks; the barrier itself (there is no
 fleet rendezvous anywhere — `stroke_api`'s "barrier" is an exception barrier);
 and one `check_timeline` per arm per stage to cover the PEN-UP LEG, which is
 the one thing an envelope of hover ENDPOINTS does not contain.
+
+## 2026-09-11 — OPEN — FOR PETE: cut at every transition, and the merge is a DP
+
+Pete: *"what if we cut lines everywhere where there is a transition and then
+figured out some sort of greedy merging and allocation trying to minimize the
+overall number of lines?"*
+
+Yes, and it does not need the greedy.  Sample a line finely, read its CAPABILITY
+SET at each sample — the (stage, arm) pairs whose arm has a certified drawing
+pose there AND whose work cell contains the point — and cut wherever that set
+changes.  Between two cuts every point has the same possible drawers, so the
+stretch is indivisible.  Choosing a drawer per atom to minimise the number of
+maximal runs is then a textbook chain DP with unit cost per change, and because
+the change cost does not depend on what you change FROM, the O(states^2)
+relaxation collapses to O(states) a step.
+
+New module `aris_sixarm/traces.py`, `tests/test_traces.py` (31 tests, no env
+vars and no atlas — every map is rasterised from rectangles), write-up in
+**docs/V2_TRACES.md**.  **Nothing in the existing pipeline changes.**
+
+### the numbers
+
+| | pieces | hand-overs | covered |
+|---|---|---|---|
+| CSAIL v19, as shipped | **46** segments / 39 strokes | — | 100.2 % |
+| CSAIL, single stage (no cells) | **40** | 1 | 100.0 % |
+| CSAIL, zigzag + 4 seam stages | **50** | 8 | 94.8 % |
+
+38 of the 39 strokes go in ONE piece.  The single exception is **stroke 26** —
+the one `tests/test_merge_spans.py` already pins as the logo's hardest, where
+arm 2's certified interval stops at 0.6213 and arm 71's starts at 0.7571 — and
+the DP hands it over 71 -> 2 once, inside the overlap the atlas does offer.  The
+piece minimiser and the shipped regression landing on the same stroke by
+independent routes is the best check this module has.  The 40 holds on v19's own
+atlas (`out/atlas_proposed_h0970_lat0860`, `--gate flat --tilt-max-deg 15`) as
+well as on the shipped gated-63 one, so it is not an artefact of the map.
+
+A thousand lines, three synthetic sets over the certified block:
+
+| set | pattern | lines | atoms | pieces | hand-overs | covered | ms |
+|---|---|---|---|---|---|---|---|
+| strokes, 660 m | zigzag | 1 000 | 2 885 | 1 661 | 533 | 97.05 % | 814 |
+| strokes | single | 1 000 | 2 614 | 1 254 | 254 | 100 % | 574 |
+| hatch, 1 369 m | zigzag | 992 | 4 142 | 2 129 | 1 032 | 97.45 % | 930 |
+| hatch | single | 992 | 4 105 | 1 869 | 877 | 100 % | 696 |
+| scribble, 213 m | zigzag | 1 000 | 1 597 | 1 148 | 131 | 97.71 % | 439 |
+| scribble | single | 1 000 | 1 551 | 1 024 | 24 | 100 % | 288 |
+
+**Where the time goes: segmentation 884 ms, DP + absorption + seams 10 ms** (the
+hatch, 4 142 atoms).  Pete's "milliseconds" is right about the merge and wrong
+about the cutting; 99 % of the cost is reading the map at 4 mm, and it is
+embarrassingly parallel and tunable.  The optimisation itself is free.
+
+### staging costs 24-33 % more pieces, and mostly to ONE arm handing over to ITSELF
+
+CSAIL +10, strokes +407, hatch +260, scribble +124.  But 6 of CSAIL's 8
+hand-overs, and 301 of the strokes set's 533, are the **same arm one stage
+later** — the line crossed out of its row band into a dead band that belongs to
+a seam stage.  That is a barrier and a re-approach, not a registration risk.  It
+is also why every dead-band crossing is a HARD edge: the stage cells tile the
+block with no overlap, so the 5 mm overdraw buys nothing staged and is used at
+almost every hand-over unstaged.
+
+Redundancy, measured cell by cell with the same map: **43.5 %** of the block
+keeps >= 2 stage-compatible drawers under the zigzag (mean 1.457) against the
+atlas's ceiling of 48.1 % (mean 1.524) — V2_WORKCELLS' 41.6 % / 1.41 at
+`--stride 2`, confirmed at full resolution.
+
+### THE ONE REAL DEFECT IN THE RECOMMENDED PATTERN, AND IT HAS A NAME
+
+The zigzag's 2.31 % of uncovered block is not spread around the rim.  It is one
+strip:
+
+    SEAM0  y in [1.010, 1.410]   100.00 % covered
+    SEAM1  y in [2.220, 2.620]    79.00 % covered   <- ALL of the loss
+
+SEAM0 is offered to 13, 17 (row 0, reaching up to y = 1.34) AND to 31, 71 (row
+1, reaching down to y = 1.08).  **SEAM1 is offered only to 97 and 2** — both in
+row 2, both reaching down to only y ~ 2.28 — and never to 31 or 71, who reach up
+to y = 2.56.  The strip y in [2.220, 2.40] is below everyone the pattern
+invites.  For the CSAIL logo that costs **0.868 m of ink (5.2 %) and stroke 17
+entirely** (0.429 m no stage can draw).
+
+Offering SEAM1 to 31 and 71 as well takes the block to **100.00 %** and the logo
+to 100 % (54 pieces instead of 50).  **Those two stages are NOT proposed here** —
+whether 31 or 71 in SEAM1 clears its partner in SEAM0 is a
+`scripts/workcell_envelopes.py` question and this module measures no clearances.
+But the hole has a name and a cheap-looking fix, and it is worth one run of that
+script to find out.
+
+### DECISION, on the one Pete asked: LOAD BALANCE IS A TIE-BREAK, NOT A WEIGHT
+
+The DP's value is the lexicographic pair `(pieces + w * imbalance, imbalance)`.
+At the default `w = 0` the first component IS the piece count and the second
+breaks its ties toward the least-loaded state.  Measured:
+
+| set | no balance | tie-break (default) | weight w = 100 |
+|---|---|---|---|
+| strokes, single | 1 254 pcs, spread 29.4 % | **1 254 pcs, 10.0 %** | 1 255 pcs, 9.8 % |
+| scribble, single | 1 024 pcs, spread 79.1 % | **1 024 pcs, 7.5 %** | 1 024 pcs, 7.5 % |
+| hatch, single | 1 869 pcs, spread 20.4 % | **1 869 pcs, 21.1 %** | 2 011 pcs, 13.0 % |
+
+Where the capability sets leave slack the FREE tie-break takes all of it — 79 %
+spread down to 7.5 % at zero cost.  Where they do not (the hatch: every line
+crosses the whole paper and the split is forced) the tie-break buys nothing and
+a real weight buys balance at **one piece per 13 cm of imbalance**, which is a
+bad trade: a piece is a pen-up, a transit and a seam.  **Leave `balance_w = 0`.**
+The lever stays for a stage that turns out makespan-bound rather than
+piece-bound, which `sequence.py` can measure and this module cannot.
+
+### what is NOT answered
+
+The pieces are `(stage, arm, polyline)`, which is `sequence.cost_matrix`'s own
+`segs` contract — one tour per (stage, arm) bucket.  Three gaps: ordering across
+stages is a BARRIER, not a tour, and a piece drawable in two stages by the same
+arm is a scheduling freedom the DP spends entirely on piece count; pen-up legs
+between pieces are not priced here (`sequence.price_crossings` knows and runs
+after); and every number is what the 2 CM ATLAS permits, not a plan — each piece
+still has to be accepted by `plan_stroke`, and one that refuses splits again.
