@@ -1,5 +1,91 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE LEG GAP IS CLOSED BY THE ENVELOPE, AND THE REFUSAL LOOP BY CUTTING THE ATOM (2026-09-11, last)
+
+Follow-up to the previous entry, which measured two pen-up legs at +12.9 mm and
++8.2 mm and said the cells were right and only the paths between them were
+unaccounted for.  Both halves are now built (`aris_sixarm/staged.py`,
+`tests/test_staged.py`, docs/V2_STAGED.md sections 8-10).
+
+**THE OTHER ACTIVES GO INTO THE ROOM AS THEIR ENVELOPES.**  Before an arm plans
+anything in a stage, the other actives of that stage are put into its static set
+as the union of their link capsules over every pose they could hold in the
+stage: the certified drawing pose at each strict-GO cell of the work cell, the
+hover above each, and the park.  That is exactly the pose stack
+`scripts/workcell_envelopes.py` measured +85.8 mm with, and it is the object
+docs/ARCHITECTURE_V2.md section 2f prescribes.  `frozen.freeze_sets` generalises
+`frozen.freeze` from one pose to a set — **a parked partner is the N = 1 case of
+an active one**, which is the sentence the whole design turns on.
+
+**A BOX WOULD NOT HAVE WORKED AND A CAPSULE CLOUD WOULD NOT HAVE BEEN
+AFFORDABLE.**  An AABB round an arm's reach swallows its neighbour; the raw
+cloud is some 9 000 capsules for a row band and `partner_clearance` is linear in
+them.  `staged.cluster_capsules` bounds them by grid-local SPHERES that contain
+every capsule whose midpoint fell in the cell — both endpoints and the radius —
+so the reduction is conservative by construction and a row band comes out as a
+few hundred spheres.  Read at the shipped stride 2, inflated by `ENVELOPE_PAD` =
+40 mm for the cells the stride skips, cached per (atlas, arm, region), and the
+leg store namespaced on it because `paper.route_key` contains neither the frozen
+poses nor the envelopes.
+
+**THE INK CHECK IS A MEASUREMENT, NOT A GATE, AND THAT IS DELIBERATE.**
+`plan_stroke` never consults the static set, so `staged.ink_vs_envelope` adds
+the half that was missing.  On CSAIL the ink clears the (inflated) envelopes by
+a median **+230.9 mm**, 5th percentile **+9.4 mm**, minimum **-28.5 mm**, with
+**5 pieces of 48** under 50 mm.  Those five are close to a bound that is
+deliberately larger than the thing it bounds, not to another arm's ink, and
+refusing certified metres to a conservatism is a bad trade: the default reports
+and `ink_gate=PAIR_MARGIN` enforces.
+
+**THE SECOND LEVER IS z AND IT IS CHEAPER THAN x.**  `staged.row_lift_ladder`
+gives each ROW band its own hover height (0.06 / 0.20 / 0.34 m) with the shipped
+ladder behind it, so an arm that cannot hold the raised pose keeps the one it
+had.  `writing.HOVER_LADDER` is borrowed for the stage and given back; the
+hover memo is keyed on the heights, so it moves that stage's legs and nothing
+else.  It fires only on a stage whose pair check still fails
+(`run(lift_retry=True)`) and `lift_used` records it.  **No constant moved**: the
+x erosion measured out earlier today cost 38.8 % of the block, and this costs
+nothing but height.
+
+**THE REFUSAL LOOP, AND THE TWO THINGS THAT HAD TO BE RIGHT.**  A refused piece
+is ink THAT ARM cannot draw IN THAT STAGE, so the loop strikes that bit of that
+atom's capability set and asks the DP again — 10 ms a round — flying nothing.
+Measured wrong twice on the way:
+
+  1. **A refusal bans only the stretch past `s_star`.**  `plan_stroke` hands
+     back the arc length up to which it DID certify and a head plan is an "ok"
+     result with all of its guarantees; banning the whole piece throws the head
+     away.
+  2. **A ban CUTS the atom rather than clearing its bit.**  An atom is
+     indivisible with respect to the capability map and a refusal is a new
+     transition in it, so a ban that merely touches an atom must split it at
+     both ends.  **Banning whole atoms took the CSAIL loop from 100 % coverage
+     to 80.6 %**; cutting them is what keeps the ink.
+
+A `degenerate` refusal bans nothing and is reported as **unplannable** — "too
+short", "off sheet" and "too short after clip" are statements about the PIECE,
+so no neighbour would do better and striking the state out would only spread the
+hole.  A span is never banned twice, which is what makes the loop terminate.
+
+**AND `sequence.solve` RAISING IS A STATEMENT ABOUT THE ROOM.**  With the
+envelopes installed a bucket can become genuinely unflyable — every order needs
+a depot leg the router refuses — and `held_karp` says so by raising.  The bucket
+falls back to the nearest-neighbour order and reports it, rather than taking the
+run down.
+
+**THE BARRIER COST, AND THE RULE THAT SHOULD REPLACE IT (proposed, not built).**
+`staged.stage_overhead` measures the park -> out -> back trip per (stage, arm)
+directly.  It is a FIXED cost per (stage, arm) and the ink is not, so the
+eight-stage pattern is right at scale and wrong on a small picture.  The rule:
+**a stage whose busiest arm carries less than `X = P x v_draw` metres is not
+worth its own barrier**, `P` being the measured park overhead.  Three ways to
+spend that, cheapest first: merge two seam stages that share no arm (2 with 4,
+3 with 5) subject to the same envelope test; let an arm that holds the SAME park
+across two consecutive stages stay out rather than fly home and back (26 of 42
+transitions are exactly that, measured earlier today); and fall back to
+`idle.conduct` for the residue, where two arms is four priority orders over a
+short horizon.
+
 ## A PARKED PARTNER IS NOT AN ENVELOPE — AND THE LEGS ARE (2026-09-11, last)
 
 A correction to docs/V2_WORKCELLS.md §5 and docs/ARCHITECTURE_V2.md §2b, and

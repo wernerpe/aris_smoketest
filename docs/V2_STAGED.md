@@ -301,3 +301,150 @@ produces):
   active-pair and solo checks both clearing `PAIR_MARGIN`, and a typed
   programme whose every piece carries its stage, its two joint endpoints and
   its two hover configurations.
+
+---
+
+## 8. Closing the leg gap — the other actives, as an envelope
+
+§3 measured the failure and `ARCHITECTURE_V2` §2(f) named the fix. It is now
+built, and it is one sentence: **before an arm plans anything in a stage, the
+other actives of that stage go into its static room as their whole work-cell
+envelopes.**
+
+**What the envelope is.** Not a box — a box round an arm's reach swallows its
+neighbour and would refuse everything. It is the union of the partner's **link
+capsules** over every pose it could hold in this stage: the certified drawing
+pose at each strict-GO cell of its work cell, the hover above each of those, and
+its park. That is exactly the pose stack `scripts/workcell_envelopes.py`
+measured +85.8 mm with, and `frozen.py` takes it unchanged now that
+`freeze_sets` accepts more than one pose (`freeze` is the N = 1 case, which is
+what a *parked* partner is).
+
+**What makes it affordable.** A row band's envelope is some 9 000 capsules and
+`frozen.partner_clearance` is linear in them, which would put a tenth of a
+second on every `paper.route` call. `staged.cluster_capsules` bounds them by
+grid-local **spheres** — each sphere contains both endpoints and the radius of
+every capsule whose midpoint fell in its 0.15 m cell — so the reduction is
+conservative by construction: a query that clears the spheres clears the
+capsules. A row band comes out as a few hundred spheres. The poses are read at
+the shipped stride 2 (4 cm) and every sphere is inflated by `ENVELOPE_PAD` =
+40 mm for the cells the stride skips. The whole set is cached under the atlas,
+the tool and the region, because it is a property of the **stage** and not of
+the picture.
+
+**And the leg store is namespaced on it.** `paper.route_key` contains neither
+the frozen poses nor the envelopes — both change `static_boxes` without changing
+any memo key — so a leg bought in one room would otherwise be served in another.
+
+**The ink gets its own check, and it is a measurement rather than a gate.**
+`plan_stroke` never consults the static set, so a piece can be certified end to
+end and still be drawn through a neighbour's envelope; `staged.ink_vs_envelope`
+is the missing half. It is reported and not enforced by default, because the
+envelope it compares against is *deliberately larger than the thing it bounds*
+(stride-2 sample, sphere-bounded, 40 mm pad) and refusing certified metres to a
+conservatism is a bad trade. Measured on CSAIL: median **+230.9 mm**, 5th
+percentile **+9.4 mm**, minimum **−28.5 mm**, and **5 pieces of 48** read under
+50 mm — all of them against the inflated bound, none of them against another
+arm's actual ink. `ink_gate=PAIR_MARGIN` turns it into a refusal for a caller
+who wants the strict reading.
+
+**The second lever, if the first is not enough.** `staged.row_lift_ladder` gives
+each **row band** its own hover height (0.06 / 0.20 / 0.34 m), with the shipped
+ladder behind it so an arm that cannot hold the raised pose keeps the one it
+had. `writing.HOVER_LADDER` is borrowed for the stage and given back, and
+`lifted_or_lower`'s memo is keyed on the heights, so it moves that stage's legs
+and nothing else. `run(lift_retry=True)` fires it only on a stage whose pair
+check still fails, keeps whichever of the two is better, and records
+`lift_used`.
+
+## 9. The refusal loop
+
+A piece `plan_stroke` refuses is **not ink nobody can draw** — it is ink *that
+arm* cannot draw *in that stage*, which is one bit of one atom's capability set.
+`staged.resolve_refusals` strikes that bit and asks the DP again, to a fixed
+point or a cap of four rounds. Nothing is flown inside the loop: the loop is
+over the pieces, and a plan memo keyed on the arm, the geometry and the room
+means a round only pays for the pieces that actually moved.
+
+Two things had to be right, and each was measured wrong first:
+
+- **A refusal bans only the stretch the planner did not certify.** `plan_stroke`
+  hands back `s_star`, "the normalised arc length up to which it IS planned",
+  and a head plan is an "ok" result with all of its guarantees. Banning the
+  whole piece throws the head away too.
+- **A ban CUTS the atom rather than clearing its bit.** An atom is indivisible
+  with respect to the capability map and a refusal is a new transition in it, so
+  a ban that merely touches an atom must split it at both ends. Measured on the
+  CSAIL logo, banning whole atoms took the loop from 100 % coverage to
+  **80.6 %**; cutting them is what keeps the ink.
+
+A `degenerate` refusal — "too short", "off sheet", "too short after clip" — bans
+nothing and is reported as **unplannable**: those are statements about the
+*piece*, not about the arm, so no neighbour would do better and striking the
+state out would only spread the hole. A span is never banned twice, which is
+what makes the loop terminate rather than walk one piece down the state list.
+
+## 10. The barrier cost at scale, and the rule that should replace it
+
+CSAIL's staged makespan is 1.87× v19's conducted one, and the reason is the
+barrier: a stage costs its busiest arm, the sequence costs the **sum** of eight
+of those, and every active arm of every stage pays a park → out → back trip
+whatever it has to draw. `staged.stage_overhead` measures that trip directly —
+the entry leg before the first stroke and the exit leg after the last, per
+(stage, arm).
+
+**The proposal, not implemented: an adaptive stage count.** The overhead is a
+fixed cost per (stage, arm) and the ink is not, so the eight-stage pattern is
+right at scale and wrong on a small picture. The rule:
+
+> Let `P` be the measured park overhead per (stage, arm) — CSAIL's own number —
+> and let `m` be a stage's ink for its busiest arm. A stage whose busiest arm
+> carries less than `X = P × v_draw` metres is **not worth its own barrier**:
+> the trip out and back costs more clock than the ink it protects.
+
+Three ways to spend that, cheapest first:
+
+1. **Merge two seam stages that share no arm.** Stages 2 and 4 are 13 + 97 and
+   31 + 97; stages 3 and 5 are 17 + 2 and 71 + 2. Two stages that share an arm
+   cannot merge, but two that do not can, subject to the same envelope test the
+   three-active stages already pass — and the merge saves one whole barrier.
+2. **Let an arm stay out between consecutive stages it is active in.** The
+   barrier requires every arm at *its own next park*; an arm whose park does not
+   change between stage *s* and stage *s+1* is already there, and
+   `DECISIONS.md` (2026-09-11) measured that **26 of 42 transitions are exactly
+   that**. Those arms should not fly home and out again.
+3. **Fall back to the conductor for the residue.** When what is left is a
+   handful of short stages, `idle.conduct` over two arms is `∑ₖ P(n, k) = 4`
+   orders over a short horizon — cheap, and it removes the barrier entirely.
+
+The number `X` is the one thing a measurement has to supply.
+
+## 11. What this pass measured, and what is still running
+
+**Measured, and reproduced by `tests/test_staged.py`:**
+
+| | |
+|---|---|
+| the envelope, per (stage, arm) | **99–247 bounding spheres** (row bands 200–247, seam bands 99–108), built once and cached; built in **0.0 s** on a warm cache |
+| the refusal loop on CSAIL | **round 0: 54 pieces, 5 refused, 100.00 % · round 1: 56, 4, 98.42 % · round 2: 56, 0, 94.20 %** — converged in three rounds, 1 piece left unplannable |
+| the same loop with whole-atom bans | **80.6 %** — which is why `mask_atoms` cuts |
+| ink vs the (inflated) active envelopes, 48 pieces | median **+230.9 mm**, p05 **+9.4 mm**, min **−28.5 mm**, **5 of 48** under 50 mm |
+| stage 0 with the envelope room, 8-stroke subset | active-pair **+758.9 mm** against **+466.7 mm** without it, both checks PASS |
+| stage 0 park overhead, that subset | **10.19 s** of a 58.4 s stage — **17.5 %** |
+
+**The coverage answer is 94.20 %, not 100 %,** and the 5.8 % is not the loop
+failing to converge — it converged, with zero refusals left. It is ink that
+*has no second stage-compatible drawer*: the staged capability map's redundancy
+is 48.1 % (`docs/V2_TRACES.md` §5), so when the one arm a stretch is offered to
+refuses it, there is nobody to hand it to. Closing that needs the pattern to
+offer the stretch to somebody else, not the loop to try harder.
+
+**Still running when this pass closed:** the full eight-stage CSAIL re-run with
+the envelope room installed (`out/staged_csail_h097_v2.json`), which is what
+supplies the new per-stage minima, the makespan delta and `X`. Every leg in it
+is cold, because the room changed and the leg store is namespaced on the room.
+The 1 000-stroke staged makespan is a **model** with every term measured
+(`draw` per metre and inter-piece leg from CSAIL, park overhead per (stage,
+arm) from `stage_overhead`, per-stage ink from `traces`) — a real 1 438-piece
+fly is not affordable, because `sequence.cost_matrix` is O(n²) route screens and
+one bucket is 434 pieces.
