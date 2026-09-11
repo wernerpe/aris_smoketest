@@ -1,5 +1,54 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE V2 ARCHITECTURE, ASSEMBLED (2026-09-11, last)
+
+The four measurement passes of today answer four different questions and
+**docs/ARCHITECTURE_V2.md** is the design they add up to.  It decides nothing
+new — every number in it is cited to the pass that measured it — but it is the
+page to read first, and it is where the build order lives.
+
+**THE SHAPE.**  Lines are cut at every capability transition and assigned by the
+per-line min-pieces DP (`traces.py`).  The pieces are grouped into the **eight
+stages** of `3-active-rowband-y20+6seams`: two 3-active row-band stages in which
+the actives are static keep-outs for each other and therefore plan and move
+**asynchronously with no conductor**, then six 2-active seam stages, which are
+the only ones conducted.  A **barrier** advances the fleet.  Planning runs
+BEHIND execution, so the first arm moves at **0.86 s** median rather than after
+3 712 s.
+
+**THE BUDGET, END TO END** (the table in §1.2, all of it measured):
+lines→pieces < 1 s at 1 000 lines; global balance **1 968.8 s → 0**; one stroke
+0.19 s / 2.2 s p95, off the critical path; one pen-up leg 62 ms / 4.2 s p95 cold
+→ **3.1 ms** cached; conduct **407.3 s → ~8 400 s at 1 000 strokes** if it stays
+six-arm, → a handful of 2-arm searches if it does not (`∑ₖ P(n,k)` is 720 for
+six arms and **4** for two); `scene_check` stays unconditional at 0.323 s per
+second of timeline.
+
+**THE BUILD ORDER**, dependency-first, with sizes: (1) a persistent
+leg-certification cache, **M**; (2) per-stage park sets, **M**; (3) the
+work-cell filter on `allocate.atlas_cells` plus stages 7–8 in
+`traces.zigzag_pattern`, **S**; (4) stage assignment wired from `traces.py`,
+**M**; (5) a typed program carrying hovers, joints and stage ids, **M**; (6) the
+per-arm runtime state machine and the barrier, **L**; (7) interior-ascent
+recovery hovers, **L**; (8) the hover roadmap's edge layers, **L, later**.
+1–3 are independent; 4 needs 3; 6 needs 2 and 5.
+
+**ONE THING THE CODE SAYS THAT THE MEASUREMENT PASSES DID NOT.**  `paper`'s
+route and leg memo keys both begin with **`id(spec)`** (`paper.py:302`,
+`paper.py:1409`) — a CPython object address.  So the caches are process-local
+**by construction**, not merely un-serialised: item 1 is a re-keying job onto a
+content signature (the shape `atlas.model_signature` already has), and only then
+a serialisation job.  Everything else the three passes assert about the code
+checks out, including `FleetProgram.barrier_before` having no caller, `_hovers`
+doing `k in (0, -1)` and `Segment` carrying no joint vector.
+
+**STILL OPEN, IN §5:** the dead band between 0.30 and 0.40 m; how many arms the
+hardware allows concurrently (no cross-process fleet clock, and arm 71 has no
+IP); acceleration-aware pacing (v18 wants 33–37 rad/s² against a gate of 10);
+and whether the capability map should be eroded.  The SEAM1 question is now
+settled by §4b and is a code change, not a measurement.  **The park set at
++4.7 mm remains the one blocker no choice of pattern can move.**
+
 ## WHAT ONE STROKE COSTS, AND WHY THE 3 712 s IS NOT THE OPTIMISER (2026-09-11)
 
 The v2 goal — fault tolerant, 1 000 strokes, moving inside 10 s — needs a
