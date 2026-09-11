@@ -183,12 +183,53 @@ is the **refusal fraction** — every number in `docs/V2_TRACES.md` is what the
 2 cm atlas permits, and a piece the local planner refuses has to split and
 re-enter the DP.
 
-*This run had not finished inside the time box; the figures are the CSAIL
-ones and the 1 000-line row is left for the next pass.* The shape to expect
-from the logo: **11.1 % refused**, four fifths of it `empty_fiber` — the
-redundancy band giving out somewhere along a piece the 2 cm lattice said was
-fine. At 1 756 pieces that is of the order of 195 pieces to re-cut, which is
-the size of the refusal loop's work and not a reason to doubt the piece count.
+`traces.synthetic("strokes", 1000)`, the same deterministic set
+`docs/V2_TRACES.md` §4 measures: 1 000 lines, 660.3 m of ink, **1 756 pieces**
+— the figure that document reports, reproduced exactly — in **937 ms** of DP.
+
+| | |
+|---|---|
+| pieces, from the DP | **1 756** |
+| **refused by `plan_stroke`** | **318, 18.1 %** |
+| `plan_stroke` over all 1 756, serial | **842.3 s** |
+| …charged per stage to its busiest arm | **342.6 s** |
+| time to first motion | **1.271 s** |
+
+| reason | n | share of refusals |
+|---|---|---|
+| `split:empty_fiber` | 127 | 39.9 % |
+| `split:start_infeasible` | 87 | 27.4 % |
+| `split:sheet_collapse` | 58 | 18.2 % |
+| `degenerate:too_short` | 33 | 10.4 % |
+| `degenerate:off_sheet` | 11 | 3.5 % |
+| `degenerate:too_short_after_clip` | 2 | 0.6 % |
+
+**Two thirds of the refusals are the redundancy band, not the reach.**
+`empty_fiber` and `start_infeasible` together are 214 of 318: the 2 cm atlas
+certifies a *cell* and the continuous piece runs between cells, so the band
+gives out somewhere along it or at its very first sample. `sheet_collapse` is
+the next 58 — a piece no single IK sheet spans. Only the last 46 are the
+piece itself being unplannable by anybody: 35 under `plan_stroke`'s 20 mm floor
+(the DP's own `MIN_PIECE_M` is 10 mm, so it is entitled to hand out pieces the
+planner calls degenerate) and 11 off the sheet.
+
+**18.1 % against the logo's 11.1 %**, and the difference is where the ink is:
+the synthetic set is spread over the whole certified block including its rim,
+and the two three-active stages take almost all of the loss — 138 of 434 and
+169 of 380, against 11 refusals in the six seam stages put together. A seam
+stage's ink sits in a 0.40 m band under two arms that both reach comfortably
+into it; a row band's ink runs out to the edge of one arm's reach.
+
+**This is the number the refusal loop is worth, and it is not small.** 318
+pieces have to split and re-enter the DP with a capability map re-derived from
+the refusals, and the DP costs 10 ms, so the loop is cheap — but the re-planning
+is not, and 18 % is too much ink to drop. It is also a direct measurement of
+how optimistic the 2 cm prefilter is, which is a number nobody had.
+
+**And the planning still keeps up.** 342.6 s of per-arm planning against a
+draw of roughly 4 300 s (`V2_SCALING_BASELINE` §3.3) is an order of magnitude
+of headroom, and that is cold — this run bought no legs at all, so a full run
+adds the leg cost, which the logo measured at 5.8× cheaper warm.
 
 ## 6. What is not built, and what the numbers ask for next
 

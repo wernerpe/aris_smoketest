@@ -110,8 +110,18 @@ refuses unknown AND missing keys, so a stage id and a per-piece hover are a
 SUPERSET of what item 5 has to absorb (stage id, barrier list, per-piece
 `q_first`/`q_last` and `hover_in`/`hover_out`, the pen-up leg blocks, the joint
 trajectory) under its own `STAGED_SCHEMA_VERSION`, and folding the two together
-is item 5's job.  (4) The **1 000-line refusal fraction** did not finish inside
-the pass; the logo's 11.1 % is the only measured figure.
+is item 5's job.  (4) The **1 000-line refusal fraction is 18.1 %**
+(318 of the 1 756 pieces `docs/V2_TRACES.md` reports, reproduced exactly), of
+which 214 are the redundancy band rather than the reach — 127 `empty_fiber` and
+87 `start_infeasible` — 58 `sheet_collapse`, and only 46 the piece itself being
+unplannable by anybody.  `plan_stroke` over all 1 756 is **842.3 s serial /
+342.6 s charged per stage to its busiest arm**, against a draw of roughly
+4 300 s, so the planner keeps up with an order of magnitude in hand.  **The two
+three-active stages take almost all of the loss** (138 of 434 and 169 of 380,
+against 11 in the six seam stages together): a seam's ink sits under two arms
+that both reach well into it, a row band's runs out to the edge of one arm's.
+That 18.1 % is also the first direct measurement of how optimistic the 2 cm
+prefilter is.
 
 **ONE THING THE CHECK HAD TO BE TAUGHT.**  `scene_check.check_timeline` gates
 each arm against `spec.static_obstacles()`, which contains the OTHER arms'
