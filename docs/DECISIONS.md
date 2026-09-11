@@ -1,5 +1,65 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE ROOM IS WHAT THE NEIGHBOUR ACTUALLY DOES, AND THE CERTIFICATE IS NOW A GRAPH (2026-09-11, last)
+
+The pose-union envelope is measured out (previous entry): tightening it moved
+the ink-vs-envelope minimum **86 mm** (-46.3 -> +39.9), moved every park clear
+of the gate (arm 71 in stage 7, **+1.2 -> +52.8 mm**), and moved the number of
+buckets that fly **by nothing** — the same six refused at every cluster cell
+from 0.10 m down, with the RRT tier ON as well as off.
+
+**SO THE UNION IS THE WRONG OBJECT, NOT A BADLY BOUNDED ONE.**  An arm's work
+cell is every pose it COULD hold anywhere inside it; two arms in adjacent row
+bands own overlapping airspace between the parks and the paper; and no bound on
+a set that large leaves a neighbour room to fly through it.  What the neighbour
+ACTUALLY holds in a stage is one trajectory — a few hundred poses out of that
+union — and that is a room a leg can be routed around.
+
+**THE CONSTRUCTION.**  `staged.trajectory_room` takes an arm's realised stage
+timeline, builds its link capsules through the same `coordination.ArmPath` the
+envelope used, and reduces them with the same `cluster_capsules`, which CONTAINS
+what it replaces.  The pad is not a guess: it is
+`scene_check.check_timeline`'s own 1-Lipschitz between-sample residual,
+`SWEEP_FRAC x` the largest step any capsule endpoint takes between two samples,
+so the spheres cover the motion BETWEEN the samples and not only at them.
+
+**TWO PASSES, AND THE ITERATION IS EXPLICITLY NOT THE CERTIFICATE.**  Pass 1
+plans every active solo against the parked fleet — the room that flies but does
+not separate the actives.  Pass 2 re-plans each active against what the OTHERS
+ACTUALLY DID in pass 1.  Re-planning A moves A, which is a room B was certified
+against, so the fixed point is approached and never proved by the iteration; the
+claim is closed only by the independent whole-timeline `active_pair_gap` at
+`PAIR_MARGIN`.  The iteration gets the trajectories apart; the check proves it.
+
+**AND THE BARRIER SEMANTICS CHANGE, SO THE DEPENDENCY IS RECORDED.**  A
+pose-union envelope is a property of the STAGE: it holds whatever the neighbour
+is asked to draw, so an arm's plan survives its neighbour being re-planned.  A
+trajectory room is a property of that neighbour's SPECIFIC PLAN, and an arm's
+certificate is void the moment that plan changes.  `ArmStage.depends_on` carries
+a digest of each neighbour's trajectory and `programme()` writes it out beside
+the arm's own, so a re-plan leaves every neighbour that still names the old
+digest stale BY INSPECTION rather than silently.  **That is the price of the
+tighter room and it is worth naming: the staged programme is no longer a set of
+independent per-arm certificates, it is a graph of them**, and build item 6's
+barrier has to carry the graph as well as the parks.
+
+**MEASURED SO FAR.**  Stage 0's rooms: arm 2 **1 339 spheres -> 422**, arm 13
+**1 377 -> 111**, arm 71 **1 157 -> 1 001**.  The counts understate it — an arm
+that draws ONE piece had its whole row band treated as a keep-out, and what it
+occupies is one approach, one stroke and one retreat; arm 13's room falls by a
+factor of 12 and arm 71's, drawing thirteen pieces across R1, barely moves.  The
+saving is exactly the ink an arm was NOT asked to draw.  **And pass 1 flies
+everything**: arm 71's thirteen-piece bucket produces a timeline against the
+parked fleet — the same bucket that produced none under the union envelope at
+any cluster cell with the tier on or off — so every active has a pass-1
+trajectory to derive a room from, which is the premise §14 could not supply.
+
+**NOT YET MEASURED.**  The CSAIL run was still in pass 2 when the box closed, so
+the buckets flown, the per-stage minima, the makespan and the cold/warm split
+are not in hand and the 1 000-stroke model is not recalibrated.  Running to
+`out/staged_csail_h097_v4.json`, with the union-envelope fly at the adopted
+tight setting alongside it in `out/staged_csail_h097_v3.json` as the control.
+
 ## THE ENVELOPE, TIGHTENED: THE CELL IS THE LEVER AND THE PARK MAY BE THE WALL (2026-09-11, last)
 
 Build item 4's envelope room, swept for tightness.  **The probe runs with the

@@ -698,3 +698,79 @@ the first attempt at this sweep look like it had hung. It is now one
 `out/staged_csail_h097_v3.json`, with the RRT tier **on**. Its envelopes are
 1 157–1 377 spheres per active arm in the main stages and 472–506 in the seam
 stages, and every leg in it is cold because the room changed.
+
+## 15. The room is what the neighbour actually does
+
+§14 measured the pose-union envelope out. Tightening it from a 0.15 m cluster
+cell with a 40 mm pad to 0.05 m with none moved the ink-vs-envelope minimum
+**86 mm** (−46.3 → +39.9), moved every park clear of the gate (arm 71 in stage 7
+from **+1.2 mm** to **+52.8 mm**), and moved the number of buckets that fly **by
+nothing** — the same six refused at every cell from 0.10 m down. The full fly at
+the adopted setting, with the RRT tier back **on**, refused them too.
+
+**So the union is the wrong object, not a badly bounded one.** An arm's work
+cell is every pose it *could* hold anywhere inside it; two arms in adjacent row
+bands own overlapping airspace between the parks and the paper; and no bound on
+a set that large leaves a neighbour room to fly through it. What the neighbour
+*actually* holds in a stage is one trajectory — a few hundred poses out of that
+union — and that is a room a leg can be routed around.
+
+**The construction.** `staged.trajectory_room` takes an arm's realised stage
+timeline, builds its link capsules through the same `coordination.ArmPath` the
+envelope used, and reduces them with the same `cluster_capsules` — which
+*contains* what it replaces, so the certificate survives the reduction. The pad
+is not a guess: it is `scene_check.check_timeline`'s own 1-Lipschitz
+between-sample residual, `SWEEP_FRAC ×` the largest step any capsule endpoint
+takes between two samples, so the spheres cover the motion **between** the
+samples and not only at them.
+
+**Two passes, and the iteration is explicitly not the certificate.** Pass 1
+plans every active solo against the parked fleet — the room that flies but does
+not separate the actives. Pass 2 re-plans each active against what the *others
+actually did* in pass 1. Re-planning A moves A, which is a room B was certified
+against, so the fixed point is approached and never proved by the iteration; the
+claim is closed only by the independent whole-timeline `active_pair_gap` at
+`PAIR_MARGIN`, exactly as before. The iteration gets the trajectories apart; the
+check proves they are apart.
+
+**And the barrier semantics change, so the dependency is recorded.** A
+pose-union envelope is a property of the **stage**: it holds whatever the
+neighbour is asked to draw, so an arm's plan survives its neighbour being
+re-planned. A trajectory room is a property of that neighbour's **specific
+plan**, and an arm's certificate is void the moment that plan changes.
+`ArmStage.depends_on` carries a digest of each neighbour's trajectory and
+`programme()` writes it out next to the arm's own `trajectory_digest`, so a
+re-plan of one arm leaves every neighbour that still names the old digest stale
+**by inspection** rather than silently. That is the price of the tighter room
+and it is worth naming: the staged programme is no longer a set of independent
+per-arm certificates, it is a graph of them.
+
+**How much smaller the room actually is.** Stage 0 of the CSAIL logo, the
+same stage whose arm-71 bucket refused at every envelope setting:
+
+| arm | pieces it draws | pose-union envelope | **trajectory room** |
+|---|---|---|---|
+| 2 | 1 | 1 339 spheres | **422** |
+| 13 | 1 | 1 377 spheres | **111** |
+| 71 | 13 | 1 157 spheres | **1 001** |
+
+The counts understate it. An arm that draws one piece had its whole row band
+treated as a keep-out; what it actually occupies is one approach, one stroke and
+one retreat. Arm 13's room falls by a factor of **12**, and arm 71 — which draws
+thirteen pieces spread across R1 — barely moves, which is the honest shape of
+the thing: the saving is exactly the ink an arm was *not* asked to draw.
+
+**And pass 1 flies everything, which is the premise the iteration needs.**
+Planned solo against the parked fleet, arm 71's thirteen-piece bucket produces a
+timeline — the same bucket that produced none under the union envelope at any
+cluster cell, with the RRT tier on or off. So there is a pass-1 trajectory to
+derive a room from, for every active arm, which is what the two-pass scheme
+assumes and what §14 could not provide.
+
+**Numbers still owed.** The CSAIL run at `--trajectory-rooms` was still in pass
+2 when this box closed, so the complete table — buckets flown, per-stage
+minima under both checks, the real makespan against 391.7 s and v19's 209.9 s,
+the cold/warm planning split — is not in hand, and neither is the recalibrated
+1 000-stroke model. It is running to `out/staged_csail_h097_v4.json`, and the
+union-envelope fly at the adopted tight setting is running alongside it to
+`out/staged_csail_h097_v3.json` as the control.
