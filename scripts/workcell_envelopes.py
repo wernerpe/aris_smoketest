@@ -514,6 +514,13 @@ def evaluate(d, name, stages, note=""):
                worst_ink_mm=min(r["worst_ink_mm"] for r in rows) if rows else None,
                worst_env_mm=min(r["worst_env_mm"] for r in rows) if rows else None,
                uncovered=int(reach.sum() - (done & reach).sum()))
+    # WHERE the holes are, not just how many: a hole is only ever a band of y
+    # on this rig (the partition is by row), so the y values of the uncovered
+    # cells are the whole diagnosis.
+    miss = reach & ~done
+    out["uncovered_y"] = ([round(float(v), 3) for v in
+                           np.unique(d["ys"][np.nonzero(miss)[0]])]
+                          if miss.any() else [])
     out["_masks"] = stages          # kept for the redundancy pass; not JSON
     return out
 
@@ -665,6 +672,50 @@ def main():
             print(f"    {lo:>3}-{hi:<3} {nm:>5} {hg:>9} {dg:>10} {bg:>32}")
     report["frontier"] = fro
 
+    # ---- 1d. who can reach which seam ------------------------------------
+    print("\n  REACH, over the certified block (tip, m) — the seam bands are "
+          "[1.010, 1.410] and [2.220, 2.620] at a 0.40 m dead band:")
+    print(f"    {'arm':>4} {'tip y':>16} {'tip x':>16} {'in SEAM0':>18} "
+          f"{'in SEAM1':>18}")
+    reachtab = {}
+    for arm in ARMS:
+        c = d["cells"][arm]
+        rr = dict(y=[float(c["y"].min()), float(c["y"].max())],
+                  x=[float(c["x"].min()), float(c["x"].max())])
+        for k, nm in ((0, "SEAM0-y20"), (1, "SEAM1-y20")):
+            s = cell_sel(d, arm, R[nm])
+            rr[f"seam{k}"] = ([float(c["y"][s].min()), float(c["y"][s].max())]
+                              if len(s) else None)
+        reachtab[arm] = rr
+        f0 = ("-" if rr["seam0"] is None
+              else f"[{rr['seam0'][0]:.3f},{rr['seam0'][1]:.3f}]")
+        f1 = ("-" if rr["seam1"] is None
+              else f"[{rr['seam1'][0]:.3f},{rr['seam1'][1]:.3f}]")
+        print(f"    {arm:>4} [{rr['y'][0]:>6.3f},{rr['y'][1]:>6.3f}] "
+              f"[{rr['x'][0]:>6.3f},{rr['x'][1]:>6.3f}] {f0:>18} {f1:>18}")
+    report["reach"] = reachtab
+
+    # ---- 2b. the seam-stage pairing matrix --------------------------------
+    print("\n  SEAM-STAGE PAIRINGS — arm a working SEAM0 against arm b working "
+          "SEAM1, ink-vs-ink (mm); the two bands are 0.81 m apart in y:")
+    s0 = [a for a in ARMS if len(cell_sel(d, a, R["SEAM0-y20"]))]
+    s1 = [b for b in ARMS if len(cell_sel(d, b, R["SEAM1-y20"]))]
+    print("      SEAM0\\SEAM1  " + "".join(f"{q:>9}" for q in s1))
+    seamtab = {}
+    for p0 in s0:
+        i0 = cell_sel(d, p0, R["SEAM0-y20"])
+        row = []
+        for p1 in s1:
+            if p0 == p1:
+                row.append("     self")
+                continue
+            v = pair_clear(d, p0, i0, p1, cell_sel(d, p1, R["SEAM1-y20"]),
+                           with_park=False)
+            seamtab[f"{p0}|{p1}"] = round(1000 * v, 1)
+            row.append(f"{1000 * v:>9.1f}")
+        print(f"      {p0:>11}  " + "".join(row))
+    report["seam_pairings"] = seamtab
+
     # ---- 2. the patterns -------------------------------------------------
     print("\n" + "=" * 74)
     print("2. STAGE PATTERNS")
@@ -742,6 +793,13 @@ def main():
     # is offered it.  A stage that draws nothing costs nothing here (each cell
     # is charged to the first stage that can take it), so the extra two are
     # free and they are what closes the last few per cent of the block.
+    #
+    # WHY THIS ONE IS NOT THE ANSWER — it offers SEAM1 only to arms 2 and 97,
+    # whose certified cells stop at y = 2.280, and SEAM1 starts at y = 2.220.
+    # `scripts/traces.py` (docs/V2_TRACES.md) found the hole from the other end:
+    # CSAIL stroke 17 lies entirely inside it.  Kept in the table because it is
+    # the version the 2026-09-11 recommendation shipped with, and the version
+    # the corrected one has to be compared against.
     pats.append(evaluate(d, "3-active-rowband-y20+4seams", [
         {13: R["R0-y20"], 71: R["R1-y20"], 2: R["R2-y20"]},
         {17: R["R0-y20"], 31: R["R1-y20"], 97: R["R2-y20"]},
@@ -749,8 +807,44 @@ def main():
         {17: R["SEAM0-y20"], 2: R["SEAM1-y20"]},
         {31: R["SEAM0-y20"], 97: R["SEAM1-y20"]},
         {71: R["SEAM0-y20"], 2: R["SEAM1-y20"]}],
-        "THE RECOMMENDATION: one arm per full-width row band with a 0.40 m "
-        "dead band in y, columns alternating, then four 2-active seam stages"))
+        "one arm per full-width row band with a 0.40 m dead band in y, columns "
+        "alternating, then four 2-active seam stages -- SEAM1 offered only to "
+        "2 and 97, which is the hole"))
+
+    # A SEAM NEEDS BOTH AN OUTER ARM AND A MIDDLE ARM, and that is arithmetic,
+    # not taste.  Over the certified block the six arms' tip-y reach is
+    #   13, 17: [0.000, 1.340]   31, 71: [1.080, 2.560]   2, 97: [2.280, 3.620]
+    # and the two seams at a 0.40 m dead band are [1.010, 1.410] and
+    # [2.220, 2.620].  So SEAM0's top 70 mm is reachable ONLY by 31/71 and its
+    # bottom 70 mm only by 13/17; SEAM1's bottom 60 mm only by 31/71 and its
+    # top 60 mm only by 2/97.  Each seam therefore has to be offered to one of
+    # each kind, and since 31 and 71 are a transverse pair they have to take
+    # opposite seams in the same stage -- which is the pairing measured in
+    # section 2b.
+    pats.append(evaluate(d, "3-active-rowband-y20+4seams-crossed", [
+        {13: R["R0-y20"], 71: R["R1-y20"], 2: R["R2-y20"]},
+        {17: R["R0-y20"], 31: R["R1-y20"], 97: R["R2-y20"]},
+        {13: R["SEAM0-y20"], 97: R["SEAM1-y20"]},
+        {17: R["SEAM0-y20"], 2: R["SEAM1-y20"]},
+        {31: R["SEAM0-y20"], 71: R["SEAM1-y20"]},
+        {71: R["SEAM0-y20"], 31: R["SEAM1-y20"]}],
+        "the same six stages, but the last two CROSS the middle pair over the "
+        "two seams instead of giving both of them SEAM0"))
+
+    # ...and the conservative fallback, if the crossed transverse pair does not
+    # clear: leave the four stages alone and add two more that pair a row-0 arm
+    # on SEAM0 with a middle arm on SEAM1.
+    pats.append(evaluate(d, "3-active-rowband-y20+6seams", [
+        {13: R["R0-y20"], 71: R["R1-y20"], 2: R["R2-y20"]},
+        {17: R["R0-y20"], 31: R["R1-y20"], 97: R["R2-y20"]},
+        {13: R["SEAM0-y20"], 97: R["SEAM1-y20"]},
+        {17: R["SEAM0-y20"], 2: R["SEAM1-y20"]},
+        {31: R["SEAM0-y20"], 97: R["SEAM1-y20"]},
+        {71: R["SEAM0-y20"], 2: R["SEAM1-y20"]},
+        {13: R["SEAM0-y20"], 31: R["SEAM1-y20"]},
+        {17: R["SEAM0-y20"], 71: R["SEAM1-y20"]}],
+        "the four seam stages plus two more that put the MIDDLE pair on SEAM1, "
+        "each against a row-0 arm on SEAM0"))
 
     # PATTERN B — 3-active, one per row, own COLUMN half only (2 stages)
     pats.append(evaluate(d, "3-active-block", [
@@ -810,6 +904,14 @@ def main():
               f"{100 * p['coverage']:>7.1f}%{p['worst_ink_mm']:>7.1f}mm"
               f"{p['worst_env_mm']:>8.1f}mm"
               f"{p['cost']:>8.0f}{p['speedup']:>8.2f}x")
+    print("\n  where the uncovered cells are (y, m):")
+    for p in pats:
+        if p["uncovered"]:
+            uy = p["uncovered_y"]
+            print(f"    {p['name']:<28}{p['uncovered']:>5} cells at y "
+                  f"{uy[0]:.2f}..{uy[-1]:.2f} ({len(uy)} rows)")
+        else:
+            print(f"    {p['name']:<28}    - none, 100 % of the block")
     report["patterns"] = pats
 
     # ---- 3. transitions --------------------------------------------------

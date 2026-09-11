@@ -84,14 +84,71 @@ The binding pair is **31–71** and it never moves, because the followers' confi
 | 3-active row bands, no dead band | 2 | 100.0 % | −206.3 mm | −206.3 mm | 1178 | 2.94× |
 | 3-active own blocks, no dead band | 2 | 99.8 % | −129.7 mm | −129.7 mm | 1176 | 2.94× |
 | 3-active row bands, 0.20 m y dead band, 2 seam stages | 4 | 95.5 % | **+85.8 mm** | +4.7 mm | 1312 | 2.64× |
-| **3-active row bands, 0.20 m y dead band, 4 seam stages** | 6 | **97.3 %** | **+85.8 mm** | +4.7 mm | 1378 | **2.51×** |
+| 3-active row bands, 0.20 m y dead band, 4 seam stages | 6 | 97.3 % | **+85.8 mm** | +4.7 mm | 1378 | 2.51× |
+| the same, seam stages *crossed* (§4b) | 6 | 100.0 % | **−201.5 mm** | −201.5 mm | 1378 | 2.51× |
+| **the same, 6 seam stages (§4b — the recommendation)** | 8 | **100.0 %** | **+85.8 mm** | +4.7 mm | 1470 | **2.35×** |
 | 3-active own blocks, 0.15 m y dead band, 2 seam stages | 4 | 97.1 % | +1.9 mm | +1.9 mm | 1295 | 2.67× |
 | 2-active, one per column | 3 | 99.8 % | −262.0 mm | −262.0 mm | 1746 | 1.98× |
 | serial (one arm at a time) | 6 | 100.0 % | n/a | +4.7 mm | 3458 | 1.00× |
 
 Only the two rows in bold with a positive ink figure are stages anyone may run. `3-active row bands, 0.15 m` misses by 3.8 mm and is the shape of the curve: the y dead band goes from −127.2 mm at 0.20 m to −3.8 mm at 0.30 m to **+85.8 mm at 0.40 m**, and there is nothing gradual about the last step — it is the moment the two adjacent rows' elbow sweeps stop overlapping.
 
-The residual 2.7 % of the block the recommended pattern does not cover is seam corners (x near 0.16 or 1.64 at a seam y) that none of the four arms offered that seam certifies; a seventh stage or a slightly wider seam recovers most of it.
+## 4b. The seam stages, corrected — a seam needs an outer arm *and* a middle arm
+
+The four-seam-stage version above leaves **92 cells (2.7 % of the block) uncovered, all of them at y ∈ [2.24, 2.40]** — five rows in a single strip, not scatter at the rim. `scripts/traces.py` (docs/V2_TRACES.md) found the same hole from the other end: CSAIL stroke 17 lies entirely inside it.
+
+The cause is arithmetic, not taste. Tip reach over the certified block:
+
+| arms | tip y | reach into SEAM0 = [1.010, 1.410] | into SEAM1 = [2.220, 2.620] |
+|---|---|---|---|
+| 13, 17 | 0.000 … 1.320 | 1.040 … 1.320 | — |
+| 31, 71 | 1.080 … 2.560 | 1.080 … 1.400 | 2.240 … 2.560 |
+| 2, 97 | 2.280 … 3.600 | — | 2.280 … 2.600 |
+
+**SEAM0's top 80 mm is reachable only by 31/71 and its bottom 30 mm only by 13/17; SEAM1's bottom 40 mm is reachable only by 31/71 and its top 20 mm only by 2/97.** Each seam has to be offered to one arm of each kind. The four-stage version gave 31 and 71 only SEAM0, so SEAM1's floor belonged to nobody.
+
+**The seam-stage pairing matrix** — arm on SEAM0 against arm on SEAM1, ink-vs-ink, the two bands 0.81 m apart in y:
+
+| SEAM0 \ SEAM1 | 2 | 31 | 71 | 97 |
+|---|---|---|---|---|
+| **13** | +250.0 | **+194.3** | +250.0 | +250.0 |
+| **17** | +250.0 | +250.0 | **+201.1** | +250.0 |
+| **31** | +156.4 | *self* | **−163.1** | +250.0 |
+| **71** | +238.6 | **−201.5** | *self* | +162.1 |
+
+So, answering the question directly:
+
+- **31 or 71 on SEAM1 against a row-0 arm on SEAM0 clears by +194.3 mm (13/31) and +201.1 mm (17/71)** — comfortably past 50 mm and past the old 80 mm.
+- **31 or 71 on SEAM1 against 2 or 97 in the same stage is not a thing that can be arranged**: 2 and 97 only reach SEAM1, so both arms would be in the same 0.40 m band and would overlap outright. In the pairings that *are* possible — 31 or 71 on SEAM0 against 2 or 97 on SEAM1 — the clearance is +156.4 to +250.0 mm.
+- **The tempting six-stage fix does not work.** Crossing the middle pair over the two seams (31 → SEAM0, 71 → SEAM1 and vice versa) covers 100 % of the block in the same six stages, and it is **−163.1 / −201.5 mm**. A transverse pair cannot be separated by putting them in different seams either: 0.81 m of y separation is not enough, because both elbows still occupy the same x column around the mid-line. **The transverse pair is unseparable on this rig, on either axis.**
+- Against **parked** arms the binding number does not move: +4.7 mm, arms 13 and 17 against each other's parks, exactly as for every other pattern. The park set is the blocker for all of them (§5) and the seam correction neither helps nor hurts it.
+
+**The smallest change that covers y ∈ [2.22, 2.40] is therefore two more seam stages**, not a different split and not a shifted dead band:
+
+| stage | active | region |
+|---|---|---|
+| 1 | 13, 71, 2 | R0 / R1 / R2, full width, y dead band 0.40 m |
+| 2 | 17, 31, 97 | the same bands, other column |
+| 3 | 13 → SEAM0, 97 → SEAM1 | +250.0 mm |
+| 4 | 17 → SEAM0, 2 → SEAM1 | +250.0 mm |
+| 5 | 31 → SEAM0, 97 → SEAM1 | +250.0 mm |
+| 6 | 71 → SEAM0, 2 → SEAM1 | +238.6 mm |
+| **7** | **13 → SEAM0, 31 → SEAM1** | **+194.3 mm** |
+| **8** | **17 → SEAM0, 71 → SEAM1** | **+201.1 mm** |
+
+with `R0 = y ∈ [0.000, 1.010]`, `R1 = [1.410, 2.220]`, `R2 = [2.620, 3.620]`, `SEAM0 = [1.010, 1.410]`, `SEAM1 = [2.220, 2.620]`, all at the full block width `x ∈ [0.16, 1.64]`.
+
+Per-stage and whole-sequence effect of the correction:
+
+| | 6 stages (4 seam) | **8 stages (6 seam)** |
+|---|---|---|
+| block covered | 97.3 % (92 cells missing at y 2.24–2.40) | **100.0 %** |
+| worst ink-vs-ink | +85.8 mm | **+85.8 mm** (unchanged) |
+| cost (uniform-ink stage sum) | 1378 | 1470 |
+| speedup vs serial | 2.51× | **2.35×** |
+| ≥ 2 stage-compatible drawers | 41.6 % | **47.1 %** |
+
+The two extra stages cost **6.4 % of the parallel speedup** (2.51× → 2.35×, because each cell is charged to the first stage that can draw it, so stages 7 and 8 only pick up what stages 3–6 could not) and they buy the last 2.7 % of the block *and* push stage-compatible redundancy from 41.6 % to **47.1 % — the atlas's own ceiling**, because SEAM1 cells now have both a middle arm and an outer arm offering to draw them. That is a better trade than it looks: the correction is the only version of this pattern that is simultaneously 100 % covering and maximally fault-tolerant.
 
 
 **6-active never clears.** Even eroding every Voronoi block by 0.60 m — leaving 248 of 3 458 cells alive, 7 % of the block — the worst pair is −23.2 mm. All six arms at once is not a margin problem, it is the transverse pairs.
@@ -168,24 +225,30 @@ A cell is only *re-queueable* if a second arm both certifies it **and** is offer
 | pattern | block with ≥ 2 stage-compatible drawers | mean drawers per cell |
 |---|---|---|
 | ceiling (any arm, no stage structure) | 47.1 % | 1.51 |
-| **3-active row bands, 0.40 m dead band, 4 seam stages** | **41.6 %** | 1.41 |
+| **3-active row bands, 0.40 m dead band, 6 seam stages (§4b)** | **47.1 %** — the ceiling | **1.51** |
+| 3-active row bands, 0.40 m dead band, 4 seam stages | 41.6 % | 1.41 |
 | 3-active row bands, no dead band | 39.0 % | 1.39 |
 | 3-active row bands, 0.40 m dead band, 2 seam stages | 35.2 % | 1.31 |
 | 6-active eroded 0.30 m + seams | 36.8 % | 1.37 |
 | 3-active own blocks (with or without dead band) | 0.0 – 2.5 % | 1.00 |
 | 1-2-1, either reading | 0.0 % | 1.00 |
 
+The recommended pattern **reaches the ceiling**: every cell with a second certified drawer is offered to it by some stage, so nothing the atlas makes redundant is thrown away by the staging.
+
 
 The row-band patterns keep most of the available redundancy (35–39 % of 47.1 %) because each row band is offered to both of its column arms, in different stages. The block patterns keep essentially none: each cell is offered to exactly one arm, so a faulted arm's ink is simply lost.
 
 ## 7. Recommendation
 
-**Adopt `3-active-rowband-y20`: one arm per full-width row band, a 0.40 m dead band in y between bands, the two columns alternating between the two main stages, then four 2-active seam stages.**
+**Adopt `3-active-rowband-y20+6seams`: one arm per full-width row band, a 0.40 m dead band in y between bands, the two columns alternating between the two main stages, then the six 2-active seam stages tabulated in §4b.**
 
-- **+85.8 mm** of ink-vs-ink clearance, against a 50 mm gate and comfortably past the 80 mm gate that was in force until 2026-09-09. Every one of the three active arms in a stage is a *static* keep-out for the other two, so within a stage the three plan and move asynchronously with no conductor.
-- **2.51× the serial makespan** (97.3 % of the block in 6 stages), against a theoretical ceiling of 3× for three arms.
-- **41.6 % of the block keeps a second stage-compatible drawer** for re-queueing a faulted arm's ink — 88 % of the 47.1 % the atlas offers at all.
-- It is a restriction of a grouping the repo already computes (`--arm-phases disjoint`), so nothing about allocation or conduction has to be re-derived — the new object is the y dead band and the per-stage park set.
+- **+85.8 mm** of ink-vs-ink clearance, against a 50 mm gate and comfortably past the 80 mm gate that was in force until 2026-09-09. Every one of the three active arms in a stage is a *static* keep-out for the other two, so within a stage the three plan and move asynchronously with no conductor. The tightest seam stage is +194.3 mm.
+- **100.0 % of the certified block**, in 8 stages.
+- **2.35× the serial makespan**, against a theoretical ceiling of 3× for three arms.
+- **47.1 % of the block keeps a second stage-compatible drawer** for re-queueing a faulted arm's ink — the atlas's own ceiling, i.e. the staging throws none of the available redundancy away.
+- It is a restriction of a grouping the repo already computes (`--arm-phases disjoint`), so nothing about allocation or conduction has to be re-derived — the new object is the y dead band, the seam stages, and the per-stage park set.
+
+Do **not** ship the six-stage version: it misses y ∈ [2.24, 2.40] (92 cells, and CSAIL stroke 17 entirely), and the six-stage fix that would cover it — crossing 31 and 71 over the two seams — is at −163.1 mm. The two extra stages are the price of a hole-free block.
 
 **Do not build the 1-2-1 as described.** Both readings require a transverse pair to draw at the same time, and that pair is at −262 mm however the paper is cut. The same idea with rows instead of columns is the recommendation above.
 

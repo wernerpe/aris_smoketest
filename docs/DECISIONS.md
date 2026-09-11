@@ -3715,3 +3715,55 @@ arm is a scheduling freedom the DP spends entirely on piece count; pen-up legs
 between pieces are not priced here (`sequence.price_crossings` knows and runs
 after); and every number is what the 2 CM ATLAS permits, not a plan — each piece
 still has to be accepted by `plan_stroke`, and one that refuses splits again.
+
+### 2026-09-11, later — the seam stages were wrong, and a transverse pair is unseparable on BOTH axes
+
+`scripts/traces.py` (docs/V2_TRACES.md) ran the recommended pattern against the
+CSAIL logo and found a hole the envelope study had not looked for: **SEAM1 was
+offered only to arms 2 and 97**, whose certified cells start at y = 2.280, and
+SEAM1 starts at y = 2.220.  92 cells of the block (2.7 %) at y in [2.24, 2.40]
+belonged to nobody in any stage — and stroke 17 of the logo lies entirely
+inside that strip.
+
+**A SEAM NEEDS AN OUTER ARM AND A MIDDLE ARM.**  Tip reach over the block is
+13/17 [0.000, 1.320], 31/71 [1.080, 2.560], 2/97 [2.280, 3.600], and the seams
+at a 0.40 m dead band are [1.010, 1.410] and [2.220, 2.620].  So SEAM0's top
+80 mm is only 31/71's and its bottom 30 mm only 13/17's; SEAM1's bottom 40 mm
+is only 31/71's and its top 20 mm only 2/97's.  Both kinds, or a hole.
+
+The seam-stage pairing matrix (arm on SEAM0 vs arm on SEAM1, ink-vs-ink, mm —
+the two bands are 0.81 m apart in y):
+
+|  SEAM0 \ SEAM1 |   2 |  31 |  71 |  97 |
+|---|---|---|---|---|
+| **13** | +250.0 | **+194.3** | +250.0 | +250.0 |
+| **17** | +250.0 | +250.0 | **+201.1** | +250.0 |
+| **31** | +156.4 | self | **-163.1** | +250.0 |
+| **71** | +238.6 | **-201.5** | self | +162.1 |
+
+**THE TRANSVERSE PAIR IS UNSEPARABLE ON THE OTHER AXIS TOO.**  The tempting fix
+was to CROSS the middle pair over the two seams — 31 to SEAM0 and 71 to SEAM1,
+then swapped — which covers 100 % of the block in the SAME six stages.  It is
+**-163.1 / -201.5 mm**.  0.81 m of y separation does not separate 31 from 71,
+because both elbows still stand in the same x column about the mid-line.  The
+x frontier already said a same-row pair needs 1.44 m of a 1.48 m block; the y
+answer is that there is no y answer.
+
+**THE CORRECTION IS TWO MORE SEAM STAGES**, pairing a row-0 arm on SEAM0 with a
+middle arm on SEAM1: 13/31 at **+194.3 mm** and 17/71 at **+201.1 mm**.
+
+| | 6 stages (4 seam) | **8 stages (6 seam)** |
+|---|---|---|
+| block covered | 97.3 % (92 cells at y 2.24-2.40) | **100.0 %** |
+| worst ink-vs-ink | +85.8 mm | **+85.8 mm** (unchanged) |
+| speedup vs serial | 2.51x | **2.35x** |
+| >= 2 stage-compatible drawers | 41.6 % | **47.1 %**, the atlas's own ceiling |
+
+6.4 % of the parallel speedup buys the last 2.7 % of the block AND takes the
+staged redundancy to the ceiling, because a SEAM1 cell now has both a middle
+arm and an outer arm offering to draw it.  The park set is untouched by any of
+this and is still the blocker: +4.7 mm, arms 13 and 17 against each other's
+parks, for this pattern exactly as for every other.
+
+docs/V2_WORKCELLS.md section 4b is the write-up; `out/workcell_envelopes.json`
+carries `reach` and `seam_pairings` as new keys.
