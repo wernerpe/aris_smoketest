@@ -225,9 +225,16 @@ def test_staged_end_to_end_on_a_three_stroke_picture(rig, toy):
     """
     _, pcs = toy
     want = sorted({p.stage for p in pcs})
+    # ENVELOPES OFF HERE, on purpose.  The toy map is rasterised from
+    # rectangles and is far more generous than the atlas the ENVELOPES are
+    # built from, so it hands arm 71 ink that the real arm 31's envelope stands
+    # over; with the envelope room installed that leg is (correctly) refused,
+    # which is a statement about the toy map and not about the pipeline.  The
+    # envelope room has its own tests above; this one is the item-4 pipeline.
     res = staged.run([STROKE_IN_ROW, STROKE_IN_BAND, STROKE_CROSSES],
                      coverage=toy_coverage(), stages=want, route_jobs=2,
-                     leg_cache=False, verbose=False)
+                     leg_cache=False, envelopes=False, refusal_rounds=0,
+                     verbose=False)
     drawn = 0
     for sr in res.stages:
         for a, st in sr.arms.items():
@@ -261,3 +268,228 @@ def test_staged_end_to_end_on_a_three_stroke_picture(rig, toy):
                 assert pc["stage"] == one["stage"]
                 assert len(pc["q_first"]) == len(pc["q_last"]) == 7
                 assert pc["hover_in"] is not None and pc["hover_out"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 3.  THE OTHER ACTIVE ARMS, AS AN ENVELOPE  (the leg gap, closed)
+# ---------------------------------------------------------------------------
+def test_cluster_capsules_contains_every_capsule_it_replaces():
+    """THE REDUCTION IS CONSERVATIVE OR IT IS NOTHING.
+
+    A row band's envelope is some 9 000 capsules and
+    `frozen.partner_clearance` is linear in them, so they are bounded by a few
+    hundred grid-local spheres before they go into the room.  The claim that
+    makes that legal is containment: every capsule the reduction replaced is
+    inside one of the spheres, so a query that clears the spheres clears the
+    capsules.  Checked here on a cloud that spans several grid cells.
+    """
+    rng = np.random.default_rng(7)
+    A = rng.uniform(-0.5, 0.5, (400, 3))
+    B = A + rng.normal(0, 0.05, (400, 3))
+    R = rng.uniform(0.02, 0.06, 400)
+    c, r = staged.cluster_capsules(A, B, R, cell=0.15, pad=0.0)
+    assert 1 < len(c) < 400
+    for i in range(len(A)):
+        okA = np.min(np.linalg.norm(c - A[i], axis=1) + R[i] - r)
+        okB = np.min(np.linalg.norm(c - B[i], axis=1) + R[i] - r)
+        assert okA <= 1e-9 and okB <= 1e-9, i
+    # ...and the pad only ever grows them
+    _, r2 = staged.cluster_capsules(A, B, R, cell=0.15, pad=0.03)
+    assert np.allclose(r2, r + 0.03)
+
+
+def test_an_active_partner_is_in_the_room_as_its_envelope(rig):
+    """`freeze_stage` puts a SET of poses into the static model, not one.
+
+    A parked partner is one pose and an active partner is an envelope; both
+    arrive through `frozen.freeze_sets` and everything downstream —
+    `filter_boxes`, `partner_clearance`, `paper.static_boxes` — takes them the
+    same way.  The test is the one that matters: a point inside the envelope is
+    refused, a point outside it is not, and the parked partners are still there.
+    """
+    parks = staged.shipped_parks(rig)
+    # a hand-made "envelope" for arm 71: one sphere, 0.20 m, right in front of
+    # arm 13's base, where nothing of arm 71's park is
+    centre = np.array([0.60, 1.00, 0.50])
+    env = {71: (centre[None, :].copy(), np.array([0.20]))}
+    got = staged.freeze_stage(13, parks, env, rig, leg_cache=False)
+    assert got == (2, 17, 31, 71, 97)
+    assert frozen.observer() == 13
+    assert 71 in frozen.frozen_ids()
+    P = np.repeat(centre[None, :], 10, axis=0)[None]   # (1 sample, 10 links, 3)
+    d_in = float(frozen.partner_clearance(P)[0])
+    assert d_in < 0.0, d_in
+    far = centre + np.array([0.0, 0.0, 4.0])
+    P2 = np.repeat(far[None, :], 10, axis=0)[None]
+    assert float(frozen.partner_clearance(P2)[0]) > 0.20
+    staged.thaw()
+
+
+def test_the_envelope_changes_the_leg_store_namespace(rig):
+    """A leg bought in one room may never be served in another.
+
+    `paper.route_key` contains neither the frozen poses nor the envelopes —
+    both change `static_boxes` without changing any memo key — so the store is
+    namespaced on them instead (`staged.leg_cache_signature`).
+    """
+    parks = staged.shipped_parks(rig)
+    base = staged.leg_cache_signature(parks, None)
+    env = {71: (np.zeros((1, 3)), np.array([0.2]))}
+    assert staged.leg_cache_signature(parks, env) != base
+    env2 = {71: (np.zeros((1, 3)), np.array([0.3]))}
+    assert staged.leg_cache_signature(parks, env2) != \
+        staged.leg_cache_signature(parks, env)
+
+
+def test_ink_that_crosses_an_active_envelope_is_a_refusal(rig, toy):
+    """`plan_stroke` NEVER CONSULTS THE STATIC SET, so the ink needs its own check.
+
+    A piece can be certified end to end — tip on the curve, margin, sigma, the
+    arm's own metal — and still be drawn straight through a neighbour's
+    envelope.  `ink_vs_envelope` is the missing half, and a piece that fails it
+    is a refusal like any other so that the DP can give the ink to somebody
+    else.
+    """
+    _, pcs = toy
+    b = staged.bucket(pcs)
+    key = (0, 71)
+    plain = staged.plan_bucket(*key, b[key], fly=False, leg_cache=False)
+    good = plain.accepted
+    assert good, "the toy picture must give arm 71 something to draw"
+    # an envelope placed exactly on the ink it just certified
+    qs = np.asarray(good[0].plan["qs"], float)
+    from aris_sixarm import coordination
+    P = coordination.chain_world(qs, rig[71], 1.0, rig[71].pen)
+    tip = np.asarray(P)[len(P) // 2, 9]
+    env = {13: (tip[None, :].copy(), np.array([0.25]))}
+    staged.plan_memo_clear()
+    hit = staged.plan_bucket(*key, b[key], fly=False, leg_cache=False,
+                             envelopes=env, ink_gate=staged.PAIR_MARGIN)
+    assert any(p.reason == "ink_vs_active_envelope" for p in hit.refused), \
+        [(p.status, p.reason) for p in hit.planned]
+    assert hit.ink_clearance and min(hit.ink_clearance) < staged.PAIR_MARGIN
+    # ...and WITHOUT the gate it is a measurement and not a refusal, because the
+    # envelope is a conservative bound and ink is too expensive to throw at one
+    staged.plan_memo_clear()
+    soft = staged.plan_bucket(*key, b[key], fly=False, leg_cache=False,
+                              envelopes=env)
+    assert not [p for p in soft.refused
+                if p.reason == "ink_vs_active_envelope"]
+    assert soft.ink_clearance == hit.ink_clearance
+    staged.thaw()
+    staged.plan_memo_clear()
+
+
+def test_row_lift_ladder_separates_the_bands_and_keeps_the_shipped_rungs():
+    """The z lever: one height per ROW, with the shipped ladder behind it."""
+    l0, l1, l2 = (staged.row_lift_ladder(a) for a in (13, 71, 2))
+    assert l0[0] < l1[0] < l2[0]
+    assert l1[0] - l0[0] == pytest.approx(staged.ROW_LIFT_STEP)
+    assert l2[0] - l1[0] == pytest.approx(staged.ROW_LIFT_STEP)
+    for lad in (l0, l1, l2):
+        assert lad[-len(staged.SHIPPED_LADDER):] == staged.SHIPPED_LADDER
+    # arms in the same row fly at the same height; 13 and 17 are row 0
+    assert staged.row_lift_ladder(17)[0] == l0[0]
+
+
+# ---------------------------------------------------------------------------
+# 4.  THE REFUSAL LOOP
+# ---------------------------------------------------------------------------
+def test_mask_atoms_cuts_the_atom_rather_than_banning_all_of_it():
+    """A REFUSAL IS A NEW TRANSITION, so the atom is cut at it.
+
+    Clearing the bit on every atom a ban merely touches throws the state out of
+    the part of the atom the ban does not cover — measured, that is what took
+    the CSAIL refusal loop from 100 % coverage to 80.6 %.
+    """
+    atoms = [T.Atom(0.0, 1.0, 0b111), T.Atom(1.0, 2.0, 0b111),
+             T.Atom(2.0, 3.0, 0b111)]
+    out = staged.mask_atoms(atoms, [(1, 0.9, 1.5)])
+    assert [(round(a.s0, 6), round(a.s1, 6), a.bits) for a in out] == [
+        (0.0, 0.9, 0b111), (0.9, 1.0, 0b101),
+        (1.0, 1.5, 0b101), (1.5, 2.0, 0b111), (2.0, 3.0, 0b111)]
+    # ...and the ink is conserved: the cuts tile the original span exactly
+    assert sum(a.s1 - a.s0 for a in out) == pytest.approx(3.0)
+    whole = staged.mask_atoms(atoms, [(0, 0.0, 3.0)])
+    assert all(a.bits == 0b110 for a in whole)
+    assert len(whole) == 3
+
+
+def test_a_masked_stretch_goes_to_the_neighbour_and_the_ink_survives():
+    """Striking one (stage, arm) out of a stretch re-enters it into the DP.
+
+    The whole point of the loop: a piece `plan_stroke` refuses is not ink
+    nobody can draw, it is ink THAT ARM cannot draw IN THAT STAGE.  With an
+    overlapping map the neighbour absorbs it and the coverage does not move.
+    """
+    cov = T.coverage_from_rects({13: [(0.0, 0.0, 2.0, 1.0)],
+                                 17: [(0.0, 0.0, 2.0, 1.0)]},
+                                extent=(0.0, 0.0, 2.0, 1.0))
+    pat = T.Pattern("two", (T.StageCell(0, 13, ((0.0, 0.0, 2.0, 1.0),)),
+                            T.StageCell(1, 17, ((0.0, 0.0, 2.0, 1.0),))))
+    cap = T.capability(cov, pat)
+    line = np.column_stack([np.linspace(0.1, 1.9, 40), np.full(40, 0.5)])
+    free = staged.plan_lines_masked([line], cap)
+    assert free.n_pieces == 1
+    k = free.lines[0].pieces[0].state
+    banned = staged.plan_lines_masked([line], cap, masks={0: [(k, 0.0, 9.9)]})
+    assert banned.n_pieces == 1
+    assert banned.lines[0].pieces[0].state != k
+    assert banned.summary()["covered_frac"] == pytest.approx(1.0)
+    assert banned.summary()["gaps"] == 0
+    # ...and with BOTH struck out there is genuinely nobody, which the DP says
+    # out loud as a gap rather than by dropping the line
+    none = staged.plan_lines_masked(
+        [line], cap, masks={0: [(0, 0.0, 9.9), (1, 0.0, 9.9)]})
+    assert none.n_pieces == 0
+    assert none.summary()["covered_frac"] == pytest.approx(0.0)
+
+
+def test_resolve_refusals_moves_a_refused_arms_ink_to_its_neighbour(rig, monkeypatch):
+    """The loop, end to end, with the planner's verdict forced.
+
+    `plan_stroke` is made to refuse everything arm 71 is offered.  The loop
+    must strike (stage 0, arm 71) out of those stretches, hand the ink to a
+    stage-compatible neighbour, and come back to full coverage — and it must
+    terminate rather than ban the same span for ever.
+    """
+    real = staged.stroke_api.plan_stroke
+
+    def refuse_71(pts, spec, opts=None, **kw):
+        if int(getattr(spec, "arm_id", -1)) == 71:
+            return dict(status="split", reason="empty_fiber", s_star=0.0)
+        return real(pts, spec, opts, **kw)
+
+    monkeypatch.setattr(staged.stroke_api, "plan_stroke", refuse_71)
+    staged.plan_memo_clear()
+    cap = T.capability(toy_coverage(), T.zigzag_pattern())
+    plan, masks, log = staged.resolve_refusals(
+        [STROKE_IN_ROW], cap, rig, stages=[0, 1], rounds=3,
+        leg_cache=False, verbose=False)
+    assert log[0]["refused"] > 0, "arm 71 was never offered the stroke"
+    assert log[-1]["refused"] == 0, log
+    assert len(log) <= 4
+    assert masks, "nothing was struck out"
+    assert all(p.arm != 71 or p.stage != 0 for p in staged.pieces_of(plan))
+    assert plan.summary()["covered_frac"] == pytest.approx(1.0)
+    staged.plan_memo_clear()
+    staged.thaw()
+
+
+def test_run_installs_the_envelope_room_for_every_active_arm(rig, toy):
+    """With `envelopes=True` every bucket is planned in the STAGE's room.
+
+    The pieces and the legs are not the claim here — the toy map is not the
+    atlas — only that the other actives of the stage are in the room as
+    envelopes when the arm plans, which is what `envelope_partners` records.
+    """
+    res = staged.run([STROKE_IN_ROW], coverage=toy_coverage(), stages=[0],
+                     route_jobs=1, leg_cache=False, fly=False, check=False,
+                     refusal_rounds=0, measure_ttfm=False, verbose=False)
+    sr = res.stages[0]
+    assert sr.actives == (2, 13, 71)
+    for a, st in sr.arms.items():
+        assert st.envelope_partners == tuple(x for x in (2, 13, 71) if x != a)
+    assert res.envelope_s >= 0.0
+    staged.plan_memo_clear()
+    staged.thaw()

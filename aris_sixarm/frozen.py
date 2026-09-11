@@ -70,6 +70,51 @@ def poses():
     return {a: np.asarray(q, float).copy() for a, q in _POSES.items()}
 
 
+def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
+    """Model these arms by the UNION of their capsules over a SET of poses.
+
+    `freeze` is the N = 1 case of this and nothing else: a PARKED partner holds
+    one pose, so its obstacle is that pose's capsules.  An ACTIVE partner in the
+    same stage holds no single pose — it holds an ENVELOPE, the union over every
+    pose it could take anywhere inside its work cell — and that union is the
+    object `docs/ARCHITECTURE_V2.md` section 2f says a pen-up leg has to be
+    routed against.  The capsule block is the same shape either way, so nothing
+    downstream (`filter_boxes`, `partner_clearance`, `chain_clearance`) changes.
+
+    `sets` is {aid: q} or {aid: Q (N, 7)}.  `clusters` is an optional
+    {aid: (centres (M, 3), radii (M,))} of BOUNDING SPHERES that already contain
+    that arm's capsules — a caller that has reduced a 9 000-capsule envelope to
+    a few hundred spheres hands them in here rather than paying the full block
+    on every query (see `staged.cluster_capsules`).  A sphere is a degenerate
+    capsule (A == B), which is all the adapting this needs.
+    """
+    global _CAPS, _POSES
+    _CAPS, _POSES = {}, {}
+    for aid, Q in (sets or {}).items():
+        aid = int(aid)
+        if aid not in fleet:
+            continue
+        Q = np.asarray(Q, float).reshape(-1, 7)
+        cl = (clusters or {}).get(aid)
+        if cl is not None:
+            C = np.asarray(cl[0], float).reshape(-1, 3)
+            R = np.asarray(cl[1], float).reshape(-1)
+            _CAPS[aid] = (C, C.copy(), R)
+            _POSES[aid] = Q[0].copy()
+            continue
+        P = coordination.chain_world(Q, fleet[aid], h_inv,
+                                     float(pens.get(aid, 0.110)))
+        tab = (coordination.CAPSULES_LAT if P.shape[1] >= 11
+               else coordination.CAPSULES)
+        A, B = coordination.cap_endpoints(P, tab)
+        tab, keep = coordination.known_pose_capsules(tab)
+        A = np.asarray(A, float)[:, keep].reshape(-1, 3)
+        B = np.asarray(B, float)[:, keep].reshape(-1, 3)
+        R = np.tile(np.array([c[2] for c in tab], float), len(Q))
+        _CAPS[aid] = (A, B, R)
+        _POSES[aid] = Q[0].copy()
+
+
 def freeze(parks, fleet, pens, h_inv):
     """Model these arms by their actual capsules at these poses.
 
