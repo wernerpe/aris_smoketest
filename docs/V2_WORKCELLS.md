@@ -1,0 +1,207 @@
+# Staged work cells — can arms be given a region of paper and left alone?
+
+Pete, 2026-09-11: *"I was also wondering if it could make sense to draw things by the one arm per column in a 121 pattern and make those arms the leaders and then have the remaining arms only plan to fill in safe spots they can handle while the leader arms are doing their thing and then afterwards reverse it. If there are ways to restrict the work cell of the arms temporarily that would allow us to do some asynchronous planning which might make things easier. And then we would also need some sort of protocols to decide when we can advance to the next stage."*
+
+Everything below is measured by `scripts/workcell_envelopes.py` on the shipped atlas (`out/atlas_proposed_h0970_lat0860_gated63`, `is_current` = True for all six arms), the shipped capsules, and the arm-to-arm gate in force (`coordination.PAIR_MARGIN` = 50 mm). Numbers in `out/workcell_envelopes.json`. **No constant and no planner semantic changes in this commit.**
+
+## What a stage is, and what it buys
+
+A **stage** assigns each arm a **work cell**: a region of the paper it may draw in. Its **envelope** for that stage is the union of the arm's own metal over every certified pose it could hold while working there — the atlas's drawing pose at every certified cell of the region, the pen-up hover above each of those cells, and the park it starts and ends at. If two arms' envelopes are ≥ `PAIR_MARGIN` apart then **nothing either of them does inside its own region can touch the other**, in any order, at any speed, with any re-plan. Each is a *static* keep-out for the other: no shared clock, no conductor, no re-conducting when one arm is late. That is exactly the asynchrony Pete is asking for, and it is a geometric question with a number for an answer.
+
+Because an envelope is a union over cells, the clearance between two envelopes is a minimum over cell pairs. The script therefore computes **one cell-to-cell clearance matrix per arm pair, once** (15 matrices, ~890 × ~890 cells on a 4 cm lattice, 31 s on 6 processes) using `coordination.ArmPath` + `clearance_matrix` — the shipped measured capsules, exact segment-to-segment distance — and every region, pattern and stage sequence below is a numpy reduction over a slice of it.
+
+Two honest caveats, stated once: the default `--stride 2` samples every second atlas cell in each axis (4 cm lattice, ~890 of ~3 830 certified cells an arm); and the **pen-up leg between two hovers is not sampled** — both its endpoints are in the envelope, the joint-space line between them is not. Everything here is an envelope of *endpoints*. A stage that clears by millimetres is not certified by this script; the recommendation below clears by 86 mm.
+
+## 1. The headline: the elbow, not the pen
+
+Splitting the paper does not split the arms.
+
+| arm | base x | elbow x over all certified drawing poses | pen tip x |
+|---|---|---|---|
+| 13 | 0.597 | 0.282 … 0.853 | 0.160 … 1.240 |
+| 17 | 1.207 | 0.950 … 1.520 | 0.560 … 1.640 |
+| 31 | 0.597 | 0.283 … 0.853 | 0.160 … 1.240 |
+| 71 | 1.207 | 0.951 … 1.520 | 0.560 … 1.640 |
+| 2 | 0.597 | 0.284 … 0.853 | 0.160 … 1.240 |
+| 97 | 1.207 | 0.950 … 1.520 | 0.560 … 1.640 |
+
+The two arms of a transverse pair sit 0.61 m apart and **both elbows swing to within 0.10 m of each other at the mid-line** (0.853 and 0.950) — with `ELBOW_R` = 0.117 m that is 135 mm of interpenetration before any other link is counted. Verified independently: arm 31 drawing at (0.44, 1.40) and arm 71 drawing at (1.24, 1.40) — pens **0.80 m apart** — are at **−160.8 mm**, and `scene_check.pair_clearance` returns the same −160.8 mm that `coordination.clearance_matrix` does.
+
+So: on their own Voronoi blocks (which for a regular 2 × 3 base grid *are* the column-by-row blocks, so "own base zone", "thirds of a column band" and "halves of a row band" are three names for one partition), the fifteen arm pairs come out:
+
+| pair | own block vs own block | verdict |
+|---|---|---|
+| 13–97, 17–2, 13–2, 17–97 | **+250.0 mm** (the broad-phase cap) | GO at 50 and at 80 |
+| 13–71, 17–31, 31–97, 71–2 | −127 to −130 mm | NO |
+| 13–31, 31–2, 17–71, 71–97 | −223 to −234 mm | NO |
+| **13–17, 31–71, 2–97** (same row) | **−262.0 mm** | NO |
+
+## 2. The separation frontier — what a dead band costs
+
+For each pair, confine one arm to `u ≤ t_a` and the other to `u ≥ t_b` along paper axis `u`, and find the smallest band `t_b − t_a` that clears 50 mm. This is the weakest separation hypothesis there is, so it is the strongest statement of what separation costs.
+
+| pair | axis | dead band needed | narrowest band at any placement |
+|---|---|---|---|
+| 13–2, 17–97, 13–97, 17–2 (two rows apart) | y | **0.00 m** | — |
+| 13–31, 17–71, 31–2, 71–97 (adjacent rows, same column) | y | **0.40 m** | 0.32 m |
+| 13–71, 17–31, 31–97, 71–2 (adjacent rows, other column) | y | **0.32 – 0.36 m** | 0.28 – 0.32 m |
+| 13–71, 17–31, 31–97, 71–2 | x | 0.44 – 0.48 m | 0.20 – 0.28 m |
+| **13–17, 31–71, 2–97** (same row) | **x** | **1.44 m** | 0.56 – 0.72 m |
+
+The certified block is 1.48 m wide. **A same-row pair needs a 1.44 m dead band in x — there is no useful split.** Two arms of the same transverse pair can never both be drawing.
+
+Two rows apart, the arms are free: no restriction at all, at the 250 mm clip.
+
+## 3. Pete's 1-2-1, measured
+
+Both readings put a **same-row pair** in the air at once, and that is the one pair geometry forbids.
+
+**(a) leaders = the middle row (31, 71), end rows confined to the paper ends:**
+
+| end arms confined to (south y ≤, north y ≥) | ink-vs-ink |
+|---|---|
+| 0.40 / 3.22 | −262.0 mm |
+| 0.605 / 3.03 | −262.0 mm |
+| 0.80 / 2.82 | −262.0 mm |
+| 1.00 / 2.62 | −262.0 mm |
+
+The binding pair is **31–71** and it never moves, because the followers' confinement does not touch it: 31 and 71 are the two leaders.
+
+**(b) leaders = the four end arms, middle row confined to a band:** binding pair **13–17**, −262.0 mm at every band height from 0.20 m down. Same reason, other pair.
+
+**Pete's instinct is right and his axis is wrong.** "One arm per column" makes the two leaders a transverse pair. The partition that works is **one arm per *row***, with the two columns alternating between stages — which, note, is exactly the grouping `scripts/csail_schedule.py --arm-phases disjoint` already produces (it colours arms adjacent when their bases are within 0.70 m; on the 2 × 3 grid the only edges are the three transverse pairs, so the colour classes are the two columns = one arm per row each). What that existing grouping does **not** do is impose the y dead band, and without the dead band it is −206 mm.
+
+## 4. Pattern comparison
+
+`cost` is the theoretical parallel makespan under uniform ink density: each block cell is charged to the first (stage, arm) that can draw it, a stage costs its busiest arm, the sequence costs the sum. The serial baseline is 3 458 cells (one arm at a time). `cover` is the fraction of the reachable certified block the sequence draws.
+
+| pattern | stages | cover | ink-vs-ink | + shipped parks | cost | speedup |
+|---|---|---|---|---|---|---|
+| 6-active, blocks eroded 0.10 m, + seams | 3 | 99.8 % | −254.9 mm | −254.9 mm | 756 | 4.57× |
+| 6-active, eroded 0.30 m, + seams | 3 | 99.8 % | −223.5 mm | −223.5 mm | 1046 | 3.31× |
+| **1-2-1 (a)** middle row leads | 2 | 99.8 % | **−262.0 mm** | −262.0 mm | 855 | 4.04× |
+| **1-2-1 (b)** end rows lead | 2 | 99.8 % | **−262.0 mm** | −262.0 mm | 969 | 3.57× |
+| 3-active row bands, no dead band | 2 | 100.0 % | −206.3 mm | −206.3 mm | 1178 | 2.94× |
+| 3-active own blocks, no dead band | 2 | 99.8 % | −129.7 mm | −129.7 mm | 1176 | 2.94× |
+| 3-active row bands, 0.20 m y dead band, 2 seam stages | 4 | 95.5 % | **+85.8 mm** | +4.7 mm | 1312 | 2.64× |
+| **3-active row bands, 0.20 m y dead band, 4 seam stages** | 6 | **97.3 %** | **+85.8 mm** | +4.7 mm | 1378 | **2.51×** |
+| 3-active own blocks, 0.15 m y dead band, 2 seam stages | 4 | 97.1 % | +1.9 mm | +1.9 mm | 1295 | 2.67× |
+| 2-active, one per column | 3 | 99.8 % | −262.0 mm | −262.0 mm | 1746 | 1.98× |
+| serial (one arm at a time) | 6 | 100.0 % | n/a | +4.7 mm | 3458 | 1.00× |
+
+Only the two rows in bold with a positive ink figure are stages anyone may run. `3-active row bands, 0.15 m` misses by 3.8 mm and is the shape of the curve: the y dead band goes from −127.2 mm at 0.20 m to −3.8 mm at 0.30 m to **+85.8 mm at 0.40 m**, and there is nothing gradual about the last step — it is the moment the two adjacent rows' elbow sweeps stop overlapping.
+
+The residual 2.7 % of the block the recommended pattern does not cover is seam corners (x near 0.16 or 1.64 at a seam y) that none of the four arms offered that seam certifies; a seventh stage or a slightly wider seam recovers most of it.
+
+
+**6-active never clears.** Even eroding every Voronoi block by 0.60 m — leaving 248 of 3 458 cells alive, 7 % of the block — the worst pair is −23.2 mm. All six arms at once is not a margin problem, it is the transverse pairs.
+
+**2-active (one per column) is worse than useless**: it pairs the two arms of a column in one stage, which is fine, but it needs three stages and 1.98× is *below* what 3-active gets in two.
+
+## 5. Stage transitions
+
+**Are the shipped parks inside the arms' next-stage cells?**
+
+| arm | park hover (canvas m) | inside the certified block | inside its own Voronoi cell |
+|---|---|---|---|
+| 2 | (0.416, 3.581) | yes | yes |
+| 13 | (0.060, 0.915) | **no** (x = 0.060 < 0.16) | no |
+| 17 | (1.622, 0.365) | yes | yes |
+| 31 | (0.060, 2.125) | **no** | no |
+| 71 | (1.683, 2.090) | **no** (x = 1.683 > 1.64) | no |
+| 97 | (1.388, 3.581) | yes | yes |
+
+Three of the six park *outside* the certified block, which is by design (`layout.PARK_GRID_PROPOSED` maximises park-vs-ink, and off the block is where that is). But the more important number is the second one:
+
+**park vs every other arm's whole-block envelope, at the gate of 50 mm:**
+
+| arm | worst | against |
+|---|---|---|
+| 2 | +55.4 mm | 97 |
+| 31 | +45.4 mm | 71 |
+| 97 | +13.7 mm | 2 |
+| 71 | +11.9 mm | 31 |
+| 13 | **+4.7 mm** | 17 |
+| 17 | **+4.7 mm** | 13 |
+
+**The shipped park set is not stage-compatible.** It was searched (DECISIONS 2026-09-10) against the *allocated* ink of one programme and it clears that by 97.7 mm; against everything an arm could be *told* to draw inside a work cell it clears by 4.7 mm. This is the single blocker between the recommended pattern's +85.8 mm of ink-vs-ink and its +4.7 mm once parks are counted, and it is why the pattern table has two clearance columns.
+
+**Is there a certified route from an arm's last hover to its stage park?** Not answered here and not answerable from an envelope: a route is a *path* and this document measures *sets of poses*. What is answerable and is answered: the park pose itself is a member of every envelope the script builds, so the numbers above already include "the arm is standing at its park while its neighbour works". The leg from the last hover to the park would be certified by `paper.route` + `scene_check.check_timeline` against the other arms' envelopes as static boxes, which is a new call, not a new capability.
+
+### The barrier protocol
+
+A stage change is a **rendezvous**: every arm retreats to a certified park inside (or compatible with) its *next* cell, and only then do the next stage's cells become active. Before releasing stage *s+1* the barrier must verify, **per arm, from measured state and not from the plan**:
+
+1. `pen_up` — tip at or above `writing.LIFT_Z` (0.06 m).
+2. `at_park` — measured joint vector within tolerance of *the specific* `q_park` that stage *s+1*'s envelope set was computed against. A park identity check, not a pose-shaped check: the guarantee is indexed by which park.
+3. `stopped` — joint velocity under threshold. The envelope argument is about poses; `coordination.SWEEP_K` slack exists precisely because a moving link sweeps more than its samples.
+4. `queue_drained` — every stroke assigned to this arm in stage *s* is completed, or explicitly re-queued (§6).
+5. `no_fault` — no un-cleared error.
+
+And fleet-level, once: 6. all six report 1–5; 7. the held park set equals the set stage *s+1* was certified against.
+
+**What exists already**
+
+| primitive | module | what it does for a stage |
+|---|---|---|
+| the pairwise envelope | `coordination.ArmPath`, `clearance_matrix`, `PAIR_MARGIN` | the gate itself; this script is the first caller that unions over a *region* |
+| freeze / retreat | `idle.conduct` (`POLICY_FREEZE`), `_blocking_freezes`, `plan_retreat`, `retreat_candidates` | an arm that has finished holds a pose and is an obstacle; a pose in somebody's way is moved |
+| park-vs-mover, park-vs-ink | `allocate.ParkProbe` | prunes a span whose path conflicts with a parked fleet, at exactly `SAFETY_M + CALIB_M` |
+| the certified park set | `layout.certified_park_poses`, `PARK_GRID_PROPOSED`, `Q_PARK_PROPOSED` | the poses a barrier would rendezvous at |
+| region-aware parks | `layout.region_aware_parks`, `phase_aside_parks`, `aside_candidates`, `repark_route` | the hook a per-stage park search plugs into — it already ranks parks against a target region |
+| arm grouping | `scripts/csail_schedule.py --arm-phases disjoint`, `allocate.park_groups` | already produces exactly "one arm per row, columns alternating" |
+| the independent check | `scene_check.check_static`, `check_timeline` | the certificate a stage's own timeline would carry |
+
+**What is missing**
+
+- **A work-cell object.** Nothing in the package takes "this arm may only draw here". `allocate` allocates on cost; the region filter would go on the atlas prefilter (`allocate.atlas_cells`).
+- **Per-stage park sets.** `Q_PARK_PROPOSED` is global and, measured above, 4.7 mm from a neighbour's unrestricted envelope. A stage needs its own parks, searched against the stage's envelopes rather than against one programme's allocation. `region_aware_parks` is the right function and it currently ranks against a target *xy*, not a stage envelope.
+- **The barrier itself.** There is no fleet-level rendezvous anywhere in the package — `stroke_api`'s "barrier" is an exception barrier. States 1–5 above are all readable; nothing gathers them.
+- **The pen-up leg.** The envelope covers hover endpoints, not the joint-space line between them. One `scene_check.check_timeline` per stage per arm against the other arms' envelopes closes it, and it is the only remaining gap between "the envelopes clear" and "the stage is certified".
+
+## 6. Fault tolerance under stages
+
+Of the reachable certified block, **47.1 % has two or more certified drawers** and 3.4 % has three or more. That is the ceiling: it is what the atlas offers, before any stage structure.
+
+A cell is only *re-queueable* if a second arm both certifies it **and** is offered it by some stage of the pattern — a stage assignment nobody measured is not a fallback, it is a new coordination problem. By that measure:
+
+| pattern | block with ≥ 2 stage-compatible drawers | mean drawers per cell |
+|---|---|---|
+| ceiling (any arm, no stage structure) | 47.1 % | 1.51 |
+| **3-active row bands, 0.40 m dead band, 4 seam stages** | **41.6 %** | 1.41 |
+| 3-active row bands, no dead band | 39.0 % | 1.39 |
+| 3-active row bands, 0.40 m dead band, 2 seam stages | 35.2 % | 1.31 |
+| 6-active eroded 0.30 m + seams | 36.8 % | 1.37 |
+| 3-active own blocks (with or without dead band) | 0.0 – 2.5 % | 1.00 |
+| 1-2-1, either reading | 0.0 % | 1.00 |
+
+
+The row-band patterns keep most of the available redundancy (35–39 % of 47.1 %) because each row band is offered to both of its column arms, in different stages. The block patterns keep essentially none: each cell is offered to exactly one arm, so a faulted arm's ink is simply lost.
+
+## 7. Recommendation
+
+**Adopt `3-active-rowband-y20`: one arm per full-width row band, a 0.40 m dead band in y between bands, the two columns alternating between the two main stages, then four 2-active seam stages.**
+
+- **+85.8 mm** of ink-vs-ink clearance, against a 50 mm gate and comfortably past the 80 mm gate that was in force until 2026-09-09. Every one of the three active arms in a stage is a *static* keep-out for the other two, so within a stage the three plan and move asynchronously with no conductor.
+- **2.51× the serial makespan** (97.3 % of the block in 6 stages), against a theoretical ceiling of 3× for three arms.
+- **41.6 % of the block keeps a second stage-compatible drawer** for re-queueing a faulted arm's ink — 88 % of the 47.1 % the atlas offers at all.
+- It is a restriction of a grouping the repo already computes (`--arm-phases disjoint`), so nothing about allocation or conduction has to be re-derived — the new object is the y dead band and the per-stage park set.
+
+**Do not build the 1-2-1 as described.** Both readings require a transverse pair to draw at the same time, and that pair is at −262 mm however the paper is cut. The same idea with rows instead of columns is the recommendation above.
+
+**Before it can run, two things must be built, in this order:**
+
+1. **A per-stage park set.** The shipped parks are 4.7 mm from a neighbour's work-cell envelope and that, not the ink, is what fails the gate. Search parks against the stage's envelopes with `layout.region_aware_parks`' machinery; the stage is only as good as its barrier pose.
+2. **The barrier** (states 1–7 of §5) plus one `scene_check.check_timeline` per arm per stage against the other arms' envelopes as static boxes, which closes the pen-up-leg gap.
+
+Neither changes a constant, a gate, or a planner semantic.
+
+## Reproducing
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/workcell_envelopes.py \
+    --atlas out/atlas_proposed_h0970_lat0860_gated63 \
+    --stride 2 --jobs 6 --json out/workcell_envelopes.json
+```
+
+`--stride 1` is the whole 2 cm atlas (≈16× the matrix work) and is the number to quote before anything is built. `--keep-sweep-band` keeps link1's revolution sweep, which every pose in an envelope has already paid for as a real link (DECISION 2026-09-09, "a known pose stops paying for a sweep"); dropping it is worth 8–60 mm here and is on by default.

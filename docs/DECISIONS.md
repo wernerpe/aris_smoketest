@@ -3492,3 +3492,107 @@ scene that would not have changed, which costs one subprocess and is the right
 way round.  What it can no longer do is serve a scene built from code that is
 gone.  `SCENE_CACHE_V` is the hand-bumped escape for a change to the exported
 scene's SHAPE, which file stamps cannot see.
+
+## 2026-09-11 — OPEN — FOR PETE: staged work cells, and why the 1-2-1 has to be by ROW
+
+Pete asked whether the fleet could be run in stages: give each arm a temporary
+*work cell*, let the arms inside a stage plan asynchronously against each
+other's frozen envelopes, and put a barrier between stages.  Specifically the
+"one arm per column in a 121 pattern, leaders and followers, then reversed".
+
+Measured by `scripts/workcell_envelopes.py` on the shipped atlas
+(`out/atlas_proposed_h0970_lat0860_gated63`, `is_current` on all six), the
+shipped capsules and `PAIR_MARGIN = 0.050`.  Full write-up in
+**docs/V2_WORKCELLS.md**, numbers in `out/workcell_envelopes.json`.  **Nothing
+in the package changes** — this is a measurement and a recommendation.
+
+### the object
+
+A stage's envelope for an arm is the union of its metal over every certified
+drawing pose in its region, the hover above each of those cells, and its park.
+Two arms whose envelopes are 50 mm apart are static keep-outs for each other
+and need no conductor at all.  An envelope is a union over cells, so the
+clearance between two envelopes is a min over cell pairs — the script computes
+ONE cell-to-cell clearance matrix per arm pair (15 of them, ~890 x ~890 on a
+4 cm lattice, 31 s on 6 processes, `coordination.clearance_matrix`) and every
+region, pattern and stage sequence is a reduction over a slice of it.
+
+### THE ELBOW IS THE PROBLEM, NOT THE PEN
+
+Every arm's elbow reaches to within 0.10 m of the paper's mid-line while it
+draws (13/31/2 to x = 0.853, 17/71/97 to x = 0.950), and `ELBOW_R` is 0.117.
+So the two arms of a TRANSVERSE PAIR interpenetrate by 135 mm before any other
+link is counted.  Spot-checked and confirmed independently: arm 31 at
+(0.44, 1.40) and arm 71 at (1.24, 1.40) — pens 0.80 m apart, each pose
+certified by the atlas — are at **-160.8 mm**, and `scene_check.pair_clearance`
+returns the same -160.8 mm as `coordination.clearance_matrix`.
+
+The separation frontier (the smallest dead band that clears 50 mm):
+
+| pair class | axis | dead band |
+|---|---|---|
+| two rows apart (13-2, 17-97, 13-97, 17-2) | - | **0.00 m** |
+| adjacent rows, either column | y | 0.32 - 0.40 m |
+| **same row** (13-17, 31-71, 2-97) | x | **1.44 m of a 1.48 m block** |
+
+### PETE'S 1-2-1: RIGHT IDEA, WRONG AXIS
+
+Both readings put a transverse pair in the air at once — (a) makes 31 and 71
+the leaders, (b) makes 13 and 17 leaders — and that pair is at **-262.0 mm**
+however deep the followers are confined, because confining the followers does
+not touch the leaders.  Every depth on both ladders: -262.0 mm.
+
+The partition that works is **one arm per ROW**, columns alternating between
+stages.  That is already the grouping `--arm-phases disjoint` computes (bases
+within 0.70 m are adjacent; the only edges on a 2 x 3 grid are the transverse
+pairs, so the colour classes are the two columns = one arm per row each).  What
+it does not do is impose the y dead band, and without it that grouping is
+-206.3 mm.
+
+### the recommendation
+
+**One arm per FULL-WIDTH row band, a 0.40 m dead band in y between bands, the
+two columns alternating, then four 2-active seam stages.**  +85.8 mm
+ink-vs-ink, 97.3 % of the certified block in 6 stages, **2.51x** the serial
+makespan (ceiling 3x), and 41.6 % of the block keeps a second stage-compatible
+drawer for re-queueing a faulted arm's ink (the atlas's own ceiling is 47.1 %).
+
+The y dead band is a cliff, not a slope: -127.2 mm at 0.20 m, -3.8 mm at
+0.30 m, +85.8 mm at 0.40 m.
+
+**6-active never clears.**  Eroding every Voronoi block by 0.60 m leaves 7 % of
+the block alive and the worst pair is still -23.2 mm.
+
+### WHAT BLOCKS IT, AND IT IS NOT THE INK
+
+`Q_PARK_PROPOSED` is **not stage-compatible**.  It was searched against the
+ALLOCATED ink of one programme and clears that by 97.7 mm; against everything
+an arm could be TOLD to draw in a work cell it clears by **4.7 mm** (arms 13
+and 17 against each other).  That 4.7 mm, and not the 85.8 mm of ink, is what
+fails the gate for the recommended pattern.  Three of the six parks also hover
+outside the certified block entirely (13, 31, 71).
+
+So a stage needs its OWN park set, searched against the stage's envelopes.
+`layout.region_aware_parks` / `phase_aside_parks` / `aside_candidates` is the
+machinery; it currently ranks against a target xy rather than against an
+envelope.
+
+### the barrier, and what is missing
+
+Per arm, from MEASURED state: pen up (>= `LIFT_Z`); at the specific `q_park`
+stage s+1's envelopes were computed against (a park IDENTITY check, since the
+guarantee is indexed by which park); stopped (the envelope argument is about
+poses, and `SWEEP_K` exists because a moving link sweeps more than its
+samples); stroke queue drained or explicitly re-queued; no un-cleared fault.
+Fleet-level: all six report all five, and the held park set is the one the
+stage was certified against.
+
+Present already: `coordination`'s envelope and gate; `idle.conduct`'s freeze /
+`plan_retreat`; `allocate.ParkProbe`; the certified park set; `--arm-phases
+disjoint`; `scene_check.check_static` / `check_timeline`.
+
+Missing: a WORK-CELL object (nothing takes "may only draw here" — it would go
+on `allocate.atlas_cells`); per-stage parks; the barrier itself (there is no
+fleet rendezvous anywhere — `stroke_api`'s "barrier" is an exception barrier);
+and one `check_timeline` per arm per stage to cover the PEN-UP LEG, which is
+the one thing an envelope of hover ENDPOINTS does not contain.
