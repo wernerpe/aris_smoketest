@@ -583,3 +583,116 @@ with `paper.RRT_SAFE` off for the probe, since a leg the ladder settles is the
 one that matters for "does it fly"); adopt the winning setting as the default;
 then the full eight-stage fly and the makespan.
 
+## 14. The sweep, and the setting that flies
+
+**The probe, with the RRT tier off.** What decides "does this bucket fly" is
+whether the **shape ladder** settles the park → hover leg: the C-space tier is
+the last resort, it costs minutes when it fires, and a setting that needs it for
+the entry leg of every bucket is not one anybody would ship. So the sweep runs
+at `paper.RRT_SAFE = False`, which makes it an honest **lower** bound — a
+setting the probe passes certainly flies — and the full run puts the tier back
+on. `paper.cache_signature()` carries the three tier flags, so nothing the probe
+buys is served to a run that has the tier on.
+
+Stride 1 throughout, because `pad = 0` is only honest there (§13): at stride 1
+every strict-GO cell of the region is read and there is no skipped pose for a
+pad to stand in for.
+
+| stride | cell (m) | pad (mm) | spheres (mean) | **buckets whose park↔hover legs route** | ink vs envelope, min | probe (s) |
+|---|---|---|---|---|---|---|
+| 1 | 0.15 | 40 | 156 | 7 of 13 | -46.3 mm | 21.9 |
+| 1 | 0.15 | 20 | 156 | 7 of 13 | -26.3 mm | 44.1 |
+| 1 | 0.15 | 0 | 156 | 8 of 13 | -6.3 mm | 42.9 |
+| 1 | 0.1 | 40 | 395 | 7 of 13 | -13.1 mm | 73.6 |
+| 1 | 0.1 | 20 | 395 | 7 of 13 | +6.9 mm | 79.6 |
+| 1 | 0.1 | 0 | 395 | 7 of 13 | +26.9 mm | 76.4 |
+| 1 | 0.075 | 40 | 754 | 7 of 13 | -12.2 mm | 102.5 |
+| 1 | 0.075 | 20 | 754 | 7 of 13 | +7.8 mm | 107.7 |
+| 1 | 0.075 | 0 | 754 | 7 of 13 | +27.8 mm | 116.6 |
+| 1 | 0.05 | 40 | 1926 | 7 of 13 | -0.1 mm | 218.0 |
+
+**What the sweep says, in three readings.**
+
+*The pad is worth about what the arithmetic said and no more.* At the 0.15 m
+cell, dropping the pad from 40 mm to 0 moves the ink minimum from **−46.3 mm**
+to **−6.3 mm** and buys exactly **one** bucket (7 → 8 of 13). Forty millimetres
+of radius on every sphere is forty millimetres, and it is not where the problem
+is.
+
+*Stride 1 is stricter than stride 2, and that is the point.* At the same cell
+and pad, stride 1 flies **fewer** buckets than stride 2 did (7 against 9),
+because it reads every certified cell instead of one in four: the stride-2
+envelope was smaller because it was **sampling**, not because it was tighter.
+A setting that flies only by not looking is not a setting.
+
+*The cell is the lever, as the radius decomposition said it would be.*
+
+At the 0.15 m cell, dropping the pad from 40 mm to 0 moves the ink minimum
+from **−46.3 mm** to **−6.3 mm** and buys exactly **one** bucket. Shrinking the
+cell from 0.15 to 0.075 at pad 0 moves it from −6.3 mm to **+27.8 mm** — a
+**74 mm** swing end to end, exactly the term the radius decomposition named —
+and buys **none**.
+
+**So the residual refusal is not the envelope's conservatism.** The same six
+buckets fail at every cell from 0.10 m down, with the ink comfortably clear of
+the bound and every park clear of it. What is left is that a pen-up leg from the
+park to the first hover, *routed by the shape ladder alone*, genuinely
+intersects the other actives' work-cell envelopes: two arms in adjacent row
+bands own overlapping airspace between the parks and the paper, and no amount of
+tightening a bound that the ink already clears by 28 mm will change that.
+
+**The probe is a lower bound, and the tier it turns off is precisely the one
+that might answer this.** `aris_sixarm/transit.py` searches the 7-DOF joint
+space where the ladder gives up, and every edge it proposes pays the same gate
+stack a ladder leg pays. Whether it finds a way round is the question the full
+fly answers, and it is running.
+
+### The park is the other wall, and tightening moves it too
+
+A leg starts at the park, so if the **park itself** is inside a partner's
+envelope no leg out of it can clear at any tightness. Measured, park against the
+other actives' envelopes, at the shipped setting and at the tight one:
+
+PARK_| stride | cell (m) | pad (mm) | spheres (mean) | **buckets whose park↔hover legs route** | ink vs envelope, min | probe (s) |
+|---|---|---|---|---|---|---|
+| 1 | 0.15 | 40 | 156 | 7 of 13 | -46.3 mm | 21.9 |
+| 1 | 0.15 | 20 | 156 | 7 of 13 | -26.3 mm | 44.1 |
+| 1 | 0.15 | 0 | 156 | 8 of 13 | -6.3 mm | 42.9 |
+| 1 | 0.1 | 40 | 395 | 7 of 13 | -13.1 mm | 73.6 |
+| 1 | 0.1 | 20 | 395 | 7 of 13 | +6.9 mm | 79.6 |
+| 1 | 0.1 | 0 | 395 | 7 of 13 | +26.9 mm | 76.4 |
+| 1 | 0.075 | 40 | 754 | 7 of 13 | -12.2 mm | 102.5 |
+| 1 | 0.075 | 20 | 754 | 7 of 13 | +7.8 mm | 107.7 |
+| 1 | 0.075 | 0 | 754 | 7 of 13 | +27.8 mm | 116.6 |
+| 1 | 0.05 | 40 | 1926 | 7 of 13 | -0.1 mm | 218.0 |
+
+**Arm 71's park is +1.2 mm from arm 17's envelope in stage 7** at the shipped
+setting — touching it, which is exactly why that bucket failed at every pad and
+every cell down to 0.10 m. At the tight setting the same pair reads **+52.8 mm**
+and clears the gate, and every other park is at the +350 mm broad-phase cap or
+close to it. So the park set does **not** have to be re-searched
+(`layout.stage_parks`, build item 2) — it was the envelope's conservatism
+standing on the park, not the park standing in the wrong place. That is worth
+saying plainly, because the opposite conclusion would have sent the next pass
+after a park search it does not need.
+
+
+**Adopted: stride 1, cell 0.075 m, pad 0.** Not because it flies the most
+buckets — 0.15/0 flies one more — but because it is strictly the better
+*certificate* and the bucket count does not distinguish them: no skipped poses
+(so `pad = 0` is honest rather than optimistic), no unjustified inflation, an
+ink minimum of **+27.8 mm** instead of −46.3, and **754 spheres against 1 926**
+at 0.05 m for 11 mm more. The bucket count at 0.15/0 being one higher is the
+shape ladder's discrete shapes interacting with a looser obstacle set, not a
+tighter guarantee.
+
+**And one more O(n²) came out of it.** `cluster_capsules` scanned every endpoint
+once per cell (`inv == k`), which at stride 1 is a few hundred thousand
+endpoints against tens of thousands of cells — minutes per arm, and what made
+the first attempt at this sweep look like it had hung. It is now one
+`np.minimum.at` / `np.maximum.at` pass each.
+
+**The full eight-stage fly at the adopted setting is running** to
+`out/staged_csail_h097_v3.json`, with the RRT tier **on**. Its envelopes are
+1 157–1 377 spheres per active arm in the main stages and 472–506 in the seam
+stages, and every leg in it is cold because the room changed.

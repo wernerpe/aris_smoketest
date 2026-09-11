@@ -1,5 +1,84 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE ENVELOPE, TIGHTENED: THE CELL IS THE LEVER AND THE PARK MAY BE THE WALL (2026-09-11, last)
+
+Build item 4's envelope room, swept for tightness.  **The probe runs with the
+RRT tier OFF** (`paper.RRT_SAFE = False`): what decides "does this bucket fly"
+is whether the SHAPE LADDER settles the park -> hover leg, the C-space tier is
+the last resort and costs minutes when it fires, and a setting that needs it for
+every entry leg is not one anybody would ship.  That makes the probe an honest
+LOWER bound -- a setting it passes certainly flies -- and the full run puts the
+tier back on.  `paper.cache_signature()` carries the three tier flags, so
+nothing the probe buys is served to a run that has the tier on.
+
+**Stride 1 throughout, because `pad = 0` is only honest there**: at stride 1
+every strict-GO cell of the region is read and there is no skipped pose for a
+pad to stand in for.
+
+| stride | cell (m) | pad (mm) | spheres (mean) | **buckets whose park↔hover legs route** | ink vs envelope, min | probe (s) |
+|---|---|---|---|---|---|---|
+| 1 | 0.15 | 40 | 156 | 7 of 13 | -46.3 mm | 21.9 |
+| 1 | 0.15 | 20 | 156 | 7 of 13 | -26.3 mm | 44.1 |
+| 1 | 0.15 | 0 | 156 | 8 of 13 | -6.3 mm | 42.9 |
+| 1 | 0.1 | 40 | 395 | 7 of 13 | -13.1 mm | 73.6 |
+| 1 | 0.1 | 20 | 395 | 7 of 13 | +6.9 mm | 79.6 |
+| 1 | 0.1 | 0 | 395 | 7 of 13 | +26.9 mm | 76.4 |
+| 1 | 0.075 | 40 | 754 | 7 of 13 | -12.2 mm | 102.5 |
+| 1 | 0.075 | 20 | 754 | 7 of 13 | +7.8 mm | 107.7 |
+| 1 | 0.075 | 0 | 754 | 7 of 13 | +27.8 mm | 116.6 |
+| 1 | 0.05 | 40 | 1926 | 7 of 13 | -0.1 mm | 218.0 |
+
+**THE PARK IS THE OTHER WALL, AND TIGHTENING MOVES IT TOO.**  A leg starts at the
+park, so a park inside a partner's envelope cannot be left at any tightness.
+Measured against the other actives' envelopes:
+
+| stage | arm | shipped (0.15 / 40 mm) | adopted |
+|---|---|---|---|
+| 0 | 71 | +286.3 mm | +341.7 mm |
+| 5 | 71 | +290.2 mm | +331.7 mm |
+| 6 | 31 | +86.5 mm | +94.9 mm |
+| 7 | 71 | **+1.2 mm** | **+52.8 mm** |
+
+(every pair not listed is at the +350 mm broad-phase cap)
+
+**Arm 71's park is +1.2 mm from arm 17's envelope in stage 7** at the shipped
+setting — touching it, which is why that bucket failed at every pad and every
+cell down to 0.10 m.  At the tight setting the same pair reads **+52.8 mm**, and
+every other park is at or near the +350 mm broad-phase cap.  **So the park set
+does NOT need re-searching** (`layout.stage_parks`, build item 2): it was the
+envelope's conservatism standing on the park, not the park standing in the wrong
+place.  Worth saying plainly, because the opposite reading would have sent the
+next pass after a search it does not need.
+
+**TIGHTENING MOVES THE INK BY 74 mm AND MOVES THE BUCKET COUNT BY NOTHING.**
+From cell 0.15 / pad 40 mm to cell 0.075 / pad 0 the ink-vs-envelope minimum
+goes **-46.3 mm -> +27.8 mm**, exactly the term the radius decomposition named,
+and the SAME SIX BUCKETS fail at every cell from 0.10 m down.  **So the residual
+refusal is not conservatism.**  With the ink clear of the bound by 28 mm and
+every park clear of it, what is left is that a pen-up leg from the park to the
+first hover, ROUTED BY THE SHAPE LADDER ALONE, genuinely intersects the other
+actives' work-cell envelopes: two arms in adjacent row bands own overlapping
+airspace between the parks and the paper.
+
+**AND THE PROBE TURNS OFF PRECISELY THE TIER THAT MIGHT ANSWER IT.**
+`aris_sixarm/transit.py` searches the 7-DOF joint space where the ladder gives
+up, at the same gate stack.  Whether it finds a way round is what the full fly
+decides, and the full fly is the next number, not this one.
+
+**ADOPTED: stride 1, cell 0.075 m, pad 0** (`staged.ENVELOPE_*`, which are this
+module's own parameters and not a gate).  NOT because it flies the most buckets
+-- 0.15/0 flies one more -- but because the bucket count does not distinguish
+them and the certificate does: no skipped poses, so `pad = 0` is honest rather
+than optimistic; no unjustified inflation; ink minimum **+27.8 mm** instead of
+-46.3; and **754 spheres against 1 926** at 0.05 m for 11 mm more.  The extra
+bucket at 0.15/0 is the shape ladder's discrete shapes meeting a looser obstacle
+set, not a tighter guarantee.
+
+**ONE MORE O(n^2).**  `cluster_capsules` scanned every endpoint once per cell
+(`inv == k`) -- at stride 1, a few hundred thousand endpoints against tens of
+thousands of cells, minutes an arm, and what made the first attempt at this
+sweep look hung.  One `np.minimum.at` / `np.maximum.at` pass each now.
+
 ## THE ENVELOPE'S CONSERVATISM IS THE CLUSTER CELL, AND THE SWEEP IS NOT DONE (2026-09-11, last)
 
 Follow-up to the previous entry, which closed the active-pair leg gap
