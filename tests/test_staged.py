@@ -739,37 +739,121 @@ def test_the_room_iteration_reaches_a_fixed_point_on_a_still_fleet(rig):
     assert gap["min_m"] >= staged.PAIR_MARGIN, gap
 
 
-def test_run_with_trajectory_rooms_records_the_dependency_graph(rig, toy):
-    """The two-pass path, end to end, and the graph it leaves behind.
+def test_run_with_trajectory_rooms_records_a_DAG_not_a_CYCLE(rig, toy):
+    """The stage planned in priority order, and the graph it leaves behind.
 
-    Pass 1 is solo against the parked fleet — `trajectory_rooms` forces that,
-    because building pass 1 against the pose-union envelope would start the
-    iteration from the room that does not fly and leave no trajectory to derive
-    a room from. Pass 2 re-plans against the others' realised trajectories, and
-    every arm comes back naming the digest of every OTHER active's plan.
+    Under the PRIORITY order the graph is a DAG: the busiest arm plans free
+    against the parked fleet and depends on nobody, and arm k depends on exactly
+    arms 1..k-1 and on nothing after it.  That is what makes the fixed point
+    exact in one sweep — arm i never moves again once arm k has avoided it.
     """
     res = staged.run([STROKE_IN_ROW], coverage=toy_coverage(), stages=[0],
                      route_jobs=1, leg_cache=False, trajectory_rooms=True,
-                     room_iterations=1, refusal_rounds=0, measure_ttfm=False,
-                     verbose=False)
+                     refusal_rounds=0, measure_ttfm=False, verbose=False)
     sr = res.stages[0]
     assert sr.actives == (2, 13, 71)
-    assert len(sr.room_passes) == 1
+    assert len(sr.order) == 3 and set(sr.order) == {2, 13, 71}
+    for k, a in enumerate(sr.order):
+        st = sr.arms[a]
+        assert st.priority == k
+        assert set(st.depends_on) == set(sr.order[:k]), (a, k, st.depends_on)
+        assert a not in st.depends_on
+        assert not (set(st.depends_on) & set(sr.order[k + 1:])), \
+            "an arm may never depend on one that plans after it"
+    assert sr.arms[sr.order[0]].room_kind == "parked"      # the first is free
+    for a in sr.order[1:]:
+        assert sr.arms[a].room_kind == "trajectory"
     digests = sr.room_passes[0]
-    assert set(digests) == {2, 13, 71}
-    assert len(set(digests.values())) == 3, "three arms, three distinct rooms"
-    for a, st in sr.arms.items():
-        assert st.room_kind == "trajectory"
-        # an arm depends on every OTHER active and never on itself
-        assert set(st.depends_on) == {x for x in (2, 13, 71) if x != a}
-        for b, h in st.depends_on.items():
+    for a in sr.order:
+        for b, h in sr.arms[a].depends_on.items():
             assert h == digests[b]
-    # the certificate is still the independent check, not the iteration
     assert sr.pair["min_m"] >= staged.PAIR_MARGIN
     doc = staged.programme(res, trajectories=False)
-    arm = doc["stages"][0]["arms"]["13"]
+    arm = doc["stages"][0]["arms"][str(sr.order[-1])]
     assert arm["room_kind"] == "trajectory"
-    assert set(arm["depends_on"]) == {"2", "71"}
+    assert len(arm["depends_on"]) == 2
     assert len(arm["trajectory_digest"]) == 16
+    staged.plan_memo_clear()
+    staged.thaw()
+
+
+def test_priority_order_is_by_ink_busiest_first():
+    """The busiest arm has the least freedom, so it chooses first."""
+    def pc(stage, arm, m):
+        return staged.Piece(stage, arm, 0, 0, np.zeros((2, 2)), float(m))
+    buckets = {(0, 13): [pc(0, 13, 0.5)],
+               (0, 71): [pc(0, 71, 2.0), pc(0, 71, 1.5)],
+               (0, 2): [pc(0, 2, 1.0)]}
+    assert staged.priority_order((2, 13, 71), buckets, 0) == (71, 2, 13)
+    # an arm with no ink sorts last, and ties break on the arm id so the order
+    # is a function of the plan rather than of dict ordering
+    buckets2 = {(0, 13): [pc(0, 13, 1.0)], (0, 71): [pc(0, 71, 1.0)]}
+    assert staged.priority_order((2, 13, 71), buckets2, 0) == (13, 71, 2)
+    # ...and it reads the stage it is asked about, not another one
+    assert staged.priority_order((13, 71), buckets, 1) == (13, 71)
+
+
+def _inked(stage, arm, m=0.5):
+    return staged.PiecePlan(
+        staged.Piece(stage, arm, 0, 0, np.zeros((2, 2)), float(m)), "ok", "",
+        dict(qs=np.zeros((2, 7)), pts=np.zeros((2, 2)), arc_len=float(m)), 0.0)
+
+
+def test_a_vacuous_stage_is_not_a_PASS(rig):
+    """A STAGE IN WHICH NOTHING FLEW IS NOT A CERTIFIED STAGE.
+
+    Six arms standing at their parks clear both checks by a quarter of a metre,
+    which is true and says nothing whatever about the programme it was supposed
+    to certify.  Measured on the v3 control run, two stages of eight flew
+    nothing at all and both were labelled PASS.  `complete` is the gate: every
+    bucket that HAS ink must have produced a timeline.
+    """
+    parks = staged.shipped_parks(rig)
+    good = _fake_stage(13, np.repeat(parks[13].reshape(1, 7), 3, axis=0),
+                       parks[13])
+    good.planned = [_inked(0, 13)]
+    stuck = staged.ArmStage(0, 71, parks[71])      # has ink, has NO timeline
+    stuck.planned = [_inked(0, 71)]
+    clear = dict(min_m=9.9, min_ink_m=9.9, worst_at=None, per_pair={},
+                 per_pair_ink={}, n_samples={}, n_ink={})
+    sr = staged.StageResult(0, (13, 71), {13: good, 71: stuck}, pair=clear,
+                            solo={13: dict(ok=True), 71: dict(ok=True)})
+    assert sr.with_ink == 2 and sr.flown == 1
+    assert sr.complete is False
+    assert sr.ok is False, "a stage with an unflown ink bucket passed"
+    stuck.timeline = good.timeline
+    assert sr.complete is True and sr.ok is True
+    # a stage with no ink at all is complete but EMPTY, and `with_ink` is what
+    # the report reads so it cannot be counted as a certified stage
+    empty = staged.StageResult(
+        0, (13,), {13: staged.ArmStage(0, 13, parks[13])}, pair=clear,
+        solo={13: dict(ok=True)})
+    assert empty.with_ink == 0 and empty.flown == 0 and empty.complete is True
+
+
+def test_the_priority_sweep_closes_where_the_simultaneous_one_cannot(rig, toy):
+    """The structural reason one scheme closes and the other does not.
+
+    Simultaneous: every arm is planned against every other arm's PREVIOUS
+    trajectory, so each is asked to yield to a path the other has already
+    abandoned — the graph is a cycle and no pass closes it.  Priority: arm i's
+    trajectory is FINAL before arm k > i ever plans, so the pair (i, k) is
+    certified against the path arm i actually flies, and arm i never moves
+    again.  Every pair is therefore certified by construction.
+    """
+    kw = dict(coverage=toy_coverage(), stages=[0], route_jobs=1,
+              leg_cache=False, trajectory_rooms=True, refusal_rounds=0,
+              measure_ttfm=False, verbose=False)
+    pri = staged.run([STROKE_IN_ROW], room_order="priority", **kw).stages[0]
+    staged.plan_memo_clear()
+    sim = staged.run([STROKE_IN_ROW], room_order="simultaneous",
+                     room_iterations=1, **kw).stages[0]
+    # the priority graph is acyclic: sizes 0, 1, 2 along the order
+    assert [len(pri.arms[a].depends_on) for a in pri.order] == [0, 1, 2]
+    # the simultaneous graph is a cycle: everybody names everybody else
+    for a, st in sim.arms.items():
+        assert set(st.depends_on) == {x for x in sim.actives if x != a}
+    # only the priority sweep records an order at all, because only it has one
+    assert pri.order and not sim.order
     staged.plan_memo_clear()
     staged.thaw()

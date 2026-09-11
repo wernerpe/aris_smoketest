@@ -525,6 +525,19 @@ def stage_rooms(arms: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT,
             for a, st in arms.items()}
 
 
+def priority_order(actives, buckets, stage) -> tuple[int, ...]:
+    """The order the actives of a stage choose their paths in. -> (arm, ...).
+
+    BUSIEST FIRST, because the arm with the most ink has the least freedom.
+    It plans against the parked fleet alone and keeps whatever it finds; every
+    arm after it plans around what the earlier ones FINALLY did.  Ties break on
+    the arm id so the order is a function of the plan and not of dict ordering.
+    """
+    def ink(a):
+        return sum(p.length_m for p in buckets.get((int(stage), int(a)), ()))
+    return tuple(sorted((int(a) for a in actives), key=lambda a: (-ink(a), a)))
+
+
 def ink_vs_envelope(plan: dict, spec, h_inv=H_INV_DEFAULT, pen=None) -> float:
     """The clearance of one certified piece's INK against the live frozen room.
 
@@ -612,6 +625,7 @@ class ArmStage:
     envelope_partners: tuple[int, ...] = ()
     depends_on: dict[int, str] = field(default_factory=dict)
     room_kind: str = "parked"          # parked | envelope | trajectory
+    priority: int | None = None        # where in the stage's order it planned
     frozen_poses: dict[int, list[float]] = field(default_factory=dict)
     lift_ladder: tuple[float, ...] | None = None
     ink_clearance: list[float] = field(default_factory=list)
@@ -1218,6 +1232,7 @@ class StageResult:
     wall_s: float = 0.0
     lift_used: bool = False
     room_passes: list = field(default_factory=list)
+    order: tuple[int, ...] = ()
 
     @property
     def duration(self) -> float:
@@ -1233,10 +1248,31 @@ class StageResult:
         return float(sum(a.ink_m for a in self.arms.values()))
 
     @property
+    def flown(self) -> int:
+        return sum(1 for st in self.arms.values() if st.timeline is not None)
+
+    @property
+    def with_ink(self) -> int:
+        return sum(1 for st in self.arms.values() if st.accepted)
+
+    @property
+    def complete(self) -> bool:
+        """Did every bucket that HAS ink produce a timeline?
+
+        A VACUOUS PASS MUST NOT READ AS A PASS.  A stage in which nothing flew
+        is six arms standing at their parks, and both checks clear it by a
+        quarter of a metre -- which is true, and says nothing whatever about the
+        programme it was supposed to certify.  Measured on the v3 control: two
+        stages of eight flew nothing at all and both were labelled PASS.
+        """
+        return all(st.timeline is not None
+                   for st in self.arms.values() if st.accepted)
+
+    @property
     def ok(self) -> bool:
         pair_ok = self.pair.get("min_m", np.inf) >= PAIR_MARGIN
         solo_ok = all(r.get("ok", False) for r in self.solo.values())
-        return bool(pair_ok and solo_ok)
+        return bool(self.complete and pair_ok and solo_ok)
 
 
 @dataclass
@@ -1292,6 +1328,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         route_jobs=None, envelopes=True, atlas_dir=ATLAS_DEFAULT,
         refusal_rounds=REFUSAL_ROUNDS, lift_retry=True, env_kw=None,
         trajectory_rooms=False, room_iterations=1,
+        room_order="priority",
         verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
@@ -1390,21 +1427,30 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         # against, so the claim is only ever closed by the INDEPENDENT
         # whole-timeline pair check below.  The iteration is what gets the
         # trajectories apart; `active_pair_gap` is what proves they are.
-        rooms = []
+        rooms, order = [], ()
         if fly and trajectory_rooms:
-            for it in range(max(1, int(room_iterations))):
-                rm = stage_rooms(arms, fl, pens, h_inv, dt)
+            if room_order == "priority":
+                arms, order, rm = _priority_stage(
+                    s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
+                    leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER, verbose)
                 rooms.append({int(a): str(v[2]) for a, v in rm.items()})
-                if verbose:
-                    print(f"  stage {s} room pass {it + 1}: "
-                          + "  ".join(f"{a}={len(v[1])}sph" for a, v in
-                                      sorted(rm.items())))
-                arms = _plan_stage(s, acts, buckets, fl, pens, parks, h_inv,
-                                   opts, leg_cache, leg_cache_root, fly,
-                                   on_piece, rm, None, verbose)
+            else:
+                # THE SUPERSEDED SIMULTANEOUS SCHEME, kept because the
+                # measurement that retired it is worth being able to reproduce:
+                # on CSAIL stage 0 it is strictly worse than planning solo.
+                for it in range(max(1, int(room_iterations))):
+                    rm = stage_rooms(arms, fl, pens, h_inv, dt)
+                    rooms.append({int(a): str(v[2]) for a, v in rm.items()})
+                    if verbose:
+                        print(f"  stage {s} room pass {it + 1}: "
+                              + "  ".join(f"{a}={len(v[1])}sph" for a, v in
+                                          sorted(rm.items())))
+                    arms = _plan_stage(s, acts, buckets, fl, pens, parks,
+                                       h_inv, opts, leg_cache, leg_cache_root,
+                                       fly, on_piece, rm, None, verbose)
         plan_s += time.perf_counter() - t1
         sr = StageResult(int(s), acts, arms, wall_s=time.perf_counter() - t1,
-                         room_passes=rooms)
+                         room_passes=rooms, order=tuple(order))
         if check and fly:
             t2 = time.perf_counter()
             _check_stage(sr, acts, fl, pens, parks, h_inv, dt, max_check_poses)
@@ -1443,6 +1489,53 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                        refusals=rlog, envelope_s=env_s,
                        summary_dp=tplan.summary())
     return res
+
+
+def _priority_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
+                    leg_cache_root, on_piece, dt, cluster, verbose):
+    """One stage, planned in PRIORITY ORDER against the rooms already fixed.
+
+    -> (arms, order, rooms).
+
+    WHY THIS AND NOT AN ITERATION.  Planning every active against every other
+    active's PREVIOUS trajectory is circular: re-planning A moves a room B was
+    certified against, so a pass never closes and -- measured on CSAIL stage 0 --
+    it can be strictly worse than planning solo, because each arm is asked to
+    yield to a neighbour's unconstrained path and nobody actually yields.
+
+    A PRIORITY ORDER CLOSES IT IN ONE SWEEP.  Arm 1 plans against the parked
+    fleet and its trajectory is then FINAL.  Arm k plans against the parked
+    fleet plus the final trajectories of arms 1..k-1, so when it finishes, every
+    pair (i, k) with i < k is certified against the path arm i actually flies --
+    and arm i never moves again.  Every pair is therefore certified, exactly,
+    with no iteration and no circularity, and the dependency graph is a DAG:
+    arm k depends on 1..k-1 and on nothing after it.
+
+    This is the spatial analogue of what `coordination.coordinate` already does
+    in time -- a priority search over orders -- with the order fixed by ink
+    rather than searched, because the busiest arm is the one with least room to
+    give and there are at most three actives in a stage.
+    """
+    order = priority_order(acts, buckets, s)
+    fixed: dict[int, tuple] = {}
+    arms: dict[int, ArmStage] = {}
+    for k, a in enumerate(order):
+        st = plan_bucket(s, a, buckets.get((s, a), []), fl, pens, parks, h_inv,
+                         opts, leg_cache=leg_cache,
+                         leg_cache_root=leg_cache_root, fly=True,
+                         on_piece=on_piece,
+                         envelopes=(dict(fixed) if fixed else None),
+                         verbose=verbose)
+        st.priority = int(k)
+        arms[int(a)] = st
+        fixed[int(a)] = trajectory_room(st, fl, pens, h_inv, dt, cluster)
+        if verbose:
+            print(f"  stage {s} priority {k}: arm {a} "
+                  f"({len(st.accepted)} pieces, {st.ink_m:.3f} m) "
+                  f"-> {len(fixed[int(a)][1])} spheres"
+                  + (f", avoiding {sorted(st.depends_on)}" if st.depends_on
+                     else ", free"))
+    return arms, order, fixed
 
 
 def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
@@ -1516,8 +1609,9 @@ def _report_stage(sr: StageResult) -> None:
              f"  active-pair {1000 * pm:+.1f} mm "
              f"(ink {1000 * sr.pair['min_ink_m']:+.1f})")
           + (f"  solo {1000 * sm:+.1f} mm" if np.isfinite(sm) else "")
+          + f"  [{sr.flown}/{sr.with_ink} flown]"
           + ("" if not sr.solo else
-             f"  [{'PASS' if sr.ok else 'FAIL'}]"))
+             f"  [{'PASS' if sr.ok else ('EMPTY' if sr.with_ink == 0 else 'FAIL')}]"))
 
 
 # ---------------------------------------------------------------------------
@@ -1582,6 +1676,7 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
                 arm=int(a), q_park=[float(x) for x in np.asarray(st.q_park).ravel()],
                 frozen_partners=[int(x) for x in st.frozen_partners],
                 room_kind=str(st.room_kind),
+                priority=(None if st.priority is None else int(st.priority)),
                 trajectory_digest=trajectory_digest(st),
                 depends_on={str(k): str(v) for k, v in st.depends_on.items()},
                 n_pieces=len(pieces), ink_m=float(st.ink_m),
@@ -1641,6 +1736,8 @@ def summary(res: StagedResult) -> dict:
                 r.get("min_clearance", np.nan) for r in sr.solo.values()), 2)),
             lift_used=bool(sr.lift_used),
             buckets=len(sr.arms),
+            complete=bool(sr.complete),
+            order=[int(a) for a in sr.order],
             buckets_flown=int(sum(1 for st in sr.arms.values()
                                   if st.timeline is not None)),
             buckets_with_ink=int(sum(1 for st in sr.arms.values()
@@ -1773,6 +1870,13 @@ def main(argv=None):
                          "section 15).  Certifies against a SPECIFIC plan, so "
                          "the dependency is recorded per arm")
     ap.add_argument("--room-iterations", type=int, default=1)
+    ap.add_argument("--room-order", choices=("priority", "simultaneous"),
+                    default="priority",
+                    help="'priority' (default): the actives choose in ink order "
+                         "and arm k avoids the FINAL trajectories of 1..k-1, "
+                         "which closes the fixed point in one sweep; "
+                         "'simultaneous' is the superseded scheme that plans "
+                         "everybody against everybody's previous pass")
     ap.add_argument("--refusal-rounds", type=int, default=REFUSAL_ROUNDS)
     ap.add_argument("--env-stride", type=int, default=ENVELOPE_STRIDE)
     ap.add_argument("--route-jobs", type=int, default=6,
@@ -1806,7 +1910,8 @@ def main(argv=None):
               lift_retry=not a.no_lift_retry,
               env_kw=dict(stride=a.env_stride),
               trajectory_rooms=a.trajectory_rooms,
-              room_iterations=a.room_iterations)
+              room_iterations=a.room_iterations,
+              room_order=a.room_order)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))
