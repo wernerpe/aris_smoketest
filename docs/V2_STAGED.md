@@ -1270,8 +1270,82 @@ the corrected pair check, **passes both checks at every setting**:
 More split is more leader ink and a wider, slower stage A, monotonically — and
 it is monotone in the clearance too, because a leader drawing further out draws
 closer to its partner's held pose. **No setting buys a single follower bucket**,
-which is the same statement the gate control makes from the other side. The
-complete cross-run table — makespan, deferred metres, what stage C cost, the
-recalibrated 1 000-stroke model — waits on the four runs, which were still in
-stage C when this box closed; re-run `scripts/lf_report.py
-out/staged_csail_h097_lf_*.json` once they land.
+which is the same statement the gate control makes from the other side.
+
+### The whole-bag run, complete — and the number that settles it
+
+`out/staged_csail_h097_lf_whole.json`, Pete's literal baseline, with the held
+barrier and the corrected pair check:
+
+| stage | who | pieces | ink (m) | stage (s) | active-pair | solo | conducted | deferred (m) | flown | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | lead 13,71,2 / foll 17,31,97 | 17 | 4.595 | 129.4 | **+85.0 mm** | +51.2 mm | — | 5.026 | 3/3 | **PASS** |
+| B | lead 17,31,97 / foll 13,71,2 | 1 | 0.028 | 17.3 | — (one mover) | +73.7 mm | — | 4.997 | 1/1 | **PASS** |
+| C | **conductor, all six** | 40 | 11.458 | 126.6 | — | — | **+44.9 mm** | 0.000 | 3/6 | **FAIL** |
+
+| | v19 | v6 zigzag | **leader/follower, whole bag** |
+|---|---|---|---|
+| makespan | 209.9 s | 432.6 s | **273.3 s** (1.30× v19, **0.63× v6**) |
+| **park overhead, critical path** | — | 92.7 s, **21.4 %** | **30.9 s, 11.3 %** |
+| barrier held-pose clearance | — | (parks, +256 mm) | **+256 / +108.2 / +107.0 mm, all PASS** |
+| coverage of the logo | — | 94.2 % | **95.6 %** |
+| time to first motion | 3 712 s | 0.280 s | **0.189 s** |
+| check | — | — | **39.1 s** (95.9 s before the pair fix) |
+| leader ink kept | — | — | 4.624 m of 4.624 m |
+| **follower ink kept** | — | — | **0.000 m of 5.026 m — 0.0 %** |
+| deferred to the final pass | — | 0.385 m residue | **10.023 m** |
+| stage C planning + conduct | — | — | **3 075 s of wall** for 126.6 s of motion |
+
+**The held barrier works and it is worth 10 points of makespan.** Park overhead
+on the critical path falls from 21.4 % to **11.3 %**, every barrier's held pose
+set clears pairwise by **107 mm or better**, and the time to first motion is
+unchanged at 0.189 s. That part of Pete's instruction lands cleanly and would be
+worth keeping whatever pattern runs above it.
+
+**The follower does not.** Not one of the fifteen follower pieces came near the
+gate:
+
+| | min | p05 | median | p75 | max | under the 50 mm gate |
+|---|---|---|---|---|---|---|
+| **follower** ink vs the room it had to fit | −419.7 mm | −417.6 mm | **−235.7 mm** | −175.2 mm | **−131.9 mm** | **15 of 15** |
+| leader ink vs the rooms before it | +249.2 mm | +249.5 mm | +252.6 mm | +277.4 mm | +302.2 mm | 0 of 3 |
+
+The follower's ink is not marginally refused. **The closest piece is 132 mm
+inside the occupied volume and the median is a quarter of a metre inside it.**
+No gate setting, no hover ladder, no split and no ordering moves a number like
+that — which is why the gate-off control changes nothing, and why the leg
+refusals and the ink refusals are one fact seen twice.
+
+**So the envelope measurement's substance survives even though its reasoning was
+over-general.** §4b's *"no pattern may ever put a same-row pair in the air
+together"* was inferred from full envelopes and should have been inferred from
+rooms; asked properly, of rooms, on this rig, the answer is the same. The
+correction was worth making — the claim is now anchored where it belongs, and
+the held barrier and the six-arm stage came out of asking — but the transverse
+pair really is unseparable here, and a follower on this geometry has nothing
+safe to draw.
+
+**And the final pass is the bill.** With the followers empty, 10.023 m of the
+logo falls to stage C, which then costs **3 075 s of wall for 126.6 s of
+motion** and still ends **5.1 mm short of the gate** with 3 of its 6 ink buckets
+unflown. That is `ARCHITECTURE_V2` §2d's warning arriving: conducting most of a
+picture as one phase does not scale, and a pattern that defers most of the
+picture to the conductor has reinvented v19 with a slower planner.
+
+**What the 1 000-stroke model would say, and why it is not quoted.** The v6
+recalibration (§21) assumes the main stages carry the ink. Here they carry
+4.62 m of 16.08 m and the conductor carries the rest, so the model's terms —
+draw s/m, inter-piece leg, park per (stage, arm) — are being fitted to three
+arms' worth of ink and then asked about six. A projection built on that would
+be arithmetic about a pattern nobody would ship. The honest number to carry
+forward is the one this run measured directly: **stage C's 3 075 s for 11.5 m**,
+which at 1 000 strokes is not a schedule, it is a refusal.
+
+### What is still running
+
+`s000` and `s150` were still in stage C when this box closed — in its *planning*,
+not its conduct, which is `sequence.cost_matrix`'s O(n²) route screen on
+~50-piece buckets and is the same wall §19 flagged. Their stage A and B numbers
+are the table two sections up and will not move; what they still owe is their
+stage C cost and their makespan. Re-run `scripts/lf_report.py
+out/staged_csail_h097_lf_*.json` when the JSONs appear.

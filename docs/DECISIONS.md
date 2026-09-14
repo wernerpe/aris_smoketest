@@ -358,10 +358,35 @@ that pair, at the full rate and with refinement — read +52.4 mm.
 `solo_check` and `hold_gap`. With the fix stage 0 reads +85.0 / +131.8 /
 +192.9 mm across the sweep and passes.
 
-**The measurements are in `docs/V2_STAGED.md` section 22**, from
-`out/staged_csail_h097_lf_*.json` and the four-way sweep `scripts/lf_sweep.sh`
-runs. `STAGED_SCHEMA_VERSION` is **2**: `role`, `conducted`, `deferred` and
-`q_hold` added, nothing renamed or removed.
+**MEASURED, and the answer is not the one the pattern hoped for**
+(`out/staged_csail_h097_lf_whole.json`, `docs/V2_STAGED.md` section 22). The
+held barrier is a clear win: park overhead on the critical path falls from v6's
+**21.4 % to 11.3 %**, every barrier's held pose set clears pairwise by **107 mm
+or better**, time to first motion is unchanged at 0.189 s, and the makespan is
+**273.3 s against v6's 432.6 s**. The follower is not: **0.000 m of the 5.026 m
+offered it**, and the fifteen follower pieces sit at a median of **-235.7 mm**
+inside the occupied volume, the closest one at **-131.9 mm**. Nothing marginal
+is happening — no gate, ladder, split or order moves a number like that, which
+is why turning the per-piece ink gate off changes stage A not at all.
+
+**So section 4b's substance survives even though its reasoning was
+over-general.** *"No pattern may ever put a same-row pair in the air together"*
+was inferred from full envelopes and should have been inferred from rooms.
+Asked properly, of rooms, the answer on this rig is the same. The correction was
+still worth making: the claim is anchored where it belongs now, and the held
+barrier and the six-arm stage came out of asking.
+
+**And the bill lands on the final pass.** With the followers empty, 10.023 m of
+the logo falls to stage C, which costs **3 075 s of wall for 126.6 s of
+motion**, still ends **5.1 mm short of the gate**, and leaves 3 of its 6 ink
+buckets unflown. That is `ARCHITECTURE_V2` section 2d arriving on schedule: a
+pattern that defers most of the picture to the conductor has reinvented v19 with
+a slower planner. **FOR PETE:** the held barrier should be kept regardless; the
+leader/follower stages need a reason to exist that the follower's -235.7 mm does
+not currently give them.
+
+`STAGED_SCHEMA_VERSION` is **2**: `role`, `conducted`, `deferred` and `q_hold`
+added, nothing renamed or removed.
 
 ## v6: EVERY BUCKET FLIES, 100 % OF THE INK, SEVEN OF EIGHT STAGES (2026-09-11, last)
 
