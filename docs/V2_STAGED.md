@@ -2509,15 +2509,27 @@ residual, `sub` = 2:
 
 | | parallel (§24.5, as shipped) | **serial** | priority |
 |---|---|---|---|
-| stage-C ink FLOWN | 10.591 m of 12.085 m | **12.085 m — all of it** | see below |
-| stage-C motion | 160.1 s | **212.4 s** | 170.9 s |
-| inter-arm, six arms | **−191.9 mm** (13↔31) | **+49.9 mm** (71↔97, t = 32.5 s) | **+50.0 mm** |
-| self | **+16.2 mm** (31) | **+14.4 mm** (71) | ≥ 20 mm |
-| frame / paper | +54.6 / −7.7 mm tip | +58.8 / −6.1 mm tip | pass |
-| t = 0 holds | +107.0 mm | +107.0 mm | +107.0 mm |
-| stage-D motion / verdict | 27.6 s, PASS | 22.4 s, **frame +31.0 mm FAIL** | 24.7 s, frame FAIL |
-| planning wall (busiest / total) | 1 369.7 s / 1 946.0 s | **1 129.6 s / 1 207.8 s** | pipeline, see below |
-| **A+B+C+D makespan** | 307.5 s | **354.6 s** | — |
+| stage-C ink FLOWN | 10.591 m of 12.085 m | **12.085 m — all of it** | 8.850 m of 12.085 m |
+| buckets flown | 4 of 6 | **6 of 6** | 2 of 6 |
+| stage-C motion | 160.1 s | **212.4 s** | 159.6 s |
+| inter-arm, six arms | **−191.9 mm** (13↔31, t = 1.18 s) | **+49.9 mm** (71↔97, t = 32.5 s) | **+49.9 mm** |
+| self | **+16.2 mm** (31) | **+14.4 mm** (71) | **+14.4 mm** (71) |
+| frame | +54.6 mm | **+58.8 mm** | +58.8 mm |
+| paper (chain / tip) | +22.1 / −7.7 mm | **+39.1 / −6.1 mm** | +39.1 / −6.1 mm |
+| t = 0 holds | +107.0 mm | **+107.0 mm** | +107.0 mm |
+| stage D | 27.6 s, PASS | 22.4 s, **frame +31.0 mm FAIL** | 22.4 s, same FAIL |
+| conduct wall | 1 369.7 s (max of 3) | **1 184.8 s (max of 3)** | 2 398.6 s (SUM of 3) |
+| **A+B+C+D makespan** | 307.5 s (uncertified) | **354.6 s** | 301.8 s (26.8 % of the ink missing) |
+
+**PRIORITY IS STRICTLY WORSE AND THE REASON IS THE SIZE OF THE ROOM.** Group
+[31, 71]'s realised stage-C trajectory is a **31 920-capsule** swept volume, and
+routed against it neither of the other two groups can produce a timeline at all
+— `[13, 17]` spends 353.7 s and flies nothing, `[2, 97]` spends 1 074.9 s and
+flies nothing. The composition is sound (the pair certificate holds at every
+instant) and the geometry will not take it: the busiest row's swept volume is
+most of the airspace over the paper. Serial gets the same +49.9 mm for **all**
+the ink and **half** the wall, because a group that plans against the earlier
+rows at their PARKS is planning against four poses rather than a tour.
 
 **THE COMPOSITION DEFECT IS CLOSED.** The cross-row pairs that refused §24.5's
 merge — 13↔31 at −191.9 mm and 17↔71 at +44.6 mm, plus the three pairs that
@@ -2657,3 +2669,27 @@ hold-margin-everywhere run, and **19190** in the baseline -- so asking the held
 pose for both costs about 6 % of the transit budget and still leaves 39 % of the
 42 %. Verdict, stage time, arm 71 pen-up and per-arm planning are owed, from
 `out/staged_csail_h097_lf5_s150.*`.
+
+### 26.6 Which mode ships
+
+**`serial`.** It is the only mode that flies all 12.085 m, it holds every gate
+but two, and it costs **354.6 s** of makespan against the 307.5 s the parallel
+composition quoted for a stage that was never a certificate. `priority` is
+sound and unusable on this picture; `parallel` stays selectable as the control
+and must not be animated or shipped.
+
+**And `serial` is not shippable YET**, by 0.09 mm and one leg:
+
+1. **+49.9 mm on 71 ↔ 97 at t = 32.5 s** against the 50 mm gate. One instant,
+   one pair, 90 µm. The row conductors each pass their own check (+62.3, +113.5,
+   +55.0 mm); this is a cross-row pair at the seam between two rows' slots, and
+   the honest fix is the one `hold_gap` already uses — stand the finishing row
+   at its park before the next row's first stroke rather than at the instant its
+   last leg ends.
+2. **+14.4 mm self on arm 71's transit `seg 3`**, whose true clearance is
+   23.60 mm. `self_pace_beat`'s lower bound is a fixed 33-sample grid over an
+   11 s beat; it has to be `paper.leg_self_lb`'s **converged** bound.
+
+Both are named with numbers and neither is a composition failure. The stage that
+§24.5 refused at −191.9 mm now reads **+49.9 mm with every metre of its ink in
+the air**, and that is the gap this box was opened to close.

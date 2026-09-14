@@ -312,6 +312,28 @@ scene. Stage C's real flown ink was **10.591 m**, not the 12.085 m of accepted
 pieces. `StageResult.complete` catches it at the stage level; the group line
 does not, and should.
 
+**MEASURED, AND THE ANSWER IS `serial`.** `--stage-c-only` on the lf3 s150
+programme, the six-arm `scene_check.check_timeline` over the merged stage:
+
+| | parallel (as shipped) | **serial** | priority |
+|---|---|---|---|
+| stage-C ink flown | 10.591 m of 12.085 | **all 12.085 m** | 8.850 m |
+| inter-arm | **-191.9 mm** | **+49.9 mm** | +49.9 mm |
+| self | +16.2 mm | +14.4 mm | +14.4 mm |
+| stage-C motion | 160.1 s | 212.4 s | 159.6 s |
+| conduct wall | 1 369.7 s (max) | **1 184.8 s (max)** | 2 398.6 s (sum) |
+| A+B+C+D | 307.5 s, uncertified | **354.6 s** | 301.8 s, 26.8 % of the ink gone |
+
+`priority` is sound and unusable here: group [31, 71]'s realised trajectory is a
+31 920-capsule swept volume and neither other group can route a single leg
+around it.  `serial` gets the same clearance for all the ink and half the wall,
+because a row planning against the rows before it AT THEIR PARKS is planning
+against four poses rather than a tour.  **`serial` is the shippable mode, and it
+is not shippable yet by 0.09 mm** (pair 71<->97 at one instant) **and one leg**
+(arm 71's transit, true self-clearance 23.60 mm, refused at +14.4 mm because the
+pacing bound is a fixed 33-sample grid over an 11 s beat and has to be
+`paper.leg_self_lb`'s converged one).  Neither is a composition failure.
+
 docs/V2_STAGED.md section 26 is the write-up and
 `tests/test_staged_compose.py` holds the mechanism down.
 
