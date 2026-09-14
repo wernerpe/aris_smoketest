@@ -2693,3 +2693,244 @@ and must not be animated or shipped.
 Both are named with numbers and neither is a composition failure. The stage that
 §24.5 refused at −191.9 mm now reads **+49.9 mm with every metre of its ink in
 the air**, and that is the gap this box was opened to close.
+
+## 28. The integrated run — the four residuals, and the programme they leave
+
+§27 closed the pen-up faults and §26 closed the composition defect, and each was
+measured on its own. This section puts every fix of 2026-09-14 into one
+programme on the CSAIL logo at h = 0.970 and says what the whole thing costs.
+First the four residuals §26.6 and §27.1 named, because **two of the four were
+named wrongly, and the measurements are here.**
+
+### 28.1 The 0.09 mm was never a seam — it is the PAIR gate's playback residual
+
+§26.6 read the serial stage C's **+49.9 mm on 71 ↔ 97 at t = 32.5 s** as a
+crossing at the seam between two rows' time slots and proposed standing the
+finishing row at its park before the next row's first stroke. Measured on that
+run's own programme (`out/staged_csail_h097_lf3c_serial_program.json`):
+
+| | at t = 32.475 s |
+|---|---|
+| arm 97's per-frame travel | **0.00 mm — it is standing still** |
+| arm 97's pose | its stage-C entry pose, which on this programme IS its park |
+| arm 97's first motion | frame 3608, **t = 180.4 s** |
+| arm 71 | drawing piece 0 (`seg` 0, t = 3.35 → 35.60 s) |
+| raw pair clearance | **50.76 mm** |
+| `scene_check`'s residual | 0.55 × (1.54 + 0.00) mm = 0.85 mm |
+| what the judge reads | **+49.91 mm** |
+
+**One arm is drawing and the other has not moved and will not move for another
+two and a half minutes.** No composition of the rows in time can change a
+number measured against an arm that never moves; the group's slot boundaries
+are irrelevant to it. What is actually wrong is the thing §26.3 already
+diagnosed for the self gate, one obstacle over: **the producer holds the room to
+`PAIR_MARGIN` on a converged bound and the judge subtracts a residual that grows
+with the SPEED.** A pose gate set at exactly the judge's number leaves nothing
+for the residual, so the geometry is legal and the playback of it is not.
+
+**THE FIX IS PACE, AGAIN, AND IT NOW COVERS THE INK.** `writing.room_pace_beat`
+and `writing.room_pace_draw` price, for a pen-up beat and for a drawn stroke,
+the seconds its own speed implies against the FROZEN partners:
+`lb − k·rate·dt_play/dt ≥ PAIR_MARGIN` solves for `dt` directly. Only the
+frozen partners, because they are the ones that do not move — the judge's
+`0.55 × (step_i + step_j)` is then entirely this arm's own step and this arm can
+pay all of it; two arms moving against each other are the conductor's business.
+
+Three things make it cheap enough to run on every stroke:
+
+* **the price is per INTERVAL, not per move.** A move's fastest point and its
+  tightest point are almost never the same point — on this stroke the global
+  maximum speed is 5× the speed at the binding clearance — so pairing the worst
+  of each asks for five times the stretch the geometry wants (5 476 s against
+  67 s, measured).
+* **only the intervals that bind are refined.** An interval whose coarse
+  1-Lipschitz bound already prices under the move's own duration cannot change
+  the answer and is never looked at again.
+* **all or nothing.** A partial stretch that still does not reach the floor is
+  seconds spent for a verdict that does not change, so a move whose price is
+  over `ROOM_PACE_MAX` is left at its own speed and handed to the judge as it is.
+
+Measured on the failing stroke, with arm 97 frozen exactly where the run had it:
+
+| | |
+|---|---|
+| converged room bound over the stroke | **50.47 mm** |
+| stroke duration | 32.25 s → **67.33 s (2.09×)** |
+| what the judge reads | **+49.91 → +50.25 mm** |
+
+That is the honest price: 35 s of stage C to make 0.09 mm of gate, and the ink,
+the route and every pose are untouched.
+
+### 28.2 The self bound had to be the converged one, and that leg cost 3 s
+
+§26.6's second residual, named and now shipped. `self_pace_beat` bounded its own
+leg on `paper.line_samples`' fixed 33-sample grid. On arm 71's stage-C transit
+beat (frames 1128 → 1190, 3.10 s):
+
+| | |
+|---|---|
+| 33-sample grid bound | **−13.9 mm** — under the floor, so "no speed rescues this" |
+| `paper.leg_self_lb`, converged | **+23.10 mm** — over the router's 23 and the judge's 20 |
+| the judge at 3.10 s | **+14.3 mm — FAIL** |
+| paced to 15.88 s (5.1×) | **≥ 20 mm — PASS** |
+
+The bound is escalated only where the coarse one says the beat is already under
+the floor, so a leg the grid cleared never pays for the refinement, and
+refinement can only ever RAISE a bound — this can therefore only ever ask for
+LESS stretch than the grid did, never more.
+
+### 28.3 Stage D's frame FAIL is the judge's box against `frozen`'s capsules
+
+§26.5 attributed stage D's **+31.0 mm** to `effective_static_floor` clamping the
+routing floor where the arm's endpoints cannot hold it. **It is not that
+either.** Measured on the same programme, arm 31's stage-D trajectory:
+
+| | |
+|---|---|
+| the tightest obstacle | **`body:71_column3`** — arm 71's base column band |
+| where | the ENTRY leg, `seg` −1, t = 9.75 s, mid-leg |
+| both endpoints | **70.42 mm** — so nothing was clamped |
+| `scene_check`'s COLUMN gate, same metal as cylinders | **+84.35 mm, PASS** |
+| `scene_check`'s FRAME gate, same metal as a 0.32 m AABB | **+31.03 mm, FAIL** |
+
+`freeze_conduct` legitimately drops a frozen partner's band and replaces it by
+that partner's real capsules — 127 mm of honest room, and the whole reason
+`frozen` exists. `scene_check` re-derives everything from the timeline and knows
+nothing about any of it: its frame gate measures every arm against
+`spec.static_obstacles()`, band AABBs included. The gate did not change and the
+route did, exactly as §26.5 said — but the room that changed is the BAND's, not
+the floor's.
+
+**SO THE CONDUCT MAY ASK FOR BOTH ROOMS.** `frozen.set_keep_bands(True)` keeps
+the bands in the static room AND keeps the pose-aware partner term, which is
+strictly more conservative than either half: it is the room the conduct flew in
+before `freeze_conduct` existed, plus the partner bodies `freeze_conduct` added.
+`staged.CONDUCT_BANDS = "auto"` routes in the relaxed room, and only where the
+judge's frame gate refuses what comes out does it route the whole set again with
+the bands kept and take that instead — and only if the retry actually clears the
+gate. The retry can only be more conservative than the run it replaces, it can
+never admit a leg, and it is paid for exactly where it buys something.
+
+### 28.4 The serialised hover was a convenience field disagreeing with the truth
+
+§27.1 named it and left it. `ArmStage.hovers` re-derived every hover with the
+ORDINARY rule after the timeline was built, while under `PARK_FREEZE`
+`writing.arm_program` asks a different question of the one pose the stage stops
+and holds — the strict joint margin and the room. The two answers differ (0.136
+rad of joint margin against 0.6023 on the pinned toy case) and the trajectory is
+the truth: it is what `scene_check` reads, what the barrier holds and what the
+next stage plans from. The last `hover_out` is now taken FROM the trajectory's
+end pose rather than re-derived beside it. Under `PARK_HOME` the trajectory ends
+at the park, which is not a hover, so the field stays what it always was.
+
+### 28.5 What the integrated programme is, and how to re-run it
+
+`scripts/lf6_run.sh` — both configurations, `setsid`, three route jobs and three
+conduct jobs each, a 1 500 s cap on any one row conduct:
+
+```
+JOBS=3 CJOBS=3 CAP=1500 bash scripts/lf6_run.sh
+```
+
+| | `lf6_s150` | `lf6_whole` |
+|---|---|---|
+| ink offered | `--split-m 0.15` | `--whole-bag` |
+| leader's standoff | `--partner-standoff 0.09` | `--partner-standoff 0.11` |
+| final pass | `--row-compose serial` | `--row-compose serial` |
+
+Both carry every fix of the day: the standoff (a5039f1 / 68ccda6), the four
+pen-up fixes (9d55ab8, 0cf78fd, 0064ba7, 5144c8a), `freeze_conduct` and the
+serial composition (f7d6ba0, 0eeca85, cee1b7b), and the four of §28.1–§28.4.
+
+### 28.6 The integrated programme, measured — and it is NOT certified
+
+`out/staged_csail_h097_lf6_{s150,whole}.{json,log,_program.json}`, both end to
+end, three route jobs and three conduct jobs each, warm leg store. Every
+conducted number is `scene_check.check_timeline` over all six arms at
+`PAIR_MARGIN` with the sweep residual, `sub` = 2, re-derived off the shipped
+programme.
+
+**`lf6_whole` — `--whole-bag --partner-standoff 0.11 --row-compose serial`**
+
+| stage | actives (roles) | pieces | ink m | stage s | inter-arm mm | solo mm | self mm | frame mm | paper mm | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | lead 2,13,71 / foll 17,31,97 | 17 | **4.595** | 84.7 | +183.0 | +175.3 | — | — | — | **PASS** |
+| B | lead 17,31,97 / foll 2,13,71 | 22 | **4.769** | 127.2 | +320.0 | +137.5 | — | — | — | **PASS** |
+| C | 3 row conductors, serial | 27 | 6.693 | 78.8 | **−108.6** | — | +63.7 | +54.7 | +22.4/−4.4 | **FAIL** |
+| D | — | 0 | 0.000 | 0.0 | — | — | — | — | — | (none) |
+
+**`lf6_s150` — `--split-m 0.15 --partner-standoff 0.09 --row-compose serial`**
+
+| stage | actives (roles) | pieces | ink m | stage s | inter-arm mm | solo mm | self mm | frame mm | paper mm | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | lead 2,13,71 / foll 17,31,97 | 15 | 2.061 | **58.5** | +197.6 | +167.9 | — | — | — | **PASS** |
+| B | lead 17,31,97 / foll 2,13,71 | 25 | **5.519** | 135.4 | +216.6 | +134.2 | — | — | — | **FAIL** |
+| C | 3 row conductors, serial | 34 | 8.407 | 98.5 | **−238.5** | — | +61.8 | +54.8 | +43.1/−3.0 | **FAIL** |
+| D | conductor [71] | 1 | 0.077 | 4.4 | +245.8 | — | +100.9 | +140.7 | +40.5/−5.5 | **FAIL** (frozen) |
+
+| | v19 | lf-whole (§22) | lf3 serial (§26.5) | **lf6_whole** | **lf6_s150** |
+|---|---|---|---|---|---|
+| makespan | **209.9 s** | 273.3 s | 354.6 s | **290.6 s** | **296.7 s** |
+| certified | yes | no | no | **no** | **no** |
+| ink drawn | 16.8 m | — | 16.07 m | 16.057 m (95.6 %) | 16.064 m (95.6 %) |
+| A + B share of the ink | — | — | 22.8 % | **58.3 %** | 47.2 % |
+| A + B makespan | — | — | 119.9 s | **211.9 s** | 193.9 s |
+| time to first motion | — | — | 0.196 s | **0.174 s** | 0.178 s |
+| planning wall (sum / busiest arm) | — | — | 1 980 / 1 102 s | 2 286 / 1 066 s | 2 361 / 1 137 s |
+| check | — | — | 49.7 s | 49.7 s | 49.7 s |
+| fleet pen-up | — | — | — | **138.5 s** (5.6 % flip, 48.5 % tall, 45.9 % honest) | **150.4 s** (2.7 % flip, 44.9 % tall, 52.3 % honest) |
+
+**STAGE A AND STAGE B ARE THE WIN, AND THEY ARE REAL.** The whole bag now draws
+**9.364 m — 58.3 % of the ink — in the two six-arm stages**, against 22.8 % for
+lf3, and stage A's own 95.86 s of §27 is now **58.47 s on identical ink** with
+`active_pair` at +197.6 mm against +65.6. The pen-up fixes and the standoff both
+hold up in a full programme.
+
+**AND THE FINAL PASS IS NOT CERTIFIED, FOR TWO REASONS THAT ARE NAMED.**
+
+### 28.7 The serial slot was measured in the wrong unit
+
+`_compose_groups` laid the groups end to end using `len(timeline["t"])` — the
+ROW COUNT of the timeline it got back. A conducted timeline is `dt`-spaced and
+its row count is its length; a timeline the conductor REFUSED comes off
+`writing.arm_program`'s waypoint clock, where 354 rows can be 59.7 s, and
+`_merge_conducts` only resamples it (`_on_clock`) AFTER the offsets are fixed.
+Measured on `lf6_whole` stage C: group [31, 71] was refused, its slot was
+written as 17.65 s, the next group started there, and arm 71 was still flying at
+59.70 s — the merge read 17 ↔ 71 at **−108.6 mm**. `_clock_frames` and
+`_slot_frames` now measure the slot on the merge's own clock, and a refused
+group's slot is the SUM of its arms' lengths because that is what
+`_merge_conducts` lays down. Re-run (`..._whole_c3.*`): the slots are
+0–32.4 / 32.45–63.35 / 63.4–116.6 s, disjoint, and the cross-row pairs are all
+clear.
+
+### 28.8 What is still in the way: the row conductor's own refusal
+
+With the slots right, both configurations still fail, and on the same thing:
+
+| | `lf6_whole_c3` | `lf6_s150_c2` |
+|---|---|---|
+| group [31, 71] | **−21.0 mm, REFUSED** | **−235.3 mm, REFUSED** |
+| group [13, 17] | +226.2 mm, PASS | +226.2 mm, PASS |
+| group [2, 97] | **−161.3 mm, REFUSED** | **−161.3 mm, REFUSED** |
+| merged stage C | **−76.6 mm** (2 ↔ 97, t = 82.95 s) | **−240.4 mm** (31 ↔ 71, t = 39.6 s) |
+| stage C motion | 116.7 s | 171.1 s |
+| A+B+C+D | 328.5 s | 369.4 s |
+
+**EVERY FAILING PAIR IS A SAME-ROW PAIR WITH ONE ARM STANDING STILL.** 2 ↔ 97 at
+t = 82.95 s: arm 97's per-frame travel is 0.00 mm. 31 ↔ 71 at t = 20.0 s: arm
+31's is 0.00 mm. That is the signature of `_conduct_stage`'s FALLBACK: when
+`idle.conduct` refuses a group, its arms fly ONE AT A TIME — but each one's
+route was laid down by `plan_bucket`, which runs BEFORE `freeze_conduct` and is
+given `partners=outside` only, so a group's own arms are never in each other's
+room. `freeze_conduct` now also holds the arms INSIDE the group that produce no
+timeline (`still`, §28.3's sibling), which took group [31, 71] from −43.6 to
+−21.0 mm; it cannot help the pair where BOTH arms have ink, because neither is
+still at `freeze_conduct` time and the refusal is only discovered afterwards.
+
+**THE FIX IS A PRIORITY ORDER INSIDE THE GROUP**, exactly as `_priority_stage`
+already does between arms in a stage: plan the busier arm of the row first and
+plan the other against its realised trajectory, so the fallback's one-at-a-time
+programme is certified by construction rather than only measured. It is named
+here rather than shipped unmeasured, and it is the one thing between this
+programme and a certificate.

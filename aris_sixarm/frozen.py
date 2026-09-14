@@ -123,6 +123,54 @@ def standoff_sig():
     return "".join(f"{a}:{_STANDOFF[a]:.6f};" for a in sorted(_STANDOFF))
 
 
+# ==========================================================================
+# KEEPING THE BANDS — the judge's frame gate does not know about this module
+# ==========================================================================
+# MEASURED 2026-09-14 (docs/V2_STAGED.md §28), stage D of the serial programme.
+# Arm 31's dead-band conduct routes with the other five arms frozen, so
+# `filter_boxes` drops `body:71_column3` and replaces it by arm 71's real parked
+# capsules — the whole point of this module, and 127 mm of honest room on this
+# rig.  `scene_check`'s FRAME gate re-derives everything from the timeline and
+# knows nothing about any of it: it measures every arm against
+# `spec.static_obstacles()`, band AABBs included, and refused that conduct at
+# +31.0 mm while its own COLUMN gate — the same metal, written as cylinders
+# rather than as the 0.32 m box that contains them — passed the identical
+# trajectory at +84.4 mm.  The gate did not change and the route did.
+#
+# SO A CALLER MAY ASK FOR BOTH.  `set_keep_bands(True)` keeps every band in the
+# static room AND keeps the pose-aware partner term, which is strictly more
+# conservative than either half: it is the room the conduct flew in before
+# `freeze_conduct` existed, plus the partner bodies `freeze_conduct` added.  It
+# can only refuse legs, never admit one, so it needs no separate certificate —
+# it costs routing room, and `staged.CONDUCT_BANDS` spends it only where the
+# relaxed room produced something the judge refuses.
+_KEEP_BANDS = False
+
+
+def set_keep_bands(flag):
+    """Keep the frozen partners' band AABBs in the static room as well.
+
+    Call it AFTER `freeze` / `freeze_sets`, which reset it — so a caller that
+    does not ask for the bands cannot inherit them from the previous bucket.
+    """
+    global _KEEP_BANDS
+    _KEEP_BANDS = bool(flag)
+
+
+def keep_bands():
+    """Are the frozen partners' bands being kept as well? -> bool."""
+    return bool(_KEEP_BANDS)
+
+
+def keep_bands_sig():
+    """A stable string for the memo and leg-cache keys. -> str.
+
+    EMPTY when the bands are dropped, so every key the shipped behaviour builds
+    is the key it built before this existed and a warm leg store still answers.
+    """
+    return "bands;" if _KEEP_BANDS else ""
+
+
 def band_owner(name):
     """The arm a pose-invariant body band belongs to. -> int | None.
 
@@ -177,6 +225,7 @@ def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
     global _CAPS, _POSES, _INVARIANT
     _CAPS, _POSES, _INVARIANT = {}, {}, {}
     set_standoff(None)
+    set_keep_bands(False)
     for aid, Q in (sets or {}).items():
         aid = int(aid)
         if aid not in fleet:
@@ -218,6 +267,7 @@ def freeze(parks, fleet, pens, h_inv):
     global _CAPS, _POSES, _INVARIANT
     _CAPS, _POSES, _INVARIANT = {}, {}, {}
     set_standoff(None)
+    set_keep_bands(False)
     for aid, q in (parks or {}).items():
         aid = int(aid)
         if aid not in fleet:
@@ -259,6 +309,7 @@ def thaw():
     global _CAPS, _POSES, _OBSERVER, _INVARIANT
     _CAPS, _POSES, _OBSERVER, _INVARIANT = {}, {}, None, {}
     set_standoff(None)
+    set_keep_bands(False)
 
 
 def observe(aid):
@@ -278,7 +329,7 @@ def keep_box(b):
     everything else — true structure, and the bands of partners that are NOT
     frozen — is kept.
     """
-    if not _CAPS:
+    if not _CAPS or _KEEP_BANDS:
         return True
     o = band_owner(b.get("name") if isinstance(b, dict) else None)
     return not (o is not None and o in _CAPS and o != _OBSERVER)

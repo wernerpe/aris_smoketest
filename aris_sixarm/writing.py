@@ -1632,6 +1632,17 @@ def self_pace_beat(spec, q0, q1, dt, pen_ext=None, dt_play=SELF_PLAY_DT,
     lb = float(lb.min()) if len(lb) else float(c.min())
     # travel per unit parameter, bounded on the same grid the bound is
     rate = float(np.linalg.norm(np.diff(X, axis=0), axis=2).max()) * (len(Q) - 1)
+    # THE BOUND HAS TO BE THE CONVERGED ONE, NOT A FIXED GRID'S.  `line_samples`
+    # is 33 points, and over an 11 s beat each interval's own 1-Lipschitz
+    # residual is tens of millimetres -- so a leg whose TRUE self-clearance is
+    # 23.60 mm reads well under the floor here, the stretch is never priced, and
+    # the judge refuses it at +14.4 mm (docs/V2_STAGED.md section 26.6, arm 71
+    # transit seg 3).  `paper.leg_self_lb` is `adaptive_lb` on the same capsule
+    # ends and converges to `ADAPT_TOL`; refinement can only ever RAISE the
+    # bound, so this can only ever ask for LESS stretch than the grid did, and a
+    # leg the grid already cleared never pays for the refinement.
+    if lb - float(floor) - SELF_PACE_EPS <= 0.0:
+        lb = float(paper.leg_self_lb(spec, q0, q1, pen_ext))
     head = lb - float(floor) - SELF_PACE_EPS
     if head <= 0.0:
         # no speed rescues a leg that is already under the judge's margin
@@ -1642,17 +1653,188 @@ def self_pace_beat(spec, q0, q1, dt, pen_ext=None, dt_play=SELF_PLAY_DT,
     return float(min(want, float(cap) * float(dt))), "paced"
 
 
-def self_pace_block(spec, q_from, steps, pen_ext=None, **kw):
-    """`self_pace_beat` over one pen-up block of `(dt, q)` beats.
+# ==========================================================================
+# THE SAME LESSON, ONE OBSTACLE OVER: the FROZEN PARTNERS' playback residual
+# ==========================================================================
+# MEASURED 2026-09-14 (docs/V2_STAGED.md section 28).  The serial stage C was
+# refused at +49.9 mm on pair 71 <-> 97 against the 50 mm gate -- 90 um, one
+# instant -- and section 26.6 read it as a seam between two rows' time slots and
+# named a settle as the fix.  IT IS NOT A SEAM.  At t = 32.475 s arm 97 is
+# STANDING STILL, at exactly the pose the planner froze it at, and arm 71 is in
+# the middle of drawing its first piece; the raw clearance there is 50.76 mm and
+# `scene_check` subtracts 0.55 x 1.54 mm of arm 71's own playback step.  No
+# amount of standing the finishing row down earlier moves a number measured
+# against an arm that never moves.
+#
+# IT IS `self_pace_beat`'S BUG WITH A DIFFERENT OBSTACLE.  The producer holds
+# the room to `PAIR_MARGIN` on a converged bound; the judge re-samples the
+# timeline that is actually written down and subtracts a residual that grows
+# with the SPEED.  A pose gate at exactly the judge's number leaves nothing for
+# the residual, so the geometry is legal and the playback of it is not.
+#
+# SO THE PRODUCER PAYS IT, AND PAYS IT IN TIME.  Requiring
+# `lb - k * rate * dt_play / dt >= floor` solves for `dt` exactly as the self
+# pacing does: the route is the same route, the poses are the same poses, the
+# ink is untouched, and only the beats and strokes that owe the residual pay it.
+# This can only ever SLOW a move; it cannot admit one, and a leg whose true
+# clearance is already under the gate is left for the judge to refuse.
+#
+# WHY IT IS ONLY THE FROZEN PARTNERS.  They are the ones that do not move, so
+# the judge's `0.55 * (step_i + step_j)` is entirely this arm's own step and
+# this arm can pay all of it.  Two arms MOVING against each other are the
+# conductor's business and are scheduled, not paced.
+ROOM_PACE = True
+ROOM_PLAY_FLOOR = 0.050     # m, restated from `staged.PAIR_MARGIN` on purpose,
+#                             exactly as SELF_PLAY_FLOOR restates the self gate
+ROOM_PACE_MAX = 3.0         # the most any one beat or stroke may be stretched
+ROOM_PACE_EPS = 0.00005     # m of headroom over the floor the stretch aims for
+ROOM_LB_TOL = 0.0001        # m the refined room bound is held to
+ROOM_SUB_CAP = 64           # most sub-samples one interval may be refined into
 
-    -> (steps, n_paced, seconds_added).  The poses are untouched.
+
+def _room_need(spec, Q, us, dur, pen_ext=None, h_inv=H_INV_DEFAULT,
+               dt_play=SELF_PLAY_DT, k=SELF_PLAY_K, floor=ROOM_PLAY_FLOOR,
+               eps=ROOM_PACE_EPS):
+    """The seconds this move needs against the FROZEN room. -> (s, reason).
+
+    `Q` is (N, 7) and `us` the (N,) parameter in [0, 1] those samples sit at;
+    the move is the POLYLINE through them, which is a straight beat's own line
+    and a drawn stroke's dense path alike.  `dur` is what it would otherwise be
+    flown in.
+
+    THE PRICE IS PER INTERVAL, not per move, and that is the whole of why this
+    is cheap enough to run.  A move's slowest point and its tightest point are
+    almost never the same point -- on the stroke this was built for the global
+    maximum speed is 5x the speed at the binding clearance -- so pairing the
+    worst of each would ask for five times the stretch the geometry wants.
+    Each interval owes `k * rate_i * dt_play / (lb_i - floor)` and the move owes
+    the largest of them.
+
+    AND ONLY THE INTERVALS THAT BIND ARE REFINED.  An interval whose coarse
+    1-Lipschitz bound already prices under `dur` cannot change the answer, so it
+    is never looked at again; the rest are subdivided until their own residual
+    is under `ROOM_LB_TOL`, which can only ever RAISE their bound and so can
+    only ever LOWER the price.
     """
-    if not SELF_PACE or not steps:
+    from . import frozen
+    if not ROOM_PACE or not frozen.active() or dur <= 0.0:
+        return float(dur), None
+    Q = np.asarray(Q, float).reshape(-1, 7)
+    u = np.asarray(us, float).reshape(-1)
+    if len(Q) < 2 or len(u) != len(Q):
+        return float(dur), None
+
+    def at(ts):
+        ts = np.asarray(ts, float).reshape(-1)
+        Qt = np.column_stack([np.interp(ts, u, Q[:, j]) for j in range(7)])
+        Pt = paper.world_chain(Qt, spec, pen_ext, h_inv)
+        Ct = paper.sphere_centres(Qt, spec, h_inv)
+        Xt = Pt if Ct is None else np.concatenate([Pt, Ct], axis=1)
+        return frozen.partner_clearance(Pt, Ct), Xt
+
+    def price(ts, c, X):
+        """Every interval's asking time, and whether any is beyond price."""
+        lb, _ = paper.interval_bounds(c, X, k)
+        step = np.linalg.norm(np.diff(X, axis=0), axis=2).max(axis=1)
+        du = np.maximum(np.abs(np.diff(np.asarray(ts, float))), 1e-12)
+        head = lb - float(floor) - float(eps)
+        want = np.where(head > 0.0,
+                        float(k) * (step / du) * float(dt_play)
+                        / np.where(head > 0.0, head, 1.0), np.inf)
+        return lb, want
+
+    c, X = at(u)
+    if not np.all(np.isfinite(c)):
+        return float(dur), None
+    lb, want = price(u, c, X)
+    need, under = float(dur), False
+    for i in np.flatnonzero(want > float(dur)):
+        # this interval would force a stretch -- so look at it properly
+        res = float(k) * float(np.linalg.norm(X[i + 1] - X[i], axis=1).max())
+        m = int(np.clip(np.ceil(res / max(ROOM_LB_TOL, 1e-9)) + 1, 2,
+                        ROOM_SUB_CAP))
+        ts = np.linspace(float(u[i]), float(u[i + 1]), m)
+        ci, Xi = at(ts)
+        lbi, wi = price(ts, ci, Xi)
+        if not len(wi):
+            continue
+        if np.any(~np.isfinite(wi)):
+            under = under or bool(np.any(lbi <= float(floor)))
+        fin = wi[np.isfinite(wi)]
+        if len(fin):
+            need = max(need, float(fin.max()))
+    if under:
+        # no speed rescues a move that is already inside the room
+        return float(dur), "under"
+    if need <= float(dur) + 1e-12:
+        return float(dur), None
+    return float(need), "paced"
+
+
+def room_pace_beat(spec, q0, q1, dt, pen_ext=None, h_inv=H_INV_DEFAULT,
+                   dt_play=SELF_PLAY_DT, k=SELF_PLAY_K, floor=ROOM_PLAY_FLOOR,
+                   cap=ROOM_PACE_MAX):
+    """The seconds this straight move needs to survive the judge's PAIR gate.
+
+    -> (dt, reason).  `reason` is `None` when nothing was owed.  The frozen
+    partners only; see the block comment above.
+    """
+    q0 = np.asarray(q0, float).reshape(7)
+    q1 = np.asarray(q1, float).reshape(7)
+    if not ROOM_PACE or dt <= 0.0 or float(np.max(np.abs(q1 - q0))) <= 1e-12:
+        return float(dt), None
+    n = paper.SAMPLES
+    want, why = _room_need(spec, paper.line_samples(q0, q1, n),
+                           np.linspace(0.0, 1.0, n), float(dt), pen_ext, h_inv,
+                           dt_play, k, floor)
+    if why != "paced":
+        return float(dt), why
+    # ALL OR NOTHING, unlike the self pacing.  A partial stretch that still does
+    # not reach the floor is seconds spent for a verdict that does not change,
+    # so a beat whose price is over the cap is left at its own speed and handed
+    # to the judge as it is.
+    if want > float(cap) * float(dt):
+        return float(dt), "capped"
+    return float(want), "paced"
+
+
+def room_pace_draw(spec, qd, ud, dur, pen_ext=None, h_inv=H_INV_DEFAULT,
+                   dt_play=SELF_PLAY_DT, k=SELF_PLAY_K, floor=ROOM_PLAY_FLOOR,
+                   cap=ROOM_PACE_MAX):
+    """The seconds this INK stroke needs to survive the judge's PAIR gate.
+
+    -> (seconds, reason).  Same statement as `room_pace_beat` over the dense
+    drawn path, whose parameter is `ud` rather than a straight line's.  The
+    stroke is unchanged: it is flown more slowly, not differently.
+    """
+    if not ROOM_PACE or dur <= 0.0:
+        return float(dur), None
+    want, why = _room_need(spec, qd, ud, float(dur), pen_ext, h_inv, dt_play,
+                           k, floor)
+    if why != "paced":
+        return float(dur), why
+    if want > float(cap) * float(dur):       # see `room_pace_beat`
+        return float(dur), "capped"
+    return float(want), "paced"
+
+
+def self_pace_block(spec, q_from, steps, pen_ext=None, h_inv=H_INV_DEFAULT,
+                    **kw):
+    """`self_pace_beat` AND `room_pace_beat` over one pen-up block of beats.
+
+    -> (steps, n_paced, seconds_added).  The poses are untouched; the slower of
+    the two answers wins, because both are requirements and neither is a
+    preference.
+    """
+    if not (SELF_PACE or ROOM_PACE) or not steps:
         return list(steps or []), 0, 0.0
     out, n, added = [], 0, 0.0
     q = np.asarray(q_from, float).reshape(7)
     for dt, qn in steps:
         dt2, why = self_pace_beat(spec, q, qn, float(dt), pen_ext, **kw)
+        dt3, why3 = room_pace_beat(spec, q, qn, float(dt), pen_ext, h_inv)
+        if dt3 > dt2:
+            dt2, why = dt3, why3
         if why == "paced":
             n += 1
             added += dt2 - float(dt)
@@ -1778,7 +1960,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 steps = r[0]
         n_pace, s_pace = 0, 0.0
         if steps and SELF_PACE:
-            steps, n_pace, s_pace = self_pace_block(spec, q0, steps, pen_ext)
+            steps, n_pace, s_pace = self_pace_block(spec, q0, steps,
+                                                    pen_ext, h_inv)
         add(0.0, q0)
         aside_s = 0.0
         if steps:
@@ -1901,7 +2084,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         froms = [q0] + [D["qd"][-1] for D in dense]
         for i in range(len(beats)):
             qf = froms[i] if i < len(froms) else beats[i - 1][-1][1]
-            beats[i], n_, add_ = self_pace_block(spec, qf, beats[i], pen_ext)
+            beats[i], n_, add_ = self_pace_block(spec, qf, beats[i],
+                                                 pen_ext, h_inv)
             self_paced += n_
             self_pace_s += add_
     transit_s = float(sum(s[0] for b in beats for s in b))
@@ -1919,8 +2103,20 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
             add(t, q_)
 
     draw_len = transit_len = 0.0
+    room_paced, room_pace_s = 0, 0.0
     for k, D in enumerate(dense):
         dur = draw_duration(D["qd"], D["ud"], D["length"], draw_speed, qd_frac)
+        # ...AND THE INK PAYS THE PAIR GATE'S PLAYBACK RESIDUAL TOO.  A stroke
+        # drawn 50.8 mm from a frozen partner is legal geometry that the judge
+        # reads at 49.9 mm because of the speed it is flown at; the stroke is
+        # not changed, it is flown slower.  See `room_pace_draw`.
+        if ROOM_PACE:
+            dur2, why = room_pace_draw(spec, D["qd"], D["ud"], float(dur),
+                                       pen_ext, h_inv)
+            if why == "paced":
+                room_paced += 1
+                room_pace_s += dur2 - float(dur)
+                dur = dur2
         for uu, q in zip(D["ud"][1:], D["qd"][1:]):
             add(t + uu * dur, q, k, uu)
         n_ch = int(np.clip(round(D["length"] / ink_chunk), 3, 60))
@@ -1958,7 +2154,8 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                    paper_safe)
         need(None if r is None else dict(steps=r[0]), "retreat", len(dense) - 1)
         if SELF_PACE:
-            paced, n_, add_ = self_pace_block(spec, hox[-1][0], r[0], pen_ext)
+            paced, n_, add_ = self_pace_block(spec, hox[-1][0], r[0],
+                                              pen_ext, h_inv)
             r = (paced,) + tuple(r[1:])
             self_paced += n_
             self_pace_s += add_
@@ -1979,6 +2176,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 transit_s=float(transit_s), taxi_s=float(taxi_s),
                 retreat_s=float(retreat_s), aside_s=0.0,
                 self_paced=int(self_paced), self_pace_s=float(self_pace_s),
+                room_paced=int(room_paced), room_pace_s=float(room_pace_s),
                 q_end=np.array(Q[-1], float),
                 park=str(park), pen=ext_of(pen_ext),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),

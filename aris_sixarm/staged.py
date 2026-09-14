@@ -235,7 +235,7 @@ def freeze_partners(arm: int, parks: dict[int, np.ndarray], specs=None,
 
 def freeze_conduct(partners, poses, specs=None, pens=None,
                    h_inv=H_INV_DEFAULT, rooms=None, leg_cache=True,
-                   leg_cache_root=None) -> tuple[int, ...]:
+                   leg_cache_root=None, keep_bands=False) -> tuple[int, ...]:
     """The room a CONDUCT flies in, installed for the whole of it. -> the ids.
 
     THE DEFECT THIS CLOSES, MEASURED 2026-09-14 (docs/V2_STAGED.md §26).
@@ -258,6 +258,10 @@ def freeze_conduct(partners, poses, specs=None, pens=None,
     No observer is named: the arms this conduct moves are not in the frozen set
     at all, so there is nothing for an observer to exclude, and `static_boxes`
     already drops a spec's own band.
+
+    `keep_bands` keeps the frozen partners' band AABBs in the static room ON TOP
+    of their real capsules -- `frozen.set_keep_bands` says why, and
+    `CONDUCT_BANDS` says when.
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
@@ -267,12 +271,13 @@ def freeze_conduct(partners, poses, specs=None, pens=None,
     frozen.freeze_sets(sets, fl, pens, h_inv, clusters=env or None)
     frozen.observe(None)
     frozen.set_standoff(None)
+    frozen.set_keep_bands(bool(keep_bands))
     paper.clear_cache()
     if leg_cache:
         paper.disk_cache_open(leg_cache_root,
                               signature=leg_cache_signature(
                                   {a: sets[a][0] for a in sets}, env or None,
-                                  None))
+                                  None, bool(keep_bands)))
     else:
         paper.disk_cache_close()
     return tuple(sorted(sets))
@@ -291,7 +296,8 @@ def _standoff_for(arm, standoff, partners) -> dict:
 
 def leg_cache_signature(frozen_poses: dict[int, np.ndarray],
                         envelopes: dict | None = None,
-                        standoff: dict | None = None) -> str:
+                        standoff: dict | None = None,
+                        keep_bands: bool = False) -> str:
     """`paper.cache_signature()` plus the frozen room it is valid under.
 
     The room is the parked partners' poses AND, in a stage, the active
@@ -318,6 +324,11 @@ def leg_cache_signature(frozen_poses: dict[int, np.ndarray],
                          if float(s) > 0.0}
         if not d["standoff"]:
             d.pop("standoff")
+    # ...AND THE KEPT BANDS, for the third time and the same reason: a leg
+    # bought in the relaxed room may not be served in the room that keeps the
+    # bands.  Absent when they are dropped, so an old signature is unchanged.
+    if keep_bands:
+        d["keep_bands"] = True
     blob = json.dumps(d, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
@@ -1004,8 +1015,12 @@ def _room_key(envelopes=None) -> str:
     # THE STANDOFF IS PART OF THE ROOM for the same reason the envelope is: it
     # changes what `ink_vs_envelope` and the legs answer without changing an id.
     # Empty appends nothing, so an S = 0 key is the key it always was.
+    # ...AND SO ARE THE KEPT BANDS: they change what every leg answers without
+    # touching an id, a pose or an envelope.  Empty when they are dropped, so
+    # the key the shipped behaviour builds is the key it always built.
     return (f"{tuple(frozen.frozen_ids())}|{frozen.observer()}|{env}"
-            + (f"|S{frozen.standoff_sig()}" if frozen.standoff() else ""))
+            + (f"|S{frozen.standoff_sig()}" if frozen.standoff() else "")
+            + (f"|B{frozen.keep_bands_sig()}" if frozen.keep_bands() else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1343,6 +1358,19 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                                           h_inv=h_inv,
                                           pen_ext=pens.get(arm))[0])
                  for s in st.programme]
+    # THE LAST EXIT HOVER IS WHATEVER THE TRAJECTORY ACTUALLY ENDS ON.  The list
+    # above re-derives every hover with the ORDINARY rule, and under
+    # `PARK_FREEZE` `writing.arm_program` asks a DIFFERENT question of the one
+    # pose the stage stops and holds: the strict joint margin and the room
+    # (`HOVER_HOLD_MARGIN`, `HOVER_ROOM_FLOOR`).  The two answers differ -- 0.136
+    # rad against 0.6023 on the pinned toy case -- and the trajectory is the
+    # truth: it is what `scene_check` reads, what the barrier holds and what the
+    # next stage plans from.  So the convenience field is taken FROM it rather
+    # than re-derived beside it (docs/V2_STAGED.md section 28).
+    if (st.hovers and st.timeline is not None
+            and str(park_policy) == writing.PARK_FREEZE):
+        st.hovers[-1] = (st.hovers[-1][0],
+                         np.asarray(st.timeline["q"], float)[-1].reshape(7))
     return _finish(st, t_all, ladder0)
 
 
@@ -2912,7 +2940,7 @@ def _conducted_phases(phases, prog_idx, dt, M):
 
 def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
                    leg_cache, leg_cache_root, on_piece, dt, sub, verbose,
-                   only=None, rooms=None, outside_poses=None):
+                   only=None, rooms=None, outside_poses=None, bands="drop"):
     """THE FINAL PASS: everything A and B could not fly, conducted.
 
     -> (arms, check_report, seconds).
@@ -2969,13 +2997,37 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
         st.role, st.conducted = "conductor", True
         arms[int(a)] = st
         segs[int(a)] = list(st.programme)
-    if outside:
-        freeze_conduct(outside, op, fl, pens, h_inv, rooms, leg_cache,
-                       leg_cache_root)
-    else:
-        thaw()
     home = {int(a): np.asarray(parks[a], float).reshape(7)
             for a in who if not segs.get(int(a))}
+    # AN ARM IN THE GROUP THAT IS NOT GOING TO MOVE IS A WALL, NOT A MOVER, AND
+    # THE ROOM HAS TO SAY SO.  `freeze_conduct` freezes the arms OUTSIDE the
+    # group because the movers cannot be in their own room -- but an arm inside
+    # the group whose bucket came out empty and whose park it is already standing
+    # at moves no joint in this conduct, and it was in neither half of the safety
+    # argument: not in the frozen set (it is nominally a mover) and not in the
+    # conductor's schedule (it has no timeline).  Measured 2026-09-14 on
+    # `lf6_whole` stage C: arm 31 drew nothing, stood at its park for the whole
+    # conduct, and arm 71 routed a leg **-41.8 mm** through it.
+    # ...AND THAT IS NOT ONLY THE EMPTY BUCKETS.  An arm whose bucket WOULD NOT
+    # FLY has pieces, so it is not offered a go-home `aside` either -- it simply
+    # stands at its entry pose for the whole conduct with no timeline at all.
+    # Measured 2026-09-14 on `lf6_whole` stage C: arm 31 carried 8 pieces, flew
+    # none, stood still, and arm 71 routed through it at -20.7 mm.
+    still = sorted(int(a) for a in who
+                   if arms[int(a)].timeline is None
+                   and (int(a) not in home
+                        or float(np.max(np.abs(
+                            np.asarray(held[a], float).reshape(7)
+                            - home[int(a)]))) <= 1e-9))
+    room = sorted(set(outside) | set(still))
+    op_all = dict(op)
+    op_all.update({int(a): np.asarray(held[a], float).reshape(7)
+                   for a in still})
+    if room:
+        freeze_conduct(room, op_all, fl, pens, h_inv, rooms, leg_cache,
+                       leg_cache_root, keep_bands=(str(bands) == "keep"))
+    else:
+        thaw()
     # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME.  `plan_bucket` returns
     # no timeline for an empty bucket, so an arm that drew in stage A or B and
     # has no residue would simply stand at its hover for ever.  `arm_program`
@@ -3196,11 +3248,11 @@ def _row_job(payload):
     answer crossable.
     """
     (s, who, buckets, defer, fl, pens, held, parks, h_inv, opts, leg_cache,
-     leg_cache_root, dt, sub, verbose, rooms, op) = payload
+     leg_cache_root, dt, sub, verbose, rooms, op, bands) = payload
     arms, rep, secs = _conduct_stage(s, buckets, defer, fl, pens, held, parks,
                                      h_inv, opts, leg_cache, leg_cache_root,
                                      None, dt, sub, verbose, only=who,
-                                     rooms=rooms, outside_poses=op)
+                                     rooms=rooms, outside_poses=op, bands=bands)
     return {int(a): _thin_stage(st) for a, st in arms.items()}, rep, float(secs)
 
 
@@ -3247,6 +3299,51 @@ def _lead(v, n, first):
         return v
     return np.concatenate([np.repeat(np.asarray(first).reshape((1,) + v.shape[1:]),
                                      n, axis=0), v])
+
+
+def _clock_frames(tl, dt) -> int:
+    """How many MERGE frames one timeline takes. -> int.
+
+    `_on_clock`'s answer, WITHOUT resampling anything -- so a caller that has to
+    lay slots end to end can ask before the merge has run.  A conducted timeline
+    is already `dt`-spaced and is its own length; a timeline the conductor
+    REFUSED comes off `writing.arm_program`'s waypoint clock, where the row count
+    says nothing at all about the seconds (measured 2026-09-14: 354 waypoints
+    over 59.7 s, which is 1 195 frames).
+    """
+    if tl is None:
+        return 1
+    t = np.asarray(tl["t"], float)
+    if len(t) > 1:
+        want = dt * np.arange(len(t))
+        if float(np.max(np.abs(t - want))) <= 1e-6:
+            return len(t)
+    dur = float(tl.get("duration", t[-1] if len(t) else 0.0))
+    return max(int(np.ceil(dur / float(dt))) + 1, 1)
+
+
+def _slot_frames(part, dt) -> int:
+    """How long one group's SLOT is, in merge frames. -> int.
+
+    THE SLOT IS THE MERGE'S CLOCK AND NOTHING ELSE.  `--row-compose serial` lays
+    the groups end to end, so a slot measured in the wrong unit overlaps the
+    next group -- and a group the conductor REFUSED is doubly wrong, because its
+    arms fly one after another (`_merge_conducts` says so) and its slot is
+    therefore the SUM of their lengths rather than the max.
+
+    MEASURED 2026-09-14 on `lf6_whole` stage C: group [31, 71] was refused, its
+    354-waypoint timeline was read as 354 frames, group [13, 17] was laid down
+    at 17.65 s -- and arm 71 was still flying until 59.70 s.  The merge read
+    17 <-> 71 at **-108.6 mm**, which is not a composition failure of the scheme
+    but of this arithmetic.
+    """
+    ns = [_clock_frames(st.timeline, dt) for st in part[0].values()
+          if st.timeline is not None]
+    if not ns:
+        return 1
+    if part[1].get("serialised"):
+        return sum(n - 1 for n in ns) + 1
+    return max(ns)
 
 
 def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub,
@@ -3381,17 +3478,69 @@ def group_order(groups, deferred, buckets, stage) -> list[tuple]:
 
 
 def _group_payload(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
-                   opts, leg_cache, leg_cache_root, dt, sub, rooms, op):
+                   opts, leg_cache, leg_cache_root, dt, sub, rooms, op,
+                   bands="drop"):
     return (s, tuple(who), buckets,
             {int(a): list(v) for a, v in (deferred or {}).items()
              if int(a) in set(int(x) for x in who)},
             fl, pens, held, parks, h_inv, opts, leg_cache, leg_cache_root,
-            dt, sub, False, (rooms or None), (op or None))
+            dt, sub, False, (rooms or None), (op or None), str(bands))
+
+
+CONDUCT_BANDS = "auto"     # drop | keep | auto -- see `_conduct_groups`
 
 
 def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                     opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
                     verbose, mode="parallel"):
+    """`_conduct_set`, with the band retry `CONDUCT_BANDS` asks for.
+
+    THE ROOM A CONDUCT ROUTES IN AND THE ROOM THE JUDGE MEASURES IT IN ARE NOT
+    THE SAME ROOM, and stage D of the serial programme is where that showed
+    (docs/V2_STAGED.md section 28).  `freeze_conduct` drops a frozen partner's
+    band AABB and replaces it by that partner's real capsules -- 127 mm of
+    honest room, and the whole reason `frozen` exists -- while
+    `scene_check`'s FRAME gate measures every arm against
+    `spec.static_obstacles()`, bands included, knowing nothing about any of it.
+
+    So: route in the relaxed room, and if the judge's frame gate refuses what
+    comes out, route the whole set AGAIN with the bands kept as well and take
+    that instead -- but only if it actually clears the gate.  `keep` and `drop`
+    force one room; `auto` (the default) pays for the second pass only where
+    the first produced something that cannot ship.  The retry can only ever be
+    more conservative than the run it replaces.
+    """
+    want = str(CONDUCT_BANDS or "auto")
+    first = "drop" if want == "auto" else want
+    arms, rep, secs = _conduct_set(s, groups, buckets, deferred, fl, pens, held,
+                                   parks, h_inv, opts, leg_cache,
+                                   leg_cache_root, dt, sub, jobs, cap_s,
+                                   verbose, mode, first)
+    rep["bands"] = first
+    if want != "auto" or not rep.get("frame_failed"):
+        return arms, rep, secs
+    if verbose:
+        print(f"  stage {s}: frame gate refuses arms {rep['frame_failed']} in "
+              "the relaxed room; re-conducting with the partners' bands kept")
+    a2, r2, s2 = _conduct_set(s, groups, buckets, deferred, fl, pens, held,
+                              parks, h_inv, opts, leg_cache, leg_cache_root,
+                              dt, sub, jobs, cap_s, verbose, mode, "keep")
+    r2["bands"] = "keep"
+    r2["bands_retry"] = dict(
+        from_frame_failed=list(rep.get("frame_failed") or []),
+        to_frame_failed=list(r2.get("frame_failed") or []),
+        ink_m_drop=float(sum(st.ink_m for st in arms.values())),
+        ink_m_keep=float(sum(st.ink_m for st in a2.values())))
+    if r2.get("frame_failed"):
+        rep["bands_retry"] = dict(r2["bands_retry"], taken=False)
+        return arms, rep, secs + s2      # the retry did not fix it either
+    r2["bands_retry"]["taken"] = True
+    return a2, r2, secs + s2
+
+
+def _conduct_set(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
+                 opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
+                 verbose, mode="parallel", bands="drop"):
     """Run several disjoint conducts. -> (arms, report, seconds).
 
     `groups` is [(arm, ...)] and `mode` is how they COMPOSE, which is the whole
@@ -3426,11 +3575,11 @@ def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
     if mode in ("priority", "serial") and len(groups) > 1:
         return _compose_groups(s, groups, buckets, deferred, fl, pens, held,
                                parks, h_inv, opts, leg_cache, leg_cache_root,
-                               dt, sub, jobs, cap_s, verbose, mode, t0)
+                               dt, sub, jobs, cap_s, verbose, mode, t0, bands)
     jobs = max(1, min(int(jobs), len(groups)))
     payloads = [_group_payload(s, who, buckets, deferred, fl, pens, held, parks,
                                h_inv, opts, leg_cache, leg_cache_root, dt, sub,
-                               None, None) for who in groups]
+                               None, None, bands) for who in groups]
     parts, lost = [], []
     if jobs == 1 or len(groups) == 1:
         for pay in payloads:
@@ -3505,8 +3654,8 @@ def _one_group(pay, cap_s):
 
 def _compose_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                     opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
-                    verbose, mode, t0):
-    """`priority` and `serial`. -> (arms, report, seconds).  See `_conduct_groups`."""
+                    verbose, mode, t0, bands="drop"):
+    """`priority` and `serial`. -> (arms, report, seconds).  See `_conduct_set`."""
     order = group_order(groups, deferred, buckets, s)
     parks7 = {int(a): np.asarray(parks[a], float).reshape(7) for a in fl}
     held7 = {int(a): np.asarray(held[a], float).reshape(7) for a in fl}
@@ -3529,7 +3678,8 @@ def _compose_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                     op[int(a)] = parks7[int(a)] if j < k else held7[int(a)]
             pay.append(_group_payload(s, who, buckets, deferred, fl, pens,
                                       held7, parks, h_inv, opts, leg_cache,
-                                      leg_cache_root, dt, sub, None, op))
+                                      leg_cache_root, dt, sub, None, op,
+                                      bands))
         import concurrent.futures as _fut
         import multiprocessing as _mp
         n = max(1, min(int(jobs), len(pay)))
@@ -3554,9 +3704,7 @@ def _compose_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
             parts.append(part)
             for a in who:
                 offsets[int(a)] = m
-            m += max([1] + [len(np.asarray(st.timeline["t"], float))
-                            for st in part[0].values()
-                            if st.timeline is not None]) - 1
+            m += _slot_frames(part, dt) - 1
     else:
         for who in order:
             op = {int(a): (parks7[int(a)] if int(a) in done else held7[int(a)])
@@ -3566,7 +3714,7 @@ def _compose_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
             op.update({int(a): held7[int(a)] for a in rooms})
             pay = _group_payload(s, who, buckets, deferred, fl, pens, held7,
                                  parks, h_inv, opts, leg_cache, leg_cache_root,
-                                 dt, sub, dict(rooms), op)
+                                 dt, sub, dict(rooms), op, bands)
             part, why = _one_group(pay, cap_s)
             if part is None:
                 lost.append((who, why))

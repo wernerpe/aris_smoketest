@@ -146,7 +146,10 @@ def test_the_conduct_keeps_its_room_installed_while_idle_conducts(rig,
     arms, rep, _ = staged._conduct_stage(
         2, {}, {}, rig, pens, held, parks, 0.97, None, False, None, None,
         0.05, 2, False, only=(31, 71))
-    assert seen["ids"] == [2, 13, 17, 97], seen
+    # ...AND ARM 71 IS IN IT TOO, because it has nothing to draw and is already
+    # standing at its park, so it moves no joint in this conduct: a mover that
+    # does not move is a wall (see `_conduct_stage`'s `still`).
+    assert seen["ids"] == [2, 13, 17, 71, 97], seen
     assert seen["observer"] is None
     # ...and the room is given back before the check is asked anything
     assert frozen.frozen_ids() == []
@@ -343,3 +346,307 @@ def test_self_pace_block_never_shortens_a_beat(rig):
     assert added == pytest.approx(sum(b[0] - a[0]
                                       for a, b in zip(steps, out)), abs=1e-9)
     assert n >= 1
+
+
+# ---------------------------------------------------------------------------
+# 5.  THE FOUR RESIDUALS OF 2026-09-14, CLOSED (docs/V2_STAGED.md section 28)
+# ---------------------------------------------------------------------------
+# The leg, verbatim: arm 71's stage-C transit beat in
+# `out/staged_csail_h097_lf3c_serial_program.json`, frames 1128 -> 1190 at
+# dt = 0.05 (3.10 s).  Its TRUE self-clearance is 23.10 mm -- over the router's
+# 23 mm and over the judge's 20 -- and the fixed 33-sample grid bounds it at
+# -13.9 mm, which is why `self_pace_beat` priced it at nothing and the judge
+# then refused it at +14.3 mm.
+LEG_71 = (
+    [-1.702715, 1.56609, -2.610526, -2.526298, -2.516868, 2.088593, -1.778371],
+    [0.510639, -0.821777, -1.198162, -1.864365, 2.374932, 1.635456, -0.201186],
+)
+
+
+def test_the_fixed_grid_bound_is_the_reason_that_leg_was_never_paced(rig):
+    """(ii) 33 samples over a 3 s beat lose the whole of its headroom."""
+    pen = scene_check.pen_len(rig[71].pen, 71)
+    q0, q1 = (np.asarray(q, float) for q in LEG_71)
+    Q = paper.line_samples(q0, q1, paper.SAMPLES)
+    A, B, R = selfcoll.capsule_ends(Q, pen)
+    c = selfcoll.clearance_screened(A, B, R, 0.12)
+    X = np.concatenate([A, B], axis=1)
+    coarse = float(paper.interval_bounds(c, X, writing.SELF_PLAY_K)[0].min())
+    assert coarse < writing.SELF_PLAY_FLOOR          # "no speed rescues this"
+    # ...and the converged bound says the geometry was fine all along
+    conv = float(paper.leg_self_lb(rig[71], q0, q1, pen))
+    assert conv > writing.SELF_PLAY_FLOOR
+    assert conv > selfcoll.SELF_PLAN_MARGIN
+    assert conv > coarse                             # refining only ever RAISES
+
+
+def test_the_self_pace_uses_the_converged_bound_and_now_prices_that_leg(rig):
+    """(ii) The same beat, paced, and the judge can read it."""
+    pen = scene_check.pen_len(rig[71].pen, 71)
+    q0, q1 = LEG_71
+    dt2, why = writing.self_pace_beat(rig[71], q0, q1, 3.10, pen)
+    assert why == "paced" and dt2 > 3.10
+    assert dt2 <= writing.SELF_PACE_MAX * 3.10
+    assert _judge(rig[71], q0, q1, 3.10, pen) < scene_check.SELF_MARGIN
+    assert _judge(rig[71], q0, q1, dt2, pen) >= scene_check.SELF_MARGIN
+
+
+def _judge_room(spec, q0, q1, dt, pen, h_inv=0.97,
+                dt_play=writing.SELF_PLAY_DT):
+    """`scene_check`'s PAIR reading of one straight move against still arms.
+
+    Restated here, as `_judge` restates the self gate: the partner does not
+    move, so the whole of `0.55 * (step_i + step_j)` is this arm's own step.
+    """
+    n = max(2, int(round(float(dt) / float(dt_play))) + 1)
+    Q = np.asarray(q0, float) + np.linspace(0.0, 1.0, n)[:, None] * (
+        np.asarray(q1, float) - np.asarray(q0, float))
+    P = paper.world_chain(Q, spec, pen, h_inv)
+    C = paper.sphere_centres(Q, spec, h_inv)
+    X = P if C is None else np.concatenate([P, C], axis=1)
+    c = frozen.partner_clearance(P, C)
+    step = np.concatenate([[0.0], np.linalg.norm(np.diff(X, axis=0),
+                                                 axis=2).max(1)])
+    return float(np.min(c - writing.SELF_PLAY_K * step))
+
+
+def _room_beat(rig):
+    """A real beat with real frozen partners, and its true clearance."""
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    q0 = np.asarray(parks[71], float).reshape(7)
+    q1 = q0.copy()
+    q1[1] += 0.45
+    q1[3] += 0.30
+    staged.freeze_conduct([2, 13, 17, 31, 97], parks, rig, pens, 0.97,
+                          leg_cache=False)
+    pen = scene_check.pen_len(rig[71].pen, 71)
+    true = float(paper.leg_room_lb(rig[71], q0, q1, pen)) \
+        if hasattr(paper, "leg_room_lb") else None
+    if true is None:
+        Q = paper.line_samples(q0, q1, 401)
+        P = paper.world_chain(Q, rig[71], pen, 0.97)
+        C = paper.sphere_centres(Q, rig[71], 0.97)
+        true = float(np.min(frozen.partner_clearance(P, C)))
+    return q0, q1, pen, true
+
+
+def test_the_room_pace_charges_the_pair_gates_playback_residual(rig):
+    """(i) A move that is legal geometry and illegal playback is SLOWED.
+
+    The floor is the argument, not the fixture: this beat is priced against a
+    floor one millimetre under its own true clearance, which is exactly the
+    shape the CSAIL stroke was in -- 50.5 mm of room against a 50 mm gate.
+    """
+    q0, q1, pen, true = _room_beat(rig)
+    floor = true - 0.001
+    dt, why = writing.room_pace_beat(rig[71], q0, q1, 0.30, pen, 0.97,
+                                     floor=floor, cap=1e6)
+    assert why == "paced" and dt > 0.30
+    assert _judge_room(rig[71], q0, q1, 0.30, pen) < floor   # before
+    assert _judge_room(rig[71], q0, q1, dt, pen) >= floor    # after
+    staged.thaw()
+
+
+def test_a_move_with_room_to_spare_is_never_slowed_by_the_room(rig):
+    """(i) Only the moves that owe the residual pay it."""
+    q0, q1, pen, true = _room_beat(rig)
+    dt, why = writing.room_pace_beat(rig[71], q0, q1, 0.30, pen, 0.97,
+                                     floor=true - 0.030)
+    assert why is None and dt == pytest.approx(0.30)
+    staged.thaw()
+
+
+def test_a_move_already_inside_the_room_is_refused_not_paced(rig):
+    """(i) No speed rescues a move whose geometry has already lost."""
+    q0, q1, pen, true = _room_beat(rig)
+    dt, why = writing.room_pace_beat(rig[71], q0, q1, 0.30, pen, 0.97,
+                                     floor=true + 0.010)
+    assert why == "under" and dt == pytest.approx(0.30)
+    staged.thaw()
+
+
+def test_the_room_pace_is_off_when_there_is_no_room(rig):
+    """(i) Thawed, the pacing is not merely inert -- it never asks."""
+    staged.thaw()
+    parks = staged.shipped_parks(rig)
+    q0 = np.asarray(parks[71], float).reshape(7)
+    q1 = q0.copy()
+    q1[1] += 0.45
+    dt, why = writing.room_pace_beat(rig[71], q0, q1, 0.30,
+                                     scene_check.pen_len(rig[71].pen, 71), 0.97)
+    assert why is None and dt == pytest.approx(0.30)
+
+
+def test_keeping_the_bands_puts_the_frozen_partners_columns_back(rig):
+    """(iii) The room the conduct routes in can be the room the judge uses."""
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+
+    def bands(spec):
+        return sorted(b["name"] for b in paper.static_boxes(spec)
+                      if frozen.band_owner(b.get("name")) is not None)
+
+    staged.freeze_conduct([2, 13, 17, 97], parks, rig, pens, 0.97,
+                          leg_cache=False)
+    dropped = bands(rig[31])
+    assert frozen.keep_bands() is False
+    assert not any(frozen.band_owner(n) in (2, 13, 17, 97) for n in dropped)
+    staged.freeze_conduct([2, 13, 17, 97], parks, rig, pens, 0.97,
+                          leg_cache=False, keep_bands=True)
+    kept = bands(rig[31])
+    assert frozen.keep_bands() is True
+    assert set(kept) > set(dropped)
+    assert {frozen.band_owner(n) for n in kept} >= {2, 13, 17, 97}
+    # ...and a leg bought in one room may not be served in the other
+    sig = staged.leg_cache_signature({71: parks[71]})
+    assert sig != staged.leg_cache_signature({71: parks[71]}, None, None, True)
+    assert frozen.keep_bands_sig() and staged._room_key().endswith("bands;")
+    staged.thaw()
+    assert frozen.keep_bands() is False
+
+
+def test_the_band_retry_fires_only_when_the_frame_gate_refuses(rig,
+                                                               monkeypatch):
+    """(iii) `auto` pays for the second pass exactly where it buys something."""
+    calls = []
+
+    def fake(*a, **kw):
+        bands = a[-1] if not kw else kw.get("bands", a[-1])
+        calls.append(str(bands))
+        rep = dict(ok=(bands == "keep"), min_clearance=0.2,
+                   frame_failed=([] if bands == "keep" else [31]))
+        return {31: _stage(31, staged.shipped_parks(rig)[31])}, rep, 1.0
+
+    monkeypatch.setattr(staged, "_conduct_set", fake)
+    _, rep, secs = staged._conduct_groups(
+        3, [(31,)], {}, {}, rig, None, {}, {}, 0.97, None, False, None,
+        0.05, 2, 1, 60.0, False)
+    assert calls == ["drop", "keep"]
+    assert rep["bands"] == "keep" and rep["bands_retry"]["taken"] is True
+    assert rep["bands_retry"]["from_frame_failed"] == [31]
+    assert secs == pytest.approx(2.0)
+    # ...and a conduct the judge already accepts is never run twice
+    calls.clear()
+    monkeypatch.setattr(staged, "_conduct_set",
+                        lambda *a, **kw: ({}, dict(ok=True, frame_failed=[]),
+                                          1.0))
+    _, rep2, _ = staged._conduct_groups(
+        3, [(31,)], {}, {}, rig, None, {}, {}, 0.97, None, False, None,
+        0.05, 2, 1, 60.0, False)
+    assert rep2["bands"] == "drop" and "bands_retry" not in rep2
+
+
+# ---------------------------------------------------------------------------
+# (iv)  THE SERIALISED HOVER IS THE ONE THE ARM ACTUALLY HOLDS
+# ---------------------------------------------------------------------------
+# The same three-stroke picture `tests/test_staged.py` pins on: one stroke in
+# row band 1, one in the dead band, and one that crosses.
+TOY_LINES = (
+    np.column_stack([np.linspace(0.55, 0.85, 8), np.full(8, 1.70)]),
+    np.column_stack([np.linspace(0.55, 0.85, 8), np.full(8, 1.22)]),
+    np.column_stack([np.full(8, 0.70), np.linspace(1.66, 1.16, 8)]),
+)
+
+
+@pytest.fixture(scope="module")
+def one_piece(rig):
+    """Arm 71's stage-0 bucket off the toy picture. -> ((stage, arm), pieces)."""
+    from aris_sixarm import traces as T
+    x0, x1 = T.BLOCK[0], T.BLOCK[2]
+    cov = T.coverage_from_rects(
+        {13: [(x0, 0.30, x1, 1.32)], 17: [(x0, 0.30, x1, 1.32)],
+         31: [(x0, 1.08, x1, 2.56)], 71: [(x0, 1.08, x1, 2.56)],
+         2: [(x0, 2.28, x1, 3.40)], 97: [(x0, 2.28, x1, 3.40)]},
+        extent=(0.0, 0.0, T.BLOCK[2] + 0.2, T.BLOCK[3]))
+    plan = T.plan_lines(list(TOY_LINES), T.capability(cov, T.zigzag_pattern()))
+    b = staged.bucket(staged.pieces_of(plan))
+    key = next(k for k in sorted(b) if k == (0, 71))
+    return key, b[key]
+
+
+def test_the_serialised_last_hover_is_the_pose_the_trajectory_ends_on(
+        rig, one_piece):
+    """(iv) The trajectory is the truth; the convenience field must agree.
+
+    `arm_program` asks a DIFFERENT question of the one pose a `PARK_FREEZE`
+    stage stops and holds -- the strict joint margin and the room -- and
+    `ArmStage.hovers` used to re-derive every hover with the ordinary rule, so
+    the serialised `hover_out` of the last piece was a pose the arm never
+    reaches (0.136 rad of joint margin against the 0.6023 it actually holds).
+    """
+    key, pcs = one_piece
+    st = staged.plan_bucket(*key, pcs, fly=True, leg_cache=False,
+                            park_policy=writing.PARK_FREEZE)
+    assert st.timeline is not None and st.hovers
+    q_end = np.asarray(st.timeline["q"], float)[-1]
+    assert np.allclose(np.asarray(st.hovers[-1][1], float).reshape(7), q_end)
+    assert np.allclose(np.asarray(st.q_end, float).reshape(7), q_end)
+    staged.thaw()
+
+
+def test_a_go_home_stage_keeps_its_ordinary_last_hover(rig, one_piece):
+    """(iv) ...and under `PARK_HOME` the trajectory ends at the PARK, which is
+    not a hover, so the field stays what it always was."""
+    key, pcs = one_piece
+    st = staged.plan_bucket(*key, pcs, fly=True, leg_cache=False,
+                            park_policy=writing.PARK_HOME)
+    assert st.timeline is not None and st.hovers
+    q_end = np.asarray(st.timeline["q"], float)[-1]
+    assert not np.allclose(np.asarray(st.hovers[-1][1], float).reshape(7),
+                           q_end)
+    staged.thaw()
+
+
+# ---------------------------------------------------------------------------
+# 6.  THE SERIAL SLOT, AND THE MOVER THAT DOES NOT MOVE
+# ---------------------------------------------------------------------------
+def test_a_refused_groups_slot_is_measured_on_the_merges_clock(rig):
+    """A waypoint-clock timeline's ROW COUNT is not its length in frames.
+
+    Measured 2026-09-14 on `lf6_whole` stage C: group [31, 71] was refused, its
+    354-waypoint timeline was read as 354 frames, the next group was laid down
+    at 17.65 s, and arm 71 was still flying at 59.70 s -- the merge read
+    17 <-> 71 at -108.6 mm.
+    """
+    q = np.asarray(staged.shipped_parks(rig)[71], float).reshape(7)
+    way = dict(t=np.array([0.0, 1.0, 59.7]), q=np.repeat(q[None], 3, axis=0),
+               seg=-np.ones(3, int), u=np.zeros(3), duration=59.7)
+    assert len(way["t"]) == 3
+    assert staged._clock_frames(way, 0.05) == 1195
+    grid = dict(way, t=0.05 * np.arange(8), q=np.repeat(q[None], 8, axis=0),
+                seg=-np.ones(8, int), u=np.zeros(8), duration=0.35)
+    assert staged._clock_frames(grid, 0.05) == 8      # already on the clock
+
+
+def test_a_refused_groups_slot_is_the_sum_of_its_arms_not_the_max(rig):
+    """`serialised` means one arm at a time, so the SLOT is the sum."""
+    parks = staged.shipped_parks(rig)
+    a, b = _stage(31, parks[31], n=5), _stage(71, parks[71], n=4)
+    conducted = ({31: a, 71: b}, dict(ok=True), 1.0)
+    assert staged._slot_frames(conducted, 0.05) == 5           # max
+    refused = ({31: a, 71: b}, dict(ok=False, serialised=True), 1.0)
+    assert staged._slot_frames(refused, 0.05) == 8             # 4 + 3 + 1
+
+
+def test_a_group_arm_with_nothing_to_draw_is_put_into_the_room(rig,
+                                                              monkeypatch):
+    """The mover that does not move is a wall; the one that goes home is not."""
+    from aris_sixarm import idle as idle_mod
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    held = {int(x): np.asarray(q, float).reshape(7) for x, q in parks.items()}
+    held[71] = held[71].copy()
+    held[71][3] += 2e-3                # arm 71 has a park trip to make
+    seen = {}
+
+    def spy(*args, **kw):
+        seen["ids"] = frozen.frozen_ids()
+        raise idle_mod.Unconductable("stop here")
+
+    monkeypatch.setattr(idle_mod, "conduct", spy)
+    staged._conduct_stage(2, {}, {}, rig, pens, held, parks, 0.97, None, False,
+                          None, None, 0.05, 2, False, only=(31, 71))
+    assert 31 in seen["ids"]           # standing at its park: a wall
+    assert 71 not in seen["ids"]       # it is going home: a mover
+    staged.thaw()

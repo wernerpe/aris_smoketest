@@ -1,5 +1,90 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE INTEGRATED RUN — AND TWO OF THE FOUR RESIDUALS WERE NAMED WRONGLY (2026-09-14, EIGHTH)
+
+Every fix of 2026-09-14 in one programme on the CSAIL logo at h = 0.970, and
+first the four things §26.6 and §27.1 left open. **Two of the four diagnoses do
+not survive being measured, and the measurements are in docs/V2_STAGED.md §28.**
+
+**THE 0.09 mm WAS NEVER A SEAM.** §26.6 read serial stage C's +49.9 mm on
+71 ↔ 97 at t = 32.5 s as a crossing at the boundary between two rows' time
+slots. At that instant **arm 97 is standing still** — at its stage-C entry pose,
+which on that programme is its park, and it does not move for another 148 s —
+while arm 71 is 29 s into drawing its first piece. Raw clearance 50.76 mm,
+`scene_check`'s residual 0.55 × 1.54 mm, verdict +49.91. No composition of the
+rows in time can move a number measured against an arm that never moves. It is
+§26.3's lesson one obstacle over: **the producer holds the room to `PAIR_MARGIN`
+on a converged bound and the judge subtracts a residual that grows with the
+SPEED.** `writing.room_pace_beat` / `room_pace_draw` now price that residual for
+pen-up beats and for drawn strokes alike, against the FROZEN partners only —
+they are the ones that do not move, so the whole of `0.55 × (step_i + step_j)`
+is this arm's own step and this arm can pay all of it. The price is charged
+**per interval** (a move's fastest point and its tightest point are almost never
+the same point: pairing the worst of each asked 5 476 s of a 32 s stroke against
+the 67 s the geometry wants), only the intervals that bind are refined, and a
+move whose price is over `ROOM_PACE_MAX` is left alone rather than half-paid.
+On the failing stroke: 32.25 → 67.33 s, and the judge goes **+49.91 → +50.25 mm**
+with the ink, the route and every pose untouched.
+
+**STAGE D'S FRAME FAIL IS NOT `effective_static_floor` EITHER.** The tightest
+obstacle on arm 31's stage-D entry leg is **`body:71_column3`** — a frozen
+partner's base column band — mid-leg, with both endpoints at 70.4 mm, so nothing
+was clamped. `scene_check`'s COLUMN gate reads the same metal as cylinders and
+passes the identical trajectory at **+84.4 mm**; its FRAME gate reads it as the
+0.32 m AABB that contains them and refuses at **+31.0 mm**. `freeze_conduct`
+drops that band and substitutes arm 71's real capsules, which is the whole
+reason `frozen` exists and 127 mm of honest room — and the judge knows nothing
+about any of it. So `frozen.set_keep_bands(True)` lets a conduct ask for BOTH
+rooms (the bands AND the partner bodies, strictly more conservative than
+either), and `staged.CONDUCT_BANDS = "auto"` spends the second pass only where
+the judge's frame gate refuses what the relaxed room produced, and only keeps it
+if the retry clears the gate.
+
+**THE OTHER TWO WERE NAMED RIGHTLY AND ARE SHIPPED.** `self_pace_beat` takes
+`paper.leg_self_lb`'s **converged** bound wherever its fixed 33-sample grid says
+the beat is already under the floor — on arm 71's 3.10 s stage-C transit the
+grid bounds it at −13.9 mm and the converged bound at +23.10 mm, so the beat was
+never priced and the judge refused it at +14.3 mm; paced to 15.88 s it reads
+≥ 20 mm. And `ArmStage.hovers`' last `hover_out` is now taken FROM the
+trajectory's end pose instead of re-derived beside it with the ordinary rule,
+because under `PARK_FREEZE` `arm_program` asks the held pose a different
+question (`HOVER_HOLD_MARGIN`, `HOVER_ROOM_FLOOR`) and the trajectory is what
+every check reads.
+
+**AND THE RUN FOUND A FIFTH, WHICH IS A COMPOSITION BUG AFTER ALL.**
+`_compose_groups` laid the serial slots end to end using the ROW COUNT of each
+group's timeline. A conducted timeline is `dt`-spaced and its row count is its
+length; a timeline the conductor REFUSED is on `writing.arm_program`'s waypoint
+clock, where 354 rows is 59.7 s, and `_merge_conducts` only resamples it AFTER
+the offsets are fixed. On `lf6_whole` stage C group [31, 71] was refused, its
+slot was written as 17.65 s, the next group started there, and arm 71 was still
+flying at 59.70 s: the merge read 17 <-> 71 at **-108.6 mm**. `_clock_frames` /
+`_slot_frames` measure the slot on the merge's own clock now, and a refused
+group's slot is the SUM of its arms' lengths because that is what the merge lays
+down. With that in, the three slots are disjoint and every cross-row pair clears.
+
+**THE INTEGRATED PROGRAMME IS NOT CERTIFIED, AND WHAT IS LEFT IS ONE THING.**
+`lf6_whole` draws **9.364 m -- 58.3 % of the ink -- in stages A and B**, both
+PASS, against 22.8 % for lf3; stage A is **58.47 s on identical ink** against
+95.86 s with `active_pair` +197.6 mm against +65.6. Stage C still fails in both
+configurations (-76.6 mm whole, -240.4 mm s150), and every failing pair is a
+SAME-ROW pair with one arm STANDING STILL. That is the signature of
+`_conduct_stage`'s fallback: when `idle.conduct` refuses a group its arms fly one
+at a time, but each one's route came from `plan_bucket`, which runs before
+`freeze_conduct` with `partners=outside` only -- so a group's own arms are never
+in each other's room. Freezing the group's non-moving arms took [31, 71] from
+-43.6 to -21.0 mm; the remaining case needs a PRIORITY ORDER INSIDE THE GROUP,
+the same argument `_priority_stage` already makes one level up. Named, not
+shipped unmeasured. `lf6_s150` stage B is refused on one held pose as well --
+arm 31's last hover keeps 0.1064 rad against `MARGIN_GATE`'s 0.15, everything
+else wide, which is exactly the best-effort limit sect. 27.1 built in.
+
+**NO GATE CONSTANT MOVED.** `PAIR_MARGIN` 0.050, `SELF` 23/20, `STATIC` 50,
+`FRAME_FLOOR` 63 and `MARGIN_GATE` 0.15 are untouched; the tool transform, the
+layout, `frames.py`, `mounts.py`, `layout.py` and `scene_check.py` are untouched.
+Every one of the four is a producer-side change that can only ever slow a move,
+keep an obstacle, or report what is already true.
+
 ## THE PEN-UP IS 74 % OF THE ARM'S TIME, AND IT WAS THREE BUGS (2026-09-14, SEVENTH)
 
 **Pete, watching the animation: "arm 71 is still spending an insane amount of
