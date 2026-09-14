@@ -300,11 +300,11 @@ def test_hover_near_is_a_tie_break_not_a_relaxation():
     # fiber opens, never what is allowed through it
     assert src.count("ok=ok") == 3
     # ...and no scan is ever run at a margin LOOSER than the caller's ask
-    assert "hold = max(float(margin_min), HOVER_HOLD_MARGIN)" in src
+    assert "float(margin_min) if HOVER_HOLD_MARGIN is None" in src
     assert "margin_min=hold" in src
 
 
-def test_hover_asks_for_the_hold_margin_before_it_settles():
+def test_the_hold_margin_preference_is_off_because_it_costs_room():
     """A hover the arm may FREEZE on is judged at `validate.MARGIN_GATE`.
 
     The lf5 stage-A re-run was refused on `frozen_failed` because arm 71's last
@@ -313,13 +313,21 @@ def test_hover_asks_for_the_hold_margin_before_it_settles():
     the hold margin first and settles for `HOVER_MARGIN` only where the fiber
     has nothing that keeps it.
     """
-    from aris_sixarm import validate
-    assert writing.HOVER_HOLD_MARGIN == validate.MARGIN_GATE
-    assert writing.HOVER_HOLD_MARGIN > writing.HOVER_MARGIN
-    # the settle path exists, so a fiber with nothing comfortable is not lost
     import inspect
+    # OFF BY DEFAULT, and the test says why: at 0.15 it moves
+    # test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture from
+    # 62.61 mm to 45.95 mm of solo clearance, under the 50 mm PAIR_MARGIN gate,
+    # because the hover score cannot see the frozen partners.  A hover may not
+    # be accepted at a clearance the old rule would have refused.
+    assert writing.HOVER_HOLD_MARGIN is None
+    # ...and `None` is the OLD scan exactly: one ask, at the caller's margin
     src = inspect.getsource(writing.hover_solve)
-    assert "if w is None and hold > margin_min:" in src
-    # and the memo cannot serve an answer computed at the other value
+    assert "float(margin_min) if HOVER_HOLD_MARGIN is None" in src
+    assert "if w is None and hold > margin_min:" in src   # the settle path
+    # the memo still cannot serve an answer computed at another value
     assert "float(HOVER_HOLD_MARGIN)" in inspect.getsource(
         writing.lifted_or_lower)
+
+    # switching it on must still be a preference and never a relaxation
+    from aris_sixarm import validate
+    assert validate.MARGIN_GATE > writing.HOVER_MARGIN

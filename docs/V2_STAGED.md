@@ -2499,3 +2499,95 @@ crossing walk all seven rungs before reaching the depot via. Twenty-one seconds
 of planning to save forty of stage time is a good trade for a fixed programme
 and a bad one for an interactive loop; if it needs to come down, the fallback
 scan is the place to look first.
+
+### 26.5 Stage C re-run, three compositions — measured
+
+`--stage-c-only` on `out/staged_csail_h097_lf3_s150_program.json`, 12.085 m of
+ink in 49 pieces plus 0.315 m of dead band, every number from
+`scene_check.check_timeline` over all six arms at `PAIR_MARGIN` with the sweep
+residual, `sub` = 2:
+
+| | parallel (§24.5, as shipped) | **serial** | priority |
+|---|---|---|---|
+| stage-C ink FLOWN | 10.591 m of 12.085 m | **12.085 m — all of it** | see below |
+| stage-C motion | 160.1 s | **212.4 s** | 170.9 s |
+| inter-arm, six arms | **−191.9 mm** (13↔31) | **+49.9 mm** (71↔97, t = 32.5 s) | **+50.0 mm** |
+| self | **+16.2 mm** (31) | **+14.4 mm** (71) | ≥ 20 mm |
+| frame / paper | +54.6 / −7.7 mm tip | +58.8 / −6.1 mm tip | pass |
+| t = 0 holds | +107.0 mm | +107.0 mm | +107.0 mm |
+| stage-D motion / verdict | 27.6 s, PASS | 22.4 s, **frame +31.0 mm FAIL** | 24.7 s, frame FAIL |
+| planning wall (busiest / total) | 1 369.7 s / 1 946.0 s | **1 129.6 s / 1 207.8 s** | pipeline, see below |
+| **A+B+C+D makespan** | 307.5 s | **354.6 s** | — |
+
+**THE COMPOSITION DEFECT IS CLOSED.** The cross-row pairs that refused §24.5's
+merge — 13↔31 at −191.9 mm and 17↔71 at +44.6 mm, plus the three pairs that
+table never listed (2↔31 −204.6, 31↔97 −117.9, 71↔97 −38.8) — are all clear.
+What is left is **0.09 mm** of the 50 mm inter-arm gate on one pair at one
+instant, and one `self` leg. Neither is a composition failure.
+
+**AND THE `self` LEG IS THE SAME LESSON TWICE.** Arm 71's transit `seg 3` reads
+**23.60 mm raw** with a 16.65 mm playback step, so the judge sees +14.4 mm and
+`self_pace_beat` did not stretch it: the beat is an 11 s leg, and the pacing's
+own lower bound is `interval_bounds` on **33 samples**, whose per-interval
+residual over a leg that long swallows the 3.6 mm of headroom the geometry
+actually has. §"the certificate was refusing, not the geometry" (2026-09-09)
+solved exactly this for the static gate with `adaptive_lb`; the pacing bound
+has to be the **converged** one (`paper.leg_self_lb`) rather than a fixed grid.
+That is one call, it can only ever raise the bound, and it is named here rather
+than shipped unmeasured.
+
+**Stage D's `frame` FAIL is new and it is not the composition either.** Arm 31's
+dead-band conduct now routes with the other five arms in the room, takes a
+different path, and stands **31.0 mm** from the frame against `STATIC_MARGIN`'s
+50. Under the old code that conduct was routed against the base columns alone
+and passed at +62.8 mm — the gate did not change, the route did, and this is the
+`FRAME_FLOOR` routing floor being clamped by `effective_static_floor` where the
+arm's own endpoints cannot hold it.
+
+### CORRECTION (2026-09-14): the hold margin is OFF, and the 55.97 s PASS is withdrawn
+
+`tests/test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture` is
+pinned at `PAIR_MARGIN`, and it FAILS at 5cdda73. Verified in a clean worktree
+checked out at that commit, then bisected over the five knobs one at a time:
+
+| knob left ON (others off) | pinned test |
+|---|---|
+| `HOVER_NEAR` | pass |
+| `CHAIN_SHEETS` | pass |
+| `paper.SHORTCUT` | pass |
+| `paper.HOME_AFTER_LADDER` | pass |
+| **`HOVER_HOLD_MARGIN = 0.15`** | **FAIL — arm 71 solo 45.95 mm vs the 50 mm gate** |
+
+and with `HOVER_HOLD_MARGIN` off and the other three ON, it passes. **The three
+fixes of 9d55ab8 are clean; the fourth is not.**
+
+**WHY, EXACTLY.** The two asks land on different exit hovers — joint margin
+0.136 at `None` against 0.576 at 0.15 — and the tight sample is neither pose: it
+is a pen-up leg 0.36 rad out of the strict hover, on the way to the depot. Solo
+clearance reads **62.61 mm** with the hold margin off and **45.95 mm** with it
+on.
+
+**THE TWO REQUIREMENTS GENUINELY CONFLICT ON THAT POSE.** The arm's last hover
+can keep 0.15 rad of joint margin — and its go-home leg passes 45.95 mm from
+parked arm 31 — or it can keep 50 mm of room and fail `validate_pose`'s margin
+gate, which is the `frozen_failed` diagnosed above. It cannot do both *from this
+scan*, and the reason is structural: **the hover score has never asked about the
+frozen partners.** `static_gate` scores a candidate on `paper.chain_screen`
+against the steel and the base columns, on the paper, and on self — and nothing
+else. The parked ARMS live in `frozen`, which only `paper.route`'s `legs_ok`
+consults, and by then the pose is already chosen.
+
+**SO `HOVER_HOLD_MARGIN` DEFAULTS TO `None`** (the old scan, exactly), because a
+hover may not be accepted at a clearance the old rule would have refused. The
+consequences, stated plainly:
+
+* **the 55.97 s PASS above is withdrawn.** It was produced with the hold margin
+  on. What ships is the 9d55ab8 configuration, whose measured stage A is the
+  **55.41 s FAIL** of `..._v1.*` — the three fixes' timing win is real and its
+  certificate is not.
+* **`frozen_failed` on arm 71's final held pose is open again**, now fully
+  diagnosed rather than merely observed.
+* **the fix is named**: give `static_gate` a `frozen.partner_clearance` term, so
+  the search can find a pose that holds joint margin AND room, instead of a
+  filter that trades one for the other. That is a change to a SCORE, not to a
+  gate, and it is the next piece of work here.

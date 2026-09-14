@@ -152,6 +152,55 @@ pose and not a sheet choice). Three legs are 12.7 s of the remaining 27.0.
 seconds of planning for forty of stage time is a good trade for a fixed
 programme and a bad one for an interactive loop.
 
+
+**CORRECTION (2026-09-14): the hold margin is OFF, and the 55.97 s PASS is withdrawn**
+
+`tests/test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture` is
+pinned at `PAIR_MARGIN`, and it FAILS at 5cdda73. Verified in a clean worktree
+checked out at that commit, then bisected over the five knobs one at a time:
+
+| knob left ON (others off) | pinned test |
+|---|---|
+| `HOVER_NEAR` | pass |
+| `CHAIN_SHEETS` | pass |
+| `paper.SHORTCUT` | pass |
+| `paper.HOME_AFTER_LADDER` | pass |
+| **`HOVER_HOLD_MARGIN = 0.15`** | **FAIL — arm 71 solo 45.95 mm vs the 50 mm gate** |
+
+and with `HOVER_HOLD_MARGIN` off and the other three ON, it passes. **The three
+fixes of 9d55ab8 are clean; the fourth is not.**
+
+**WHY, EXACTLY.** The two asks land on different exit hovers — joint margin
+0.136 at `None` against 0.576 at 0.15 — and the tight sample is neither pose: it
+is a pen-up leg 0.36 rad out of the strict hover, on the way to the depot. Solo
+clearance reads **62.61 mm** with the hold margin off and **45.95 mm** with it
+on.
+
+**THE TWO REQUIREMENTS GENUINELY CONFLICT ON THAT POSE.** The arm's last hover
+can keep 0.15 rad of joint margin — and its go-home leg passes 45.95 mm from
+parked arm 31 — or it can keep 50 mm of room and fail `validate_pose`'s margin
+gate, which is the `frozen_failed` diagnosed above. It cannot do both *from this
+scan*, and the reason is structural: **the hover score has never asked about the
+frozen partners.** `static_gate` scores a candidate on `paper.chain_screen`
+against the steel and the base columns, on the paper, and on self — and nothing
+else. The parked ARMS live in `frozen`, which only `paper.route`'s `legs_ok`
+consults, and by then the pose is already chosen.
+
+**SO `HOVER_HOLD_MARGIN` DEFAULTS TO `None`** (the old scan, exactly), because a
+hover may not be accepted at a clearance the old rule would have refused. The
+consequences, stated plainly:
+
+* **the 55.97 s PASS above is withdrawn.** It was produced with the hold margin
+  on. What ships is the 9d55ab8 configuration, whose measured stage A is the
+  **55.41 s FAIL** of `..._v1.*` — the three fixes' timing win is real and its
+  certificate is not.
+* **`frozen_failed` on arm 71's final held pose is open again**, now fully
+  diagnosed rather than merely observed.
+* **the fix is named**: give `static_gate` a `frozen.partner_clearance` term, so
+  the search can find a pose that holds joint margin AND room, instead of a
+  filter that trades one for the other. That is a change to a SCORE, not to a
+  gate, and it is the next piece of work here.
+
 **WHAT IS NOT CLAIMED.** The classifier's thresholds are calibrated on this
 programme's honest legs and are deliberately conservative — arm 71's legs 4 and
 5 come out "honest" at `flip_rad` 3.0 and 0.1, under the 6 rad floor, where a

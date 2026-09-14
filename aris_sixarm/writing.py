@@ -54,7 +54,9 @@ HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
 #   speed.  Callers that are CHOOSING a pose rather than accepting one — the
 #   idle policy's retreat — ask for the stricter gate instead, because there is
 #   no reason to spend margin you do not have to.
-HOVER_HOLD_MARGIN = 0.15  # rad, restated from `validate.MARGIN_GATE` on purpose
+HOVER_HOLD_MARGIN = None  # rad, restated from `validate.MARGIN_GATE`; OFF by
+#   default -- see "AND IT CONFLICTS WITH THE ROOM" below.  `None` is the old
+#   behaviour exactly; 0.15 is the value the conflict was measured at.
 #   ...AND THE FIBER SCAN IS EXACTLY SUCH A CALLER (2026-09-14).  The sentence
 #   above says what to do and the widened scan was not doing it.  MEASURED on
 #   the lf5 stage-A re-run: arm 71's stage ends on its last hover (the freeze
@@ -72,6 +74,30 @@ HOVER_HOLD_MARGIN = 0.15  # rad, restated from `validate.MARGIN_GATE` on purpose
 #   ask-then-settle shape `HOVER_COMFORT` already uses for clearance.  It
 #   cannot lose a hover (the fallback is the identical old scan) and it cannot
 #   admit one (both asks run the same `ok`).
+#
+#   ...AND IT CONFLICTS WITH THE ROOM, WHICH IS WHY IT IS OFF (2026-09-14).
+#   MEASURED on `tests/test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture`,
+#   which is pinned at `PAIR_MARGIN`.  Bisecting the five knobs of 9d55ab8 and
+#   0cf78fd, this one and no other moves it: arm 71's solo clearance reads
+#   62.61 mm at `HOVER_HOLD_MARGIN = None` and 45.95 mm at 0.15, under the
+#   50 mm gate.  The two asks land on DIFFERENT exit hovers -- joint margin
+#   0.136 against 0.576 -- and the tight sample is not either pose, it is a
+#   pen-up leg 0.36 rad out of the strict one, on the way to the depot.
+#
+#   SO THE TWO REQUIREMENTS GENUINELY CONFLICT ON THAT POSE.  The arm's last
+#   hover can keep 0.15 rad of joint margin (and its go-home leg passes 45.95 mm
+#   from parked arm 31) or it can keep 50 mm of room (and fail `validate_pose`'s
+#   margin gate, which is the `frozen_failed` of docs/V2_STAGED.md section 27).
+#   It cannot do both from this scan, because THE HOVER SCORE HAS NEVER ASKED
+#   ABOUT THE FROZEN PARTNERS: `static_gate` scores a candidate on
+#   `paper.chain_screen` against the steel and the base columns, on the paper,
+#   and on self -- and on nothing else.  The parked ARMS are in `frozen`, which
+#   only `paper.route`'s `legs_ok` consults, and by then the pose is chosen.
+#
+#   A hover may not be accepted at a clearance the old rule would have refused,
+#   so this stays OFF until the score can see the room.  THE FIX IS NAMED: give
+#   `static_gate` a `frozen.partner_clearance` term so the search can find a
+#   pose that holds both, instead of a filter that trades one for the other.
 
 
 HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
@@ -1156,7 +1182,8 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
                               and float(np.asarray(ok(q[None, :]), float)[0])
                               >= cap - paper.EPS)):
         return q
-    hold = max(float(margin_min), HOVER_HOLD_MARGIN)
+    hold = (float(margin_min) if HOVER_HOLD_MARGIN is None
+            else max(float(margin_min), float(HOVER_HOLD_MARGIN)))
     w, dw = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
                           margin_min=hold, tilt=tilt, phis=HOVER_YAWS,
                           q7s=ik.Q7_GRID, ok=ok)
@@ -1405,7 +1432,8 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            # time: `HOVER_NEAR` decides whether the narrow answer is kept or
            # the fiber is opened, so two runs at different values must not read
            # each other's hovers.
-           float(HOVER_NEAR), float(HOVER_HOLD_MARGIN),
+           float(HOVER_NEAR),
+           None if HOVER_HOLD_MARGIN is None else float(HOVER_HOLD_MARGIN),
            # ...and the C-space tier, for the same reason again.  The depot
            # rescue below asks `hover_joins_depot`, which is three
            # `paper.route` calls, and those have a different answer with the
