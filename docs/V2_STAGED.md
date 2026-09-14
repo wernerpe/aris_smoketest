@@ -1715,3 +1715,221 @@ one more: stages A and B do not yet carry the majority of the ink (stage A's
 follower still flies none), and the measured stage-C cost per metre this pass
 was meant to replace §22's 3 075 s / 11.5 m with is exactly the number the runs
 did not reach.
+
+## 25. The leader's standoff — buying the follower its routing room
+
+§24.4 left stage A's follower with **0 %** of its ink and named exactly one
+number as the reason: **every pose arm 31 can hold near its own ink stands
++53.7 mm from leader 71's exact room**, at every hover rung and over every
+x-y — over the 50 mm pose gate and under `paper.FRAME_FLOOR`'s 63 mm routing
+floor, so `paper.route` has a knife edge and no slack to route in. The clear
+stretches the cut produces are certified and then dropped by the leg loop.
+
+That number is **constant in the follower's pose**, which says the binding
+geometry is the follower's links that do not move. This section tests the one
+lever that follows: **make the LEADER keep more.**
+
+### 25.1 What the binding pair actually is — measured, not assumed
+
+Leader 71's realised stage-A trajectory against follower 31's capsules at its
+held pose, per capsule of the follower (minimum surface gap, mm):
+
+| follower 31's capsule | base band 0 | band 1 | band 2 | **upper (1→3)** | elbow | forearm | wrist | hand | tool |
+|---|---|---|---|---|---|---|---|---|---|
+| gap to leader 71's plan | 207.0 | 243.8 | 192.2 | **103.2** | 314.2 | 331.4 | 613.3 | 560.1 | 519.8 |
+
+The binding pair is the leader's **forearm** against the follower's **upper
+arm** — the shoulder→elbow link, whose shoulder end is chain point 1, where the
+base column ends and nothing moves. So the pose-invariant set this section
+charges a standoff against is **every capsule both of whose chain endpoints are
+in {0, 1, 3}**: the four base column bands (0→1) and the shoulder→elbow link
+(1→3). That is "base column + link 0/1". The elbow link (3→4) is three times
+further away and is deliberately **not** in it.
+
+### 25.2 What was built — `frozen.set_standoff`, and no gate constant moved
+
+`S` is an **ADDITIONAL requirement**, not a gate change. `PAIR_MARGIN` (50 mm),
+`rig_final.STATIC_MARGIN` (50 mm), `selfcoll.SELF_PLAN_MARGIN` (23 mm) and
+`paper.FRAME_FLOOR` (63 mm) are untouched, and a test pins all four.
+
+`frozen.partner_clearance` returns
+
+```
+min( gap to everything , gap to THAT partner's pose-invariant capsules − S )
+```
+
+so every call site that compares the result against its own floor `f` is
+thereby demanding `f + S` of the named set and `f` of everything else. One
+seam, again: `plan_stroke`'s ink gate, `writing.arm_program`, `paper.route`'s
+straight / ladder / go-around / RRT tiers and `paper.effective_static_floor`
+all reach the partner model through `frozen`, so they all saw it at once, and
+`scene_check` shares none of it and stays the judge.
+
+**Who owes it.** `staged.lf_standoffs`: **a LEADER, and only to its SAME-ROW
+FOLLOWER.** The leader is the arm that plans first and is certified at exactly
+`PAIR_MARGIN` against the partner's held pose, so its plan is what eats the
+room the follower then has to route in; and the pair with no room to give is
+the same-row one, because a cross-row pair clears by +194 mm with each row
+inside its own band (`docs/V2_WORKCELLS.md` §4b). Charging a cross-row partner
+would cost a leader ink and buy a follower nothing.
+
+**The keys move with it.** A standoff changes what `paper.route` grants without
+changing one memo key, exactly as the frozen set and the envelope do, so it
+goes into `leg_cache_signature` and `staged._room_key` — and **only when it is
+non-empty**, so every key an S = 0 run builds is bit-identical to the key it
+built before the standoff existed and a warm leg store still answers.
+
+**S = 0 is a no-op and the run proves it.** `--partner-standoff 0.0` on CSAIL
+h = 0.970, split +0.15, stage A reproduces the live baseline line for line:
+15 pieces, 2.0613 m, 95.864 s, `active_pair` +65.58 mm, `solo` +51.66 mm, order
+(71, 2, 13, 31, 17, 97), 3/3 leader buckets, PASS, arm 31's park +53.7 mm with
+0/45 tuck stations clear, the same cut (1 clear part, 0.157 m, 49.3 % of poses
+clear) and the same two drops. `tests/test_staged_standoff.py` holds the
+mechanism down independently.
+
+### 25.3 The ceiling — what ANY standoff could buy, before the sweep
+
+A standoff can only move the leader's plan **toward** the case where the leader
+draws nothing, whose room is the single held pose it starts the stage at. So
+that case is the ceiling. Arm 31's 45 tuck stations (3 pieces × 3 x-y × 5
+heights), against three versions of leader 71:
+
+| leader 71 is… | arm 31's park | station min | median | max | ≥ 63 mm |
+|---|---|---|---|---|---|
+| its **full stage-A room** (S = 0, the shipped run) | **+53.7 mm** | −132.8 | **+53.7** | +53.7 | **0 / 45** |
+| its **held pose only** (S → ∞) | +80.2 mm | −40.5 | **+192.0** | +195.7 | **39 / 45** |
+| its **park** (never moved) | +80.2 mm | +135.2 | +241.0 | +350.0 | 45 / 45 |
+
+**So +53.7 mm is a property of the leader's TRAJECTORY, not of the two arms'
+fixed geometry.** With the leader standing still the follower's own hovers
+clear the routing floor at 39 of 45 stations and a median of +192 mm. The room
+is there to be bought; the question is the price.
+
+### 25.4 What S forbids, and it is not ink
+
+Leader 71's stage-A trajectory sample by sample against follower 31's
+pose-invariant set — the set `set_standoff` charges — 451 samples, 417 drawing
+and 34 pen-up:
+
+| | min | p05 | median | max |
+|---|---|---|---|---|
+| whole trajectory | **+103.2 mm** | +235.5 | +350.0 | +350.0 |
+| while **drawing** | +229.7 | | +350.0 | |
+| on a **pen-up leg** | **+103.2** | | +193.6 | |
+
+| S | bar = 63 + S | samples under the bar | % of trajectory | % of pen-up | **% of ink** |
+|---|---|---|---|---|---|
+| 0 | 63 mm | 0 | 0.0 % | 0.0 % | **0.0 %** |
+| 70 mm | 133 mm | 12 | 2.7 % | 35.3 % | **0.0 %** |
+| 90 mm | 153 mm | 12 | 2.7 % | 35.3 % | **0.0 %** |
+| 110 mm | 173 mm | 13 | 2.9 % | 38.2 % | **0.0 %** |
+| 130 mm | 193 mm | 17 | 3.8 % | 50.0 % | **0.0 %** |
+
+**Not one of the leader's ink poses is inside the bar at any S in the sweep.**
+The standoff is a constraint on the leader's **pen-up legs** and on nothing
+else: it makes the router reroute a third to a half of them and can cost the
+leader a piece only where a leg cannot be rerouted at all. That is also why the
+runs below are slow — every one of those legs falls off the straight tier and
+down into the ladder, the go-around and the RRT.
+
+### 24.5 Split +0.15, the whole programme — and the merge does NOT compose
+
+The run completed (`out/staged_csail_h097_lf3_s150.{json,log}`,
+`_program.json`). The table Pete reads:
+
+| stage | who | pieces | ink (m) | stage (s) | inter-arm, realised | solo | deferred out | verdict |
+|---|---|---|---|---|---|---|---|---|
+| A | lead 13/71/2, foll 17/31/97 | 15 | 2.061 | 95.9 | **+65.6 mm** | +51.7 mm | 2.142 | **PASS** |
+| B | roles swapped | 7 | 1.610 | 24.0 | **+98.6 mm** | +73.7 mm | 5.939 | FAIL (not the gate — see below) |
+| C | **3 row conductors, parallel** | 49 | 12.085 | 160.1 | **−191.9 mm** | — | 0.000 | **FAIL** |
+| D | dead band, arm 31 alone | 2 | 0.315 | 27.6 | **+62.8 mm** | — | 0.000 | **PASS** |
+
+| | value | against |
+|---|---|---|
+| makespan | **307.5 s** | v19 209.9 s, lf-whole 273.3 s |
+| coverage | 95.63 %, 16.081 m of 16.805 m | unchanged |
+| ink in A+B / C+D | **3.671 m (22.8 %) / 12.400 m (77.2 %)** | §22: 2.97 / 13.10 m |
+| time to first motion | **0.196 s** | unchanged |
+| planning wall, total / busiest arm | 1 980.2 s / 1 101.8 s | — |
+| check | 49.7 s | — |
+| held-pose barriers | +256.0 / +172.2 / +107.0 / +107.0 mm | all PASS, `holds_ok` |
+
+**THE ROW CONDUCTORS ARE WORTH WHAT THEY WERE BUILT FOR, AND THEY DO NOT
+COMPOSE.** The wall is exactly the win that was wanted: the three groups ran at
+**39.9 s (13+17), 536.4 s (2+97) and 1 369.7 s (31+71)** concurrently, so stage
+C cost **1 369.7 s** of wall for 12.085 m — against §22's six-arm **3 075 s for
+11.458 m**. Per metre: **113 s/m against 268 s/m, a factor of 2.4**, and the
+combinatorial 720-order search is gone. Each group also passed its own conduct's
+clearance gate (+55.9, +inf, +72.8 mm).
+
+**And the merged six-arm check refuses the stage at −191.9 mm.** Re-measured
+straight off the programme with `scene_check.check_timeline` and nothing else:
+
+| pair | mm | |
+|---|---|---|
+| **13 ↔ 31** | **−191.9** | **cross-row**, at t = 1.175 s |
+| 17 ↔ 71 | **+44.6** | **cross-row**, also under the gate |
+| 13 ↔ 17 | +55.9 | within row 0 — conducted |
+| 31 ↔ 71 | +72.8 | within row 1 — conducted |
+| 17 ↔ 31 | +110.8 | cross-row, fine |
+| 13 ↔ 71 | +557.0 | cross-row, fine |
+
+**Both failures are cross-row pairs, and the dead-band argument is what they
+falsify.** §4b's +85.8 mm was measured with **one arm per row** in the air; the
+final pass puts **two**, and 13 ↔ 31 at t = 1.175 s is the instant every arm
+leaves its held pose for its first stroke at once. Rows are separated for
+*drawing*; they are not separated for *four arms leaving four held poses
+simultaneously*, and nothing in this build ever certified that — each group's
+planning froze the other rows at their stage-C **entry** poses, which is true
+only until those arms move.
+
+`self` also fails, on arm 31 at **+16.2 mm** against the 23 mm gate. That is
+independent of the merge — it is arm 31's own conducted trajectory folding
+through itself on a pen-up leg, the hazard `writing.py` names in as many words —
+and it would have failed a six-arm conduct too.
+
+**THE FIX IS TO SERIALISE THE ROW CONDUCTS IN TIME AND KEEP THEM PARALLEL IN
+WALL CLOCK**, which is what stage D already does and why stage D passes at
++62.8 mm: one group moves while the others hold at poses the planner froze them
+at, which is exactly the assumption the planning made. The 2.4× planning win
+survives untouched — it comes from the group size, not from the overlap — and
+what is paid is stage C's motion becoming the SUM of the three rows rather than
+the max. On this run that is 160.1 s becoming at most the sum of the three
+groups' own durations. Until that lands, **stage C as merged here is not a
+certificate and must not be animated or shipped.**
+
+**Stage B's FAIL is not the ink gate and not a collision**, and §24.3's rule is
+what says so: realised trajectories +98.6 mm, static set +73.7 mm, both well
+over. `StageResult.ok` is `complete and pair_ok and solo_ok`, and the term that
+is false is `complete` or `solo_check`'s non-clearance gates — not
+`ink_vs_envelope_mm`, which `ok` has never read.
+
+### 24.6 What the cut is worth, measured: nothing yet, on this picture
+
+| split +0.15 | stage A | stage B | total |
+|---|---|---|---|
+| pieces the gate refused and the cut re-cut | 1 | 2 | **3** |
+| certified clear stretches produced | 1 | 2 | **3** |
+| new ends refused for want of a hover | 0 | 0 | **0** |
+| **ink kept and FLOWN by the cut** | 0.000 m | 0.000 m | **0.000 m** |
+| ink deferred as cut parts (instead of whole lines) | 0.326 m | 0.680 m | 1.006 m |
+
+The cut produces exactly what it was specified to produce and **none of it
+flies**: every part is shed afterwards, in stage A by `_fly_or_defer`'s leg loop
+(the +53.7 mm shoulder wall of §24.1) and in stage B by the re-gate. Stage A's
+piece and metre counts, stage B's, and the follower fit fraction (0.339) are
+therefore **identical to the pre-cut run**, and the extra pieces cost **no**
+pen-up legs, because none of them was kept.
+
+**One thing did move.** Cutting at the room boundary also cuts pieces that
+straddle a row band, so the dead-band share of the final pass fell from
+**9.7 % to 5.3 %** (0.579 m → 0.315 m of 5.939 m) — which is still over the
+`BAND_SHARE_MAX` bar, so stage D stayed a stage, and it is a 27.6 s stage that
+passes.
+
+**The 1 000-stroke model is NOT recalibrated**: A + B carry **22.8 %** of the
+ink, not the majority, so the condition the build set is not met. The number to
+carry forward instead is the measured final-pass cost, and it is the one real
+improvement this pass bought: **113 s of wall per metre of deferred ink, against
+§22's 268 s/m** — provided the composition is fixed, because the stage that
+produced it does not pass.
