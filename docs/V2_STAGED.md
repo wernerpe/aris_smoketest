@@ -2025,3 +2025,127 @@ the deferred pile that stage C would otherwise have to conduct — which is the
 term §22 measured at 3 075 s of wall for 11.5 m. Stage B's own duration at the
 best S is the number this box did not buy, and it is the only thing between
 these tables and a makespan.
+
+## 26. The row conductors compose — the room that was thrown away, and the gate the judge could not read
+
+§24.5 measured the split-+0.15 programme and refused stage C at **−191.9 mm**
+with `self` failing on arm 31 at **+16.2 mm**. It attributed the first to the
+overlap — three row groups moving at once, each planned with the other rows
+frozen at their stage-C entry poses — and proposed serialising the rows in
+time. **Both halves of that attribution are wrong, and the measurements are
+here.**
+
+### 26.1 The rows were never frozen during the conduct at all
+
+`idle.conduct` does not re-time the timelines `plan_bucket` built. It calls
+`writing.arm_program` **again**, per arm, and **routes every pen-up leg again**
+(`idle._programs`). `_conduct_stage` called `thaw()` between the two, so every
+leg a row conductor emitted was routed against `paper.static_boxes`'s
+pose-invariant base columns and nothing else — not against the four arms
+standing outside the group, which were also not in the conduct and therefore
+not scheduled against either. The four arms outside a two-arm group were
+**invisible to both halves of the safety argument.**
+
+Measured on the run's own programme, arm 31's stage-C trajectory against the
+frozen set the planner *thought* it had (`frozen.partner_clearance`, the
+planner's own seam, the five partners at their stage-C entry poses):
+
+| pair | mm | t (s) | what is moving |
+|---|---|---|---|
+| 13 ↔ 31 | **−205.7** | 1.15 | both |
+| **2 ↔ 31** | **−204.6** | **3.20** | **arm 2 is STANDING STILL** |
+| 31 ↔ 97 | **−117.9** | 4.20 | arm 97 is standing still |
+| 71 ↔ 97 | **−38.8** | 19.85 | arm 97 is standing still |
+| 17 ↔ 71 | +35.2 | 94.45 | both |
+| 31 ↔ 71 | +58.7 | 81.70 | both, and conducted |
+| 13 ↔ 17 | +52.1 | 7.10 | both, and conducted |
+
+**Three of the five failing pairs have a stationary arm in them**, and §24.5's
+table did not list them because it quoted only six of the fifteen pairs. A
+still arm cannot be fixed by serialising the rows in time: arm 2 holds that
+pose for the whole of stage C under *every* composition. `frozen.partner_clearance`
+reads **−165.3 mm at t = 3.20 s** on the same leg, which settles it — the
+planner's own room was violated, so the room was not installed. Every one of
+these is a **transit** (`seg = −1`); no ink is involved.
+
+**One more thing the trajectory says, and §24.5 read it as a PASS.** Group
+[2, 97] reported `+inf mm, PASS` and drew **nothing**: both arms produced 1.494 m
+of accepted ink and no timeline at all, so the group's "clearance" was the
+clearance of an empty scene. Stage C's real flown ink is **10.591 m**, not the
+12.085 m of accepted pieces `StageResult.ink_m` reports.
+
+### 26.2 What was built
+
+1. **`staged.freeze_conduct`** — the arms a conduct does NOT move stay in the
+   room *for the length of the conduct*, through the same `frozen` seam every
+   planner gate already reads. `thaw()` moves to after `idle.conduct`, where it
+   belongs (the check still inherits nothing). No observer is named: the movers
+   are simply not in the frozen set, and `static_boxes` already drops a spec's
+   own band.
+2. **`--row-compose parallel | priority | serial`** (`staged.run(row_compose=)`),
+   with `group_order` ordering the groups **busiest-first** exactly as
+   `priority_order` orders the arms inside a stage.
+   * **`parallel`** — the control. Every group starts at stage time zero and
+     plans with the other groups STANDING at their entry poses. That is what
+     the code always claimed and now actually does; it is still the assertion
+     §24.5 refused.
+   * **`priority`** — a pipeline. Group 1 is conducted free; group *k* is
+     conducted against groups 1..*k*−1's **realised** trajectories, installed as
+     `exact_room.ExactRoom` swept capsules through `frozen.freeze_sets`'
+     `clusters` seam. A pair (i, k) with i < k is then certified against the
+     path arm i actually flies, **at every instant** — if k's chain never enters
+     i's swept volume, it clears i wherever i is. The wall becomes the SUM of
+     the groups; the motion still overlaps.
+   * **`serial`** — the rows run one after another in TIME and still plan at
+     once: group *k* sees the earlier groups at their PARKS (`PARK_HOME` sends
+     them there) and the later ones at their entry poses, so every group's room
+     is known before any of them runs. `_merge_conducts(offsets=)` lays the
+     groups end to end on one clock.
+3. **The t = 0 proof.** `_merge_conducts` now runs `hold_gap` over the merged
+   timeline's first frame and **fails the merge** if the six entry poses are not
+   pairwise clear (`t0_holds` in the conducted report).
+4. **`--stage-c-only PROGRAMME.json`** (`staged.run_conducted`) — the final pass
+   re-run off an existing programme: the entry poses are the barrier's `holds`
+   and the ink is the pieces the conducted stages carry. A piece the original
+   conduct REFUSED is written out without its geometry, so a re-run is offered
+   the accepted set (1 piece of 50 on this programme, and a piece `plan_stroke`
+   refused once it refuses again).
+
+### 26.3 The self gate was a DENSITY disagreement, not a geometry one
+
+Arm 31's `self` failure is independent of all of the above and it is not a
+fold. The leg — stage-C transit `seg 13`, worst at t = 86.4 s — has a true
+minimum self-clearance of **26.12 mm** over 401 dense samples, which clears the
+**checker's 20 mm** *and* the **router's 23 mm** `SELF_PLAN_MARGIN`. The whole
+of the difference is arithmetic:
+
+| term | value |
+|---|---|
+| true self-clearance of the leg | **26.12 mm** |
+| capsule-endpoint step between two playback frames (dt = 0.05 s, `sub` = 2) | 18.06 mm |
+| `scene_check`'s 1-Lipschitz residual, 0.55 × that | **9.93 mm** |
+| what the judge reads | **+16.18 mm** — FAIL against 20 mm |
+
+**The producer and the judge were answering different questions.** `paper`
+converges its bound on its own adaptive samples (`adaptive_lb`, residual driven
+to `ADAPT_TOL`) and holds the geometry to 23 mm; `scene_check` samples the
+timeline that is actually written down and subtracts a residual that grows with
+the **speed**. 23 mm is 3 mm over the judge's 20, and at 0.55 that 3 mm buys
+only **5.45 mm of frame step** — a pen-up flown at the shipped transit speed
+puts three times that between two frames. No gate constant is wrong.
+
+**THE FIX IS PACE, NOT GEOMETRY AND NOT A REFUSAL.** `writing.self_pace_beat`
+prices, for each pen-up beat, the residual its own speed implies: between two
+playback frames no capsule endpoint travels further than `rate × dt_play / dt`,
+so requiring `lb − 0.55 × rate × dt_play / dt ≥ 20 mm` solves for `dt`
+directly. The beat is **stretched** until its bound fits and nothing else
+moves — the route is the same route, the poses are the same poses, the ink is
+untouched. Only the beats that owe the residual pay it; a leg whose true
+clearance is already under the judge's margin cannot be rescued by any speed
+and is left for the judge to refuse, which is the right division of labour.
+On the pinned leg: 0.05 s → 0.097 s, and +16.18 mm → **+21.1 mm**.
+
+The three numbers `writing` needs (`SELF_PLAY_DT` 0.025, `SELF_PLAY_K` 0.55,
+`SELF_PLAY_FLOOR` 0.020) are **restated** in `writing.py`, exactly as
+`validate.py` restates `selfcoll.SELF_MARGIN`: a producer that reached into the
+judge for its own floor would be marking its own homework.

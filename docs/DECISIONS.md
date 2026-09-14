@@ -1,5 +1,71 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE ROW CONDUCTORS COMPOSE — AND THE ROOM WAS BEING THROWN AWAY (2026-09-14, SIXTH)
+
+**§24.5 refused stage C at −191.9 mm and blamed the overlap. The overlap was
+not the bug.** `idle.conduct` does not re-time the timelines `plan_bucket`
+built — it calls `writing.arm_program` again and **routes every pen-up leg
+again** (`idle._programs`). `_conduct_stage` called `thaw()` between the two, so
+every leg a two-arm row conductor emitted was routed against
+`paper.static_boxes`'s pose-invariant base columns and **nothing else**. The
+four arms outside the group were neither routed around (thawed) nor scheduled
+against (not in the conduct): **invisible to both halves of the safety
+argument.** A six-arm conduct never showed it, because there is no arm outside
+the group.
+
+**THE PROOF IS THE PLANNER'S OWN SEAM.** `frozen.partner_clearance` on arm 31's
+realised stage-C trajectory, with the five partners frozen at the stage-C entry
+poses the planner was told to use, reads **−165.3 mm at t = 3.20 s**. The
+planner's own room was violated, so the room was not installed.
+
+**AND THREE OF THE FIVE FAILING PAIRS HAVE A STATIONARY ARM IN THEM** — 2 ↔ 31
+at −204.6 mm, 31 ↔ 97 at −117.9 mm, 71 ↔ 97 at −38.8 mm, with arms 2 and 97
+standing still for the whole stage. §24.5's table quoted six of fifteen pairs
+and missed all three. Serialising the rows in time — §24.5's proposed fix —
+cannot touch a pair whose other half never moves. Every violation is a
+**transit**; no ink is involved.
+
+**WHAT WAS BUILT.** `staged.freeze_conduct` keeps the arms a conduct does NOT
+move in the room for the length of the conduct, through the same `frozen` seam
+every planner gate already reads; `thaw()` moves to after `idle.conduct`.
+`--row-compose parallel | priority | serial`: `priority` conducts the groups
+busiest-first as a pipeline, each later group against the earlier groups'
+REALISED trajectories as `exact_room` swept capsules — if group k's chain never
+enters group i's swept volume, it clears i wherever i is, which is the whole
+pair certificate and not a snapshot. `serial` runs the rows one after another
+in time and still plans them at once. `_merge_conducts` now also proves the six
+entry poses pairwise at t = 0 (`hold_gap`) and fails the merge if they are not
+clear. `--stage-c-only` re-runs the final pass off an existing programme.
+
+**THE `self` FAILURE IS A DENSITY DISAGREEMENT, NOT A FOLD, AND NO GATE
+CONSTANT IS WRONG.** Arm 31's refused leg has a true minimum self-clearance of
+**26.12 mm** over 401 dense samples — over the checker's 20 mm *and* over the
+router's 23 mm `SELF_PLAN_MARGIN`. `scene_check` reads **+16.18 mm** because it
+samples the timeline that is written down and subtracts **0.55 × 18.06 mm** of
+capsule-endpoint travel between two playback frames. `paper` converges its bound
+on its own adaptive samples; the judge's residual grows with the **speed**. The
+3 mm the producer holds over the judge buys **5.45 mm of frame step** at 0.55,
+and a pen-up at the shipped transit speed puts three times that between frames.
+
+**SO THE FIX IS PACE.** `writing.self_pace_beat` stretches exactly the beats
+whose own converged self bound cannot carry the residual their speed implies:
+`lb − 0.55 × rate × dt_play / dt ≥ 20 mm` solves for `dt` directly. The route,
+the poses and the ink are untouched; a leg already under the judge's margin is
+left for the judge to refuse. On the pinned leg 0.05 s → 0.097 s, and
++16.18 mm → +21.1 mm. `SELF_PLAY_DT` 0.025, `SELF_PLAY_K` 0.55 and
+`SELF_PLAY_FLOOR` 0.020 are **restated** in `writing.py` on purpose, as
+`validate.py` restates `selfcoll.SELF_MARGIN`.
+
+**ONE MORE THING THE RUN SAID AND §24.5 READ AS A PASS.** Group [2, 97]
+reported `+inf mm, PASS` and drew **nothing** — 1.494 m of accepted ink, no
+timeline for either arm — so its "clearance" was the clearance of an empty
+scene. Stage C's real flown ink was **10.591 m**, not the 12.085 m of accepted
+pieces. `StageResult.complete` catches it at the stage level; the group line
+does not, and should.
+
+docs/V2_STAGED.md section 26 is the write-up and
+`tests/test_staged_compose.py` holds the mechanism down.
+
 ## A SAME-ROW PAIR *CAN* DRAW TOGETHER — THE LEADER'S PARTNER STANDOFF (2026-09-14, FIFTH of five)
 
 **The claim this overturns is our own.** §22 §4b's *"no pattern may ever put a

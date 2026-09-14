@@ -1417,6 +1417,103 @@ PARK_FREEZE = "freeze"      # stop at the hover pose above the last stroke
 PARK_HOME = "home"          # the old behaviour: transit back to `spec.q_seed`
 
 
+# ==========================================================================
+# THE SELF GATE AND THE JUDGE DISAGREED ABOUT DENSITY, NOT ABOUT GEOMETRY
+# ==========================================================================
+# MEASURED 2026-09-14 on the lf3 s150 programme, stage C, arm 31
+# (docs/V2_STAGED.md section 26).  `scene_check.check_timeline` refused the
+# stage on `self` at +16.2 mm against its 20 mm margin, and the leg it refused
+# is NOT close to itself: sampled at twenty times the playback density its true
+# minimum self-clearance is 26.12 mm, which clears the ROUTER's 23 mm floor as
+# well.  The whole of the 9.93 mm difference is the judge's own 1-Lipschitz
+# between-sample residual -- 0.55 x an 18.06 mm capsule-endpoint step -- charged
+# because the leg is flown fast enough that the playback grid puts 18 mm of
+# metal travel between two frames.
+#
+# SO THE PRODUCER AND THE JUDGE WERE ANSWERING DIFFERENT QUESTIONS.  `paper`
+# converges its bound on its OWN adaptive samples and holds the geometry to
+# 23 mm; the judge samples the timeline that is actually written down and
+# subtracts a residual that grows with the speed.  A leg can satisfy the first
+# and fail the second for ever, and no gate constant is wrong: 23 mm is 3 mm
+# over the judge's 20, and 3 mm buys 5.45 mm of frame step at 0.55.
+#
+# WHAT IS FIXED, AND WHERE.  The BEATS are where a leg's speed is decided, so
+# that is where the residual is paid: a pen-up block whose own converged self
+# bound cannot carry the residual its speed implies is STRETCHED until it can.
+# The geometry does not move, the route does not change, the leg does not get
+# refused -- it is flown slower, and only the legs that need it are (measured
+# on the same stage: one block of one leg on one arm of six).  A leg whose true
+# clearance is already under the judge's margin cannot be rescued by any speed
+# and is left alone for the judge to refuse, which is the right division of
+# labour.
+#
+# THE THREE NUMBERS ARE RESTATED HERE ON PURPOSE, exactly as `validate.py`
+# restates `selfcoll.SELF_MARGIN`: this module may not import the judge, and a
+# producer that reached into the judge for its own floor would be marking its
+# own homework.
+SELF_PACE = True            # pay the judge's playback residual on pen-up legs
+SELF_PLAY_DT = 0.025        # s, the density the whole-timeline judge re-samples
+#                             at: `staged.CHECK_DT` 0.05 over its `sub` = 2
+SELF_PLAY_K = 0.55          # its 1-Lipschitz between-sample coefficient
+SELF_PLAY_FLOOR = 0.020     # m, restated from `selfcoll.SELF_MARGIN` on purpose
+SELF_PACE_MAX = 6.0         # the most any one beat may be stretched
+SELF_PACE_EPS = 0.0005      # m of headroom over the floor the stretch aims for
+
+
+def self_pace_beat(spec, q0, q1, dt, pen_ext=None, dt_play=SELF_PLAY_DT,
+                   k=SELF_PLAY_K, floor=SELF_PLAY_FLOOR, cap=SELF_PACE_MAX):
+    """The seconds this straight pen-up move needs to survive the judge.
+
+    -> (dt, reason).  `reason` is `None` when nothing was owed.
+
+    Between two playback frames no capsule endpoint travels further than
+    `rate * dt_play / dt`, where `rate` is the fastest any of them moves per
+    unit of the move's own parameter, so the judge's reading of this move is at
+    worst `lb - k * rate * dt_play / dt`.  Requiring that to clear `floor`
+    solves for `dt` directly.
+    """
+    q0 = np.asarray(q0, float).reshape(7)
+    q1 = np.asarray(q1, float).reshape(7)
+    if not SELF_PACE or dt <= 0.0 or float(np.max(np.abs(q1 - q0))) <= 1e-12:
+        return float(dt), None
+    from . import selfcoll
+    Q = paper.line_samples(q0, q1)
+    A, B, R = selfcoll.capsule_ends(Q, pen_ext)
+    c = selfcoll.clearance_screened(A, B, R, floor + 0.10)
+    X = np.concatenate([A, B], axis=1)
+    lb, _ = paper.interval_bounds(c, X, k)
+    lb = float(lb.min()) if len(lb) else float(c.min())
+    # travel per unit parameter, bounded on the same grid the bound is
+    rate = float(np.linalg.norm(np.diff(X, axis=0), axis=2).max()) * (len(Q) - 1)
+    head = lb - float(floor) - SELF_PACE_EPS
+    if head <= 0.0:
+        # no speed rescues a leg that is already under the judge's margin
+        return float(dt), ("under" if lb < float(floor) else None)
+    want = float(k) * rate * float(dt_play) / head
+    if want <= float(dt) + 1e-12:
+        return float(dt), None
+    return float(min(want, float(cap) * float(dt))), "paced"
+
+
+def self_pace_block(spec, q_from, steps, pen_ext=None, **kw):
+    """`self_pace_beat` over one pen-up block of `(dt, q)` beats.
+
+    -> (steps, n_paced, seconds_added).  The poses are untouched.
+    """
+    if not SELF_PACE or not steps:
+        return list(steps or []), 0, 0.0
+    out, n, added = [], 0, 0.0
+    q = np.asarray(q_from, float).reshape(7)
+    for dt, qn in steps:
+        dt2, why = self_pace_beat(spec, q, qn, float(dt), pen_ext, **kw)
+        if why == "paced":
+            n += 1
+            added += dt2 - float(dt)
+        out.append((float(dt2), qn))
+        q = np.asarray(qn, float).reshape(7)
+    return out, n, float(added)
+
+
 class PaperRefused(RuntimeError):
     """A pen-up move that cannot be flown without entering the paper.
 
@@ -1532,6 +1629,9 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                         f"arm {getattr(spec, 'arm_id', '?')}: the aside park "
                         "offered for this phase cannot be flown to")
                 steps = r[0]
+        n_pace, s_pace = 0, 0.0
+        if steps and SELF_PACE:
+            steps, n_pace, s_pace = self_pace_block(spec, q0, steps, pen_ext)
         add(0.0, q0)
         aside_s = 0.0
         if steps:
@@ -1550,6 +1650,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                     dense_tip_err=0.0,
                     draw_len=0.0, transit_len=0.0, transit_s=0.0, draw_s=0.0,
                     taxi_s=0.0, retreat_s=0.0, aside_s=aside_s,
+                    self_paced=int(n_pace), self_pace_s=float(s_pace),
                     q_end=np.array(Q[-1], float), park=str(park),
                     pen=ext_of(pen_ext), paper_modes=[r[1]] if steps else [],
                     paper_vias=int(len(steps) - 1) if steps else 0,
@@ -1626,6 +1727,17 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                      "final lift", k)
         beats.append(b["steps"])
         modes.append(b["modes"])
+    # ---- and every pen-up beat PACED so the judge can still read it ------
+    # The block's own start pose is the arm's start for the entry and the last
+    # drawn pose for every transit after it; see `self_pace_beat`.
+    self_paced, self_pace_s, self_under = 0, 0.0, 0
+    if SELF_PACE:
+        froms = [q0] + [D["qd"][-1] for D in dense]
+        for i in range(len(beats)):
+            qf = froms[i] if i < len(froms) else beats[i - 1][-1][1]
+            beats[i], n_, add_ = self_pace_block(spec, qf, beats[i], pen_ext)
+            self_paced += n_
+            self_pace_s += add_
     transit_s = float(sum(s[0] for b in beats for s in b))
     stretch = max(0.0, float(taxi_stretch))
     kf = 1.0 + stretch / transit_s if transit_s > 1e-12 and stretch else 1.0
@@ -1679,6 +1791,11 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                    paper.travel_floor(hox[-1][1], z_ret), qd_frac, T_LIFT_F,
                    paper_safe)
         need(None if r is None else dict(steps=r[0]), "retreat", len(dense) - 1)
+        if SELF_PACE:
+            paced, n_, add_ = self_pace_block(spec, hox[-1][0], r[0], pen_ext)
+            r = (paced,) + tuple(r[1:])
+            self_paced += n_
+            self_pace_s += add_
         retreat_s = float(sum(s[0] for s in r[0]))
         t0 = t
         for dt_, q_ in r[0]:
@@ -1695,6 +1812,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 draw_len=draw_len, transit_len=transit_len,
                 transit_s=float(transit_s), taxi_s=float(taxi_s),
                 retreat_s=float(retreat_s), aside_s=0.0,
+                self_paced=int(self_paced), self_pace_s=float(self_pace_s),
                 q_end=np.array(Q[-1], float),
                 park=str(park), pen=ext_of(pen_ext),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
