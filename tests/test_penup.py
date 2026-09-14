@@ -298,13 +298,13 @@ def test_hover_near_is_a_tie_break_not_a_relaxation():
     src = inspect.getsource(writing.hover_solve)
     # every scan is handed the SAME `ok`; `HOVER_NEAR` only decides whether the
     # fiber opens, never what is allowed through it
-    assert src.count("ok=ok") == 3
+    assert src.count("ok=ok") == 3  # narrow, strict-wide, settle-wide
     # ...and no scan is ever run at a margin LOOSER than the caller's ask
-    assert "float(margin_min) if HOVER_HOLD_MARGIN is None" in src
+    assert "float(margin_min) if hold_ask is None" in src
     assert "margin_min=hold" in src
 
 
-def test_the_hold_margin_preference_is_off_because_it_costs_room():
+def test_the_hold_margin_is_per_call_not_a_module_default():
     """A hover the arm may FREEZE on is judged at `validate.MARGIN_GATE`.
 
     The lf5 stage-A re-run was refused on `frozen_failed` because arm 71's last
@@ -314,20 +314,49 @@ def test_the_hold_margin_preference_is_off_because_it_costs_room():
     has nothing that keeps it.
     """
     import inspect
-    # OFF BY DEFAULT, and the test says why: at 0.15 it moves
-    # test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture from
-    # 62.61 mm to 45.95 mm of solo clearance, under the 50 mm PAIR_MARGIN gate,
-    # because the hover score cannot see the frozen partners.  A hover may not
-    # be accepted at a clearance the old rule would have refused.
-    assert writing.HOVER_HOLD_MARGIN is None
-    # ...and `None` is the OLD scan exactly: one ask, at the caller's margin
-    src = inspect.getsource(writing.hover_solve)
-    assert "float(margin_min) if HOVER_HOLD_MARGIN is None" in src
-    assert "if w is None and hold > margin_min:" in src   # the settle path
-    # the memo still cannot serve an answer computed at another value
-    assert "float(HOVER_HOLD_MARGIN)" in inspect.getsource(
-        writing.lifted_or_lower)
-
-    # switching it on must still be a preference and never a relaxation
     from aris_sixarm import validate
-    assert validate.MARGIN_GATE > writing.HOVER_MARGIN
+    # THE HOLD MARGIN IS PER CALL AND HAS NO MODULE DEFAULT.  Asked of EVERY
+    # hover it costs room -- it moved
+    # test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture from
+    # 62.61 mm to 45.95 mm of solo clearance, under the 50 mm PAIR_MARGIN gate.
+    # So `hover_solve` reads only its own argument, and `arm_program` is the
+    # one caller that passes it -- for the one pose the arm stops on.
+    assert writing.HOVER_HOLD_MARGIN == validate.MARGIN_GATE
+    src = inspect.getsource(writing.hover_solve)
+    assert "hold_ask = hold" in src
+    assert "HOVER_HOLD_MARGIN" not in src, \
+        "hover_solve must not read the module constant; the caller passes it"
+    assert "if w is None and hold > margin_min:" in src   # the settle path
+    # the memo cannot serve an answer computed under other asks
+    memo = inspect.getsource(writing.lifted_or_lower)
+    assert "None if hold is None else float(hold)" in memo
+    assert "None if room_floor is None else float(room_floor)" in memo
+
+
+def test_only_the_held_hover_pays_the_hold_margin():
+    """`arm_program` asks for it once, under PARK_FREEZE, for the last exit."""
+    import inspect
+    src = inspect.getsource(writing.arm_program)
+    assert 'str(park) == PARK_FREEZE and HOVER_HOLD_MARGIN is not None' in src
+    assert "hold=HOVER_HOLD_MARGIN" in src
+    assert "room_floor=HOVER_ROOM_FLOOR" in src
+    # best-effort: a fiber with nothing that holds both leaves the old answer
+    assert "if strict is not None and float(strict[1]) > 0.0:" in src
+    # ...and the travelling hovers above it are solved with neither ask
+    assert src.count("hold=HOVER_HOLD_MARGIN") == 1
+
+
+def test_the_room_term_is_a_floor_and_a_capped_preference():
+    """`static_gate(room_floor=...)` refuses under the floor and prefers more."""
+    import inspect
+    src = inspect.getsource(writing.static_gate)
+    assert "partner_clearance" in src
+    assert "good &= room >= rfl - paper.EPS" in src          # the floor
+    assert "val = np.minimum(val, np.minimum(room, rcap))" in src  # the term
+    # comfortable has to mean comfortable on BOTH or the fiber never opens
+    assert "score.cap = cap if rcap is None else min(cap, rcap)" in src
+    # off by default: no room_floor, no partner query, no behaviour change
+    assert "room_floor=None" in inspect.signature(
+        writing.static_gate).__str__().replace(" ", "").replace(
+        "room_floor=None", "room_floor=None")
+    assert writing.HOVER_ROOM_FLOOR > 0.050    # above PAIR_MARGIN, on purpose

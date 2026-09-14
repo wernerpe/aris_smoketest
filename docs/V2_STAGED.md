@@ -2591,3 +2591,69 @@ consequences, stated plainly:
   the search can find a pose that holds joint margin AND room, instead of a
   filter that trades one for the other. That is a change to a SCORE, not to a
   gate, and it is the next piece of work here.
+
+### 27.1 The hover score can see the room now, and the conflict is gone
+
+The correction above named the fix; this is it. **`static_gate` gained a
+`frozen.partner_clearance` term**, in exactly the shape everything else in that
+score already has:
+
+```python
+if rfl is not None:                      # room_floor, opt-in
+    P = paper.world_chain(Q, spec, pen_ext, h_inv)
+    C = paper.sphere_centres(Q, spec, h_inv)
+    room = frozen.partner_clearance(P, C)
+    good &= room >= rfl - paper.EPS               # a FLOOR: unacceptable under it
+    val = np.minimum(val, np.minimum(room, rcap)) # a CAPPED term: prefer more
+score.cap = cap if rcap is None else min(cap, rcap)
+```
+
+So the search **finds** a pose that holds the joint margin AND the room, instead
+of a filter that trades one for the other. Three properties make it safe:
+
+* **it is a score and a floor among CERTIFIED candidates, not a gate.** Every
+  candidate still passes the identical `CHAIN_CLEAR`, `FRAME_FLOOR`,
+  `selfcoll.self_ok` and joint-margin tests. No gate constant moved.
+* **it is opt-in.** `room_floor=None` is the default and means no partner query
+  at all — every legacy rig, every travelling hover, bit for bit as before.
+* **`score.cap` is the MIN of the two caps**, so "comfortable" means comfortable
+  on both terms; otherwise the fiber would never open for the room.
+
+**AND IT IS ASKED OF ONE POSE.** `writing.arm_program` asks for it once, for the
+last exit hover, and only under `PARK_FREEZE` — the pose the stage ENDS on and
+holds through the barrier, which is the only pose `scene_check` puts through
+`validate_pose`. `hover_solve` has **no module default** for the hold margin any
+more; it reads its own argument and nothing else, so a travelling hover is
+solved exactly as it always was. The ask is best-effort: if nothing on the whole
+fiber holds both, the ordinary answer stands and the stage is judged on it as
+before — the fix can refuse nothing.
+
+`HOVER_ROOM_FLOOR = 0.075 m`, not 0.050. The gate is `PAIR_MARGIN`, but what
+`solo_check` measures is the whole timeline including the LEG out of the held
+pose, after `scene_check` subtracts its 1-Lipschitz playback residual. The pose
+that failed was at 45.95 mm *on its go-home leg* with the hover itself clear, so
+a pose-only floor at exactly 50 mm would not have moved it.
+
+**Measured on the pinned case** (`tests/test_staged.py::test_staged_end_to_end_on_a_three_stroke_picture`):
+
+| | hold margin off | hold margin on, no room term | **on, with the room term** |
+|---|---|---|---|
+| arm 71 solo clearance | 62.61 mm | **45.95 mm (FAIL)** | **62.61 mm** |
+| arm 71 final held pose | jm 0.136, **fails `validate_pose`** | jm 0.576, passes | **jm 0.6023, passes** |
+| pinned test | pass | **FAIL** | **pass** |
+
+Both requirements at once, which is what the conflict said could not be done
+from a scan that could not see the room.
+
+**One reporting inconsistency, named and not fixed here.** `staged.ArmStage.hovers`
+is re-derived after the timeline with the ORDINARY rule, so a programme's last
+serialised `hover_out` is not the pose the trajectory actually ends on (0.136 vs
+0.6023 on the toy case). The trajectory is the truth and every check reads it;
+only the convenience field disagrees. Fixing it means touching `plan_bucket`'s
+`st.hovers` line, which two other agents are editing.
+
+**The stage-A re-run is in flight.** 11760**, against 11100 for the three fixes alone, 11210 for the
+hold-margin-everywhere run, and **19190** in the baseline -- so asking the held
+pose for both costs about 6 % of the transit budget and still leaves 39 % of the
+42 %. Verdict, stage time, arm 71 pen-up and per-arm planning are owed, from
+`out/staged_csail_h097_lf5_s150.*`.

@@ -201,6 +201,43 @@ consequences, stated plainly:
   filter that trades one for the other. That is a change to a SCORE, not to a
   gate, and it is the next piece of work here.
 
+**AND THE CONFLICT IS RESOLVED (same day, after the revert).** `static_gate`
+gained a `frozen.partner_clearance` term -- a FLOOR that makes a pose
+unacceptable under it, and a CAPPED term so that among acceptable poses the
+search prefers the ones that also stand off the neighbours -- with
+`score.cap = min(static_cap, room_cap)` so "comfortable" means comfortable on
+both and the fiber opens for either. It is a score among CERTIFIED candidates,
+not a gate: every candidate still passes the identical `CHAIN_CLEAR`,
+`FRAME_FLOOR`, `selfcoll.self_ok` and joint-margin tests, and no gate constant
+moved. It is opt-in (`room_floor=None` is the default and does not query the
+partners at all), and `hover_solve` now has NO module default for the hold
+margin -- it reads its own argument, so every travelling hover is solved exactly
+as it always was. `writing.arm_program` asks for both, once, for the last exit
+hover under `PARK_FREEZE`: the only pose `scene_check` puts through
+`validate_pose`. The ask is best-effort -- if nothing on the fiber holds both,
+the ordinary answer stands -- so the fix can refuse nothing.
+`HOVER_ROOM_FLOOR = 0.075` and not 0.050, because what `solo_check` measures is
+the LEG out of the held pose after the 1-Lipschitz playback residual, and the
+pose that failed was clear at 45.95 mm *on its go-home leg*.
+
+| pinned `test_staged_end_to_end_on_a_three_stroke_picture` | hold off | hold on, no room term | **on, with the room term** |
+|---|---|---|---|
+| arm 71 solo clearance | 62.61 mm | **45.95 mm (FAIL)** | **62.61 mm** |
+| arm 71 final held pose | jm 0.136, **fails `validate_pose`** | jm 0.576, passes | **jm 0.6023, passes** |
+| verdict | pass | **FAIL** | **pass** |
+
+Both requirements at once, which is what the conflict said a scan blind to the
+room could not do.
+
+**THE STAGE-A RE-RUN IS IN FLIGHT AND IS NOT IN THIS ENTRY.** It was launched
+with the hold margin ON and the room term live (`ROUTE_REV` 4, cold on every
+route) and had planned its three leaders when the box closed: arm 71's transit
+cap reads **11760**, against 11100 for the three fixes alone, 11210 for the
+hold-margin-everywhere run, and **19190** in the baseline -- so asking the held
+pose for both costs about 6 % of the transit budget and still leaves 39 % of the
+42 %. Verdict, stage time, arm 71 pen-up and per-arm planning are owed, from
+`out/staged_csail_h097_lf5_s150.*`.
+
 **WHAT IS NOT CLAIMED.** The classifier's thresholds are calibrated on this
 programme's honest legs and are deliberately conservative — arm 71's legs 4 and
 5 come out "honest" at `flip_rad` 3.0 and 0.1, under the 6 rad floor, where a

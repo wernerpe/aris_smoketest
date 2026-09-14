@@ -54,9 +54,9 @@ HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
 #   speed.  Callers that are CHOOSING a pose rather than accepting one — the
 #   idle policy's retreat — ask for the stricter gate instead, because there is
 #   no reason to spend margin you do not have to.
-HOVER_HOLD_MARGIN = None  # rad, restated from `validate.MARGIN_GATE`; OFF by
-#   default -- see "AND IT CONFLICTS WITH THE ROOM" below.  `None` is the old
-#   behaviour exactly; 0.15 is the value the conflict was measured at.
+HOVER_HOLD_MARGIN = 0.15  # rad, restated from `validate.MARGIN_GATE`.  Asked
+#   ONLY of the hover the arm will HOLD (see `arm_program`), never of a
+#   travelling one -- `None` turns it off and is the pre-2026-09-14 behaviour.
 #   ...AND THE FIBER SCAN IS EXACTLY SUCH A CALLER (2026-09-14).  The sentence
 #   above says what to do and the widened scan was not doing it.  MEASURED on
 #   the lf5 stage-A re-run: arm 71's stage ends on its last hover (the freeze
@@ -95,10 +95,21 @@ HOVER_HOLD_MARGIN = None  # rad, restated from `validate.MARGIN_GATE`; OFF by
 #   only `paper.route`'s `legs_ok` consults, and by then the pose is chosen.
 #
 #   A hover may not be accepted at a clearance the old rule would have refused,
-#   so this stays OFF until the score can see the room.  THE FIX IS NAMED: give
-#   `static_gate` a `frozen.partner_clearance` term so the search can find a
-#   pose that holds both, instead of a filter that trades one for the other.
+#   so this was OFF until the score could see the room.  IT NOW CAN:
+#   `static_gate(room_floor=...)` carries a `frozen.partner_clearance` floor AND
+#   a capped term, so the search FINDS a pose that holds both instead of a
+#   filter that trades one for the other -- and the ask is made only of the
+#   pose the arm actually stops on, so a travelling hover is unchanged.
 
+
+# THE ROOM A HELD HOVER HAS TO KEEP, restated from `coordination.PAIR_MARGIN`
+# (0.050) on purpose and with a comfort band on top: the pose is judged at
+# PAIR_MARGIN by `solo_check`, and the LEG out of it is judged there too after
+# `scene_check` subtracts its 1-Lipschitz playback residual -- which is why the
+# pose is asked for more than the gate.  Measured: the pose that failed was at
+# 45.95 mm on its go-home leg with the hover itself clear, so a pose-only floor
+# at exactly 50 mm would not have moved it.
+HOVER_ROOM_FLOOR = 0.075    # m of frozen-partner clearance a HELD hover keeps
 
 HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
 #   The TOOL YAW axis of the hover fiber, and it only became a real axis when
@@ -1085,7 +1096,7 @@ paper.on_clear(_clear_hovers)
 
 
 def static_gate(spec, pen_ext=None, h_inv=H_INV_DEFAULT, floor=None,
-                comfort=None):
+                comfort=None, room_floor=None):
     """How good a CHOSEN pen-up pose is. -> fn (N,7) -> (N,) float.
 
     `-inf` for a pose that may not be held at all; otherwise the static
@@ -1118,6 +1129,9 @@ def static_gate(spec, pen_ext=None, h_inv=H_INV_DEFAULT, floor=None,
     boxes = paper.static_boxes(spec) if paper.STATIC_SAFE else []
     fl = paper.FRAME_FLOOR if floor is None else float(floor)
     cap = fl + (HOVER_COMFORT if comfort is None else float(comfort))
+    rfl = None if room_floor is None else float(room_floor)
+    rcap = None if rfl is None else rfl + (HOVER_COMFORT if comfort is None
+                                           else float(comfort))
 
     def score(Q):
         Q = np.asarray(Q, float).reshape(-1, 7)
@@ -1130,14 +1144,37 @@ def static_gate(spec, pen_ext=None, h_inv=H_INV_DEFAULT, floor=None,
         from . import selfcoll
         good &= selfcoll.self_ok(Q, margin=selfcoll.SELF_PLAN_MARGIN,
                                  pen_ext=pen_ext)
-        return np.where(good, np.minimum(sc, cap), -np.inf)
-    score.cap = cap          # `hover_solve` reads it to decide when to widen
+        val = np.minimum(sc, cap)
+        if rfl is not None:
+            # ...AND THE FROZEN PARTNERS, WHICH THIS SCORE COULD NOT SEE.
+            # `paper.static_boxes` is the STEEL and the base columns: pose
+            # invariant, and no arm is in it.  The parked ARMS live in `frozen`
+            # and only `paper.route`'s `legs_ok` ever consulted them -- by which
+            # time the pose was already chosen.  So a hover could be picked at
+            # 46 mm from a parked neighbour and nothing in the search knew
+            # (docs/V2_STAGED.md section 27, the HOVER_HOLD_MARGIN conflict).
+            #
+            # It is asked HERE, in the same shape as everything else: a floor
+            # that makes a pose unacceptable, and a capped term so that among
+            # acceptable poses the search prefers the ones that also stand off
+            # the neighbours.  `inf` when nothing is frozen, which is every
+            # legacy rig and every call that does not ask for it.
+            from . import frozen as _frozen
+            P = paper.world_chain(Q, spec, pen_ext, h_inv)
+            C = paper.sphere_centres(Q, spec, h_inv)
+            room = np.asarray(_frozen.partner_clearance(P, C), float).ravel()
+            good &= room >= rfl - paper.EPS
+            val = np.minimum(val, np.minimum(room, rcap))
+        return np.where(good, val, -np.inf)
+    # `hover_solve` reads this to decide when to widen: "comfortable" has to
+    # mean comfortable on BOTH terms or the fiber never opens for the room.
+    score.cap = cap if rcap is None else min(cap, rcap)
     return score
 
 
 def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
                 pen_ext=None, tilt=None, margin_min=HOVER_MARGIN, ok=None,
-                near=None):
+                near=None, hold=None):
     """The best hover over (xy, z) that `ok` allows. -> q (7,) | None.
 
     Two stages, cheap first, and the first stage is bit-for-bit the call this
@@ -1174,6 +1211,10 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     `HOVER_NEAR`; `near=inf` restores the old short-circuit exactly.
     """
     near = HOVER_NEAR if near is None else float(near)
+    # `hold` IS PER CALL AND HAS NO MODULE DEFAULT, deliberately: the
+    # constant names the value, `arm_program` names the one pose that asks for
+    # it, and every travelling hover is solved exactly as it always was.
+    hold_ask = hold
     q, dq = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
                           margin_min=margin_min, tilt=tilt, ok=ok)
     cap = getattr(ok, "cap", None)
@@ -1182,8 +1223,8 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
                               and float(np.asarray(ok(q[None, :]), float)[0])
                               >= cap - paper.EPS)):
         return q
-    hold = (float(margin_min) if HOVER_HOLD_MARGIN is None
-            else max(float(margin_min), float(HOVER_HOLD_MARGIN)))
+    hold = (float(margin_min) if hold_ask is None
+            else max(float(margin_min), float(hold_ask)))
     w, dw = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
                           margin_min=hold, tilt=tilt, phis=HOVER_YAWS,
                           q7s=ik.Q7_GRID, ok=ok)
@@ -1393,7 +1434,7 @@ def hover_joins_depot(spec, q_ref, h, h_inv=H_INV_DEFAULT, pen_ext=None):
 
 
 def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
-                    pen_ext=None, tilt=None):
+                    pen_ext=None, tilt=None, hold=None, room_floor=None):
     """A CERTIFIED hover over `xy`, as high as the arm can hold one.
     -> (q, height_used).
 
@@ -1434,6 +1475,11 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            # each other's hovers.
            float(HOVER_NEAR),
            None if HOVER_HOLD_MARGIN is None else float(HOVER_HOLD_MARGIN),
+           # ...and the HELD-POSE asks, which are per-call and not per-run:
+           # the same tip at the same height is a different question when the
+           # arm is going to stop there.
+           None if hold is None else float(hold),
+           None if room_floor is None else float(room_floor),
            # ...and the C-space tier, for the same reason again.  The depot
            # rescue below asks `hover_joins_depot`, which is three
            # `paper.route` calls, and those have a different answer with the
@@ -1447,12 +1493,12 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
     def ladder(ok):
         for z in heights:
             q = hover_solve(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
-                            tilt=tilt, ok=ok)
+                            tilt=tilt, ok=ok, hold=hold)
             if q is not None:
                 return np.asarray(q, float), float(z)
         return None
 
-    gate = static_gate(spec, pen_ext, h_inv)
+    gate = static_gate(spec, pen_ext, h_inv, room_floor=room_floor)
     out = ladder(gate)
     if out is None and gate is not None:
         # ...AND THE HOVER IS CLAMPED TO ITS OWN INK, for the third time and
@@ -1465,7 +1511,8 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
         fl = float(paper.chain_static(np.asarray(q_ref, float).reshape(1, 7),
                                       spec, pen_ext, h_inv)[0])
         if fl < paper.FRAME_FLOOR:
-            out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl))
+            out = ladder(static_gate(spec, pen_ext, h_inv, floor=fl,
+                                     room_floor=room_floor))
     if out is None:
         out = (np.asarray(q_ref, float), 0.0)
     if sel and gate is not None \
@@ -1784,6 +1831,25 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                            pen_ext=pen_ext) for D in dense]
     hox = [lifted_or_lower(spec, D["qd"][-1], D["pts"][-1], h_inv=h_inv,
                            pen_ext=pen_ext) for D in dense]
+    # ...AND THE ONE HOVER THE ARM IS GOING TO STOP ON IS A DIFFERENT QUESTION.
+    # Under `PARK_FREEZE` the stage ENDS on the last exit hover and holds it
+    # through the barrier, and `scene_check` judges a held pose with
+    # `validate_pose` -- `validate.MARGIN_GATE` (0.15 rad), not the 0.10 a
+    # travelling hover is allowed.  Asked of every hover that filter costs room
+    # (docs/V2_STAGED.md section 27); asked of THIS one it costs nothing that
+    # matters, because it is one pose and the search is told about the parked
+    # partners at the same time so it can hold both.
+    #
+    # BEST-EFFORT AND NEVER A REFUSAL.  If nothing on the whole fiber holds the
+    # hold margin AND the room, the ordinary answer stands -- exactly what
+    # shipped before this existed -- and the stage is judged on it as before.
+    if dense and str(park) == PARK_FREEZE and HOVER_HOLD_MARGIN is not None:
+        strict = lifted_or_lower(spec, dense[-1]["qd"][-1], dense[-1]["pts"][-1],
+                                 h_inv=h_inv, pen_ext=pen_ext,
+                                 hold=HOVER_HOLD_MARGIN,
+                                 room_floor=HOVER_ROOM_FLOOR)
+        if strict is not None and float(strict[1]) > 0.0:
+            hox[-1] = strict
     q_home = np.asarray(spec.q_seed, float).reshape(7)
 
     def need(beat, what, k):
