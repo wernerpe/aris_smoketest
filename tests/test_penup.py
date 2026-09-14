@@ -296,7 +296,30 @@ def test_hover_near_is_a_tie_break_not_a_relaxation():
     assert writing.HOVER_NEAR > 0
     import inspect
     src = inspect.getsource(writing.hover_solve)
-    # both scans are handed the same `ok`, and the wide one is not given a
-    # looser margin: if either ever changes, this test is the place to notice
-    assert src.count("ok=ok") == 2
-    assert "margin_min=margin_min" in src
+    # every scan is handed the SAME `ok`; `HOVER_NEAR` only decides whether the
+    # fiber opens, never what is allowed through it
+    assert src.count("ok=ok") == 3
+    # ...and no scan is ever run at a margin LOOSER than the caller's ask
+    assert "hold = max(float(margin_min), HOVER_HOLD_MARGIN)" in src
+    assert "margin_min=hold" in src
+
+
+def test_hover_asks_for_the_hold_margin_before_it_settles():
+    """A hover the arm may FREEZE on is judged at `validate.MARGIN_GATE`.
+
+    The lf5 stage-A re-run was refused on `frozen_failed` because arm 71's last
+    hover stood 0.1111 rad from a joint limit against `validate_pose`'s 0.15,
+    while every distance gate passed wide.  The widened fiber scan now asks for
+    the hold margin first and settles for `HOVER_MARGIN` only where the fiber
+    has nothing that keeps it.
+    """
+    from aris_sixarm import validate
+    assert writing.HOVER_HOLD_MARGIN == validate.MARGIN_GATE
+    assert writing.HOVER_HOLD_MARGIN > writing.HOVER_MARGIN
+    # the settle path exists, so a fiber with nothing comfortable is not lost
+    import inspect
+    src = inspect.getsource(writing.hover_solve)
+    assert "if w is None and hold > margin_min:" in src
+    # and the memo cannot serve an answer computed at the other value
+    assert "float(HOVER_HOLD_MARGIN)" in inspect.getsource(
+        writing.lifted_or_lower)

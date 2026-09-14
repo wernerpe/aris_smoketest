@@ -94,20 +94,41 @@ moved):
 | `solo` min over arms | +51.7 mm | **+167.9 mm** |
 | stage verdict | PASS | **FAIL — `frozen`, and only `frozen`** |
 
-**THE FAIL IS ONE BOOKKEEPING BOOLEAN AND IT IS NOT DIAGNOSED.** Re-deriving
-arm 71's `solo_check` off the shipped programme (1 109 frames at dt = 0.05):
-`min_clearance` **+167.9 mm**, `frame_failed []`, `paper_failed []`,
-`self_failed []`, `column_failed []`, `monotone True`, every arm's
-`joint_margin > 0` — and `frozen_failed 1`. **Every distance gate passes and
-passes wide; the planner's own installed frozen-partner room is the only thing
-that refuses it.** That rules out the one soundness hole this change knew it
-had (the shortcutter reuses `legs_ok`, which bounds static and self adaptively
-but bounds `chain_z`/`tip_z` on 33 samples with NO Lipschitz residual, and a
-shortcut chord is longer than the legs it replaces — but `paper_failed` and
-`self_failed` are empty at the judge's own density). **So 55.41 s is a
-measurement of this timeline and not a certificate of it**, and the next step is
-`frozen.partner_clearance` on arm 71's realised trajectory against the poses
-`freeze_stage` installed — §26's instrument, on §27's run.
+**THE FAIL WAS A FOURTH BUG, AND `frozen_failed` IS NOT WHAT ITS NAME
+SUGGESTS.** `scene_check`'s `frozen` term is NOT `frozen.partner_clearance` and
+has nothing to do with the leader/follower standoff: it is
+`validate_pose(qtraj[a][-1])` -- **the last pose of each arm's trajectory**, the
+pose the arm HOLDS when the stage ends, which under `PARK_FREEZE` is the hover
+over the last stroke. Arm 71's read `joint margin 0.11108 rad on joint 0
+against validate.MARGIN_GATE's 0.15`, hard violations `['margin']` and nothing
+else, with frame 69.3 mm, self 105.7 mm, chain z 106.0 mm, tip z 60 mm and
+inter-arm +167.9 mm. **Not the shortcutter** (`paper_failed` and `self_failed`
+empty at the judge's own density). **Not the standoff**: the run carried
+`--partner-standoff 0.0`, arm 71's serialised `standoff` is `None`,
+`frozen.set_standoff` was never called in the run or the re-check, so the two
+agree at S = 0 -- and `partner_clearance` is not the function this verdict comes
+from.
+
+**IT IS A MARGIN MISMATCH THAT WAS LATENT AND THIS CHANGE EXPOSED**, and
+`HOVER_MARGIN`'s own comment had already written the fix: *"Callers that are
+CHOOSING a pose rather than accepting one ask for the stricter gate instead,
+because there is no reason to spend margin you do not have to."* The widened
+fiber scan is exactly such a caller and was not doing it; the 0.1111 rad pose
+was always in the fiber and always passed `HOVER_MARGIN`, and `HOVER_NEAR`
+merely made the fiber's nearest pose winnable. `writing.HOVER_HOLD_MARGIN =
+0.15` (restated from `validate.MARGIN_GATE`): the widened scan asks for the hold
+margin first and settles for `HOVER_MARGIN` only where the fiber has nothing
+that keeps it. It cannot lose a hover (the fallback is the identical old scan)
+and it cannot admit one (both asks run the same `ok`). `ROUTE_REV` -> 3.
+
+**THE VERDICT RE-RUN IS IN FLIGHT AND IS NOT IN THIS ENTRY.** Stage A was
+relaunched with the margin fix (`ROUTE_REV` 3, so cold on every route) and had
+planned its three leaders when this work's clock ran out: **arm 71's transit cap
+reads 11210 against 11100 before the fix and 19190 in the baseline**, so asking
+for the hold margin costs about 1 % of the transit budget and gives back none of
+the 42 %. The stage verdict, duration and arm 71 pen-up under the fix are owed,
+from `out/staged_csail_h097_lf5_s150.*`; `out/staged_csail_h097_lf5_s150_v1.*`
+is the FAIL'ing run this entry diagnoses and is kept for the comparison.
 
 **WHAT IS NOT CLAIMED.** The classifier's thresholds are calibrated on this
 programme's honest legs and are deliberately conservative — arm 71's legs 4 and

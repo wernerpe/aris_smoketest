@@ -2404,9 +2404,9 @@ clearance readings improved by more than a factor of two, which is what a hover
 chosen near the ink and a route that does not climb to the park pose look like
 from the checker's side.
 
-**THE STAGE VERDICT IS FAIL, AND THE GATE THAT REFUSES IT IS `frozen`.**
-Re-deriving arm 71's `solo_check` off the shipped programme (1 109 frames at
-dt = 0.05):
+**THE STAGE VERDICT WAS FAIL, AND `frozen_failed` IS NOT WHAT ITS NAME
+SUGGESTS.** Re-deriving arm 71's `solo_check` off the shipped programme
+(1 109 frames at dt = 0.05):
 
 ```
 ok False          min_clearance  0.16794 m      monotone True
@@ -2414,33 +2414,55 @@ frame_failed []   paper_failed []   self_failed []   column_failed []
 frozen_failed 1   joint_margin  arm 71  0.1107 rad (all six > 0)
 ```
 
-**Every distance gate passes and passes wide.** The real inter-arm capsule
-clearance is +167.9 mm against a 50 mm gate, the steel, the paper plane, the
-arm against itself and the joint limits are all clean, and the timeline is
-monotone. The single false boolean is `frozen_failed`, the planner's own
-installed frozen-partner room — which is bookkeeping about what arm 71 was
-PLANNED against, not a statement that it is near anything. Two consequences
-worth stating plainly:
+Every distance gate passes and passes wide. **`scene_check`'s `frozen` term is
+not `frozen.partner_clearance` and has nothing to do with the standoff**: it is
 
-* **it is not the shortcutter's known hole.** `legs_ok` bounds the static and
-  self gates adaptively but bounds `chain_z`/`tip_z` on 33 samples with no
-  Lipschitz residual (`leg_bounds`), and a shortcut chord is longer than the
-  legs it replaces, so that was the first suspect. `paper_failed` is empty and
-  `self_failed` is empty at the judge's own density: it is not that.
-* **it is not diagnosed to a cause, and 55.4 s is therefore a measurement of
-  this timeline and not a certificate of it.** The next step is to attribute
-  `frozen_failed` to a leg and a partner — `frozen.partner_clearance` on arm
-  71's realised trajectory against the poses `freeze_stage` installed — which
-  is the same instrument §26 used on the stage-C composition bug, and to
-  establish whether the room the leader was planned against is the room the
-  re-check is reading. Until then the honest statement is: **the stage is 42 %
-  faster over more ink with every clearance gate improved, and one bookkeeping
-  verdict is unexplained.**
+```python
+rep_p = validate_pose(np.asarray(qtraj[a], float)[-1], fl[a], h_inv, ...)
+```
 
-**Sample-count note for whoever picks that up.** If it does turn out to be the
-paper gate on a long chord, the fix is to certify a shortcut chord at a sample
-count scaled to its length; `paper.sample_residual(P)` already returns the
-number `leg_bounds` would need to subtract.
+— `validate_pose` on the **last pose of each arm's trajectory**, the pose the
+arm HOLDS when the stage ends. And under `PARK_FREEZE` that pose is the hover
+over the last stroke. Running it directly:
+
+| | arm 71's final held pose |
+|---|---|
+| joint margin | **0.11108 rad, joint 0, against `validate.MARGIN_GATE` 0.15** |
+| frame clearance | 69.3 mm |
+| self clearance | 105.7 mm |
+| chain z | 106.0 mm |
+| tip z | 60 mm |
+| hard violations | `['margin']` — **and nothing else** |
+
+**So it is neither of the two things it was suspected of being.** It is not the
+shortcutter (`paper_failed` and `self_failed` are empty at the judge's own
+density). It is not the standoff: the run carried `--partner-standoff 0.0`, arm
+71's serialised `standoff` is `None`, `frozen.set_standoff` was never called in
+the run or in the re-check, and the two therefore agree at S = 0 — and in any
+case `partner_clearance` is not the function this verdict comes from.
+
+**IT IS A MARGIN MISMATCH THAT WAS LATENT AND THIS CHANGE EXPOSED.**
+`writing.HOVER_MARGIN` is 0.10 rad and its own comment has said, since long
+before this work, exactly what was wrong:
+
+> Looser than `validate.MARGIN_GATE` (0.15) on purpose and historically: a
+> hover is a place to stand, not a curve to be dragged along at a commanded
+> speed. **Callers that are CHOOSING a pose rather than accepting one** — the
+> idle policy's retreat — **ask for the stricter gate instead**, because there
+> is no reason to spend margin you do not have to.
+
+The widened fiber scan is exactly such a caller and was not doing it. The pose
+at 0.1111 rad was always in the fiber and always passed `HOVER_MARGIN`; what
+`HOVER_NEAR` changed is that the fiber's NEAREST pose became winnable, and the
+nearest one happened to be the one standing 39 mrad inside the hold gate.
+
+**THE FIX.** `writing.HOVER_HOLD_MARGIN = 0.15` (restated from
+`validate.MARGIN_GATE`): the widened scan asks for the hold margin first and
+settles for `HOVER_MARGIN` only where the fiber has nothing that keeps it — the
+same ask-then-settle shape `HOVER_COMFORT` already uses for clearance. **It
+cannot lose a hover** (the fallback is the identical old scan) and **it cannot
+admit one** (both asks run the same `ok`). `ROUTE_REV` goes to 3 and
+`HOVER_HOLD_MARGIN` joins `lifted_or_lower`'s memo key.
 
 ### The pen-up anatomy, before and after, off the two programmes' own trajectories
 
@@ -2463,3 +2485,13 @@ got slightly CHEAPER, not dearer** (7.3 → 6.6 s for arm 71): the menus and the
 Viterbi cost about a third of a second a piece, and the sequencer's route screen
 — which is where arm 71's `seq_s` actually goes — has fewer refused crossings to
 route once the hovers are near the ink.
+
+**The verdict re-run is in flight and is not in this section.** Stage A was
+relaunched with the margin fix (`ROUTE_REV` 3, so cold on every route) and had
+planned its three leaders when this work's clock ran out: **arm 71's transit cap
+reads 11210 against 11100 before the fix and 19190 in the baseline**, so asking
+for the hold margin costs about 1 % of the transit budget and gives back none of
+the 42 %. The stage verdict, duration and arm 71 pen-up under the fix are owed,
+from `out/staged_csail_h097_lf5_s150.*`. `out/staged_csail_h097_lf5_s150_v1.*`
+is the FAIL'ing run diagnosed above and is kept for the comparison; the tables
+in this section are that run's numbers.

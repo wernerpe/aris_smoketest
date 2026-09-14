@@ -212,7 +212,7 @@ HOME_AFTER_LADDER = True
 # tier's output and nothing else; this covers every tier, that one included.)
 SHORTCUT = True
 SHORTCUT_ROUNDS = 8        # passes of drop-one-via before giving up
-ROUTE_REV = 2              # bumped when route's tiers, vias or hovers change
+ROUTE_REV = 3              # bumped when route's tiers, vias or hovers change
 
 SAMPLES = 33               # configurations sampled along one straight move
 

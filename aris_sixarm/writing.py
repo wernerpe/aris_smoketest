@@ -54,6 +54,24 @@ HOVER_MARGIN = 0.10     # rad, the joint-limit margin a HOVER pose must keep.
 #   speed.  Callers that are CHOOSING a pose rather than accepting one — the
 #   idle policy's retreat — ask for the stricter gate instead, because there is
 #   no reason to spend margin you do not have to.
+HOVER_HOLD_MARGIN = 0.15  # rad, restated from `validate.MARGIN_GATE` on purpose
+#   ...AND THE FIBER SCAN IS EXACTLY SUCH A CALLER (2026-09-14).  The sentence
+#   above says what to do and the widened scan was not doing it.  MEASURED on
+#   the lf5 stage-A re-run: arm 71's stage ends on its last hover (the freeze
+#   park policy), `scene_check` judges a pose the arm HOLDS with
+#   `validate_pose`, and that pose read a joint margin of 0.1111 rad against
+#   `validate.MARGIN_GATE`'s 0.15 — so the whole stage was refused on
+#   `frozen_failed`, with every distance gate passing wide (frame 69.3 mm, self
+#   105.7 mm, chain z 106.0 mm, inter-arm +167.9 mm).  The pose was legal by
+#   `HOVER_MARGIN` and always had been; what changed is that `HOVER_NEAR` made
+#   the fiber's NEAREST pose winnable, and the nearest one happened to be the
+#   one standing 39 mrad inside the hold gate.
+#
+#   So the widened scan ASKS FOR THE HOLD MARGIN FIRST and settles for
+#   `HOVER_MARGIN` only where the fiber has nothing that keeps it -- the same
+#   ask-then-settle shape `HOVER_COMFORT` already uses for clearance.  It
+#   cannot lose a hover (the fallback is the identical old scan) and it cannot
+#   admit one (both asks run the same `ok`).
 
 
 HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
@@ -1138,9 +1156,16 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
                               and float(np.asarray(ok(q[None, :]), float)[0])
                               >= cap - paper.EPS)):
         return q
+    hold = max(float(margin_min), HOVER_HOLD_MARGIN)
     w, dw = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
-                          margin_min=margin_min, tilt=tilt, phis=HOVER_YAWS,
+                          margin_min=hold, tilt=tilt, phis=HOVER_YAWS,
                           q7s=ik.Q7_GRID, ok=ok)
+    if w is None and hold > margin_min:
+        # nothing on the fiber keeps the hold gate: settle for the old ask
+        w, dw = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv,
+                              pen_ext=pen_ext, margin_min=margin_min,
+                              tilt=tilt, phis=HOVER_YAWS, q7s=ik.Q7_GRID,
+                              ok=ok)
     if w is None or q is None:
         return w if w is not None else q
     # both exist: keep whichever the score prefers, and where the score is
@@ -1380,7 +1405,7 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            # time: `HOVER_NEAR` decides whether the narrow answer is kept or
            # the fiber is opened, so two runs at different values must not read
            # each other's hovers.
-           float(HOVER_NEAR),
+           float(HOVER_NEAR), float(HOVER_HOLD_MARGIN),
            # ...and the C-space tier, for the same reason again.  The depot
            # rescue below asks `hover_joins_depot`, which is three
            # `paper.route` calls, and those have a different answer with the
