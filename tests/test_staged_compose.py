@@ -207,6 +207,34 @@ def test_serial_offsets_put_the_second_group_after_the_first_in_time(rig):
     staged.thaw()
 
 
+def test_a_group_the_conductor_refused_is_laid_down_one_arm_at_a_time(rig):
+    """`serialised` means each arm has its OWN clock, and the merge must say so.
+
+    Measured 2026-09-14: group [2, 97] refuses `idle.conduct` -- a same-row pair
+    whose nominal timelines cannot share a clock -- and the fallback flies them
+    in turn.  Merged from frame zero they read **-208.3 mm** against each other,
+    which is a programme nobody was ever going to run.
+    """
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    q2 = np.asarray(parks[2], float).reshape(7)
+    q97 = np.asarray(parks[97], float).reshape(7)
+    a2, a97 = _stage(2, q2, n=5), _stage(97, q97, n=4)
+    for st in (a2, a97):
+        st.residue, st.conducted = True, False
+    part = ({2: a2, 97: a97}, dict(ok=False, serialised=True,
+                                   min_clearance=0.02), 1.0)
+    arms, rep = staged._merge_conducts(2, [part], rig, pens, parks, parks, 0.97,
+                                       0.05, 1)
+    assert rep["serialised_groups"] == [[2, 97]]
+    # arm 2 flies frames 0..4, arm 97 flies 4..7, and neither moves in the
+    # other's window
+    assert len(np.asarray(arms[2].timeline["q"], float)) == 8
+    assert rep["offsets_s"] == {"97": 0.2}
+    assert rep["makespan_s"] == pytest.approx(0.05 * 7)
+    staged.thaw()
+
+
 def test_priority_hands_every_earlier_groups_room_to_every_later_one(rig,
                                                                     monkeypatch):
     """Group k's payload carries a room for every arm groups 1..k-1 moved."""

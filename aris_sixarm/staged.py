@@ -1837,6 +1837,14 @@ class StageResult:
         RESIDUE bucket is not concurrent with anything: it runs after the others
         have parked, so it is added rather than maxed.
         """
+        if self.conducted:
+            # A CONDUCTED STAGE HAS ONE CLOCK AND THE MERGE IS WHERE IT IS SET.
+            # `_merge_conducts` pads every arm to the same frame count and lays
+            # a group the conductor REFUSED down one arm at a time INSIDE that
+            # clock, so a residue arm's seconds are already in the maximum;
+            # adding them again would bill the same wall twice (measured
+            # 2026-09-14: 680.9 s reported for a 227.0 s timeline).
+            return max((a.duration for a in self.arms.values()), default=0.0)
         conc = max((a.duration for a in self.arms.values() if not a.residue),
                    default=0.0)
         return conc + sum(a.duration for a in self.arms.values() if a.residue)
@@ -2947,10 +2955,12 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
     rooms = {int(a): v for a, v in (rooms or {}).items() if int(a) in outside}
     arms: dict[int, ArmStage] = {}
     segs: dict[int, list] = {}
+    room_poses = {int(a): np.asarray(q, float).reshape(7)
+                  for a, q in held.items()}
+    room_poses.update({int(a): np.asarray(q, float).reshape(7)
+                       for a, q in op.items()})
     for a in who:
         pcs = list(buckets.get((s, int(a)), [])) + list(deferred.get(int(a), []))
-        room_poses = dict(held)
-        room_poses.update(op)
         st = plan_bucket(s, a, pcs, fl, pens, room_poses, h_inv, opts,
                          leg_cache=leg_cache, leg_cache_root=leg_cache_root,
                          fly=True, on_piece=on_piece,
@@ -3022,7 +3032,11 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
             if st.timeline is None:
                 continue
             st.residue = True
-            rep = solo_check(st, held, fl, pens, h_inv, PAIR_MARGIN, dt, sub)
+            # ...against the poses the partners actually hold WHILE this group
+            # runs, which is `held` for a group that has not started and its
+            # park for one that already went home (`--row-compose serial`).
+            rep = solo_check(st, room_poses, fl, pens, h_inv, PAIR_MARGIN, dt,
+                             sub)
             worst = min(worst, float(rep.get("min_clearance", np.nan)))
             ok = ok and bool(rep.get("ok", False))
         return arms, dict(ok=bool(ok), serialised=True, reason=str(exc),
@@ -3197,6 +3211,35 @@ def _pad(v, M):
     return np.concatenate([v, np.repeat(v[-1:], M - len(v), axis=0)])
 
 
+def _on_clock(tl, dt):
+    """One arm's timeline, on the MERGE's clock. -> dict.
+
+    A CONDUCTED timeline is already `dt`-spaced -- `_conduct_stage` builds it by
+    indexing `idle.conduct`'s own uniform samples -- but a timeline the
+    conductor REFUSED, and a bare go-home `aside`, come straight out of
+    `writing.arm_program` on its WAYPOINT clock, where two consecutive rows can
+    be a whole reconfiguration apart.  Merging those as if they were frames puts
+    4.3 rad between two samples, and `scene_check`'s 1-Lipschitz residual then
+    reads half a metre of self-collision that is not there (measured
+    2026-09-14: arm 2 at -531.6 mm, arm 97 at -512.4 mm).  `uniform_samples` is
+    the same resampler the conductor uses, and it is applied here so that every
+    arm in the merged scene is on one clock whatever produced it.
+    """
+    t = np.asarray(tl["t"], float)
+    if len(t) > 1:
+        want = dt * np.arange(len(t))
+        if float(np.max(np.abs(t - want))) <= 1e-6:
+            return tl
+    s = writing.uniform_samples(dict(tl, t=t, q=np.asarray(tl["q"], float),
+                                     seg=np.asarray(tl["seg"], int),
+                                     u=np.asarray(tl["u"], float),
+                                     duration=float(tl.get("duration",
+                                                           t[-1] if len(t)
+                                                           else 0.0))), dt)
+    return dict(tl, t=dt * np.arange(int(s["n"])), q=s["q"], seg=s["seg"],
+                u=s["u"])
+
+
 def _lead(v, n, first):
     """`n` frames of `first` in front of `v`. -> array."""
     v = np.asarray(v)
@@ -3225,7 +3268,25 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub,
     arms: dict[int, ArmStage] = {}
     for a, st in ((int(a), st) for g in parts for a, st in g[0].items()):
         arms[a] = st
+    for st in arms.values():
+        if st.timeline is not None:
+            st.timeline = _on_clock(st.timeline, dt)
     off = {int(a): int(v) for a, v in (offsets or {}).items()}
+    # A GROUP THE CONDUCTOR REFUSED FLIES ONE ARM AT A TIME, AND THE MERGE HAS
+    # TO SAY SO.  `_conduct_stage`'s fallback hands back each arm's timeline on
+    # ITS OWN clock -- that is the whole content of "serialised" -- so laying
+    # them all down from frame zero merges a programme nobody is going to run.
+    # Measured 2026-09-14: group [2, 97] refuses the conductor, and merged
+    # concurrently its two arms read -208.3 mm against each other.
+    for g in parts:
+        if not g[1].get("serialised"):
+            continue
+        base = max([0] + [int(off.get(int(a), 0)) for a in g[0]])
+        for a in sorted(int(x) for x in g[0]):
+            st = g[0][a]
+            off[int(a)] = int(base)
+            if st.timeline is not None:
+                base += len(np.asarray(st.timeline["t"], float)) - 1
     M = max([1] + [int(off.get(int(a), 0))
                    + len(np.asarray(st.timeline["t"], float))
                    for a, st in arms.items() if st.timeline is not None])
@@ -3283,6 +3344,10 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub,
     rep["margin_m"] = float(PAIR_MARGIN)
     rep["makespan_s"] = float(ts[-1]) if M > 1 else 0.0
     rep["t0_holds"] = dict(min_m=float(t0h["min_m"]), ok=bool(t0h["ok"]))
+    rep["serialised_groups"] = [sorted(int(a) for a in g[0]) for g in parts
+                                if g[1].get("serialised")]
+    rep["offsets_s"] = {str(a): round(dt * int(v), 3)
+                        for a, v in sorted(off.items()) if int(v)}
     if not t0h["ok"]:
         rep["failed"] = sorted(set(rep["failed"]) | {"t0_holds"})
         rep["ok"] = False
