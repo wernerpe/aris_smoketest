@@ -829,120 +829,176 @@ def write_html(scene, prog, ts, Q, LIVE, STAGE, args):
 # ---------------------------------------------------------------------------
 # 5.  THE OFFLINE GIF
 # ---------------------------------------------------------------------------
+def _view_limits(view):
+    from aris_sixarm.fleet import SHEET
+    if view == "top":   # horizontal = paper y, vertical = paper x (1.80 x 3.63)
+        return 1, 0, (-0.30, SHEET[1] + 0.30), (-0.30, SHEET[0] + 0.30), \
+            "paper y  [m]", "paper x  [m]"
+    return 0, 2, (-0.30, SHEET[0] + 0.30), (-0.12, 1.25), \
+        "paper x  [m]", "z  [m]"
+
+
+class _Panel:
+    """One programme drawn into one axes, updated frame by frame.
+
+    Pulled out of `render_gif` so a BEFORE/AFTER can put two programmes on one
+    figure and one clock.  A panel whose programme is shorter simply freezes:
+    `Programme.sample` holds every arm at its last hold past the makespan, so
+    the finished run sits still next to the one still working — which is the
+    comparison, made visible.
+    """
+
+    def __init__(self, fig, rect, prog, h_inv, view, ts, args, title=None,
+                 fig_w=8.0, t_end=None):
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import LineCollection
+        from aris_sixarm.coordination import cap_endpoints
+        from aris_sixarm.fleet import FLEET, SHEET
+
+        self.prog, self.ts, self.args = prog, ts, args
+        self.t_end = float(prog.makespan if t_end is None else t_end)
+        self.ax_h, self.ax_v, xlim, ylim, xlabel, ylabel = _view_limits(view)
+        self.Q, self.DOWN, self.LIVE, self.STAGE = prog.sample(ts)
+        ch = chains_for(prog, self.Q, h_inv)
+        self.caps = capsule_table(ch[prog.arms[0]].shape[1])
+        self.A = {a: cap_endpoints(ch[a], self.caps) for a in prog.arms}
+        self.tips = {a: ch[a][:, 9, :] for a in prog.arms}
+        self.ink_acc = {a: [] for a in prog.arms}
+
+        ax = fig.add_axes(rect)
+        self.ax = ax
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_aspect("equal")
+        ax.set_xlabel(xlabel, fontsize=8)
+        ax.set_ylabel(ylabel, fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.set_facecolor("#f2f2f0")
+        if view == "top":
+            ax.add_patch(plt.Rectangle((0, 0), SHEET[1], SHEET[0],
+                                       fc="#fbfbf4", ec="#9a9a90", lw=1.0,
+                                       zorder=0))
+        else:
+            ax.plot([0, SHEET[0]], [0, 0], color="#9a9a90", lw=2.0, zorder=0)
+            ax.axhline(0.970, color="#cbb", lw=0.8, ls=":", zorder=0)
+
+        pts_per_m = fig_w * rect[2] * 72.0 / (xlim[1] - xlim[0])
+        lw = np.array([2 * c[2] * pts_per_m for c in self.caps])
+        self.arm_lc, self.ink_lc, self.base_pt = {}, {}, {}
+        for a in prog.arms:
+            col = FLEET[a].color
+            base = FLEET[a].T_world_base(h_inv)[:3, 3]
+            self.base_pt[a] = ax.plot([base[self.ax_h]], [base[self.ax_v]],
+                                      "o", ms=7, mfc=col, mec="#333", mew=0.6,
+                                      zorder=6)[0]
+            ax.annotate(str(a), (base[self.ax_h], base[self.ax_v]), fontsize=7,
+                        xytext=(6, 6), textcoords="offset points",
+                        color="#333", zorder=7)
+            self.ink_lc[a] = LineCollection([], colors=[col], linewidths=1.6,
+                                            zorder=3)
+            ax.add_collection(self.ink_lc[a])
+            self.arm_lc[a] = LineCollection([], colors=[col], linewidths=lw,
+                                            capstyle="round", alpha=0.85,
+                                            zorder=5)
+            ax.add_collection(self.arm_lc[a])
+        self.title_base = title
+        self.title = (None if title is None else
+                      ax.set_title(title, fontsize=9, family="monospace",
+                                   loc="left", color="#222"))
+
+    def set_status(self, i):
+        """The per-panel status goes in the TITLE, above the axes — below it
+        is where the x label lives and the two would overprint."""
+        if self.title is None:
+            return
+        self.title.set_text(f"{self.title_base}\n{self.banner_text(i)}")
+
+    def banner_text(self, i):
+        prog, ts = self.prog, self.ts
+        k = int(self.STAGE[i])
+        s = prog.stages[k]
+        # WHO IS MOVING AND WHO IS HELD, named, every frame.  Read off LIVE,
+        # not off the stage's `actives`: an arm that has finished its bucket is
+        # HELD (at its park, or under schema 2 at a hover) until the barrier.
+        mv = [prog.tag(a, k) for a in prog.arms if self.LIVE[a][i]]
+        pk = [prog.tag(a, k) for a in prog.arms if not self.LIVE[a][i]]
+        holding = "holding" if prog.schema >= 2 else "parked"
+        done = ts[i] > self.t_end + 1e-9
+        return (f"stage {s['label']}   t = {min(ts[i], self.t_end):6.1f} s"
+                + ("  DONE" if done else "")
+                + f"   moving: {' '.join(mv) or '(barrier)'}"
+                f"   |  {holding}: {' '.join(pk) or '-'}")
+
+    def update(self, i):
+        from aris_sixarm.fleet import FLEET
+        h, v = self.ax_h, self.ax_v
+        for a in self.prog.arms:
+            live = bool(self.LIVE[a][i])
+            col = FLEET[a].color if live else GREY
+            A0, A1 = self.A[a][0][i], self.A[a][1][i]
+            self.arm_lc[a].set_segments([[(A0[k, h], A0[k, v]),
+                                          (A1[k, h], A1[k, v])]
+                                         for k in range(len(self.caps))])
+            self.arm_lc[a].set_color([col])
+            self.arm_lc[a].set_alpha(0.9 if live else PARKED_ALPHA)
+            self.arm_lc[a].set_zorder(5 if live else 4)
+            self.base_pt[a].set_mfc(col)
+            if i and self.DOWN[a][i] and self.DOWN[a][i - 1]:
+                p, q = self.tips[a][i - 1], self.tips[a][i]
+                self.ink_acc[a].append([(p[h], p[v]), (q[h], q[v])])
+                self.ink_lc[a].set_segments(self.ink_acc[a])
+
+
+def _grab(fig):
+    from PIL import Image
+    fig.canvas.draw()
+    im = Image.frombuffer("RGBA", fig.canvas.get_width_height(),
+                          fig.canvas.buffer_rgba(), "raw", "RGBA", 0, 1)
+    return im.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE,
+                                     colors=64)
+
+
+def _save_gif(frames_out, path, fps):
+    frames_out[0].save(path, save_all=True, append_images=frames_out[1:],
+                       duration=int(round(1000.0 / fps)), loop=0,
+                       optimize=True, disposal=2)
+    return os.path.getsize(path) / 1e6
+
+
 def render_gif(prog, args, h_inv, path, view="top"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.collections import LineCollection
-    from PIL import Image
-    from aris_sixarm.fleet import FLEET, SHEET
 
     dt = args.gif_rate / args.gif_fps
     ts = sample_grid(prog, dt, args.stage)
-    Q, DOWN, LIVE, STAGE = prog.sample(ts)
-    ch = chains_for(prog, Q, h_inv)
-    caps = capsule_table(ch[prog.arms[0]].shape[1])
-    # top: horizontal = paper y, vertical = paper x (the sheet is 1.80 x 3.63)
-    if view == "top":
-        ax_h, ax_v = 1, 0
-        xlim = (-0.30, SHEET[1] + 0.30)
-        ylim = (-0.30, SHEET[0] + 0.30)
-        xlabel, ylabel = "paper y  [m]", "paper x  [m]"
-    else:                                   # side: looking along +y
-        ax_h, ax_v = 0, 2
-        xlim = (-0.30, SHEET[0] + 0.30)
-        ylim = (-0.12, 1.25)
-        xlabel, ylabel = "paper x  [m]", "z  [m]"
+    _, _, xlim, ylim, _, _ = _view_limits(view)
 
     fig_w = 8.0
     fig_h = fig_w * (ylim[1] - ylim[0]) / (xlim[1] - xlim[0]) + 1.25
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=args.gif_dpi)
     fig.patch.set_facecolor("white")
-    ax = fig.add_axes([0.065, 0.40 / fig_h, 0.925,
-                       1 - (0.82 + 0.40) / fig_h])
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
-    ax.set_aspect("equal")
-    ax.set_xlabel(xlabel, fontsize=8)
-    ax.set_ylabel(ylabel, fontsize=8)
-    ax.tick_params(labelsize=7)
-    ax.set_facecolor("#f2f2f0")
-    if view == "top":
-        ax.add_patch(plt.Rectangle((0, 0), SHEET[1], SHEET[0], fc="#fbfbf4",
-                                   ec="#9a9a90", lw=1.0, zorder=0))
-    else:
-        ax.plot([0, SHEET[0]], [0, 0], color="#9a9a90", lw=2.0, zorder=0)
-        ax.axhline(0.970, color="#cbb", lw=0.8, ls=":", zorder=0)
-
-    # points per metre, for capsule radii drawn as line widths
-    pts_per_m = fig_w * 0.92 * 72.0 / (xlim[1] - xlim[0])
-    lw = np.array([2 * c[2] * pts_per_m for c in caps])
-
-    arm_lc, ink_lc, base_pt = {}, {}, {}
-    for a in prog.arms:
-        col = FLEET[a].color
-        base = FLEET[a].T_world_base(h_inv)[:3, 3]
-        base_pt[a] = ax.plot([base[ax_h]], [base[ax_v]], "o", ms=7, mfc=col,
-                             mec="#333", mew=0.6, zorder=6)[0]
-        ax.annotate(str(a), (base[ax_h], base[ax_v]), fontsize=7,
-                    xytext=(6, 6), textcoords="offset points",
-                    color="#333", zorder=7)
-        ink_lc[a] = LineCollection([], colors=[col], linewidths=1.6, zorder=3)
-        ax.add_collection(ink_lc[a])
-        arm_lc[a] = LineCollection([], colors=[col], linewidths=lw,
-                                   capstyle="round", alpha=0.85, zorder=5)
-        ax.add_collection(arm_lc[a])
+    panel = _Panel(fig, [0.065, 0.40 / fig_h, 0.925,
+                         1 - (0.82 + 0.40) / fig_h],
+                   prog, h_inv, view, ts, args, fig_w=fig_w)
 
     banner = fig.text(0.5, 1 - 0.30 / fig_h, "", ha="center", va="top",
                       fontsize=11, family="monospace")
     sub = fig.text(0.5, 1 - 0.60 / fig_h, "", ha="center", va="top",
                    fontsize=8, color="#555", family="monospace")
 
-    from aris_sixarm.coordination import cap_endpoints
-    A = {a: cap_endpoints(ch[a], caps) for a in prog.arms}
-    tips = {a: ch[a][:, 9, :] for a in prog.arms}
-    ink_acc = {a: [] for a in prog.arms}
-
     frames_out = []
     for i in range(len(ts)):
-        for a in prog.arms:
-            live = bool(LIVE[a][i])
-            col = FLEET[a].color if live else GREY
-            A0, A1 = A[a][0][i], A[a][1][i]
-            arm_lc[a].set_segments([[(A0[k, ax_h], A0[k, ax_v]),
-                                     (A1[k, ax_h], A1[k, ax_v])]
-                                    for k in range(len(caps))])
-            arm_lc[a].set_color([col])
-            arm_lc[a].set_alpha(0.9 if live else PARKED_ALPHA)
-            arm_lc[a].set_zorder(5 if live else 4)
-            base_pt[a].set_mfc(col)
-            if i and DOWN[a][i] and DOWN[a][i - 1]:
-                p, q = tips[a][i - 1], tips[a][i]
-                ink_acc[a].append([(p[ax_h], p[ax_v]), (q[ax_h], q[ax_v])])
-                ink_lc[a].set_segments(ink_acc[a])
-        k = int(STAGE[i])
-        s = prog.stages[k]
-        # WHO IS MOVING AND WHO IS HELD, named, every frame.  Read off LIVE,
-        # not off the stage's `actives`: an active arm that has finished its
-        # bucket is HELD at its park until the barrier, and with more than
-        # three actives in a stage that difference is the whole picture.
-        mv = [prog.tag(a, k) for a in prog.arms if LIVE[a][i]]
-        pk = [prog.tag(a, k) for a in prog.arms if not LIVE[a][i]]
-        holding = "holding" if prog.schema >= 2 else "parked"
-        banner.set_text(f"stage {s['label']}   t = {ts[i]:6.1f} s"
-                        f"   moving: {' '.join(mv) or '(barrier)'}"
-                        f"   |  {holding}: {' '.join(pk) or '-'}")
+        panel.update(i)
+        s = prog.stages[int(panel.STAGE[i])]
+        banner.set_text(panel.banner_text(i))
         sub.set_text(f"{prog.pattern}   stage {s['label']} actives "
                      f"{s['actives']}"
                      f"{'  residue ' + str(s['residues']) if s['residues'] else ''}"
                      f"   makespan {prog.makespan:.1f} s   {args.gif_rate:g}x"
                      + ("   L = leader, F = follower" if prog.schema >= 2
                         else ""))
-        fig.canvas.draw()
-        im = Image.frombuffer("RGBA", fig.canvas.get_width_height(),
-                              fig.canvas.buffer_rgba(), "raw", "RGBA", 0, 1)
-        frames_out.append(im.convert("RGB").convert(
-            "P", palette=Image.Palette.ADAPTIVE, colors=64))
+        frames_out.append(_grab(fig))
     plt.close(fig)
 
     frames_out[0].save(path, save_all=True, append_images=frames_out[1:],
@@ -955,6 +1011,74 @@ def render_gif(prog, args, h_inv, path, view="top"):
     if args.mp4 and _which("ffmpeg"):
         mp4 = str(Path(path).with_suffix(".mp4"))
         _mp4_from(frames_out, mp4, args.gif_fps)
+    return path, mb, len(frames_out) / args.gif_fps
+
+
+def render_compare(progs, labels, args, h_inv, path, view="top"):
+    """Two (or more) programmes, one clock, stacked. -> (path, MB, seconds).
+
+    ONE CLOCK IS THE WHOLE POINT.  Both panels advance at the same programme
+    seconds per frame, so the faster run visibly finishes and freezes while
+    the slower one is still reconfiguring, and the saving is a thing you watch
+    rather than a number you are told.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    dt = args.gif_rate / args.gif_fps
+
+    def end_of(p):
+        """With --stage k, compare stage k of each run, not whole makespans."""
+        if args.stage is None:
+            return p.makespan
+        k = min(int(args.stage), len(p.stages) - 1)
+        return p.stages[k]["t1"]
+
+    ends = [end_of(p) for p in progs]
+    ts = np.arange(0.0, max(ends) + dt * 0.5, dt)
+    _, _, xlim, ylim, _, _ = _view_limits(view)
+
+    n = len(progs)
+    fig_w = 8.0
+    pan_h = fig_w * 0.90 * (ylim[1] - ylim[0]) / (xlim[1] - xlim[0])
+    # `top` carries the shared banner AND panel 0's two-line title; `gap`
+    # carries the panel above's x label plus the next panel's two-line title.
+    top, bot, gap = 1.00, 0.45, 1.00
+    fig_h = n * pan_h + (n - 1) * gap + top + bot
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=args.gif_dpi)
+    fig.patch.set_facecolor("white")
+
+    panels = []
+    for k, (p, lab, te) in enumerate(zip(progs, labels, ends)):
+        y = 1 - (top + (k + 1) * pan_h + k * gap) / fig_h
+        what = ("whole programme" if args.stage is None
+                else f"stage {p.stages[min(int(args.stage), len(p.stages) - 1)]['label']}")
+        panels.append(_Panel(fig, [0.075, y, 0.90, pan_h / fig_h], p, h_inv,
+                             view, ts, args, t_end=te,
+                             title=f"{lab}   {p.pattern}   {what} "
+                                   f"= {te:.1f} s", fig_w=fig_w))
+
+    banner = fig.text(0.5, 1 - 0.14 / fig_h, "", ha="center", va="top",
+                      fontsize=12, family="monospace")
+
+    frames_out = []
+    for i in range(len(ts)):
+        for panel in panels:
+            panel.update(i)
+            panel.set_status(i)
+        banner.set_text(f"t = {ts[i]:6.1f} s   ({args.gif_rate:g}x)   "
+                        + "  vs  ".join(
+                            f"{lab}: {min(ts[i], te):.1f} s"
+                            + ("  DONE" if ts[i] > te + 1e-9 else "")
+                            for te, lab in zip(ends, labels)))
+        frames_out.append(_grab(fig))
+    plt.close(fig)
+
+    mb = _save_gif(frames_out, path, args.gif_fps)
+    print(f"wrote {path}  ({len(frames_out)} frames, {args.gif_fps} fps, "
+          f"{args.gif_rate:g}x, {len(frames_out) / args.gif_fps:.1f} s, "
+          f"{mb:.1f} MB)")
     return path, mb, len(frames_out) / args.gif_fps
 
 
@@ -998,6 +1122,11 @@ def main(argv=None):
     ap.add_argument("--html", default=None)
     ap.add_argument("--gif", default=None)
     ap.add_argument("--side-gif", default=None)
+    ap.add_argument("--compare", default=None,
+                    help="a second programme JSON; with --compare-gif it is "
+                         "drawn under the first on ONE clock")
+    ap.add_argument("--compare-gif", default=None)
+    ap.add_argument("--compare-labels", default="before,after")
     ap.add_argument("--gif-fps", type=float, default=15.0)
     ap.add_argument("--gif-rate", type=float, default=8.0)
     ap.add_argument("--gif-dpi", type=int, default=78)
@@ -1059,6 +1188,14 @@ def main(argv=None):
         render_gif(prog, a, a.h_inv, a.gif, "top")
     if a.side_gif:
         render_gif(prog, a, a.h_inv, a.side_gif, "side")
+    if a.compare_gif:
+        if not a.compare:
+            raise SystemExit("--compare-gif needs --compare OTHER.json")
+        other = Programme(json.loads(Path(a.compare).read_text()))
+        labs = [x.strip() for x in a.compare_labels.split(",")]
+        print(f"  comparing against {a.compare}: {other.pattern}, "
+              f"makespan {other.makespan:.1f} s")
+        render_compare([prog, other], labs, a, a.h_inv, a.compare_gif, "top")
     if a.meshcat or a.html:
         meshcat_run(prog, a, a.h_inv)
     return 0

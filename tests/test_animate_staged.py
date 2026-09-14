@@ -190,6 +190,23 @@ def test_clear_out_tuck_is_a_ramp_before_the_arm_draws():
     assert np.allclose(Q[1][3], hold)
 
 
+def test_sampling_past_the_makespan_freezes_rather_than_wrapping():
+    """The BEFORE/AFTER comparison runs both programmes on ONE clock.
+
+    The shorter one is asked for times past its own end, and it must FREEZE at
+    its last hold — not wrap, not drift, and not fall back to the park — or
+    the side-by-side would show the finished run doing something it never does.
+    """
+    p = animate_staged.Programme(_held_doc())          # 14 s long
+    ts = np.array([14.0, 20.0, 100.0])                 # at the end, and past it
+    Q, DOWN, LIVE, STAGE = p.sample(ts)
+    hold_b = np.array([2.25] + [0.0] * 6)
+    for k in range(len(ts)):
+        assert np.allclose(Q[1][k], hold_b), ts[k]
+    assert not LIVE[1][1:].any() and not DOWN[1][1:].any()
+    assert (STAGE[1:] == p.n_stages - 1).all()         # pinned to the last
+
+
 def test_six_arms_two_stages_all_leaders_and_followers():
     """The lf2 shape: six arms, every one active in both stages."""
     park = {a: [0.05 * a] * 7 for a in range(1, 7)}
