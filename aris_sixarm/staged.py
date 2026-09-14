@@ -3071,17 +3071,33 @@ def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
             parts.append(_row_job(pay))
     else:
         ctx = _mp.get_context("fork")
-        with _fut.ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as ex:
-            futs = {ex.submit(_row_job, pay): pay[1] for pay in payloads}
-            for f in _fut.as_completed(futs, timeout=None):
+        ex = _fut.ProcessPoolExecutor(max_workers=jobs, mp_context=ctx)
+        futs = {ex.submit(_row_job, pay): pay[1] for pay in payloads}
+        try:
+            # THE CAP IS ON THE WHOLE SET, AND IT HAS TO BE HERE.  `as_completed`
+            # with no timeout blocks for ever on a group that hangs, and a
+            # per-future timeout never runs because the future it would time out
+            # is the one that has not been yielded.
+            for f in _fut.as_completed(futs, timeout=max(1.0, float(cap_s))):
                 who = futs[f]
                 try:
-                    parts.append(f.result(timeout=max(1.0, float(cap_s))))
+                    parts.append(f.result())
                 except Exception as exc:               # noqa: BLE001
                     lost.append((who, f"{type(exc).__name__}: {exc}"))
                     if verbose:
                         print(f"  stage {s} group {sorted(who)}: ABANDONED "
                               f"({type(exc).__name__}: {exc})")
+        except TimeoutError:
+            for f, who in futs.items():
+                if not f.done():
+                    f.cancel()
+                    lost.append((who, f"over the {cap_s:.0f} s cap"))
+                    if verbose:
+                        print(f"  stage {s} group {sorted(who)}: ABANDONED "
+                              f"(over the {cap_s:.0f} s wall-clock cap); its "
+                              "ink is reported as residue")
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
     if verbose:
         for g in parts:
             print(f"  stage {s} group {sorted(int(a) for a in g[0])}: "
