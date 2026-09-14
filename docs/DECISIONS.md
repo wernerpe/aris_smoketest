@@ -1,5 +1,83 @@
 # Decisions — the numbers, and where each one is anchored
 
+## PIECES ARE CUT AT THE ROOM BOUNDARY, AND THE FINAL PASS IS ONE CONDUCTOR PER ROW (2026-09-14, FOURTH of four)
+
+**Two decisions, both of the same shape: cut where the geometry changes, and do
+not ask six arms a question only two of them are in.**
+
+**1. A follower's piece that fails the room ink gate is CUT, not refused
+whole.** `ink_vs_envelope` is a minimum over a piece's poses, so 55.9 % of
+follower 31's poses clearing the 50 mm gate against its leader's exact room
+bought **0 %** of its ink (§23.3). `staged.split_at_room` returns the contiguous
+stretches whose EVERY pose clears the gate — with the follower's own
+1-Lipschitz sweep residual subtracted, so the claim covers the motion between
+the ink samples and not only at them — and feeds them back through the ordinary
+refusal loop. Each stretch is at least `traces.MIN_PIECE_M` long, each new end
+must hold a certified hover, and each part is re-planned and RE-GATED: the cut
+chooses where, the gate stays the judge. What is deferred is the refused ink
+rather than the line it belonged to. Split parts take piece ids from 1 000 up,
+so `(line, piece)` still identifies ink uniquely everywhere downstream.
+
+**A NEW PIECE END IS JUDGED AT `PAIR_MARGIN` (50 mm), NOT AT
+`paper.FRAME_FLOOR` (63 mm), and that is not a gate change.** `FRAME_FLOOR` is
+`STATIC_MARGIN` plus the CHECKER's sweep residual and it is a ROUTING floor;
+`paper.effective_static_floor` already clamps it to whatever a leg's own
+endpoints can hold, exactly so a certified pose 51 mm from a neighbour is not
+stranded by a bar its own endpoint cannot meet. A hover is a POSE THE ARM
+HOLDS, and `hold_gap` already judges a held pose at `PAIR_MARGIN`. Measured: at
+63 mm the cut threw away every clear stretch it found on CSAIL stage A, because
+**every** hover over follower 31's ink reads **+53.7 mm**.
+
+**And +53.7 mm being the same number every time is itself a result.** Arm 31's
+hover over any of its own ink, at any rung of the ladder, and its park, all
+stand 53.7 mm from same-row leader 71's exact room. A same-row pair's shoulders
+are a fixed distance apart whatever their pens do. Legal to stand in, at the
+50 mm gate; not routable through, at the router's 63 mm floor. That is §22's
+"no pattern may ever put a same-row pair in the air together" with a number on
+it, and it is why stage A's follower still keeps nothing while stage B's keeps
+most of what it is offered.
+
+**2. Stage C is THREE TWO-ARM CONDUCTORS, one per row, in parallel processes.**
+Deferred ink is by construction the contested strip between one row's two arms,
+and rows are separated by the 0.40 m y dead band — `docs/V2_WORKCELLS.md` §4b
+measures cross-row pairs at **+194.3 / +201.1 mm** with each row drawing inside
+its own band. So 13+17, 31+71 and 2+97 are conducted separately and at once:
+**four priority orders each instead of 720**, a third of the pieces each, and
+the `sequence.cost_matrix` route screen — which is the wall §22 measured at
+3 075 s, not the DP — paid three ways in parallel. The groups overlap in time
+and `_merge_conducts` pads them onto one clock, with every arm in no group
+holding its pose IN THE SCENE; **one** `scene_check.check_timeline` over all six
+arms is the certificate, and it shares no code with any of it.
+
+**A piece that leaves its row band may never ride with a row conductor.** The
+cross-row number was measured with each row inside its own band.
+`staged.piece_row` returns a row only if the piece's whole geometry stays in it;
+everything else goes to a short **stage D**. Measured on the CSAIL logo's
+deferred ink: **9.7 % (split +0.15) / 11.5 % (whole bag)** is dead-band ink, all
+of it row 1's, against a 5 % bar — so stage D is a real stage, and Pete's
+two-phase sequence (outer rows draw their band ink while the middle row holds,
+then the middle row draws its own) collapses to its second phase here.
+
+**AND THE ROW CONDUCTORS ARE PROFOUNDLY UNBALANCED ON THIS PICTURE**: row 1
+carries 5.13 m of 5.94 m, row 2 0.23 m, row 0 nothing. The parallelism is worth
+much less than 3x here; what it is worth is that the conduct stops being a
+six-arm search, which is the term `ARCHITECTURE_V2` §2d says does not scale.
+
+**3. WHICH CERTIFICATE IS KEPT WHERE, stated once.** `ink_vs_envelope` is a
+certificate exactly where it is used as a GATE — the follower's per-piece
+refusal and the split's clear-stretch test. Everywhere else it is a REPORT: a
+leader is measured against the rooms before it and never refused on that number
+(§8). The stage's verdict is and has always been the realised-trajectory
+checks — `active_pair_gap` over the arms that MOVE, `solo_check`, `hold_gap` at
+every barrier, `scene_check.check_timeline` over a conducted stage — computed
+with the planner's room thrown away. §23.4b's "the stage is marked not-ok by
+`ink_vs_envelope_mm = 35.67`" was a misreading: `StageResult.ok` has never
+included that number.
+
+Gate constants are untouched: `PAIR_MARGIN` 0.050, `SELF` 23, `STATIC` 50,
+`FRAME_FLOOR` 63. `docs/V2_STAGED.md` §24 is the write-up;
+`tests/test_staged_split.py` holds the claims down.
+
 ## THE FOLLOWER'S ROOM IS THE LEADER'S CAPSULES, NOT A CLOUD OF SPHERES AROUND THEM (2026-09-14, THIRD of three)
 
 **What was wrong.** A follower was certified against `cluster_capsules`'
