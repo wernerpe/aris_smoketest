@@ -226,23 +226,30 @@ CLUSTER_D = POST_Y_BAND                                 # 152.4, plan y
 #     0.78, and tests/test_system_model.py pins it.
 #   * WHAT IS MISSING IS WHAT HOLDS THOSE RAILS UP.  Each half-cage end frame
 #     stands on TWO corner posts (the drawing's post_BL / post_BR, 76.2 sq,
-#     tabletop to rail underside) with a corner brace plate pair at the top
-#     (brace_BL / brace_BR).  Butted, that is FOUR posts and FOUR brace
-#     clusters straddling the seam — mid-span legs at the paper's mid-length.
-#     This model had four corner legs and nothing between them, and said so:
-#     OPEN_QUESTIONS['cage_legs'], "mid-span legs are almost certainly
-#     required — the original spans 2.08 m".  They are required, they exist,
-#     and they are the drawing's own.
+#     tabletop to rail underside).  This model had four corner legs and
+#     nothing between them, and said so: OPEN_QUESTIONS['cage_legs'],
+#     "mid-span legs are almost certainly required — the original spans
+#     2.08 m".  They are required and they exist.
 #
-# WHAT THE SEAM FRAME IS NOT.  It is not a mid-WIDTH post: the drawing's front
-# view (which looks along y, so both end frames project onto it) shows exactly
-# two verticals above the tabletop, the corner posts, and nothing between them
-# but arm 31's own drop-post pair.  The nine 3 x 3 blobs in the top view are
-# the TABLE's legs and levelling feet — the table has a mid-width leg and a
-# mid-depth cross rail, both below the tabletop, and both already inside this
-# model's solid `table` body.  Nothing the seam adds is below the paper.
+# AND WHAT THIS MODEL BUILDS THERE IS ONE REPRESENTATIVE BAR PER SIDE.  Pete
+# Werner, 2026-09-14, settling it rather than photographing it: *"just put a
+# representative bar in the middle that is as wide as two of the corner
+# struts."*  So `seam_bodies` builds `seam_bar_W` and `seam_bar_E` — 3 in in x
+# on the corner-leg line, 6 in in y centred on the seam, tabletop to runway
+# underside — and there are no outstanding questions about the seam.  The bar
+# is the exact union of the two end-frame corner posts it replaces, so it
+# decides every clearance identically; see the SEAM BAR TABLE below, which is
+# the only place a hardware change touches.
 #
-# EVERY ASSUMPTION IS IN OPEN_QUESTIONS['seam_frame'].
+# WHAT THE SEAM SUPPORT IS NOT.  Nothing below the paper: the nine 3 x 3 blobs
+# in the drawing's top view are the TABLE's legs and levelling feet — the table
+# has a mid-width leg and a mid-depth cross rail, both below the tabletop, and
+# both already inside this model's solid `table` body.
+#
+# IT IS IN THE PLANNER'S CERTIFIED STATIC SET (2026-09-14, the re-certification
+# commit): `mounts.seam_frame_boxes` is wired into `mounts.obstacles_for`, so
+# every StudySpec gates against it.  `ARIS_SEAM_POSTS=0` takes it back out and
+# reproduces the pre-seam numbers.
 _PBL_LO, _PBL_HI = _dbox("post_BL")        # the half-cage's own seam-side...
 _PBR_LO, _PBR_HI = _dbox("post_BR")        # ...corner posts, in the W frame
 _XBL_LO, _XBL_HI = _dbox("brace_BL")       # and their corner brace clusters
@@ -264,6 +271,36 @@ SEAM_OVERLAP_MM = round(2 * HALF_CAGE_L - FR_L, 2)                       # 153.9
 SEAM_BRACE = (203.2, PROFILE_THIN, 203.2)      # 8 x 1.5 x 8 in, brace_BL/BR
 SEAM_BRACE_RUN = round(float(_XBL_HI[0] - _XBL_LO[0]) * 10.0 - PROFILE, 2)
 SEAM_BRACE_H = round(float(_XBL_HI[2] - _XBL_LO[2]) * 10.0, 2)           # 203.2
+
+# ---------------------------------------------------------------------------
+# THE SEAM BAR — the whole of the seam support, and where its table lives
+# ---------------------------------------------------------------------------
+# PETE WERNER, 2026-09-14: *"just put a representative bar in the middle that
+# is as wide as two of the corner struts."*  So the seam support is NOT four
+# inferred posts and there is no photo question outstanding about it: it is ONE
+# REPRESENTATIVE BAR PER SIDE of the frame, 3 in in x on the corner-leg line,
+# 6 in in y centred on the seam plane, standing the full height from the
+# tabletop to the runway underside.
+#
+# WHAT THE BAR COSTS AGAINST THE FOUR POSTS: NOTHING, and that is arithmetic,
+# not luck.  The two posts at one x occupied y in [SEAM_Y - PROFILE, SEAM_Y]
+# and [SEAM_Y, SEAM_Y + PROFILE]; their union is exactly this bar, and a union
+# of two AABBs that share a face IS an AABB.  Every clearance in this repo is a
+# distance to that occupied volume, so the bar and the four posts decide every
+# number identically.  Two bodies instead of four; the same steel.
+#
+# THE TABLE IS `mounts.SEAM_BARS_MM`, not a constant here, and that is an
+# import-graph fact rather than a preference: since 2026-09-14 the bars are in
+# the PLANNER's certified static set (`mounts.obstacles_for`, switch
+# `ARIS_SEAM_POSTS`), `layout` builds `FLEET_PROPOSED` through that function at
+# import, and THIS module reads `layout.FLEET_PROPOSED` at import — so `mounts`
+# cannot import `system_model`, and the table has to live upstream.  The four
+# numbers below are this model's own derivation of it, and
+# `tests/test_system_model.py` pins the table against them.
+SEAM_BAR_X = (("W", FR_X0), ("E", FR_X1 - PROFILE))   # 3 in, the corner-leg line
+SEAM_BAR_DY = 2 * PROFILE                       # 152.4 — "two corner struts"
+SEAM_BAR_Z0 = LEG_BOTTOM                        # -27.38, standing on the table
+SEAM_BAR_Z1 = GRID_U                            # 1623.62, the rail underside
 
 
 def plate_centre_x(x_axis):
@@ -516,49 +553,41 @@ def cage_bodies(h=None):
 def seam_bodies():
     """The steel where the two half-cages meet -> [Body].  See section 3b.
 
-    FOUR posts and FOUR corner brace clusters, straddling `SEAM_Y`.  The
-    seam's own END RAILS are NOT here: they are `runway_r1_S` / `runway_r1_N`,
-    which this model already builds within `SEAM_RAIL_RESIDUAL_MM` = 0.78 mm
-    of where the two half-cages put them.  Adding them again would be 152.4 mm
-    of steel counted twice.
+    ONE REPRESENTATIVE BAR PER SIDE, "as wide as two of the corner struts"
+    (Pete Werner, 2026-09-14), centred on `SEAM_Y`: 3 in in x on the frame's
+    own corner-leg line, 6 in in y, tabletop to runway underside.  The seam's
+    own END RAILS are NOT here: they are `runway_r1_S` / `runway_r1_N`, which
+    this model already builds within `SEAM_RAIL_RESIDUAL_MM` = 0.78 mm of
+    where the two half-cages put them.  Adding them again would be 152.4 mm of
+    steel counted twice.
+
+    The bar is the exact union of the two end-frame corner posts that stood
+    here before (`SEAM_BAR_DY` = 2 x `PROFILE`, straddling the seam), so every
+    clearance it decides is the number those four posts decided.  The corner
+    BRACE plates are still not built: bolted on a post's faces they overlap it
+    in any AABB, the model's own four corner legs carry none either, and they
+    live at z 1420.42 .. 1623.62 — 450 mm above anything a certified pose
+    reaches.
     """
     out = []
-    xs = (("W", FR_X0), ("E", FR_X1 - PROFILE))
-    # south band = half B's S end frame, north band = half A's N end frame
-    ys = (("S", SEAM_Y - PROFILE), ("N", SEAM_Y))
-    for xt, x0 in xs:
-        for yt, y0 in ys:
-            out.append(_b(f"seam_post_{yt}{xt}", "cage",
-                          (x0, y0, LEG_BOTTOM),
-                          (x0 + PROFILE, y0 + PROFILE, GRID_U),
-                          "DRAWING",
-                          f"half-cage end-frame corner post = the drawing's "
-                          f"post_B{'L' if xt == 'W' else 'R'}, {PROFILE} sq, "
-                          f"tabletop ({LEG_BOTTOM}) to rail underside "
-                          f"({GRID_U}), cut length "
-                          f"{round(GRID_U - LEG_BOTTOM, 2)}.  Plan x is the "
-                          f"frame corner, the same x band as "
-                          f"leg_F{'L' if xt == 'W' else 'R'}; plan y is the half-"
-                          f"cage butt, which lands on this model's own middle "
-                          f"runway to {SEAM_RAIL_RESIDUAL_MM} mm.  REPORTED ON "
-                          f"THE REAL HARDWARE (Pete Werner 2026-09-14) and "
-                          f"NOT PHOTOGRAPHED — see "
-                          "OPEN_QUESTIONS['seam_frame']",
-                          _STEEL_DARK,
-                          note="the mid-span legs OPEN_QUESTIONS['cage_legs'] "
-                               "said were almost certainly required"))
-    # THE CORNER BRACES ARE NOT BUILT, and the reason is not laziness.  Each
-    # post carries two 203.2 x 38.1 x 203.2 plates on its inboard faces
-    # (brace_BL / brace_BR).  Bolted on the post's FACES they overlap the post
-    # in any AABB that contains them, and the two half-cages' braces pass each
-    # other across the seam at different offsets inside the 76.2 profile — so
-    # the honest box model is four bodies that interpenetrate, and
-    # `tests/test_system_model.py::test_no_two_static_bodies_interpenetrate`
-    # rightly refuses it.  The same is true of the model's own FOUR CORNER
-    # legs, which have never carried braces either.  Nothing rides on it: the
-    # braces live at z 1420.42 .. 1623.62, more than 450 mm above the highest
-    # point any certified pose reaches.  Carried as a question rather than as
-    # bad geometry — OPEN_QUESTIONS['seam_frame'].
+    for name, lo, hi in mounts.SEAM_BARS_MM:
+        side = "L" if name.endswith("W") else "R"
+        out.append(_b(name, "cage", tuple(lo), tuple(hi), "DRAWING",
+                      f"REPRESENTATIVE seam support, {PROFILE} x "
+                      f"{SEAM_BAR_DY} in plan — 'a bar as wide as two of the "
+                      f"corner struts' (Pete Werner, 2026-09-14), centred on "
+                      f"the seam plane {SEAM_Y}.  Tabletop ({SEAM_BAR_Z0}) to "
+                      f"rail underside ({SEAM_BAR_Z1}), cut length "
+                      f"{round(SEAM_BAR_Z1 - SEAM_BAR_Z0, 2)} — the same cut "
+                      f"as a corner leg.  Plan x is the frame corner, the "
+                      f"same x band as leg_F{side}; plan y is the half-cage "
+                      f"butt, which lands on this model's own middle runway "
+                      f"to {SEAM_RAIL_RESIDUAL_MM} mm.  THE TABLE IS "
+                      f"mounts.SEAM_BARS_MM",
+                      _STEEL_DARK,
+                      note="two half-cage end-frame corner posts "
+                           "(the drawing's post_BL / post_BR) as one bar; "
+                           "IN THE CERTIFIED STATIC SET since 2026-09-14"))
     return out
 
 
@@ -792,56 +821,6 @@ OPEN_QUESTIONS = {
                  "stand up at all in the room it is going into.",
         answer_by="survey the room",
         blocking="cutting the grid"),
-    "seam_frame": dict(
-        what="CONFIRM ON HARDWARE — PHOTO REQUESTED.  Exactly what steel "
-             "stands where the two half-cages meet, at the paper's "
-             f"mid-length y = {SEAM_Y} mm?",
-        why="Pete Werner, 2026-09-14: \"there are a few bars on the real "
-            "hardware that are not in our model.  they are supports in the "
-            "middle, I think the half-table drawing had them.  the real thing "
-            "is essentially the two halves next to each other.\"  This model "
-            "was built as ONE long frame on four corner legs and said, at "
-            "OPEN_QUESTIONS['cage_legs'], that mid-span legs were almost "
-            "certainly required.  Section 3b builds them from the drawing's "
-            "own post_BL/post_BR and brace_BL/brace_BR.  "
-            "THE ASSUMPTIONS, " + "FIVE, every one of them.  (1) THE SEAM PLANE is the "
-                    f"paper's mid-length, {SEAM_Y} mm, which is also the "
-                    "middle arm row and rig_final6.MIRROR_PLANE_CANVAS_Y.  "
-                    "(2) THE TWO HALVES BUTT WITH ZERO GAP — the same "
-                    "assumption rig_final6.GAP_CM flags, and the levelling-"
-                    "foot pads overhang the leg lines by 3.3 mm, so real "
-                    "frames touching at the PADS stand 6.6 mm apart.  (3) THE "
-                    "SEAM END RAILS ARE THE MIDDLE RUNWAY and are therefore "
-                    "NOT added again; the two readings differ by "
-                    f"{SEAM_RAIL_RESIDUAL_MM} mm and the posts are snapped to "
-                    "the runway rather than to the butt, so each post stands "
-                    "under the beam it carries.  (4) THE END FRAME HAS NO "
-                    "MID-WIDTH POST.  The drawing's front view looks along y, "
-                    "so BOTH end frames project onto it, and it shows exactly "
-                    "two verticals above the tabletop.  The nine blobs in the "
-                    "top view are the TABLE's 3 x 3 legs and levelling feet, "
-                    "all below the tabletop and already inside the solid "
-                    "`table` body.  (5) THE POSTS STAND ON THE TABLETOP, at "
-                    f"LEG_BOTTOM = {LEG_BOTTOM}, the way the drawing's own "
-                    "post_FL does — not on the floor beside the table.",
-        rides_on="The middle row.  Arms 31 and 71 have their J1 axes ON the "
-                 "seam plane, and the west/east seam posts stand 114.3 mm "
-                 "outboard of the canvas edge over the whole 1651 mm from the "
-                 "tabletop to the rail — i.e. straight through the mount "
-                 "plane and straight through the band a middle-row arm's "
-                 "links sweep when it reaches for its own x extreme.  A pen "
-                 "on the canvas edge clears a post by 14.3 mm against the "
-                 "50 mm static margin; a LINK there misses by 90.7 mm.",
-        answer_by="ONE PHOTO of the seam, from inside the cage looking along "
-                  "the paper, plus one looking down the seam from an end.  "
-                  "The questions it answers are in docs/SYSTEM_MODEL.md "
-                  "and BUILD_SHEET.md: how many posts, at what x; is there a "
-                  "mid-width post or a diagonal; is the gap really zero; do "
-                  "the two end rails sit side by side (two bars) or has "
-                  "someone removed one (one bar).",
-        blocking="re-certification of the middle row's parks and of every "
-                 "certified cell within 205 mm of the canvas's x edges at "
-                 "the seam row"),
     "penholder_cradle": dict(
         what="Which fingers are on the arms, and how far in is the blade's "
              "foot bolted?  (THE LEAN IS SETTLED, 2026-09-07: 23 deg, the "

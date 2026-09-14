@@ -12,8 +12,8 @@ clears it.
 import numpy as np
 import pytest
 
-from aris_sixarm import (fleet, frames, layout, mounts, rig_final, stroke_api,
-                         validate)
+from aris_sixarm import (fleet, frames, layout, mounts, paper, rig_final,
+                         stroke_api, validate)
 from aris_sixarm.rig_final6 import SHEET_FINAL6
 
 
@@ -53,9 +53,11 @@ def test_study_specs_carry_the_other_arms_mounts_on_the_merged_canvas():
     for aid, spec in fl.items():
         boxes = spec.static_obstacles()
         assert boxes, "v2 specs are NOT green field any more"
+        # ...and the SEAM BARS since 2026-09-14, which are nobody's own
+        # hardware: they are the room, so every arm carries them
         assert {b["tag"] for b in boxes} == \
             {f"mount:{o}" for o in fl if o != aid} \
-            | {f"body:{o}" for o in fl if o != aid}
+            | {f"body:{o}" for o in fl if o != aid} | {"seam"}
         assert fleet.sheet_for(spec) == SHEET_FINAL6
         assert spec.mount in ("floor", "inv")
 
@@ -188,6 +190,50 @@ def test_every_proposed_park_pose_clears_every_other_mount():
         cl = rig_final.chain_static_clearance(Pw, spec.static_obstacles())[0]
         assert cl >= rig_final.STATIC_MARGIN - 1e-9, (aid, float(cl))
     assert frames.ACTIVE_TOOL == "inline" and frames.PEN_LAT == 0.0
+
+
+def test_every_proposed_park_pose_clears_the_routers_floor_too():
+    """A DEPOT THE ARM CANNOT FLY OUT OF IS NOT A DEPOT (2026-09-14).
+
+    The test above holds every park to `rig_final.STATIC_MARGIN` = 50 mm,
+    which is the POSE gate and what the atlas was swept at.  The ROUTER asks
+    for `paper.FRAME_FLOOR` = 63 mm, and until the seam bars entered the
+    static set no park had ever been near enough to either for the difference
+    to show: every arm stood 214-277 mm off the nearest steel.
+
+    The seam bars stand on the middle row's own line.  The park set shipped
+    that morning put arm 31 at **50.9 mm** — past the pose gate, 12.1 mm short
+    of the router's floor — and `PARK_GRID_PROPOSED` was re-searched against
+    the bars the same day.  This is the gate that re-search was run at, and it
+    is measured the CHECKER's way (`layout.static_clearance`), which reads
+    9.9 mm under the planner's on this rig; a park chosen at 63 mm of PLANNER
+    clearance fails the whole-timeline verdict at 53.
+    """
+    fl, _ = fleet.rig("proposed")
+    h = layout.LAYOUT_PROPOSED["h"]
+    for aid, spec in sorted(fl.items()):
+        c = layout.static_clearance(layout.Q_PARK_PROPOSED[aid], spec, h,
+                                    pen_ext=EXT)
+        assert c >= paper.FRAME_FLOOR - 1e-9, (aid, round(1000 * c, 1))
+
+
+def test_the_middle_rows_parks_are_what_the_seam_bars_decided():
+    """The two arms whose J1 axes stand ON the seam plane are the only two the
+    bars can reach, and the only two whose park the re-certification moved.
+    Everybody else is 267.5 mm off the nearest steel, which is a neighbour's
+    body column and not the cage at all."""
+    fl, _ = fleet.rig("proposed")
+    h = layout.LAYOUT_PROPOSED["h"]
+    seam = {b["name"] for b in mounts.seam_frame_boxes()}
+    near = {}
+    for aid, spec in sorted(fl.items()):
+        boxes = [b for b in spec.static_obstacles() if b["name"] in seam]
+        assert len(boxes) == 2, aid          # every arm sees the room
+        near[aid] = layout.static_clearance(
+            layout.Q_PARK_PROPOSED[aid], spec, h, pen_ext=EXT)
+    # the outer rows park a long way from the seam; the middle row does not
+    for aid in (2, 13, 17, 97):
+        assert near[aid] > 0.20, (aid, near[aid])
 
 
 def test_the_proposed_layout_leaves_the_booms_out_of_reach():
@@ -365,13 +411,22 @@ def test_the_parked_fleet_does_not_park_inside_the_table():
         assert rep["ok"], (aid, rep)
         assert rep["worst"]["tip_z"] >= 0.09, aid          # hovering, not down
         assert frames.joint_margin(q) >= 0.30, aid
-        # STEEL is far away (>= 0.466 m); the nearest obstacle a parked arm
-        # has is now a NEIGHBOUR — arm 17 holds 0.097 m to arm 13's base
-        # column boxes, which is 0.169 m to the arm inside them, against the
-        # 0.080 m the conductor asks of every moving pair.  Both numbers
-        # shrank when the mesh audit widened the column from 0.12 to 0.185
-        # and the mover's own capsules with it.
-        assert rep["worst"]["min_frame_clearance"] >= 0.09, aid
+        # STEEL used to be far away (>= 0.466 m) and for five of the six it
+        # still is; the nearest obstacle those arms have is a NEIGHBOUR — arm
+        # 17 holds 0.097 m to arm 13's base column boxes, which is 0.169 m to
+        # the arm inside them, against the 0.080 m the conductor asks of every
+        # moving pair.  Both numbers shrank when the mesh audit widened the
+        # column from 0.12 to 0.185 and the mover's own capsules with it.
+        #
+        # ARM 31 IS THE EXCEPTION SINCE 2026-09-14, and it is the seam bar:
+        # the middle row's J1 axes stand ON the seam plane, so 31's park is
+        # gated by cage steel and not by a neighbour.  0.080 m here is 0.070 m
+        # to the CHECKER (`layout.static_clearance`, 9.9 mm more
+        # conservative), which is what the router's 63 mm floor is measured
+        # against — see `test_every_proposed_park_pose_clears_the_routers_
+        # floor_too`, which is the gate the park was re-searched at.
+        floor = 0.08 if aid == 31 else 0.09
+        assert rep["worst"]["min_frame_clearance"] >= floor, aid
         steel = [b for b in spec.static_obstacles()
                  if b["tag"].startswith("mount")]
         T, pts = frames.fk(np.asarray(q, float))
@@ -1196,6 +1251,45 @@ def test_every_stage_park_is_certified_or_says_why_not():
     for s in range(pat.n_stages):
         worst, pair = L.park_pair_clearance(parks[s], fleet, h)
         assert worst >= co.PAIR_MARGIN, f"stage {s}: {pair} at {worst:.4f} m"
+
+
+def test_a_stage_park_search_with_a_static_floor_holds_every_park_to_it():
+    """THE SEAM BARS' OWN GATE (2026-09-14).
+
+    Ranked on envelope clearance alone the search will happily hand the middle
+    row a park 35.3 mm INSIDE a seam bar, because that is where it stands
+    furthest from everybody else's ink — `out/stage_parks_h0970.json` stages 2
+    and 6 did exactly that the morning the bars were modelled.  A candidate
+    inside the steel is not a candidate, so `static_floor` removes it before
+    anything is ranked rather than penalising it afterwards.
+    """
+    import numpy as np
+    from aris_sixarm import layout as L
+    from aris_sixarm import paper as P
+    from aris_sixarm import traces as T
+    fleet = L.FLEET_PROPOSED
+    h = float(L.LAYOUT_PROPOSED["h"])
+    pat = T.zigzag_pattern()
+    cells = _fake_cells(fleet, h)
+    parks, _ = L.stage_parks(pat, cells, fleet=fleet, h_inv=h, rank=2,
+                             static_floor=P.FRAME_FLOOR)
+    for s in range(pat.n_stages):
+        for arm, q in parks[s].items():
+            c = L.static_clearance(q, fleet[arm], h)
+            assert c >= P.FRAME_FLOOR - 1e-9, (s, arm, round(1000 * c, 1))
+    # ...and the floor really removes candidates rather than being a no-op:
+    # the middle row's recipe grid reaches past the seam bars in both
+    # directions, so some of what it offers arm 31 is inside them.
+    cands = L.aside_candidates(fleet[31], extra=(L.PARK_GRID_PROPOSED[31],))
+    kept = [q for q, _ in cands
+            if L.clears_static_floor(q, fleet[31], P.FRAME_FLOOR, h)]
+    assert 0 < len(kept) < len(cands), (len(kept), len(cands))
+    # `None` is the old search exactly, which is how a pre-seam number is
+    # reproduced — same shape, and every arm still gets a park
+    loose, _ = L.stage_parks(pat, cells, fleet=fleet, h_inv=h, rank=2)
+    assert sorted(loose) == sorted(parks)
+    for s in loose:
+        assert sorted(loose[s]) == sorted(fleet)
 
 
 def test_no_stage_ever_puts_a_same_row_pair_in_the_air():

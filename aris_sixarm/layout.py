@@ -255,17 +255,20 @@ CLOCKINGS = {"uniform": CLOCKING_UNIFORM, "mirrored": CLOCKING_MIRRORED}
 
 
 def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
-                q_park=None, clocking=None):
+                q_park=None, clocking=None, seam=None):
     """A layout dict -> {arm_id: StudySpec}, each carrying the OTHER arms'
-    schematic mount hardware as static obstacle boxes.
+    schematic mount hardware and the SEAM BARS as static obstacle boxes.
 
     layout = dict(floor=[(x, y) x nf], inv=[(x, y) x (6 - nf)], h=0.922)
     `with_mounts=False` reproduces the v1 GREEN-FIELD specs exactly (no
-    boxes AT ALL — no hardware and no neighbour bodies) — that is how the
-    study re-scores v1's winner honestly.
+    boxes AT ALL — no hardware, no neighbour bodies and no seam) — that is how
+    the study re-scores v1's winner honestly.
     `q_park` is {arm_id: q} of park poses (`certified_park_poses`); `None`
     leaves every arm on its mount's legacy default seed, which is what the
     COVERAGE study wants and what nothing that FLIES the arm can use.
+    `seam=False` drops the seam bars (`mounts.obstacles_for`), which is how a
+    run reproduces a number earned before 2026-09-14; `None` follows
+    `mounts.SEAM_POSTS_ON`, i.e. the `ARIS_SEAM_POSTS` switch, default ON.
     """
     h = float(layout.get("h", 0.922))
     fids, iids = arm_ids(layout)
@@ -287,7 +290,8 @@ def build_fleet(layout, mount_model=mounts.MOUNTS, with_mounts=True,
                             q_ready=q_park.get(aid),
                             yaw_deg=clk.get(aid, 0.0),
                             mount_boxes=mounts.obstacles_for(aid, bare, h,
-                                                             mount_model))
+                                                             mount_model,
+                                                             seam=seam))
             for aid, s in bare.items()}
 
 
@@ -680,6 +684,54 @@ ASIDE_COLUMN = (0.0, 0.25)
 _ASIDE_CANDS = {}
 
 
+# ---------------------------------------------------------------------------
+# THE STATIC FLOOR A PARK HAS TO CLEAR — and why it is not the pose gate
+# ---------------------------------------------------------------------------
+# `certified_ready_pose` gates every candidate through `validate.check_pose`,
+# which holds the chain to `rig_final.STATIC_MARGIN` = 50 mm against the spec's
+# static set.  That is the floor the ATLAS was swept at, and until 2026-09-14
+# it was the only one a park ever had to meet, because the static set was the
+# neighbours' hardware and nothing of the cage: a park that cleared 50 mm of a
+# neighbour's boom cleared it by 200.
+#
+# The seam bars changed that for the middle row.  `Q_PARK_PROPOSED`'s arm 31
+# sat 50.9 mm off the west bar — past the pose gate, and 12.1 mm SHORT of what
+# the ROUTER asks (`paper.FRAME_FLOOR` = `rig_final.STATIC_PLAN_MARGIN` =
+# 63 mm).  A depot the arm cannot fly out of is not a depot, so a park set is
+# now searched against the router's floor as well as the pose gate.
+#
+# AND IT IS MEASURED BY THE CHECKER, NOT BY THE PLANNER.  `scene_check.
+# static_clearance_lb` is the independent derivation `check_timeline` uses, and
+# on this rig it reads 9.9 mm UNDER `rig_final.chain_static_clearance` for the
+# same pose (the unsurveyed-base allowance enters the two differently).  The
+# conservative one is the one that decides: a park chosen at 63 mm of planner
+# clearance is 53 mm to the checker and fails the whole-timeline verdict, which
+# is the only verdict anybody ships.
+def static_clearance(q, spec, h_inv=None, pen_ext=None):
+    """One pose's whole chain against `spec`'s static set. -> metres.
+
+    The CHECKER's lower bound (`scene_check.static_clearance_lb`), so a number
+    from here is comparable with `check_timeline`'s frame clearance and with
+    every seam number in docs/DECISIONS.md.
+    """
+    from . import scene_check
+    from .frames import ext_of
+    h_inv = float(spec.z) if h_inv is None else float(h_inv)
+    pen_ext = float(getattr(spec, "pen", None) or ext_of()) \
+        if pen_ext is None else float(pen_ext)
+    P = scene_check._chain(np.asarray(q, float).reshape(7), spec, h_inv,
+                           pen_ext)[None]
+    return float(scene_check.static_clearance_lb(
+        P, spec.static_obstacles())[0])
+
+
+def clears_static_floor(q, spec, floor, h_inv=None, pen_ext=None):
+    """-> bool.  `floor` metres, `None` meaning "no floor beyond the gate"."""
+    if floor is None:
+        return True
+    return static_clearance(q, spec, h_inv, pen_ext) >= float(floor)
+
+
 def corridor_clearance(q, spec, target_xy, h_inv=None, pen_ext=None,
                        column=ASIDE_COLUMN, moving_only=True):
     """How far a parked chain stands off the column over a cell. -> metres.
@@ -733,10 +785,17 @@ def aside_candidates(spec, sheet=SHEET_FINAL6, pen_lat=None,
     # question — and a cache that keyed them apart would make one caller pay
     # nine seconds of IK for an answer another caller already had.
     from .frames import PEN_LAT_HOLDER
+    from .paper import _box_sig
     pen_lat = PEN_LAT_HOLDER if pen_lat is None else float(pen_lat)
+    # THE STATIC SET IS PART OF THE QUESTION, not part of the arm (2026-09-14).
+    # `certified_ready_pose` gates every candidate through `check_pose`, which
+    # reads `spec.static_obstacles()` — so a cache keyed on the arm alone hands
+    # a seam-gated answer to a `seam=False` spec and vice versa, silently, in
+    # whichever order the two fleets were built.
     key = (int(spec.arm_id), round(float(spec.z), 9), tuple(spec.xy),
            tuple(sheet), round(float(pen_lat), 9),
-           tuple(bearings), tuple(radii), tuple(hovers), tuple(map(tuple, extra)))
+           tuple(bearings), tuple(radii), tuple(hovers),
+           tuple(map(tuple, extra)), _box_sig(spec.static_obstacles()))
     if key in _ASIDE_CANDS:
         return _ASIDE_CANDS[key]
     out, seen = [], set()
@@ -1014,7 +1073,8 @@ def stage_envelopes(pattern, cell_poses, stage):
 
 def stage_parks(pattern, cell_poses, fleet=None, h_inv=None, gate=None,
                 sheet=SHEET_FINAL6, pen_lat=None, grid=None,
-                rank=STAGE_PARK_RANK, cands=None, verbose=False):
+                rank=STAGE_PARK_RANK, cands=None, verbose=False,
+                static_floor=None):
     """A certified park for every arm, in every stage. -> ({stage: {arm: q}}, report).
 
     The search is `aside_candidates`' three-number machinery — the same
@@ -1028,6 +1088,13 @@ def stage_parks(pattern, cell_poses, fleet=None, h_inv=None, gate=None,
     `(-clearance, index)`, which is a total order; the arms are then served
     worst-constrained first and a park-versus-park conflict walks the LOSER
     down its own ranking rather than re-ranking anybody.
+
+    `static_floor` metres drops every candidate whose chain stands closer than
+    that to the arm's own static set BEFORE anything is ranked — the seam bars
+    made that necessary for the middle row, and the long note by
+    `static_clearance` says why the pose gate is not enough and why the number
+    is the checker's.  `None` keeps the pose gate alone, which is what every
+    stage park before 2026-09-14 was chosen under.
     """
     from . import coordination as co
     from .frames import PEN_LAT_HOLDER
@@ -1042,6 +1109,20 @@ def stage_parks(pattern, cell_poses, fleet=None, h_inv=None, gate=None,
         cands = {a: aside_candidates(fleet[a], sheet=sheet, pen_lat=pen_lat,
                                      extra=(grid[a],) if a in grid else ())
                  for a in arms}
+    if static_floor is not None:
+        # A CANDIDATE INSIDE THE STEEL IS NOT A CANDIDATE, so it is removed
+        # here and not penalised later: the ranking is over envelope clearance
+        # and would happily hand an arm a park 35 mm inside a seam bar because
+        # that is where it stands furthest from everybody else's ink.
+        cands = {a: [(q, rec) for q, rec in cands[a]
+                     if clears_static_floor(q, fleet[a], static_floor, h_inv)]
+                 for a in arms}
+        empty = [a for a in arms if not cands[a]]
+        if empty:
+            raise RuntimeError(
+                f"arms {empty} have no park candidate clearing "
+                f"{1000 * float(static_floor):.0f} mm of their own static set "
+                "— the recipe grid cannot reach past the steel")
     QC = {a: np.vstack([q.reshape(1, 7) for q, _ in cands[a]]) for a in arms}
     CP = {a: _stage_path(a, QC[a], fleet, h_inv) for a in arms}
 
@@ -1324,8 +1405,59 @@ LAYOUT_PROPOSED = paired_grid(spacing=PAIR_SPACING, rows=3, h=0.970)
 # and `allocate.ParkProbe` prunes against these poses at allocation time so a
 # span inside one of them never reaches the conductor at all.
 PARK_GRID_PROPOSED = {2: (0.70, 0.30, 105.0), 13: (0.62, 0.30, 150.0),
-                      17: (0.48, 0.30, -30.0), 31: (0.62, 0.30, 150.0),
+                      17: (0.48, 0.30, -30.0), 31: (0.62, 0.35, -150.0),
                       71: (0.55, 0.20, 30.0), 97: (0.70, 0.30, 75.0)}
+# RE-SEARCHED AGAINST THE SEAM BARS (2026-09-14), AND ONE ARM MOVED.  The two
+# seam bars went into the certified static set that day (`mounts.SEAM_BARS_MM`,
+# docs/DECISIONS.md), and they stand on the MIDDLE ROW's own line, 114.3 mm
+# outboard of the canvas edge over the whole 1651 mm from the tabletop to the
+# runway.  The grid above was searched in an empty room, and arm 31's entry
+# parked it at (0.060, 2.125) — 50.9 mm off the west bar by the checker's
+# derivation, past the 50 mm pose gate and 12.1 mm short of the 63 mm the
+# ROUTER asks.  A depot the arm cannot fly out of is not a depot.
+#
+#     ARIS_RIG=proposed ARIS_TOOL=lateral scripts/height_sweep.py park \
+#         --h 0.970 --atlas out/atlas_proposed_h0970_lat0860 --jobs 6 \
+#         --steel-floor 0.063 --out out/park_search_h0970_seam.json
+#
+# Same search, same 576 candidates per arm, same ranking — one thing added,
+# `--steel-floor`, which is the ROUTER's floor instead of the pose gate.
+# 442-461 of 576 candidates per arm certify against the bars (was 496-497
+# against nothing), and **FIVE OF THE SIX ARMS RE-WIN THEIR OWN TRIPLE
+# EXACTLY**: 2, 13, 17, 71 and 97 are the same three numbers the empty room
+# gave them, because the nearest steel to any of them is still a neighbour's
+# body column at 267.5 mm and the bars never enter it.
+#
+# ARM 31 MOVES ACROSS THE SEAM AND STAYS AT ITS OWN RADIUS: bearing +150 ->
+# -150, hover 0.30 -> 0.35, r = 0.62 unchanged.  Its pen waits at (0.060,
+# 1.505) instead of (0.060, 2.125) — the same standoff, mirrored to the south
+# side of the bar it was leaning against.
+#
+# | arm 31 | before | after |
+# |---|---:|---:|
+# | chain to the seam bar (checker) | **50.9 mm  FAIL** | **70.4 mm  PASS** |
+# | park vs every other arm's ink AND lift | 98.0 mm | **98.8 mm** |
+# | its own cells it can fly to / home from | 18/24 | **19/24** |
+# | min(joint margin, 2.5 sigma) | 0.692 | 0.680 |
+#
+# It buys the router's floor, 0.8 mm of ink clearance and one more flyable
+# cell, and pays 0.013 of conditioning for them — against a 0.30 gate, which
+# neither pose is anywhere near.
+#
+# IT IS NOT THE SEARCH'S OWN TOP ROW, and that is the one judgement call in
+# this re-search.  Ranked flyability-first the winner is (0.40, 0.10, -135.0)
+# — 20/24 cells and 248.4 mm off the steel — but it parks arm 31 at (0.314,
+# 1.532), well inside the canvas, and its park-vs-(ink AND lift) is **79.0 mm**
+# against the **80 mm the conductor asks**, which is the criterion this whole
+# grid was chosen on (see the 2026-08-26 note below).  One more flyable cell is
+# not worth the number that decides whether a phase can be conducted at all.
+# The triple above is the best `key` among the candidates that clear the
+# router's floor AND hold the 80 mm.
+#
+# FLEET, on the committed set: park-vs-park **250.0 mm** (the broad-phase cap),
+# worst park-vs-(ink AND lift) **97.7 mm** (arm 17, unchanged — arm 31 was
+# never the binding one), entries and go-homes **113/144**, and every one of
+# the six clears the router's 63 mm floor against its own static set.
 # RE-SEARCHED AT h = 0.970 (2026-09-10) and the grid above is THAT search's
 # output; the 0.940 grid is in the note below.  Nothing about the search
 # changed — same 24 bearings x 6 radii x 4 hovers = 576 candidates per arm,
@@ -1515,14 +1647,26 @@ PARK_GRID_PROPOSED = {2: (0.70, 0.30, 105.0), 13: (0.62, 0.30, 150.0),
 # (>= 250 mm, arms 2 and 13), and the worst park-vs-(ink AND lift) is
 # +97.7 mm — against a `PAIR_MARGIN` that is now 50 mm.
 #
-# ARMS 13 AND 31 HOLD THE SAME SEVEN JOINT VALUES, for the reason arms 2 and
-# 31 did at 0.940: same mount, same column, same triple, base frames differing
-# by a pure translation in canvas y.  Their pens hover 1.21 m apart.
+# ARM 31 RE-DERIVED 2026-09-14 against the SEAM BARS, from the moved triple
+# above and nothing else — `certified_park_poses(build_fleet(LAYOUT_PROPOSED),
+# PARK_GRID_PROPOSED, pen_lat=PEN_LAT_HOLDER, pen_ext=PEN_EXT_HOLDER)`'s own
+# output still, and the other five literals are bit-identical: with the bars in
+# the static set that function re-derives them unchanged, so only the arm whose
+# RECIPE moved has a new pose.  Arm 31 clears the west bar by 70.4 mm against
+# the router's 63, the fleet's nearest pair is at the broad-phase cap
+# (>= 250 mm, arms 2 and 13) and the worst park-vs-(ink AND lift) is +97.7 mm.
+#
+# ARMS 13 AND 31 NO LONGER HOLD THE SAME SEVEN JOINT VALUES.  They did from
+# 2026-09-10 to 2026-09-14 — same mount, same column, same triple, base frames
+# differing by a pure translation in canvas y — and the seam bar is what parted
+# them: 13's copy of that pose stands over row 0, where there is no bar, and
+# 31's stood 50.9 mm off one.  Their pens now hover 0.59 m apart, on the same
+# canvas x.
 Q_PARK_PROPOSED = {
     2:  (0.0003, 1.0443, 1.4169, -1.8606, 2.0498, 1.2968, 2.1750),
     13: (-0.6162, 1.0125, 1.3275, -1.7335, 2.1074, 1.2793, 2.1750),
     17: (-0.7230, -1.0365, -1.5768, -2.1834, 2.0188, 1.2693, -2.1750),
-    31: (-0.6162, 1.0125, 1.3275, -1.7335, 2.1074, 1.2793, 2.1750),
+    31: (0.3615, 1.0868, -1.1631, -1.5285, -2.1041, 1.2335, -1.3841),
     71: (0.9167, -1.1814, 1.2489, -2.2444, -2.0707, 1.5627, 2.1750),
     97: (0.0046, -1.0778, 1.7029, -1.8578, -2.0201, 1.3231, -0.5932),
 }
@@ -1534,7 +1678,7 @@ PARK_HOVER_PROPOSED = {
     2:  (0.416, 3.581),                         # hover 0.30 m
     13: (0.060, 0.915),                         # hover 0.30 m
     17: (1.622, 0.365),                         # hover 0.30 m
-    31: (0.060, 2.125),                         # hover 0.30 m
+    31: (0.060, 1.505),                         # hover 0.35 m
     71: (1.683, 2.090),                         # hover 0.20 m
     97: (1.388, 3.581),                         # hover 0.30 m
 }

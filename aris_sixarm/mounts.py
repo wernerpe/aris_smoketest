@@ -1,10 +1,15 @@
 """SCHEMATIC MOUNT HARDWARE — and the arms' own base columns — as first-class
 static obstacles (layout study v2; body columns 2026-08-25).
 
-Two things live here.  The first is the STEEL (below).  The second, added
-after the proposed rig refused to conduct anything at all, is the part of a
-NEIGHBOUR ARM that is an obstacle in every configuration it can hold: its base
-column, `arm_column_boxes`, whose long note is at the bottom of this module.
+THREE things live here now.  The first is the STEEL (below).  The second,
+added after the proposed rig refused to conduct anything at all, is the part
+of a NEIGHBOUR ARM that is an obstacle in every configuration it can hold: its
+base column, `arm_column_boxes`, whose long note is at the bottom of this
+module.  The third, added 2026-09-14, is the first piece of the CAGE that any
+certified number has ever been earned against: the two SEAM BARS where the
+installation's two half-cages butt, `SEAM_BARS_MM` / `seam_frame_boxes`, which
+stand on the middle arm row's own line.  `obstacles_for` hands all three out
+together and `ARIS_SEAM_POSTS=0` removes the third.
 
 
 v1 of the layout study (docs/LAYOUT_STUDY.md v1, commit 83ad415) modelled NO
@@ -72,6 +77,7 @@ MIXED-HEIGHT LAYOUTS ARE OUT OF SCOPE: every layout here puts all inverted
 arms on ONE ceiling grid at one h.  A taller arm's boom descending past a
 shorter arm's mount plane WOULD bite, and `boom_shadow_active` reports it.
 """
+import os
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -271,9 +277,9 @@ def arm_mount_boxes(mount, xy, yaw=0.0, h=0.850, tag="mount", m=MOUNTS):
 
 
 # ---------------------------------------------------------------------------
-# THE SEAM FRAME — steel this module never had, because nobody had seen it
+# THE SEAM SUPPORT — steel this module never had, because nobody had seen it
 # ---------------------------------------------------------------------------
-# `StudySpec.static_obstacles` (layout.py) returns the neighbours' mount boxes
+# `StudySpec.static_obstacles` (layout.py) returned the neighbours' mount boxes
 # and base columns AND NOTHING ELSE.  Every certified number on the proposed
 # rig — the atlas, the certified area, v19, the staged programme — was earned
 # against a fleet standing in an EMPTY ROOM with no cage around it at all.
@@ -282,33 +288,76 @@ def arm_mount_boxes(mount, xy, yaw=0.0, h=0.850, tag="mount", m=MOUNTS):
 #
 # It stopped being defensible on 2026-09-14, when Pete Werner reported that
 # the real installation is two half-cages side by side and that the half-cage
-# END FRAME — which now stands at the paper's MID-LENGTH, on the middle arm
-# row — is real steel we do not model.  `system_model.seam_bodies` builds it
-# from the drawing; this function is the same four posts and four braces in
-# the box shape the gates here consume.
+# END FRAME — which stands at the paper's MID-LENGTH, on the middle arm row —
+# is real steel we do not model.  `system_model.seam_bodies` builds it: one
+# REPRESENTATIVE BAR PER SIDE, "as wide as two of the corner struts" (Pete
+# Werner, same day), 76.2 x 152.4 in plan, tabletop to runway underside.  This
+# function is those bars in the box shape the gates here consume.
 #
-# IT IS NOT WIRED IN.  `obstacles_for` and `StudySpec.static_obstacles` do not
-# call it, deliberately: adding steel to the static set silently re-decides
-# every certified cell in the repo, and this module's whole convention is that
-# a disagreement with the system model is REPORTED, not resolved
-# (`system_model.reconciliation`).  A caller that wants to know what the seam
-# costs asks for it — `scripts/seam_impact.py` does exactly that — and the
-# answer is in docs/DECISIONS.md.  Wiring it in is the re-certification, and
-# it waits on the photo (`system_model.OPEN_QUESTIONS['seam_frame']`).
+# IT IS WIRED IN NOW (2026-09-14, the re-certification).  `obstacles_for` adds
+# it to every arm's static set, so `validate.check_pose`, `atlas.solve_cell`,
+# `paper.route`, `planner` and `scene_check` all gate against it and every
+# number earned after this date has the seam in it.  What that cost is in
+# docs/DECISIONS.md: the middle row's parks moved, and the certified area lost
+# 165 of 16 184 cells with the hole-free block untouched.
+#
+# THE SWITCH.  `ARIS_SEAM_POSTS=0` in the environment takes the bars back out
+# and reproduces the pre-seam numbers exactly — for a regression run against a
+# number earned before today, and for nothing else.  It is read ONCE, here, at
+# import: a static set that could change under a running process is not a
+# static set.  Per-call, pass `seam=False`.
+def _seam_default():
+    # an EMPTY value is "not set", not "off": the only way to lose the bars is
+    # to say so
+    v = os.environ.get("ARIS_SEAM_POSTS", "").strip().lower()
+    return v not in ("0", "off", "no", "false")
+
+
+SEAM_POSTS_ON = _seam_default()
+
+# ---------------------------------------------------------------------------
+# THE TABLE.  One bar per side, MILLIMETRES, canvas frame, as the build sheet
+# speaks.  A hardware change is an edit HERE and nowhere else: another bar is
+# one more row, a wider one is its y span, a bar standing on the floor instead
+# of the tabletop is its z0.  `system_model.seam_bodies` reads this table and
+# `tests/test_system_model.py` pins every number in it against the drawing's
+# own derivation, so a hand edit that contradicts the drawing is a red test
+# and not a silent disagreement.
+#
+# WHY THE TABLE IS HERE AND NOT IN `system_model`, where the rest of the
+# installation lives: `system_model` reads `layout.FLEET_PROPOSED` at import,
+# and `layout` builds that fleet through `obstacles_for` — so the module that
+# owns the static set cannot import the model that describes it.  This module
+# imports nothing but `rig_final`, so the table can live here and the system
+# model can be downstream of it.  The derivation, from `system_model`'s own
+# constants (mm):
+#
+#     x    FR_X0 = -190.5 and FR_X1 - PROFILE = 1917.7   the frame's corner
+#          line, exactly the x band of leg_FL / leg_FR — PROFILE = 76.2 wide
+#     y    SEAM_Y +/- PROFILE = 1815.32 +/- 76.2         "as wide as two of
+#          the corner struts", centred on the seam plane
+#     z    LEG_BOTTOM = -27.38 to GRID_U = 1623.62       tabletop to runway
+#          underside; cut 1651.0, the same cut as a corner leg
+SEAM_BARS_MM = (
+    ("seam_bar_W", (-190.50, 1739.12, -27.38), (-114.30, 1891.52, 1623.62)),
+    ("seam_bar_E", (1917.70, 1739.12, -27.38), (1993.90, 1891.52, 1623.62)),
+)
+SEAM_SOURCE = ("REPRESENTATIVE seam support, 76.2 x 152.4 in plan — 'a bar as "
+               "wide as two of the corner struts' (Pete Werner, 2026-09-14), "
+               "centred on the seam plane where the two half-cages butt.  "
+               "Tabletop to runway underside, cut 1651.0 — the same cut as a "
+               "corner leg.  IN THE CERTIFIED STATIC SET")
+
+
 def seam_frame_boxes(tag="seam"):
-    """The half-cage seam frame -> boxes in the canvas frame, METRES.
+    """The seam support bars -> boxes in the canvas frame, METRES.
 
     Same dict shape as `arm_mount_boxes`: name / lo / hi / source / tag, so a
     caller can concatenate it onto `spec.static_obstacles()` unchanged.
     """
-    from . import system_model      # local: system_model imports this module
-    out = []
-    for b in system_model.seam_bodies():
-        out.append(dict(name=b.name,
-                        lo=np.asarray(b.lo, float) / 1000.0,
-                        hi=np.asarray(b.hi, float) / 1000.0,
-                        source=b.source, tag=tag))
-    return out
+    return [dict(name=n, lo=np.array(lo, float) / 1000.0,
+                 hi=np.array(hi, float) / 1000.0, source=SEAM_SOURCE, tag=tag)
+            for n, lo, hi in SEAM_BARS_MM]
 
 
 def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
@@ -486,18 +535,26 @@ def fleet_body_boxes(fleet, m=MOUNTS, h_inv=None):
             for aid, spec in fleet.items()}
 
 
-def obstacles_for(arm_id, fleet, h=0.850, m=MOUNTS):
-    """Every OTHER arm's hardware AND body column -> flat box list.
+def obstacles_for(arm_id, fleet, h=0.850, m=MOUNTS, seam=None):
+    """Every OTHER arm's hardware AND body column, and the SEAM BARS -> boxes.
 
     The own-arm exclusion is the point: an arm is bolted to its own plate and
     boom (and the legacy r = 0.12 own-boom proxy still gates its own column),
     and its own base column is the one capsule every static check skips
     (`rig_final.STATIC_CAPSULES` starts at index 1).
+
+    The seam bars are NOT any arm's own hardware — they are the room — so
+    every arm sees them, including the two whose J1 axes stand on the seam
+    plane.  `seam=False` (or `ARIS_SEAM_POSTS=0`) leaves them out and gives
+    back the set every pre-2026-09-14 number was earned against.
     """
     hw = fleet_mount_boxes(fleet, h, m)
     body = fleet_body_boxes(fleet, m)
-    return [b for aid in fleet if aid != arm_id
-            for b in hw[aid] + body[aid]]
+    out = [b for aid in fleet if aid != arm_id
+           for b in hw[aid] + body[aid]]
+    if SEAM_POSTS_ON if seam is None else bool(seam):
+        out += seam_frame_boxes()
+    return out
 
 
 def attach_body_columns(fleet, m=MOUNTS, h_inv=None):

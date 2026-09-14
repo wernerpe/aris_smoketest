@@ -91,6 +91,15 @@ def main():
                     help="skip the flyability and transition routes (the slow "
                          "half; the clearances are unaffected)")
     ap.add_argument("--no-leg-cache", action="store_true")
+    ap.add_argument("--static-floor", type=float,
+                    default=float(paper.FRAME_FLOOR),
+                    help="metres a park's chain must clear its own static "
+                         "set by, measured the CHECKER's way "
+                         "(`layout.static_clearance`).  Default "
+                         "`paper.FRAME_FLOOR` = 63 mm, the router's floor — "
+                         "the pose gate alone is 50 mm and the seam bars made "
+                         "the difference matter for the middle row.  Pass 0 "
+                         "to reproduce the pre-2026-09-14 search.")
     a = ap.parse_args()
 
     fleet = layout.FLEET_PROPOSED
@@ -107,9 +116,13 @@ def main():
     print(f"cells read in {time.time() - t0:.1f} s")
 
     t0 = time.time()
+    floor = float(a.static_floor) or None
     parks, rows = layout.stage_parks(pattern, poses, fleet=fleet, h_inv=h,
-                                     gate=gate, verbose=True)
-    print(f"stage park search in {time.time() - t0:.1f} s")
+                                     gate=gate, verbose=True,
+                                     static_floor=floor)
+    print(f"stage park search in {time.time() - t0:.1f} s"
+          + ("" if floor is None else
+             f" (static floor {1000 * floor:.0f} mm)"))
 
     # ---- the shipped set, measured the same way, for the comparison
     shipped = {}
@@ -154,6 +167,9 @@ def main():
                        min(mine, key=lambda r: r["env_clear_m"])["arm"]),
                    worst_park_vs_park_m=float(pp),
                    worst_park_vs_park_pair=list(pair) if pair else None,
+                   worst_static_m=float(min(
+                       layout.static_clearance(parks[s][arm], fleet[arm], h)
+                       for arm in sorted(fleet))),
                    all_certified=all(r["certified"] for r in mine),
                    parks={}, )
         for arm in sorted(fleet):
@@ -163,6 +179,8 @@ def main():
                      env_clear_m=float(
                          next(r["env_clear_m"] for r in mine
                               if r["arm"] == arm)),
+                     static_clear_m=float(
+                         layout.static_clearance(q, fleet[arm], h)),
                      recipe=next(r["recipe"] for r in mine if r["arm"] == arm))
             if arm in cells:
                 e["in_own_cell"] = in_region(e["tip_xy"], cells[arm].region)
@@ -200,7 +218,8 @@ def main():
     Path(a.json).write_text(json.dumps(out, indent=1))
     print(f"\nwrote {a.json}")
     print(f"{'stage':>5} {'active':>16} {'park-vs-env':>12} "
-          f"{'shipped':>10} {'park-vs-park':>13} {'flyable':>9}")
+          f"{'shipped':>10} {'park-vs-park':>13} {'vs-steel':>9} "
+          f"{'flyable':>9}")
     for s in range(pattern.n_stages):
         r = out["stages"][str(s)]
         fly = [v.get("flyable") for v in r["parks"].values()
@@ -209,6 +228,7 @@ def main():
               f"{1000 * r['worst_park_vs_envelope_m']:>+11.1f} "
               f"{1000 * shipped[s]['worst_m']:>+9.1f} "
               f"{1000 * r['worst_park_vs_park_m']:>+12.1f} "
+              f"{1000 * r['worst_static_m']:>+8.1f} "
               f"{sum(1 for f in fly if f)}/{len(fly):>7}")
     need = [t for t in trans if t["needs_route"]]
     print(f"\ntransitions needing a route: {len(need)} of {len(trans)}; "

@@ -89,20 +89,30 @@ def test_mount_dimensions_are_parameterised():
 def test_every_arm_sees_all_other_mounts_and_never_its_own():
     fl = layout.build_fleet(layout.LAYOUT_V1)
     assert len(fl) == 6
+    n_seam = len(mounts.seam_frame_boxes())
     for aid, spec in fl.items():
         tags = {b["tag"] for b in spec.static_obstacles()}
         assert f"mount:{aid}" not in tags, "an arm is bolted to its own mount"
         assert f"body:{aid}" not in tags, "an arm is not its own obstacle"
+        # ...and the SEAM BARS, which are nobody's own hardware: they are the
+        # room, so every arm sees them (2026-09-14)
         assert tags == {f"mount:{o}" for o in fl if o != aid} \
-            | {f"body:{o}" for o in fl if o != aid}
+            | {f"body:{o}" for o in fl if o != aid} | {"seam"}
     # ... and the count matches the hardware PLUS the body column BANDS: 2
     # boxes per inverted arm, 1 per floor arm, one band-box per band per arm,
-    # minus own
+    # minus own — plus the two seam bars
     inv_ids = [a for a, s in fl.items() if s.mount == "inv"]
     nb = len(mounts.MOUNTS.column_bands)
     assert nb == 4, "connector, taper, waist, link1's swept solid"
+    assert n_seam == 2, "one representative bar per side of the frame"
     assert len(fl[inv_ids[0]].static_obstacles()) == \
-        2 * (len(inv_ids) - 1) + 2 + nb * (len(fl) - 1)
+        2 * (len(inv_ids) - 1) + 2 + nb * (len(fl) - 1) + n_seam
+    # the switch takes them out again, and nothing else with them
+    off = layout.build_fleet(layout.LAYOUT_V1, seam=False)
+    for aid in fl:
+        assert len(off[aid].static_obstacles()) == \
+            len(fl[aid].static_obstacles()) - n_seam
+        assert "seam" not in {b["tag"] for b in off[aid].static_obstacles()}
 
 
 def test_obstacles_for_matches_the_fleet_minus_the_owner():

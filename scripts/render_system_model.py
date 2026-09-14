@@ -102,9 +102,22 @@ VIEWS = (
     # a HIGH OBLIQUE, not a true plan: straight down, the runway beams roof
     # the arms over completely and the picture is six grey rectangles
     ("plan", (CW / 2 + 1.15, CL / 2 - 3.30, 5.70), (CW / 2, CL / 2, 0.35), 44),
-    # arm 31, middle row, west column: axis (0.5967, 1.81532).  The eye stands
-    # OUTSIDE the frame — from inside, the gussets fill the picture.
-    ("drop_cluster", (-1.55, 0.62, 2.05), (0.62, 1.78, 1.12), 30),
+    # A DROP CLUSTER FROM OUTSIDE THE FRAME — from inside, the gussets fill
+    # the picture.  The subject is ARM 13, row 0, west column: axis
+    # (0.5967, 0.60511), and the eye stands off it exactly as it stood off
+    # arm 31 before 2026-09-14.
+    #
+    # WHY IT IS NO LONGER ARM 31.  The seam bar stands on the MIDDLE ROW's own
+    # line, at the frame's west corner — 0.79 m due west of arm 31's axis and
+    # 1.65 m tall.  Any eye west of the frame aimed at that cluster looks
+    # along the row and the bar is between the two: at this camera's 30 deg it
+    # sat 15.8 deg off axis, inside the 22 deg half-width, and filled the left
+    # third of the frame with a grey slab.  A sweep of every eye outside the
+    # frame between 2.4 and 3.2 m and 10 to 40 deg of elevation clears the bar
+    # only from the SOUTH, where arm 13's own cluster then stands in the way.
+    # The cluster is the same part on every row, so the shot moved one row
+    # instead — the picture is of the hardware, not of arm 31.
+    ("drop_cluster", (-1.55, -0.59, 2.05), (0.62, 0.57, 1.12), 30),
     ("holder", None, None, 33),      # framed on the arm's own hand, below
     # THE ONE VIEW THAT SETTLES WHICH WAY ROUND THE HOLDER IS.  Straight down
     # the hand's own x axis, so the finger-travel axis (hand y) lies across the

@@ -4,21 +4,22 @@
     ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/seam_impact.py \
         [--json out/seam_impact_h0970.json]
 
-THE STEEL THIS MEASURES.  `system_model.seam_bodies` / `mounts.seam_frame_boxes`
-— four 3 in posts and four corner brace clusters straddling the paper's
-mid-length, where the two half-cages butt (docs/SYSTEM_MODEL.md, the seam-frame
-section).  Reported by Pete Werner on 2026-09-14 and built here from the
-drawing's own post_BL / post_BR / brace_BL / brace_BR.
+THE STEEL THIS MEASURES.  `mounts.SEAM_BARS_MM` / `system_model.seam_bodies` —
+two representative bars, 76.2 x 152.4 in plan, straddling the paper's
+mid-length where the two half-cages butt (docs/SYSTEM_MODEL.md 3b).  Reported
+by Pete Werner on 2026-09-14 and settled by him the same day: *"just put a
+representative bar in the middle that is as wide as two of the corner struts."*
 
-WHY THERE IS A SCRIPT AT ALL, AND WHY IT DOES NOT CHANGE THE STATIC SET.
-`layout.StudySpec.static_obstacles` returns the neighbours' mount boxes and base
-columns AND NOTHING ELSE: every certified number on the proposed rig was earned
-against a fleet standing in an empty room, with no cage around it.  Adding steel
-to that set re-decides every certified cell in the repo, so it is a
-re-certification and it waits on the photo
-(`system_model.OPEN_QUESTIONS['seam_frame']`).  This script answers the question
-the re-certification would ask, without pre-empting its answer: the seam boxes
-are concatenated onto a COPY of the fleet, and nothing on disk moves.
+WHAT THIS SCRIPT IS FOR NOW THAT THE BARS ARE WIRED IN.  It was written the
+morning the seam was modelled, when `StudySpec.static_obstacles` still returned
+the neighbours' mount boxes and base columns and nothing else, to price a
+re-certification nobody had done.  That re-certification happened the same day:
+the bars are in every arm's static set (`mounts.obstacles_for`) and every
+number earned after it has them.  So this file is now the DELTA it always
+measured, read the other way round — what the shipped, pre-seam artefacts on
+disk (the atlas, the map, the v19 timeline, an old park set) are worth against
+the steel that is now modelled.  It builds its own fleet with `seam=True` and
+changes nothing on disk except the files it is asked to write.
 
 THE THREE MEASUREMENTS.
 
@@ -73,17 +74,16 @@ MM = 1000.0
 
 
 def seam_fleet(h=0.970):
-    """`layout.FLEET_PROPOSED` with the seam boxes bolted onto every spec.
+    """A fleet with the seam bars in its static set, whatever the switch says.
 
-    A fresh fleet, never the module-level one: this script must not be able to
-    change what anything else in the process sees.
+    Since 2026-09-14 that is simply `build_fleet(seam=True)` — the bars are
+    the default and this is the shipped fleet.  `seam=True` is passed
+    EXPLICITLY so a run with `ARIS_SEAM_POSTS=0` in the environment still
+    measures the seam rather than silently measuring nothing.  A fresh fleet,
+    never the module-level one: this script must not change what anything else
+    in the process sees.
     """
-    fl = layout.build_fleet(layout.LAYOUT_PROPOSED)
-    seam = mounts.seam_frame_boxes()
-    for spec in fl.values():
-        object.__setattr__(spec, "mount_boxes",
-                           tuple(spec.mount_boxes) + tuple(seam))
-    return fl
+    return layout.build_fleet(layout.LAYOUT_PROPOSED, seam=True)
 
 
 def _chain_of(q, spec, h_inv, pen_ext):
@@ -162,7 +162,7 @@ def measure_area(fl, boxes, h, pen_ext, atlas_dir, map_npz, floor):
                         for x, y, o in zip(g[:, 0], g[:, 1], ok)}
         killed_rows[aid] = int((~ok).sum())
     live1 = np.zeros_like(live0)
-    per_arm = {}
+    per_arm, keeps = {}, {}
     for aid, m in masks.items():
         keep = np.zeros_like(m)
         s = survive.get(aid, {})
@@ -173,9 +173,36 @@ def measure_area(fl, boxes, h, pen_ext, atlas_dir, map_npz, floor):
                 keep[j, i] = s.get((round(float(x), 4), round(float(y), 4)),
                                    True)
         per_arm[int(aid)] = dict(before=int(m.sum()), after=int(keep.sum()))
+        keeps[int(aid)] = keep
         live1 |= keep
     return dict(xs=xs, ys=ys, live0=live0, live1=live1, per_arm=per_arm,
-                atlas_rows_killed=killed_rows)
+                atlas_rows_killed=killed_rows, masks=keeps, src=d)
+
+
+def write_map(res, path):
+    """The re-decided map, in `feasible_workspace`'s own _map.npz shape.
+
+    So that `scripts/certified_area.py --map` can answer the hole-free-block
+    question with its own machinery instead of this file growing a second
+    rectangle finder.  Every field of the source map is carried through and
+    only the per-arm masks, `n_arms` and `cause` are re-decided: a cell that
+    every arm lost is dead, and it is dead as NO_DRAW because a draw pose is
+    the layer this script re-decides.
+    """
+    import feasible_workspace as fw
+    d, keeps = res["src"], res["masks"]
+    out = {k: np.asarray(d[k]) for k in d.files}
+    n = np.zeros_like(np.asarray(d["n_arms"]))
+    for aid, m in keeps.items():
+        out[f"mask{aid}"] = m
+        n += m.astype(n.dtype)
+    out["n_arms"] = n
+    cause = np.asarray(d["cause"]).copy()
+    cause[(cause == fw.FEASIBLE) & (n == 0)] = fw.NO_DRAW
+    out["cause"] = cause
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **out)
+    return path
 
 
 def largest_rect(mask, xs, ys):
@@ -238,6 +265,10 @@ def main(argv=None):
     ap.add_argument("--skip-area", action="store_true")
     ap.add_argument("--skip-timeline", action="store_true")
     ap.add_argument("--json", default="out/seam_impact_h0970.json")
+    ap.add_argument("--write-map", default=None,
+                    help="write the re-decided map as a "
+                         "`feasible_workspace` _map.npz, for "
+                         "`scripts/certified_area.py --map`")
     a = ap.parse_args(argv)
 
     fl = seam_fleet(a.h)
@@ -295,6 +326,9 @@ def main(argv=None):
                            caveat="draw-pose layer only — hover and routing "
                                   "legs are not on disk, so this is a LOWER "
                                   "bound on the damage")
+        if a.write_map:
+            print(f"   wrote {write_map(res, a.write_map)}")
+            out["area"]["map"] = a.write_map
 
     if not a.skip_timeline:
         print("\n3. THE SHIPPED TIMELINE  (v19, whole merged timeline)")

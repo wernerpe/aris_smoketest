@@ -301,6 +301,14 @@ P_NCAND = 24          # candidates carried into the depot-flyability stage
 P_NCELL = 24          # certified cells sampled per arm for that stage
 _LAYERS = {}          # {arm: (ink (N,11,3), lift (M,11,3))}, filled before fork
 _PARK = {}            # per-worker: fleet, h, atlas
+# The floor a candidate's chain must clear against the STATIC SET.  `None` is
+# `rig_final.STATIC_MARGIN` = 50 mm, what the atlas is swept at and what every
+# park set before 2026-09-14 was searched at.  The seam bars changed what that
+# buys: a pose may clear 50 mm of seam steel and still be refused by the
+# ROUTER, which asks `paper.FRAME_FLOOR` = 63 mm, so a depot the arm cannot fly
+# out of certifies as a pose.  `--steel-floor` raises the bar; it never lowers
+# the gate, which is `certified_ready_pose`'s own and is untouched.
+_PK_STEEL = None
 
 
 def _pk_world(Q, spec):
@@ -449,7 +457,9 @@ def _pk_one_arm(job):
                                              None, EXT)[0]
                 steel = float(rig_final.chain_static_clearance(
                     P, spec.static_obstacles())[0])
-                if steel < rig_final.STATIC_MARGIN - 1e-9:
+                floor = (rig_final.STATIC_MARGIN if _PK_STEEL is None
+                         else float(_PK_STEEL))
+                if steel < floor - 1e-9:
                     continue
                 rows.append(dict(
                     r=r, hover=hv, bearing=round(bdeg, 1), steel=steel,
@@ -469,6 +479,8 @@ def _pk_one_arm(job):
 def do_park(a):
     """The (radius, hover, bearing) search, at `--h`, against `--atlas`."""
     import multiprocessing as mp
+    global _PK_STEEL
+    _PK_STEEL = getattr(a, "steel_floor", None)
     # THE SEARCH DOES NOT READ THE INCUMBENT PARKS — it is what produces them —
     # so a recipe that does not certify at this height or this CLOCKING must
     # not block it.  `do_sweep` has taken the same escape since 0.850, and it
@@ -656,6 +668,13 @@ def main():
     k.add_argument("--atlas", required=True)
     k.add_argument("--jobs", type=int, default=6)
     k.add_argument("--out", default=None)
+    k.add_argument("--steel-floor", type=float, default=None,
+                   help="metres of clearance a candidate must hold against "
+                        "the STATIC SET (default rig_final.STATIC_MARGIN = "
+                        "0.050).  Pass 0.063 (paper.FRAME_FLOOR) to search "
+                        "for depots the ROUTER can also fly out of — which "
+                        "is what the seam bars made necessary for the middle "
+                        "row.  It raises the bar and never lowers a gate.")
     k.set_defaults(fn=do_park)
 
     p = sub.add_parser("pilot", help="the hover and route layers, sampled")

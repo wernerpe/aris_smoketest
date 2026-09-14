@@ -120,7 +120,7 @@ SEAM_BRACE_H = SM.SEAM_BRACE_H                # 203.2 of it under the rail
 # elevations, the title-block banner, the cut list and the open items.  The
 # seam frame is REPORTED steel (Pete Werner, 2026-09-14) that nobody has
 # photographed; it must never read as surveyed.
-SEAM_FLAG = "CONFIRM ON HARDWARE — photo requested"
+SEAM_FLAG = "AS DIRECTED 2026-09-14 — one representative bar per side"
 
 # --- the arm-31 mount, lifted from the drawing -----------------------------
 POST_PITCH_X = SM.POST_PITCH_X                    # 317.6
@@ -220,8 +220,15 @@ def seam_members():
 
 
 def seam_posts():
-    """The four half-cage end-frame corner posts -> [Body]."""
-    return [b for b in seam_members() if b.name.startswith("seam_post")]
+    """The seam's VERTICAL members -> [Body].
+
+    Two representative bars since 2026-09-14 (`seam_bar_W` / `seam_bar_E`,
+    3 in x 6 in, one per side, centred on the seam); the four inferred
+    end-frame corner posts before that, whose union they are.  Either way
+    they are read off `system_model`, never off a literal here.
+    """
+    return [b for b in seam_members()
+            if b.name.startswith(("seam_bar", "seam_post"))]
 
 
 def seam_braces_are_bodies():
@@ -332,15 +339,17 @@ def cut_list(h):
          f"transverse pair and only {SM.GUSSET_GAP} exists; rotated, the "
          f"pair clears by {SM.GUSSET_PAIR_CLEAR}. No part number: see open "
          "item 4."),
-        ("I", "seam corner post", '3" x 3" T-slot', seam_post_length(),
+        ("I", "seam support bar", '3" (x) x 6" (y)', seam_post_length(),
          len(seam_posts()),
-         f"{SEAM_FLAG}. The half-cage end-frame corner posts, tabletop "
-         f"({LEG_BOTTOM}) to runway underside ({GRID_U}), standing in the same "
-         f"x bands as the corner legs but at the seam, y = {SEAM_Y:.2f}. TWO "
-         f"PER SIDE, {P} apart in y — one per half-cage. These are the "
-         f"mid-span legs open item 3 said were almost certainly required; they "
-         f"exist, and they are the original drawing's own post_BL / post_BR. "
-         f"Same cut as item E."),
+         f"{SEAM_FLAG}. Pete Werner: \"just put a representative bar in the "
+         f"middle that is as wide as two of the corner struts.\" ONE PER "
+         f"SIDE, tabletop ({LEG_BOTTOM}) to runway underside ({GRID_U}), "
+         f"standing in the same x bands as the corner legs but at the seam, "
+         f"y = {SEAM_Y:.2f}, {2 * P} wide in y and centred on it. Two 3 in "
+         f"posts side by side build the same thing — the bar is exactly their "
+         f"union — and that is what the original drawing's own "
+         f"post_BL / post_BR do. These are the mid-span legs open item 3 said "
+         f"were almost certainly required. Same cut as item E."),
         ("J", "seam corner brace", '8" x 8" x 1.5" gusset', SEAM_BRACE[0],
          2 * len(seam_braces()),
          f"{SEAM_FLAG}. {SEAM_BRACE[0]} x {SEAM_BRACE[2]} x {SEAM_BRACE[1]}, "
@@ -471,24 +480,25 @@ OPEN_ITEMS = [
      f"within {SEAM_RAIL_RESIDUAL} mm of the MIDDLE RUNWAY already drawn: the "
      f"runway IS the two butted end rails and is NOT cut twice.  What was "
      f"missing is what holds them up — items I and J, {len(seam_posts())} "
-     f"posts and {len(seam_braces())} brace clusters straddling "
-     f"y = {SEAM_Y:.2f}.  The posts are model bodies; the braces are drawn "
+     f"bars and {len(seam_braces())} brace clusters straddling "
+     f"y = {SEAM_Y:.2f}.  The bars are model bodies; the braces are drawn "
      f"DASHED because a box containing a face-bolted brace also contains its "
      f"post and system_model will not carry interpenetrating geometry.  "
-     f"EVERY WORD OF THIS IS REPORTED, NOT PHOTOGRAPHED, "
-     f"and five assumptions ride on it "
-     f"(system_model.OPEN_QUESTIONS['seam_frame']): the seam plane, a zero "
-     f"butt gap, the end rails being the runway, no mid-width post, and the "
-     f"posts standing on the TABLETOP rather than the floor.",
-     "TWO PHOTOGRAPHS: one of the seam from inside the cage looking along the "
-     "paper, one looking down the seam from an end.  They settle how many "
-     "posts there are and at what x, whether there is a mid-width post or a "
-     "diagonal, whether the butt gap is really zero, and whether both end "
-     "rails are still there (two bars) or someone has removed one.",
-     "BLOCKS items I and J, and re-certification of the middle row — a seam "
-     "post stands 114.3 mm outboard of the canvas edge over the full "
+     f"WHAT TO BUILD THERE IS SETTLED, not photographed: Pete Werner, the "
+     f"same day — \"just put a representative bar in the middle that is as "
+     f"wide as two of the corner struts\" — so this sheet asks for one "
+     f"{P} x {2 * P} bar per side instead of a pair of inferred posts, and "
+     f"nothing about the seam is waiting on a photograph.",
+     "NOTHING OUTSTANDING.  The bar is what was asked for, and it is in the "
+     "planner's certified static set (mounts.obstacles_for) as of "
+     "2026-09-14 — so the parks and the certified area already account for "
+     "it.  A builder who finds something else at the seam edits one table, "
+     "mounts.SEAM_BARS_MM.",
+     "CLOSED 2026-09-14.  It blocked the middle row's parks, which were "
+     "re-searched against the bar and moved — a seam bar stands 114.3 mm "
+     "outboard of the canvas edge over the full "
      f"{seam_post_length():.0f} mm, straight through the band a middle-row "
-     "arm's links sweep."),
+     "arm's links sweep.  docs/DECISIONS.md."),
 ]
 
 
@@ -1123,7 +1133,7 @@ def sheet_topdown(h, out_dir):
              f"SEAM FRAME  items I + J\n{SEAM_FLAG}\n"
              f"The rig is TWO half-cages "
              f"{HALF_CAGE_L:.1f} long\nbutted at y = {SEAM_Y:.2f}.  "
-             f"{len(seam_posts())} posts + {len(seam_braces())} brace\n"
+             f"{len(seam_posts())} bars + {len(seam_braces())} brace\n"
              f"clusters hold up the two butted END RAILS\n"
              f"— which ARE the middle runway already\n"
              f"drawn, to {SEAM_RAIL_RESIDUAL} mm.  Open item 7.",
@@ -1365,7 +1375,7 @@ def _plan_notes(h, z, ca):
                    f"butted at y = {SEAM_Y:.2f}.  Their two seam-side\n"
                    f"END RAILS *ARE* the middle runway already\n"
                    f"drawn ({SEAM_RAIL_RESIDUAL} mm) — do not cut them twice.\n"
-                   f"{len(seam_posts())} posts + {len(seam_braces())} brace "
+                   f"{len(seam_posts())} bars + {len(seam_braces())} brace "
                    f"clusters hold them up."))
     n.append(("h", "5  GUSSETS ARE ROTATED"))
     n.append(("n", f"The drawing's inboard orientation needs\n"
@@ -1560,7 +1570,7 @@ def sheet_side(h, out_dir):
              f"SEAM FRAME  items I + J  —  {SEAM_FLAG}\n"
              f"AT THE MIDDLE ROW THIS SECTION IS THE SEAM: the two "
              f"half-cages\nbutt at y = {SEAM_Y:.2f}, and "
-             f"{len(seam_posts())} end-frame corner posts (hatched, on the "
+             f"{len(seam_posts())} representative bars (hatched, on the "
              f"corner-leg\nx bands) carry the butted end rails — item C's "
              f"middle runway.\nThe {len(seam_braces())} brace clusters run "
              f"{SEAM_BRACE_RUN} inboard, {SEAM_BRACE_H} under the rail — "
@@ -1619,7 +1629,7 @@ def sheet_side(h, out_dir):
             over=0, txt_off=40)
     axb.text((FR_Y0 + FR_Y1) / 2, -1280,
              f"SEAM FRAME  items I + J  —  {SEAM_FLAG}\n"
-             f"{len(seam_posts())} posts tabletop to rail at y = "
+             f"{len(seam_posts())} bars tabletop to rail at y = "
              f"{SEAM_Y:.2f} — two per side, {P} apart, one per half-cage — "
              f"plus {len(seam_braces())} brace clusters (dashed)\n"
              f"THESE ARE THE MID-SPAN LEGS OF OPEN ITEM 3: clear runway span "

@@ -22,12 +22,12 @@
   "provenance_mix_scope": "the 77 STATIC bodies only \u2014 the cage, the table and the canvas.  The arms, their collision geometry and the tool are not boxes and carry their own class in `arm_geometry` and `tool` (both AUDIT, except the tool PLACEMENT, which is ASSUMED).",
   "provenance_mix": {
     "DRAWING": {
-      "count": 51,
-      "percent": 63.0
+      "count": 49,
+      "percent": 62.0
     },
     "CODE": {
       "count": 1,
-      "percent": 1.2
+      "percent": 1.3
     },
     "AUDIT": {
       "count": 0,
@@ -35,7 +35,7 @@
     },
     "ASSUMED": {
       "count": 29,
-      "percent": 35.8
+      "percent": 36.7
     }
   },
   "canvas": {
@@ -945,13 +945,6 @@
       "rides_on": "716.4 mm of modelled boom length, and whether the cage can stand up at all in the room it is going into.",
       "answer_by": "survey the room",
       "blocking": "cutting the grid"
-    },
-    "seam_frame": {
-      "what": "CONFIRM ON HARDWARE \u2014 PHOTO REQUESTED.  Exactly what steel stands where the two half-cages meet, at the paper's mid-length y = 1815.32 mm?",
-      "why": "Pete Werner, 2026-09-14: \"there are a few bars on the real hardware that are not in our model.  they are supports in the middle, I think the half-table drawing had them.  the real thing is essentially the two halves next to each other.\"  This model was built as ONE long frame on four corner legs and said, at OPEN_QUESTIONS['cage_legs'], that mid-span legs were almost certainly required.  Section 3b builds them from the drawing's own post_BL/post_BR and brace_BL/brace_BR.  THE ASSUMPTIONS, FIVE, every one of them.  (1) THE SEAM PLANE is the paper's mid-length, 1815.32 mm, which is also the middle arm row and rig_final6.MIRROR_PLANE_CANVAS_Y.  (2) THE TWO HALVES BUTT WITH ZERO GAP \u2014 the same assumption rig_final6.GAP_CM flags, and the levelling-foot pads overhang the leg lines by 3.3 mm, so real frames touching at the PADS stand 6.6 mm apart.  (3) THE SEAM END RAILS ARE THE MIDDLE RUNWAY and are therefore NOT added again; the two readings differ by 0.78 mm and the posts are snapped to the runway rather than to the butt, so each post stands under the beam it carries.  (4) THE END FRAME HAS NO MID-WIDTH POST.  The drawing's front view looks along y, so BOTH end frames project onto it, and it shows exactly two verticals above the tabletop.  The nine blobs in the top view are the TABLE's 3 x 3 legs and levelling feet, all below the tabletop and already inside the solid `table` body.  (5) THE POSTS STAND ON THE TABLETOP, at LEG_BOTTOM = -27.38, the way the drawing's own post_FL does \u2014 not on the floor beside the table.",
-      "rides_on": "The middle row.  Arms 31 and 71 have their J1 axes ON the seam plane, and the west/east seam posts stand 114.3 mm outboard of the canvas edge over the whole 1651 mm from the tabletop to the rail \u2014 i.e. straight through the mount plane and straight through the band a middle-row arm's links sweep when it reaches for its own x extreme.  A pen on the canvas edge clears a post by 14.3 mm against the 50 mm static margin; a LINK there misses by 90.7 mm.",
-      "answer_by": "ONE PHOTO of the seam, from inside the cage looking along the paper, plus one looking down the seam from an end.  The questions it answers are in docs/SYSTEM_MODEL.md and BUILD_SHEET.md: how many posts, at what x; is there a mid-width post or a diagonal; is the gap really zero; do the two end rails sit side by side (two bars) or has someone removed one (one bar).",
-      "blocking": "re-certification of the middle row's parks and of every certified cell within 205 mm of the canvas's x edges at the seam row"
     },
     "penholder_cradle": {
       "what": "Which fingers are on the arms, and how far in is the blade's foot bolted?  (THE LEAN IS SETTLED, 2026-09-07: 23 deg, the housing's own clocking, which is the only lean that puts the square block flush with the blades.  The graphite is USER-SPECIFIED at 20 mm past the cap.)",
@@ -3286,17 +3279,17 @@
       "envelope": "mounts.arm_mount_boxes \u2014 the schematic 0.226x0.190x0.05 plate and the 0.2x0.2 column every certified number was earned against"
     },
     {
-      "name": "seam_post_SW",
+      "name": "seam_bar_W",
       "kind": "cage",
       "provenance": "DRAWING",
       "size_mm": [
         76.2,
-        76.2,
+        152.4,
         1651.0
       ],
       "centre_mm": [
         -152.4,
-        1777.22,
+        1815.32,
         798.12
       ],
       "lo_mm": [
@@ -3306,53 +3299,25 @@
       ],
       "hi_mm": [
         -114.3,
-        1815.32,
-        1623.62
-      ],
-      "collision": true,
-      "source": "half-cage end-frame corner post = the drawing's post_BL, 76.2 sq, tabletop (-27.38) to rail underside (1623.62), cut length 1651.0.  Plan x is the frame corner, the same x band as leg_FL; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  REPORTED ON THE REAL HARDWARE (Pete Werner 2026-09-14) and NOT PHOTOGRAPHED \u2014 see OPEN_QUESTIONS['seam_frame']",
-      "note": "the mid-span legs OPEN_QUESTIONS['cage_legs'] said were almost certainly required"
-    },
-    {
-      "name": "seam_post_NW",
-      "kind": "cage",
-      "provenance": "DRAWING",
-      "size_mm": [
-        76.2,
-        76.2,
-        1651.0
-      ],
-      "centre_mm": [
-        -152.4,
-        1853.42,
-        798.12
-      ],
-      "lo_mm": [
-        -190.5,
-        1815.32,
-        -27.38
-      ],
-      "hi_mm": [
-        -114.3,
         1891.52,
         1623.62
       ],
       "collision": true,
-      "source": "half-cage end-frame corner post = the drawing's post_BL, 76.2 sq, tabletop (-27.38) to rail underside (1623.62), cut length 1651.0.  Plan x is the frame corner, the same x band as leg_FL; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  REPORTED ON THE REAL HARDWARE (Pete Werner 2026-09-14) and NOT PHOTOGRAPHED \u2014 see OPEN_QUESTIONS['seam_frame']",
-      "note": "the mid-span legs OPEN_QUESTIONS['cage_legs'] said were almost certainly required"
+      "source": "REPRESENTATIVE seam support, 76.2 x 152.4 in plan \u2014 'a bar as wide as two of the corner struts' (Pete Werner, 2026-09-14), centred on the seam plane 1815.32.  Tabletop (-27.38) to rail underside (1623.62), cut length 1651.0 \u2014 the same cut as a corner leg.  Plan x is the frame corner, the same x band as leg_FL; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  THE TABLE IS mounts.SEAM_BARS_MM",
+      "note": "two half-cage end-frame corner posts (the drawing's post_BL / post_BR) as one bar; IN THE CERTIFIED STATIC SET since 2026-09-14"
     },
     {
-      "name": "seam_post_SE",
+      "name": "seam_bar_E",
       "kind": "cage",
       "provenance": "DRAWING",
       "size_mm": [
         76.2,
-        76.2,
+        152.4,
         1651.0
       ],
       "centre_mm": [
         1955.8,
-        1777.22,
+        1815.32,
         798.12
       ],
       "lo_mm": [
@@ -3362,40 +3327,12 @@
       ],
       "hi_mm": [
         1993.9,
-        1815.32,
-        1623.62
-      ],
-      "collision": true,
-      "source": "half-cage end-frame corner post = the drawing's post_BR, 76.2 sq, tabletop (-27.38) to rail underside (1623.62), cut length 1651.0.  Plan x is the frame corner, the same x band as leg_FR; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  REPORTED ON THE REAL HARDWARE (Pete Werner 2026-09-14) and NOT PHOTOGRAPHED \u2014 see OPEN_QUESTIONS['seam_frame']",
-      "note": "the mid-span legs OPEN_QUESTIONS['cage_legs'] said were almost certainly required"
-    },
-    {
-      "name": "seam_post_NE",
-      "kind": "cage",
-      "provenance": "DRAWING",
-      "size_mm": [
-        76.2,
-        76.2,
-        1651.0
-      ],
-      "centre_mm": [
-        1955.8,
-        1853.42,
-        798.12
-      ],
-      "lo_mm": [
-        1917.7,
-        1815.32,
-        -27.38
-      ],
-      "hi_mm": [
-        1993.9,
         1891.52,
         1623.62
       ],
       "collision": true,
-      "source": "half-cage end-frame corner post = the drawing's post_BR, 76.2 sq, tabletop (-27.38) to rail underside (1623.62), cut length 1651.0.  Plan x is the frame corner, the same x band as leg_FR; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  REPORTED ON THE REAL HARDWARE (Pete Werner 2026-09-14) and NOT PHOTOGRAPHED \u2014 see OPEN_QUESTIONS['seam_frame']",
-      "note": "the mid-span legs OPEN_QUESTIONS['cage_legs'] said were almost certainly required"
+      "source": "REPRESENTATIVE seam support, 76.2 x 152.4 in plan \u2014 'a bar as wide as two of the corner struts' (Pete Werner, 2026-09-14), centred on the seam plane 1815.32.  Tabletop (-27.38) to rail underside (1623.62), cut length 1651.0 \u2014 the same cut as a corner leg.  Plan x is the frame corner, the same x band as leg_FR; plan y is the half-cage butt, which lands on this model's own middle runway to 0.78 mm.  THE TABLE IS mounts.SEAM_BARS_MM",
+      "note": "two half-cage end-frame corner posts (the drawing's post_BL / post_BR) as one bar; IN THE CERTIFIED STATIC SET since 2026-09-14"
     }
   ]
 }
