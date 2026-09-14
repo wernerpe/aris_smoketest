@@ -1349,3 +1349,194 @@ not its conduct, which is `sequence.cost_matrix`'s O(n²) route screen on
 are the table two sections up and will not move; what they still owe is their
 stage C cost and their makespan. Re-run `scripts/lf_report.py
 out/staged_csail_h097_lf_*.json` when the JSONs appear.
+
+## 23. The room was the wrong shape — exact swept capsules, and the follower's tuck
+
+§22 left stage A with the followers keeping **0 %** of their ink at every split,
+and the diagnosis (`scripts/diag_lf_follower.py`, commit `2cd3eb0`) named the
+biggest correctable term: the room a follower is certified against was not the
+leader's trajectory, it was `cluster_capsules`' **sphere reduction** of it — one
+sphere per 0.075 m cell, radius = 65 mm half-diagonal + up to 177 mm (the
+biggest capsule in the cell) + 24 mm sweep pad, median 186 mm and max 417 mm.
+Measured cost of that reduction: a **median 195 mm** of clearance the leader's
+metal was not occupying.
+
+### 23.1 What was built
+
+**`aris_sixarm/exact_room.py`** — a leader's realised trajectory as its **real
+swept capsule chain**: one capsule per link per timeline sample, each carrying
+`scene_check.check_timeline`'s own per-sample 1-Lipschitz residual (`SWEEP_FRAC`
+× the larger of the step into and the step out of that sample) rather than the
+sphere form's single global maximum. Nothing is decimated at the shipped stride.
+
+The spheres are kept — as the **broad phase**. Each grid cell holds its members,
+its bounding sphere *and* its AABB, and a query prunes a cell whole when both
+bounds already exceed the best gap found so far. The narrow phase then opens
+**shells** of increasing bound and stops a row the moment its best gap falls
+below the shell boundary already measured — every unmeasured cell lies beyond
+that boundary, so the termination is exact, not heuristic. The answer is
+bit-identical to a brute-force minimum over every capsule at every cell size
+(`tests/test_exact_room.py`).
+
+| | cost per pose, stage-sized room (26 000 capsules, 87 cells) |
+|---|---|
+| floored at the router's `FRAME_FLOOR` (how every `paper.route` gate asks) | **0.05 ms** |
+| floored at the ink gate's cap (`staged.INK_CAP`, 0.30 m) | **0.18 ms** |
+| unfloored, exact to infinity | 4.6 ms |
+
+The budget was ≤ 1 ms per pose for the planner's gates; the gates are floored,
+and a test pins the floored number under 1 ms. `ink_vs_envelope` is capped at
+0.30 m for the same reason `coordination.BROAD_CAP` caps everything else — the
+gate it feeds is 50 mm.
+
+**One seam, not five.** Every consumer named in the build item already reaches
+the room through `frozen.chain_clearance` / `frozen.partner_clearance`:
+`plan_stroke`'s ink gate, `writing.arm_program`, `paper.route`'s straight,
+ladder and RRT tiers, and `paper.effective_static_floor`. So the room was
+swapped **inside `frozen`** and all of them saw it at once. The one tier that
+could *not* see it is the go-around: `paper._skirt` reads box **footprints** to
+decide which way to walk, and a room is not a box — so `frozen.room_boxes()`
+hands it the room's coarse cells **for detour generation only**. Every candidate
+it proposes is still gated against the exact room, so a bad pseudo-box costs a
+refused detour and never a certificate. `scene_check` shares none of this code
+and stays the judge.
+
+`ARIS_ROOM=spheres|capsules` (default `capsules`) is the whole A/B.
+
+### 23.2 The A/B, same tree, same seam bar, CSAIL h = 0.970, split +0.15, stage A
+
+| | sphere room (`ARIS_ROOM=spheres`) | **exact capsules** |
+|---|---|---|
+| leader 71's room | 891 spheres | **19 190 capsules** |
+| follower 31's **start pose** vs the room | **−128.4 mm** | **+53.7 mm** |
+| follower ink clearance, min | −243.8 mm | **−199.8 mm** |
+| …median | −134.6 mm | **−118.9 mm** |
+| …max | −128.4 mm | **−38.0 mm** |
+| pieces refused at the ink gate | 3 | **2** |
+| leader ink flown | 2.0613 m | 2.0613 m |
+| **follower ink flown** | **0.000 m (0 %)** | **0.000 m (0 %)** |
+| stage A inter-arm (`scene_check`) | +65.6 mm, PASS | +65.6 mm, PASS |
+
+**The start pose is the result that matters.** It moved by **+182 mm**, from 128 mm
+*inside* the room to 54 mm outside it. That was the mechanism §22.3 blamed:
+`paper.effective_static_floor` clamps every leg's static floor to what its own
+endpoints can hold, so a park inside the room clamped the floor **negative**
+before routing began and the entry legs failed first. That specific failure is
+gone.
+
+**And the follower still keeps nothing.** The exact room moved the ink clearance
+by +44 mm (min) to +90 mm (max) and it is still deeply negative. This is not a
+modelling artefact any more — it is the allocation: **the follower's ink lies
+inside the volume the leader's arm actually sweeps.**
+
+### 23.3 Why 55.9 % of poses clear does not buy 55.9 % of the ink
+
+The diagnosis measured 55.9 % of arm 31's ink samples clearing 50 mm against
+the exact capsules, and read that as the ceiling. It is not, because
+**`ink_vs_envelope` returns the MINIMUM over a piece's poses** and the gate
+refuses the piece whole. A piece with 55.9 % of its poses clear still has a
+minimum of −185 mm, so it is refused entire. Turning a pose-wise fraction into
+flown ink needs the pieces **split at the room boundary** — a DP that cuts a
+stroke where it enters a leader's trajectory, which the refusal loop does for
+*coverage* but not for *rooms*. That is the next build item, and it is now the
+only one between here and a follower that draws.
+
+### 23.4 The tuck, and why it did not fire
+
+`staged.tuck_pose` / `clear_out` / `splice_timeline` implement the
+pre-position: a follower searches hover stations over **its own ink** at a
+ladder of heights for one that clears the leaders' exact rooms by the routing
+floor + 10 mm, flies park → tuck **while the leaders are still parked** (so the
+clear-out is routed against the parked fleet, like any other leg), and plans its
+tour from there. The clear-out is **spliced into the follower's timeline**, not
+left as a prologue — so `trajectory_room`, `active_pair_gap` and `scene_check`
+all see it, and the next arm in the sweep avoids it. `q_tuck` and `clear_out_s`
+are recorded per arm in the programme (schema stays 2; `q_hold` is unchanged).
+
+On this picture **it did not fire, and it should not have**:
+
+- arm 31 (split +0.15): park **+53.7 mm**, 0 of 45 stations cleared the 73 mm
+  bar → stays put. The park is *already* outside the room once the room is
+  exact; every hover over its own ink is *inside* it, which is the same fact
+  §23.2 reports — the ink is in the leader's swept volume, so a station above
+  the ink is too.
+- arm 97 (whole bag): park **+263.4 mm** — already clear, early return, no move.
+
+So the clear-out cost **0 s** and the time to first motion is unchanged at
+**2.269 s** (split +0.15), well inside the 10 s bar. The machinery is built,
+tested and inert on this picture; it earns its keep the moment a park sits
+inside a room again, which the seam-bar park re-search happened to fix for
+arm 31 at the same time.
+
+### 23.4b Stage B, split +0.15: the followers fly 62.6 % of their ink
+
+The split +0.15 run finished stages A and B after the box closed, and stage B
+is the first result in this pattern where **a follower keeps anything**:
+
+| stage B (roles swapped: leaders 17/31/97, followers 2/13/71) | value |
+|---|---|
+| follower ink offered | 2.5249 m |
+| **follower ink flown** | **1.5812 m — `follower_fit_frac` 0.626** |
+| follower ink clearance vs the leaders' exact rooms | min **+35.7**, median **+179.6**, max +1591.9 mm |
+| leader ink flown | 0.0284 m of 0.0284 m |
+| inter-arm, realised trajectories (`active_pair_gap`) | **+98.6 mm** (binding pair 71↔97, leg vs leg) |
+| static set, per arm (`scene_check` via `solo_check`) | **+73.7 mm** |
+| stage duration / busiest arm | 24.0 s |
+| stage verdict | **FAIL** |
+
+**The FAIL is not a collision.** The realised trajectories separate by +98.6 mm
+and every arm clears the steel by +73.7 mm — both comfortably over their gates.
+The stage is marked not-ok by `ink_vs_envelope_mm = 35.67`: one accepted piece's
+ink reads +35.7 mm against a room, under the 50 mm `PAIR_MARGIN`. That is the
+planner's own per-piece reading of a stage the independent measurements pass,
+and it is the same per-piece minimum §23.3 identifies as the thing to split on.
+
+Totals for the split +0.15 run, stages A + B: makespan **119.885 s**, time to
+first motion **0.216 s**, coverage 95.63 %, leader ink 2.0898 m flown,
+**follower ink 1.5812 m of 4.6688 m offered (33.9 %)**, deferred 8.0850 m,
+`holds_ok` true.
+
+### 23.5 The whole bag, stages A + B (the full A/B/C did not fit the box)
+
+Run with `--stages 0,1`, exact rooms, seam bar in:
+
+| | value |
+|---|---|
+| makespan, stages A + B | **145.867 s** (A 128.6 s + B 17.3 s) |
+| time to first motion, clear-out included | **0.192 s** |
+| leader ink flown | **4.6238 m of 4.6238 m offered** |
+| follower ink flown | **0.000 m of 5.0258 m offered (0 %)** |
+| deferred to stage C | **10.0231 m** of 16.0826 m drawn = **62.3 %** |
+| follower ink clearance vs the exact rooms | min −272.4, median −152.6, max −37.8 mm, 13 of 13 under gate |
+| `scene_check` | stage A and B both **PASS**, `all_ok` true, `holds_ok` true |
+| held-pose barriers | 3, all clear |
+
+Against the §22 baseline (sphere rooms, **pre**-seam-bar, so only partly a
+controlled comparison): A + B makespan 146.7 s → 145.9 s, follower ink
+clearance min −419.7 → −272.4 mm, median −235.7 → −152.6 mm, max −131.9 →
+−37.8 mm. The deferred share is **unchanged at 62 %** because it is the
+followers' whole bag either way. The controlled A/B is §23.2, which holds the
+tree and the seam bar fixed.
+
+**Stage C was not run.** The build capped a six-arm conduct at 30 minutes of
+wall clock and the box closed before stage A + B finished on both splits; the
+split +0.15 run was still in stage B's route screen — the same
+`sequence.cost_matrix` O(n²) wall §19 flagged — when this was written. Its
+stage A numbers are §23.2 and will not move.
+
+### 23.6 What did not change, and the honest bottom line
+
+Stage A's inter-arm clearance, its makespan (95.9 s for the busiest arm at split
++0.15, 128.6 s whole-bag) and its verdict are unchanged: **PASS**, `all_ok`
+true, 3 of 3 leader buckets flown. Coverage 97.46 % (split +0.15) / 95.64 %
+(whole bag). The exact room is strictly better geometry at 1/25th of the pruning
+slack and no measurable planning cost, and it removes one of the two reasons the
+follower kept nothing. The other reason is the allocation, and no room model
+fixes it.
+
+**The 1 000-stroke model is NOT recalibrated in this pass**, because the
+condition the build set for it — "only if stages A/B now carry most of the ink"
+— is not met. Stages A and B carry the leaders' ink alone; the followers carry
+none, so the deferred share is unchanged in kind. Recalibrating a throughput
+model on a stage that still defers its followers' whole bag would be quoting the
+conductor's cost as if it were the pattern's.

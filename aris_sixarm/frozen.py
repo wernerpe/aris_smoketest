@@ -35,7 +35,7 @@ import re
 
 import numpy as np
 
-from . import coordination, link_spheres, rig_final
+from . import coordination, exact_room, link_spheres, rig_final
 
 # {aid: (A (C,3), B (C,3), R (C,))} of every frozen partner's world capsules
 _CAPS = {}
@@ -87,6 +87,14 @@ def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
     a few hundred spheres hands them in here rather than paying the full block
     on every query (see `staged.cluster_capsules`).  A sphere is a degenerate
     capsule (A == B), which is all the adapting this needs.
+
+    ...OR AN `exact_room.ExactRoom`, which is the same object without the
+    reduction: the partner's real swept capsules behind a grid-hash prune.  The
+    sphere cloud cost a median 195 mm of clearance against the capsules it
+    contained (docs/V2_STAGED.md section 23), so the room the follower is
+    certified against is the exact one by default and the spheres are kept only
+    for the A/B (`ARIS_ROOM=spheres`).  Both arrive here and both leave through
+    `partner_clearance`, which is the only seam either of them has.
     """
     global _CAPS, _POSES
     _CAPS, _POSES = {}, {}
@@ -96,6 +104,12 @@ def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
             continue
         Q = np.asarray(Q, float).reshape(-1, 7)
         cl = (clusters or {}).get(aid)
+        if cl is not None and isinstance(cl[0], exact_room.ExactRoom):
+            # `(room, radii, digest)` — `staged.trajectory_room`'s tuple, whose
+            # first slot is the room itself rather than a cloud of centres
+            _CAPS[aid] = cl[0]
+            _POSES[aid] = Q[0].copy()
+            continue
         if cl is not None:
             C = np.asarray(cl[0], float).reshape(-1, 3)
             R = np.asarray(cl[1], float).reshape(-1)
@@ -191,6 +205,44 @@ def filter_boxes(boxes):
     return [b for b in boxes if keep_box(b)]
 
 
+def room_kinds():
+    """What model each frozen partner is carried as. -> {aid: str}.
+
+    `capsules` for an exact room, `spheres` for a cluster cloud, `pose` for the
+    one-pose capsule block of a parked partner.  A cache that namespaces on the
+    room has to see this: the same partner ids and the same poses describe two
+    different obstacles under the two room models.
+    """
+    out = {}
+    for a, blk in _CAPS.items():
+        out[int(a)] = (blk.kind if isinstance(blk, exact_room.ExactRoom)
+                       else ("spheres" if len(blk) == 3
+                             and blk[0] is not blk[1]
+                             and np.array_equal(blk[0], blk[1]) else "pose"))
+    return out
+
+
+def room_boxes(observer=None):
+    """The frozen ROOMS' occupied airspace, as a few AABBs. -> [box dict].
+
+    FOR DETOUR GENERATION ONLY.  `paper._skirt` reads box footprints to decide
+    which way to walk around an obstacle, and a room is not a box, so the tier
+    was blind to the one obstacle that mattered: every crossing the leader's
+    trajectory blocked fell through to the RRT with no hint about WHERE to go.
+    These are each room's own coarse cells (`ExactRoom.boxes`), handed to the
+    waypoint generator and to nothing else — every leg the generator proposes
+    is still gated against the exact room by `chain_clearance`, so a box here
+    can cost a wasted detour and can never buy a certificate.
+    """
+    obs = _OBSERVER if observer is None else int(observer)
+    out = []
+    for a, blk in sorted(_CAPS.items()):
+        if a == obs or not isinstance(blk, exact_room.ExactRoom):
+            continue
+        out += blk.boxes(name=f"room:{int(a)}")
+    return out
+
+
 def partner_clearance(P, C=None, floor=None):
     """Observer chain -> clearance to every frozen partner's real capsules.
 
@@ -227,6 +279,11 @@ def partner_clearance(P, C=None, floor=None):
     # decision is made once and on the complete number.
     for aid in others:
         blk = _CAPS[aid]
+        # AN EXACT ROOM ANSWERS THE WHOLE QUESTION ITSELF, prune included; the
+        # loop below is the flat-block form and would defeat the index.
+        if isinstance(blk, exact_room.ExactRoom):
+            worst = np.minimum(worst, blk.chain_clearance(P, caps, floor))
+            continue
         Acap, Bcap, Rcap = blk[3] if len(blk) > 3 else (blk[0], blk[1], blk[2])
         for (i, j, r) in caps:
             # (N,1,3) observer segment against (1,C,3) partner segments
@@ -242,7 +299,13 @@ def partner_clearance(P, C=None, floor=None):
     Ps, Cs = P[sel], C[sel]
     lean_w = np.full(len(Ps), np.inf)
     for aid in others:
-        A, B, R = _CAPS[aid][0], _CAPS[aid][1], _CAPS[aid][2]
+        blk = _CAPS[aid]
+        if isinstance(blk, exact_room.ExactRoom):
+            lean_w = np.minimum(lean_w, blk.chain_clearance(Ps, lean, floor))
+            lean_w = np.minimum(lean_w, blk.sphere_clearance(
+                Cs, link_spheres.RADII, floor))
+            continue
+        A, B, R = blk[0], blk[1], blk[2]
         for (i, j, r) in lean:
             d = coordination.seg_seg_dist(Ps[:, i][:, None, :],
                                           Ps[:, j][:, None, :],

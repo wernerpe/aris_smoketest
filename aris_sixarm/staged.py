@@ -52,6 +52,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,7 +60,8 @@ from typing import Callable, Iterable, Sequence
 
 import numpy as np
 
-from . import allocate, coordination, frozen, paper, scene_check, stroke_api
+from . import (allocate, coordination, exact_room, frozen, paper,
+               scene_check, stroke_api)
 from . import traces as traces_mod
 from . import writing
 from .fleet import FLEET, H_INV_DEFAULT
@@ -222,9 +224,7 @@ def leg_cache_signature(frozen_poses: dict[int, np.ndarray],
         frozen={str(int(a)): [round(float(x), 9)
                               for x in np.asarray(q, float).ravel()]
                 for a, q in sorted(frozen_poses.items())},
-        envelopes={str(int(a)): [int(len(v[1])),
-                                 round(float(np.sum(v[0])), 6),
-                                 round(float(np.sum(v[1])), 6)]
+        envelopes={str(int(a)): list(room_sig(v))
                    for a, v in sorted((envelopes or {}).items())}),
         sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
@@ -492,18 +492,71 @@ def trajectory_digest(st: "ArmStage", dt=CHECK_DT) -> str:
     return hashlib.sha256(np.round(Q, 9).tobytes()).hexdigest()[:16]
 
 
-def trajectory_room(st: "ArmStage", specs=None, pens=None, h_inv=H_INV_DEFAULT,
-                    dt=CHECK_DT, cluster=ENVELOPE_CLUSTER, max_n=None):
-    """One arm's ACTUAL stage timeline, as swept bounding spheres.
-    -> (centres, radii, digest).
+ROOM_STRIDE = 1            # timeline samples the exact room keeps out of each
+INK_CAP = 0.30             # m, above which the ink gate stops resolving exactly
 
-    The same reduction the pose-union envelope uses (`cluster_capsules`, which
-    CONTAINS what it replaces), over the poses the arm actually holds instead of
-    the poses it could hold.  The pad is not a guess here: it is
-    `scene_check.check_timeline`'s own 1-Lipschitz between-sample residual,
-    `SWEEP_FRAC x` the largest step any capsule endpoint takes between two
-    samples of the timeline, so the spheres cover the motion BETWEEN the samples
-    and not only at them.
+
+def room_mode():
+    """Which obstacle a realised trajectory is modelled as. -> str.
+
+    `ARIS_ROOM=spheres` reproduces every number earned before 2026-09-14
+    exactly — `cluster_capsules` unchanged, `frozen` measuring degenerate
+    capsules — and `capsules`, the default, is the leader's real swept chain.
+    One flag, read in one place, so the A/B is one flag and not a branch per
+    consumer.  An empty value is NOT SET, not off.
+    """
+    v = os.environ.get("ARIS_ROOM", "").strip().lower()
+    return "spheres" if v in ("spheres", "sphere") else "capsules"
+
+
+def room_sig(v) -> tuple:
+    """What a cache has to key on to tell two rooms apart. -> tuple.
+
+    `(kind, n primitives, position sum, radius sum)`, which is the shape both
+    the plan memo and the leg store want and the only thing either of them ever
+    knew about a room.  It exists because `v[0]` used to be an array of centres
+    that `np.sum` would take, and an `ExactRoom` is not one.
+    """
+    if isinstance(v[0], exact_room.ExactRoom):
+        return v[0].signature()
+    return ("spheres", int(len(v[1])),
+            round(float(np.sum(v[0])), 6), round(float(np.sum(v[1])), 6))
+
+
+def room_size(v) -> str:
+    """How big a room is, for a log line. -> "861 sph" | "23220 cap"."""
+    return (f"{len(v[0])} cap" if isinstance(v[0], exact_room.ExactRoom)
+            else f"{len(v[1])} sph")
+
+
+def trajectory_room(st: "ArmStage", specs=None, pens=None, h_inv=H_INV_DEFAULT,
+                    dt=CHECK_DT, cluster=ENVELOPE_CLUSTER, max_n=None,
+                    mode=None, stride=None):
+    """One arm's ACTUAL stage timeline, as the room a partner must avoid.
+    -> (room, radii, digest).
+
+    Under `ARIS_ROOM=capsules` (the default) `room` is an
+    `exact_room.ExactRoom` holding the arm's REAL swept capsule chain, and
+    `radii` its per-capsule radii; under `spheres` it is the shipped
+    `cluster_capsules` reduction and `radii` the sphere radii.  The tuple shape
+    is the same either way because every consumer downstream takes it apart the
+    same way (`room_sig`, `room_size`, `freeze_stage`).
+
+    THE PAD IS NOT A GUESS IN EITHER MODE.  It is
+    `scene_check.check_timeline`'s own 1-Lipschitz between-sample residual, so
+    the room covers the motion BETWEEN the samples and not only at them — the
+    sphere form charges `SWEEP_FRAC x` the LARGEST step anywhere in the
+    timeline to every sphere, the capsule form charges each sample the larger
+    of its own two steps, which is the same bound applied where it is earned
+    rather than globally.
+
+    WHY THE SPHERES WERE NOT ENOUGH.  A sphere per 0.075 m cell is the cell's
+    half-diagonal (65 mm) plus the biggest capsule radius that fell in it (up
+    to 177 mm) plus the pad, and measured on 2026-09-14 that reduction costs a
+    MEDIAN 195 mm of clearance against the capsules it contains: on follower
+    arm 31 against leader 71, 0 % of the follower's ink clears the 50 mm gate
+    against the spheres and 55.9 % clears it against the capsules.  The
+    reduction, not the leader, was refusing the follower's ink.
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
@@ -515,6 +568,12 @@ def trajectory_room(st: "ArmStage", specs=None, pens=None, h_inv=H_INV_DEFAULT,
             if k not in coordination.FROZEN_SWEEP_BANDS]
     A3 = np.asarray(path.A, float)[:, keep]
     B3 = np.asarray(path.B, float)[:, keep]
+    dig = trajectory_digest(st, dt)
+    if (room_mode() if mode is None else str(mode)) == "capsules":
+        rm = exact_room.from_samples(
+            A3, B3, np.asarray(path.r, float)[keep], SWEEP_FRAC,
+            stride=ROOM_STRIDE if stride is None else int(stride), digest=dig)
+        return rm, rm.R, dig
     step = 0.0
     if len(A3) > 1:
         step = max(float(np.max(np.linalg.norm(np.diff(A3, axis=0), axis=2))),
@@ -522,12 +581,12 @@ def trajectory_room(st: "ArmStage", specs=None, pens=None, h_inv=H_INV_DEFAULT,
     R = np.tile(np.asarray(path.r, float)[keep], len(A3))
     c, r = cluster_capsules(A3.reshape(-1, 3), B3.reshape(-1, 3), R, cluster,
                             SWEEP_FRAC * step)
-    return c, r, trajectory_digest(st, dt)
+    return c, r, dig
 
 
 def stage_rooms(arms: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT,
                 dt=CHECK_DT, cluster=ENVELOPE_CLUSTER) -> dict:
-    """{arm: (centres, radii, digest)} from one stage's ACTUAL timelines."""
+    """{arm: (room, radii, digest)} from one stage's ACTUAL timelines."""
     return {int(a): trajectory_room(st, specs, pens, h_inv, dt, cluster)
             for a, st in arms.items()}
 
@@ -558,7 +617,13 @@ def ink_vs_envelope(plan: dict, spec, h_inv=H_INV_DEFAULT, pen=None) -> float:
         return float("inf")
     P = coordination.chain_world(np.asarray(plan["qs"], float), spec, h_inv,
                                  float(spec.pen if pen is None else pen))
-    return float(np.min(frozen.partner_clearance(P)))
+    # CAPPED, THE WAY `coordination.BROAD_CAP` CAPS EVERY OTHER CLEARANCE IN
+    # THIS REPO.  The exact room resolves a gap below the cap exactly and stops
+    # scanning outward above it; the gate this feeds is 50 mm and the number is
+    # only ever read to rank pieces by how deeply they are buried, so paying
+    # for an exact 400 mm buys nothing.  Measured: 4.6 ms per pose uncapped,
+    # 0.18 ms at this cap, same verdict.
+    return float(np.min(frozen.partner_clearance(P, floor=INK_CAP)))
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +659,7 @@ def _room_key(envelopes=None) -> str:
     """
     if not frozen.active():
         return "-"
-    env = "".join(f"{int(a)}:{len(v[1])}:{float(np.sum(v[1])):.6f};"
+    env = "".join(f"{int(a)}:{room_sig(v)};"
                   for a, v in sorted((envelopes or {}).items()))
     return f"{tuple(frozen.frozen_ids())}|{frozen.observer()}|{env}"
 
@@ -639,6 +704,14 @@ class ArmStage:
     conducted: bool = False            # its timeline came out of `idle.conduct`
     frozen_poses: dict[int, list[float]] = field(default_factory=dict)
     lift_ladder: tuple[float, ...] | None = None
+    # WHERE THE ARM WENT BEFORE THE STAGE STARTED, and what that cost.  `None`
+    # for every arm that did not pre-position -- a leader, or a follower whose
+    # entry pose was already outside its leaders' rooms.  `q_park` remains the
+    # pose the arm STARTED the stage at, which IS the tuck when there is one,
+    # because that is what `plan_bucket` planned the tour from; `q_tuck` says so
+    # explicitly and `clear_out_s` is the pre-move's seconds.
+    q_tuck: np.ndarray | None = None
+    clear_out_s: float = 0.0
     ink_clearance: list[float] = field(default_factory=list)
     ink_clear: dict = field(default_factory=dict)  # {piece.key: clearance_m}
     plan_s: float = 0.0
@@ -1491,7 +1564,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         trajectory_rooms=False, room_iterations=1,
         room_order="priority", order_search=6, residue=True,
         follower_ink_gate=PAIR_MARGIN, lf_max_drops=LF_MAX_DROPS, sub=2,
-        verbose=True, on_piece=None) -> StagedResult:
+        tuck=True, verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
     `lines` are polylines in paper metres, `pattern` a `traces.Pattern` (the
@@ -1621,7 +1694,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                     s, acts, roles[s], buckets, fl, pens, entry, h_inv, opts,
                     leg_cache, leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER,
                     follower_ink_gate, lf_max_drops, writing.PARK_FREEZE,
-                    verbose)
+                    tuck, verbose)
                 # A DEFERRAL GOES TO THE NEXT STAGE THIS ARM *LEADS*, and only
                 # then to the conductor.  A follower keeps what fits and the
                 # rest is its own remainder: in stage B the same arm has
@@ -1692,7 +1765,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                     rooms.append({int(a): str(v[2]) for a, v in rm.items()})
                     if verbose:
                         print(f"  stage {s} room pass {it + 1}: "
-                              + "  ".join(f"{a}={len(v[1])}sph" for a, v in
+                              + "  ".join(f"{a}={room_size(v)}" for a, v in
                                           sorted(rm.items())))
                     arms = _plan_stage(s, acts, buckets, fl, pens, parks,
                                        h_inv, opts, leg_cache, leg_cache_root,
@@ -1791,7 +1864,7 @@ def _sweep_in_order(s, order, buckets, fl, pens, parks, h_inv, opts, leg_cache,
         if verbose:
             print(f"  stage {s} priority {k}: arm {a} "
                   f"({len(st.accepted)} pieces, {st.ink_m:.3f} m) "
-                  f"-> {len(fixed[int(a)][1])} spheres"
+                  f"-> {room_size(fixed[int(a)])}"
                   + (f", avoiding {sorted(st.depends_on)}" if st.depends_on
                      else ", free"))
     return arms, order, fixed
@@ -1902,6 +1975,175 @@ def _residue_pass(s, arms, buckets, fl, pens, parks, h_inv, opts, leg_cache,
 #      shared clock -- not a static keep-out -- carries the safety argument.
 
 
+# ---------------------------------------------------------------------------
+# 5b-i.  THE FOLLOWER'S PRE-POSITION
+# ---------------------------------------------------------------------------
+# THE PARK IS INSIDE THE ROOM, and that is where stage A actually died.  Measured
+# 2026-09-14 on arm 31 (docs/V2_STAGED.md section 22.3): the follower's own start
+# pose reads -128.4 mm against its same-row leader's room before it has moved a
+# joint.  `paper.effective_static_floor` then clamps EVERY leg's static floor to
+# that negative number -- correctly, because a gate no endpoint can meet refuses
+# ink the arm can draw -- so the router is asked to fly out of a hole it is
+# already in, and the entry legs fail first.  No amount of routing fixes a start
+# pose; the arm has to be somewhere else before the leader starts.
+#
+# SO IT MOVES FIRST.  The follower flies park -> TUCK while the leader is still
+# parked -- a few seconds, gated against the parked fleet exactly like any other
+# leg -- and the leader starts after that.  The tuck is chosen OUTSIDE the
+# leader's whole trajectory room by the routing floor, which is a stronger claim
+# than "clear at each instant": it holds for the entire stage whatever the
+# leader is doing, so the follower may stand there for the whole tour and the
+# pair is separated by construction.  The cost is the clear-out's seconds on the
+# time to first motion, and it is reported.
+TUCK_HEIGHTS = (writing.LIFT_Z, 0.09, 0.12, 0.15, 0.20)
+TUCK_XY_PER_PIECE = 3        # ink points per piece offered as a tuck station
+TUCK_MARGIN = 0.010          # m ABOVE the routing floor a tuck must stand clear
+TUCK_MAX_S = 10.0            # s the clear-out may cost the time to first motion
+
+
+def _ink_xy(pieces, per=TUCK_XY_PER_PIECE):
+    """Paper points spread over a bucket's ink. -> [(x, y)].
+
+    The tuck wants to be near the arm's OWN ink -- it is a start line, not a
+    parking bay -- so the candidate stations are the ink itself: the ends of
+    each piece and a point or two along it.
+    """
+    out = []
+    for p in pieces:
+        P = np.asarray(p.pts, float).reshape(-1, 2)
+        if not len(P):
+            continue
+        idx = np.unique(np.linspace(0, len(P) - 1, max(2, int(per))).astype(int))
+        out += [(float(P[i, 0]), float(P[i, 1])) for i in idx]
+    return out
+
+
+def tuck_pose(spec, pieces, q_from, h_inv=H_INV_DEFAULT, pen_ext=None,
+              floor=None, heights=TUCK_HEIGHTS, margin=TUCK_MARGIN):
+    """Where a follower should stand while its leader draws. -> (q, info).
+
+    `(None, info)` when nothing clears.  THE ROOM MUST ALREADY BE INSTALLED:
+    this reads `paper.static_boxes` and `frozen.chain_clearance` through the
+    ordinary accessors, so it measures against exactly what the router will,
+    the leaders' exact rooms included.
+
+    The candidates are hovers over the arm's own ink at a ladder of heights
+    (`writing.hover_solve`, the same solver `paper._traverse` lifts with), plus
+    the pose the arm is already standing in -- because a follower whose park is
+    ALREADY outside the room should not move at all, and this is where that is
+    decided.  A candidate has to clear the whole installed room by the routing
+    floor plus `margin`, and the winner is the one whose pen tip is nearest the
+    ink it is about to draw.
+    """
+    fl_ = paper.FRAME_FLOOR if floor is None else float(floor)
+    need = fl_ + float(margin)
+    boxes = paper.static_boxes(spec)
+    xys = _ink_xy(pieces)
+    info = dict(need_mm=1000 * need, n_xy=len(xys), tried=0, kept=0,
+                park_mm=None, best_mm=None, moved=False)
+    q_from = np.asarray(q_from, float).reshape(7)
+    cen = (np.mean(np.asarray(xys, float), axis=0) if xys
+           else paper.tip_xy(q_from, spec, pen_ext, h_inv))
+
+    def score(q):
+        """(clears?, clearance, distance from the ink centroid)."""
+        q = np.asarray(q, float).reshape(7)
+        c = float(paper.chain_static(q[None], spec, pen_ext, h_inv, boxes)[0])
+        d = float(np.linalg.norm(paper.tip_xy(q, spec, pen_ext, h_inv) - cen))
+        return c, d
+
+    c0, d0 = score(q_from)
+    info["park_mm"] = 1000 * c0
+    best, best_key, best_c = None, None, None
+    if c0 >= need:
+        # ALREADY OUTSIDE.  Nothing to do, and nothing is charged for it.
+        info.update(tried=1, kept=1, best_mm=1000 * c0, moved=False)
+        return q_from, info
+    for z in heights:
+        for xy in xys:
+            q = writing.hover_solve(spec, q_from, xy, z=z, h_inv=h_inv,
+                                    pen_ext=pen_ext)
+            info["tried"] += 1
+            if q is None:
+                continue
+            c, d = score(q)
+            if c < need:
+                continue
+            info["kept"] += 1
+            key = (d, -c)
+            if best_key is None or key < best_key:
+                best, best_key, best_c = np.asarray(q, float).reshape(7), key, c
+    if best is not None:
+        info.update(best_mm=1000 * best_c, moved=True)
+    return best, info
+
+
+def splice_timeline(pre, main):
+    """Lay `main` down after `pre` on one clock. -> timeline dict.
+
+    `writing.arm_program` builds ONE pass from ONE start pose and there is no
+    other way in; a pre-move is therefore a second programme, and the two have
+    to become one object or nothing downstream sees the first.  That matters
+    for more than tidiness: `trajectory_room`, `active_pair_gap` and
+    `scene_check` all read the timeline, so a clear-out that is not in it is a
+    few seconds of six-arm motion that no gate ever looked at.
+
+    The junction sample is dropped rather than repeated -- `pre` ends at the
+    tuck and `main` starts at it, the same pose -- and every phase, ink chunk
+    and second of `main` is shifted by `pre`'s duration.  Monotonicity is
+    re-established the way `arm_program` establishes it in the first place.
+    """
+    if pre is None or float(pre.get("duration", 0.0)) <= 0.0:
+        return main
+    if main is None:
+        return pre
+    off = float(pre["duration"])
+    t = np.concatenate([np.asarray(pre["t"], float),
+                        np.asarray(main["t"], float)[1:] + off])
+    t = np.maximum.accumulate(t + 1e-9 * np.arange(len(t)))
+    out = dict(main)
+    out["t"] = t
+    for k in ("q", "seg", "u"):
+        out[k] = np.concatenate([np.asarray(pre[k]), np.asarray(main[k])[1:]])
+    out["phases"] = list(pre.get("phases", [])) + [
+        dict(p, t0=float(p["t0"]) + off, t1=float(p["t1"]) + off)
+        for p in main.get("phases", [])]
+    out["ink"] = list(pre.get("ink", [])) + [
+        (float(ti) + off, ch) for ti, ch in main.get("ink", [])]
+    out["lifts"] = list(pre.get("lifts", [])) + list(main.get("lifts", []))
+    out["paper_modes"] = (list(pre.get("paper_modes", []))
+                          + list(main.get("paper_modes", [])))
+    for k in ("transit_s", "taxi_s", "retreat_s", "aside_s", "draw_s",
+              "draw_len", "transit_len", "paper_vias", "fallbacks", "n_home"):
+        out[k] = pre.get(k, 0) + main.get(k, 0)
+    out["duration"] = float(t[-1])
+    out["dense_tip_err"] = max(float(pre.get("dense_tip_err", 0.0)),
+                               float(main.get("dense_tip_err", 0.0)))
+    return out
+
+
+def clear_out(spec, q_from, q_tuck, h_inv=H_INV_DEFAULT, pen_ext=None):
+    """The pre-move park -> tuck, as a certified timeline. -> dict | None.
+
+    `writing.arm_program`'s `aside` path, which is the one place in this repo
+    that lays a standalone routed move down on the real clock: it routes with
+    `paper.route` at the flying floor and raises rather than teleporting.  IT
+    IS PLANNED IN WHATEVER ROOM IS INSTALLED WHEN IT IS CALLED, and the caller
+    installs the fleet with every leader still PARKED -- which is true, because
+    this is the move that happens before any leader starts.
+    """
+    if float(np.max(np.abs(np.asarray(q_from, float).reshape(7)
+                           - np.asarray(q_tuck, float).reshape(7)))) <= 1e-9:
+        return None
+    try:
+        return writing.arm_program(spec, [], h_inv=h_inv, pen_ext=pen_ext,
+                                   q_start=np.asarray(q_from, float).reshape(7),
+                                   park=writing.PARK_FREEZE,
+                                   aside=np.asarray(q_tuck, float).reshape(7))
+    except writing.PaperRefused:
+        return None
+
+
 def role_order(roles: dict, actives, buckets, stage) -> tuple[int, ...]:
     """The order the six actives of a main stage choose their paths in.
 
@@ -1979,7 +2221,7 @@ def _fly_or_defer(s, a, pieces, fl, pens, parks, h_inv, opts, leg_cache,
 
 def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
               leg_cache, leg_cache_root, on_piece, dt, cluster, gate,
-              max_drops, park_policy, verbose):
+              max_drops, park_policy, tuck, verbose):
     """One six-arm main stage of the leader/follower pattern.
 
     -> (arms, order, rooms, {arm: [Piece] deferred}).
@@ -1994,8 +2236,40 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
     fixed: dict[int, tuple] = {}
     arms: dict[int, ArmStage] = {}
     deferred: dict[int, list] = {}
+    start = {int(a): np.asarray(q, float).reshape(7) for a, q in parks.items()}
     for k, a in enumerate(order):
         role = str(roles.get(int(a), "active"))
+        pieces = list(buckets.get((s, int(a)), []))
+        pre = None
+        # THE PRE-POSITION, AND ONLY FOR A FOLLOWER WITH A ROOM TO GET OUT OF.
+        # The clear-out is planned with the LEADERS STILL PARKED -- which is
+        # when it happens -- so the room it is routed in is the entry fleet and
+        # no trajectory rooms at all; the tuck it flies to is then chosen in
+        # the room WITH the leaders' trajectories in it, because that is the
+        # room the follower has to stand in for the rest of the stage.
+        if role == "follower" and fixed and pieces and tuck:
+            freeze_stage(int(a), start, None, fl, pens, h_inv,
+                         leg_cache, leg_cache_root)
+            q_pre = start[int(a)].copy()
+            freeze_stage(int(a), start, dict(fixed), fl, pens, h_inv,
+                         leg_cache, leg_cache_root)
+            q_t, info = tuck_pose(fl[int(a)], pieces, q_pre, h_inv,
+                                  pens.get(int(a)))
+            if q_t is not None and info["moved"]:
+                freeze_stage(int(a), start, None, fl, pens, h_inv,
+                             leg_cache, leg_cache_root)
+                pre = clear_out(fl[int(a)], q_pre, q_t, h_inv, pens.get(int(a)))
+                if pre is not None and float(pre["duration"]) <= TUCK_MAX_S:
+                    start[int(a)] = np.asarray(q_t, float).reshape(7)
+                else:
+                    pre = None
+            if verbose:
+                print(f"  stage {s} arm {a} [follower] tuck: park "
+                      f"{info['park_mm']:+.1f} mm, {info['kept']}/{info['tried']}"
+                      f" stations clear >= {info['need_mm']:.0f} mm"
+                      + (f" -> {info['best_mm']:+.1f} mm, clear-out "
+                         f"{pre['duration']:.2f} s" if pre is not None
+                         else " -> none (staying put)"))
         # THE FOLLOWER IS THE ONE THAT YIELDS, so the ink gate is ITS gate.  A
         # leader's ink is measured against the rooms of the leaders before it
         # and reported (that is the pre-existing reading, docs/V2_STAGED.md
@@ -2003,12 +2277,20 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
         # knock out lines in its cell that were safe to draw" is a per-piece
         # instruction and this is the per-piece test.
         g = gate if (role == "follower" and fixed) else None
-        st, drop = _fly_or_defer(s, a, list(buckets.get((s, int(a)), [])),
-                                 fl, pens, parks, h_inv, opts, leg_cache,
+        st, drop = _fly_or_defer(s, a, pieces,
+                                 fl, pens, start, h_inv, opts, leg_cache,
                                  leg_cache_root, on_piece,
                                  (dict(fixed) if fixed else None), g,
                                  max_drops, park_policy, verbose)
         st.role, st.priority = role, int(k)
+        # THE CLEAR-OUT IS PART OF THE TRAJECTORY, not a prologue to it.  Spliced
+        # in here, it reaches `trajectory_room` (so the next arm avoids it),
+        # `active_pair_gap` and `scene_check` (so it is certified like every
+        # other second of motion) and the programme (so it is flown).
+        if pre is not None:
+            st.q_tuck = start[int(a)].copy()
+            st.timeline = splice_timeline(pre, st.timeline)
+            st.clear_out_s = float(pre["duration"])
         arms[int(a)] = st
         if drop:
             deferred[int(a)] = list(drop)
@@ -2018,7 +2300,7 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
                   f"({len(st.accepted)} pieces, {st.ink_m:.3f} m"
                   + (f", {sum(p.length_m for p in drop):.3f} m deferred"
                      if drop else "")
-                  + f") -> {len(fixed[int(a)][1])} spheres"
+                  + f") -> {room_size(fixed[int(a)])}"
                   + (f", avoiding {sorted(st.depends_on)}" if st.depends_on
                      else ", free")
                   + ("" if st.timeline is not None else "  [NO TIMELINE]"))
@@ -2374,6 +2656,9 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
                 # reads for "where this arm stands in this stage".
                 arm=int(a), q_park=[float(x) for x in np.asarray(st.q_park).ravel()],
                 q_hold=[float(x) for x in np.asarray(st.q_end).ravel()],
+                q_tuck=(None if st.q_tuck is None else
+                        [float(x) for x in np.asarray(st.q_tuck).ravel()]),
+                clear_out_s=float(st.clear_out_s),
                 frozen_partners=[int(x) for x in st.frozen_partners],
                 room_kind=str(st.room_kind),
                 residue=bool(st.residue),
@@ -2722,6 +3007,13 @@ def main(argv=None):
     ap.add_argument("--route-jobs", type=int, default=6,
                     help="processes the pen-up route screen may fork "
                          "(sequence.ROUTE_JOBS; 0 = the machine decides)")
+    ap.add_argument("--no-tuck", action="store_true",
+                    help="leader_follower only: do NOT let a follower "
+                         "pre-position before its leaders start.  The shipped "
+                         "park can be deep inside the same-row leader's room "
+                         "(-128.4 mm on arm 31, measured), which clamps every "
+                         "leg's static floor negative before routing begins; "
+                         "this turns the clear-out off to reproduce that.")
     ap.add_argument("--json", default=None)
     ap.add_argument("--programme", default=None)
     a = ap.parse_args(argv)
@@ -2758,7 +3050,8 @@ def main(argv=None):
               room_iterations=a.room_iterations,
               room_order=a.room_order, order_search=a.order_search,
               residue=not a.no_residue, sub=2,
-              follower_ink_gate=(None if a.no_follower_gate else PAIR_MARGIN))
+              follower_ink_gate=(None if a.no_follower_gate else PAIR_MARGIN),
+              tuck=not a.no_tuck)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))

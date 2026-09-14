@@ -382,6 +382,7 @@ def _dyn_state():
     not the one it was opened under.
     """
     return (bool(frozen.active()), tuple(sorted(frozen.frozen_ids())),
+            tuple(sorted(frozen.room_kinds().items())),
             bool(envelope.active()))
 
 
@@ -1839,13 +1840,25 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     # follows the diagnosis: metal-only, skirt first.
     metal_only = bool(cz >= chain_floor - EPS and tz >= tip_floor - EPS)
 
+    # WHAT THE GO-AROUND IS ALLOWED TO SEE.  `_skirt` reads box FOOTPRINTS to
+    # decide which way round an obstacle to walk, and a frozen partner's
+    # trajectory room is not a box — so with a leader in the air the tier had
+    # nothing to walk around and every crossing the leader blocked fell through
+    # to the C-space tier with no hint about where the obstacle was.  The
+    # room's own coarse cells are added HERE and nowhere else: they generate
+    # candidate detours and they gate nothing.  `legs_ok` below still judges
+    # every candidate against the exact room through `frozen.chain_clearance`,
+    # so a pseudo-box that is too fat or too thin costs a detour that is tried
+    # and refused, never a certificate.
+    skirt_boxes = list(boxes) + frozen.room_boxes()
+
     def skirts(base):
         """The sidestep family. -> (result, tried) with result None if none fit."""
         t = base
-        if not boxes:
+        if not skirt_boxes:
             return None, t
         for z in SKIRT_HEIGHTS:
-            for wp in _skirt(spec, xy0, xy1, boxes):
+            for wp in _skirt(spec, xy0, xy1, skirt_boxes):
                 seq = _walk(spec, q0, [xy0] + wp + [xy1], z, pen_ext, h_inv,
                             mm, SKIRT_STEP, lift)
                 if not seq:
