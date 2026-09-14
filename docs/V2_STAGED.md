@@ -1681,6 +1681,9 @@ seam bar in, CSAIL h = 0.970:
 | poses clear, per cut piece | 49.3 % | 44.3 / 38.9 / 46.3 % |
 | hovers refused at the new ends (`PAIR_MARGIN` bar) | 0 | 0 |
 | **follower ink flown** | **0.000 m** | **0.000 m** |
+| stage A pieces / ink / busiest arm | 15 / 2.061 m / 95.9 s | 17 / 4.595 m / 128.6 s |
+| stage A `active_pair_gap` / `solo_check` | +65.6 / +51.7 mm | **+78.7** / +51.2 mm |
+| stage A verdict | **PASS**, 3/3 leader buckets | **PASS**, 3/3 leader buckets |
 
 The parts are produced and then **dropped by the leg loop**: arm 31's bucket
 produces no timeline with any subset of them, so `_fly_or_defer` sheds pieces
