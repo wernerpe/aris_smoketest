@@ -2377,32 +2377,14 @@ rides in `paper.cache_signature()`, so a warm store cannot serve pre-change
 routes, and `writing.HOVER_NEAR` is in `lifted_or_lower`'s memo key for the same
 reason. The re-run below is therefore COLD on every route.
 
-### The re-run: stage A of lf2 s150, with all three fixes
+### The first re-run said FAIL, and it was right to
 
-`out/staged_csail_h097_lf5_s150.{json,log,_program.json}`, same lines, same
-pattern, same split, `--route-jobs 4`, and COLD on every route because
-`ROUTE_REV` moved:
-
-| stage A | lf2 s150 (before) | **lf5 s150 (after)** |
-|---|---|---|
-| **stage duration** | **95.86 s** | **55.4 s — 0.58×, 42 % faster** |
-| pieces flown | 15 | **16** |
-| ink drawn | 2.0613 m | **2.4162 m (+17.2 %)** |
-| arms with a timeline | 3 of 6 | **4 of 6** |
-| arm 71 (leader) | 13 pieces, 1.838 m | 13 pieces, 1.838 m — **unchanged** |
-| arm 31 (follower) | 0 pieces, 0.000 m | **1 piece, 0.355 m** |
-| sequencer's own transit cap, arm 71 | 19190 | **11100 (−42 %)** |
-| `active_pair` | +65.6 mm | **+138.6 mm** |
-| `solo` (min over arms) | +51.7 mm | **+167.9 mm** |
-| stage verdict | PASS | **FAIL** |
-
-**The ink is not unchanged and that is the point: it went UP.** Arm 71 draws
-exactly the same thirteen pieces in the same 1.838 m; the extra 0.355 m is arm
-31, a follower whose bucket the baseline could not fly at all and which now cuts
-at the room boundary into four clear parts and flies one of them. Both
-clearance readings improved by more than a factor of two, which is what a hover
-chosen near the ink and a route that does not climb to the park pose look like
-from the checker's side.
+`out/staged_csail_h097_lf5_s150_v1.*` — the three fixes above, nothing else.
+Stage A came out at **55.41 s against 95.86**, over **more** ink (16 pieces,
+2.4165 m, because arm 31's follower bucket cut at the room boundary and flew
+0.355 m the baseline could not), with `active_pair` +138.6 mm and `solo`
++167.9 mm against +65.6 and +51.7. **And the stage verdict was FAIL.** That run
+is kept, because the thing it was refused on is the fourth bug.
 
 **THE STAGE VERDICT WAS FAIL, AND `frozen_failed` IS NOT WHAT ITS NAME
 SUGGESTS.** Re-deriving arm 71's `solo_check` off the shipped programme
@@ -2464,34 +2446,56 @@ cannot lose a hover** (the fallback is the identical old scan) and **it cannot
 admit one** (both asks run the same `ok`). `ROUTE_REV` goes to 3 and
 `HOVER_HOLD_MARGIN` joins `lifted_or_lower`'s memo key.
 
-### The pen-up anatomy, before and after, off the two programmes' own trajectories
+### The diagnosis held, and the certified re-run
 
-`scripts/penup_anatomy.py` on each, stage A:
+`out/staged_csail_h097_lf5_s150.{json,log,_program.json}` — the three fixes plus
+`HOVER_HOLD_MARGIN`, `--stages 0`, `--route-jobs 5`, cold on every route:
 
-| st | arm | pieces | ink m | stage s | pen-up s | flip legs | tall legs | plan s |
-|---|---|---|---|---|---|---|---|---|
-| A | 2 | 1 | 0.153 | 11.08 → **9.90** | 0.35 → 0.35 | 0 → 0 | 0 → 0 | 0.8 → 0.8 |
-| A | 13 | 1 | 0.070 | 4.13 → **4.13** | 0.25 → 0.25 | 0 → 0 | 0 → 0 | 1.1 → 0.6 |
-| A | 31 | 0 → **1** | 0.000 → **0.355** | — → **8.37** | — → 0.35 | — → 0 | — → 0 | 0.0 → 0.9 |
-| **A** | **71** | **13** | **1.838** | **95.86 → 55.41** | **70.54 → 22.04** | **4 → 0** | **5 → 0** | **7.3 → 6.6** |
-| A | 17, 97 | 0 | 0.000 | — | — | — | — | — |
+| stage A | lf2 s150 (before) | **lf5 s150 (after)** |
+|---|---|---|
+| **stage duration** | **95.86 s** | **55.97 s — 0.58×, 41.6 % faster** |
+| **stage verdict** | PASS | **PASS** (all six arms' `solo` ok) |
+| pieces, ink | 15, 2.0613 m | **15, 2.0613 m — identical** |
+| arm 71 | 13 pieces, 1.838 m | **13 pieces, 1.838 m — identical** |
+| **arm 71 pen-up** | **70.54 s (73.6 %)** | **27.04 s (48.3 %) — −61.7 %** |
+| arm 71 flip legs / tall legs | 4 / 5 | **2 / 1** |
+| arm 71 planning wall | 7.3 s | **21.3 s (2.9×)** |
+| arm 2 stage / planning | 11.08 s / 0.8 s | 13.06 s / 4.9 s |
+| arm 13 stage / planning | 4.13 s / 1.1 s | 4.13 s / 0.8 s |
+| `active_pair` | +65.6 mm | **+196.7 mm (3.0×)** |
+| `solo` min over arms | +51.7 mm | **+168.7 mm (3.3×)** |
 
-**Arm 71's pen-up falls 70.54 → 22.04 s, −68.8 %, over the identical thirteen
-pieces and the identical 1.838 m of ink**, and every one of its legs now
-classifies honest: the four flips and the five tall/wandering legs are gone, not
-reclassified. The stage falls 95.86 → 55.41 s, which is 40.45 s saved against
-48.50 s of pen-up removed — the rest is the taxi factor and the hovers. **Planning
-got slightly CHEAPER, not dearer** (7.3 → 6.6 s for arm 71): the menus and the
-Viterbi cost about a third of a second a piece, and the sequencer's route screen
-— which is where arm 71's `seq_s` actually goes — has fewer refused crossings to
-route once the hovers are near the ink.
+**The ink is identical and the time is 0.58×.** The 0.355 m of follower ink the
+FAIL'ing run picked up does NOT survive the hold margin — arm 31's bucket is
+back to not flying — so the honest statement of this change is **the same
+drawing, 39.9 s sooner, with every clearance reading three times better**, and
+not the coverage win the intermediate run appeared to offer.
 
-**The verdict re-run is in flight and is not in this section.** Stage A was
-relaunched with the margin fix (`ROUTE_REV` 3, so cold on every route) and had
-planned its three leaders when this work's clock ran out: **arm 71's transit cap
-reads 11210 against 11100 before the fix and 19190 in the baseline**, so asking
-for the hold margin costs about 1 % of the transit budget and gives back none of
-the 42 %. The stage verdict, duration and arm 71 pen-up under the fix are owed,
-from `out/staged_csail_h097_lf5_s150.*`. `out/staged_csail_h097_lf5_s150_v1.*`
-is the FAIL'ing run diagnosed above and is kept for the comparison; the tables
-in this section are that run's numbers.
+**THE TALL LEGS ARE GONE COMPLETELY.** Every one of arm 71's pen-up legs now
+reads `ztrav = 0.120 m` and `zmax = 0.060 m` — the honest lift-and-lower and
+nothing more — against four legs at 0.64–0.79 m of vertical travel and 0.32–0.42 m
+of peak height before. The ladder and the shortcutter did their whole job.
+
+**WHAT IS LEFT, NAMED.** Three legs carry almost all of the remaining 27.04 s:
+
+```
+leg   s      dq     lift  travel  lower   hop     kind
+  2   4.54   14.38  2.39  10.73   1.26    0.192   flip  -- piece-to-piece sheet
+ 10   4.57   15.11  1.88  11.23   2.00    0.275   flip  -- piece-to-piece sheet
+ 12   4.10   15.12   --     --     --     0.000   flip  -- the go-home fold
+```
+
+The hover half of the flip cost is fully paid; what remains is the **piece-to-
+piece** half on two crossings, and the **go-home** fold at the end. The chain DP
+has fewer certified alternatives to work with now that the hold margin narrows
+the fiber, which is the honest price of the fix. The go-home leg is a different
+problem again — it is the park pose, not a sheet choice.
+
+**PLANNING GOT 2.9× DEARER FOR ARM 71 (7.3 → 21.3 s), AND THAT IS NOT THE
+MENUS.** The chain DP costs ~0.3 s a piece, or ~4 s for thirteen. The rest is
+`HOVER_HOLD_MARGIN`'s fallback scan (a second 500-solution fiber pass wherever
+nothing on the fiber keeps 0.15 rad) and `HOME_AFTER_LADDER` making a refused
+crossing walk all seven rungs before reaching the depot via. Twenty-one seconds
+of planning to save forty of stage time is a good trade for a fixed programme
+and a bad one for an interactive loop; if it needs to come down, the fallback
+scan is the place to look first.

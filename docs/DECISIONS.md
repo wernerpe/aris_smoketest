@@ -76,23 +76,12 @@ tier's output and nothing else. **`paper.ROUTE_REV` rides in
 `paper.cache_signature()`** and `HOVER_NEAR` rides in `lifted_or_lower`'s memo
 key, so no warm store can serve a pre-change route.
 
-**THE RE-RUN, STAGE A OF lf2 s150, ALL THREE FIXES TOGETHER**
-(`out/staged_csail_h097_lf5_s150.{json,log,_program.json}`, same lines, same
-pattern, same split, `--route-jobs 4`, COLD on every route because `ROUTE_REV`
-moved):
-
-| stage A | before (lf2) | **after (lf5)** |
-|---|---|---|
-| **arm 71 pen-up** | **70.54 s** | **22.04 s — −68.8 %** |
-| arm 71 flip legs / tall legs | 4 / 5 | **0 / 0** |
-| arm 71 pieces, ink | 13, 1.838 m | **13, 1.838 m — identical** |
-| arm 71 planning wall | 7.3 s | **6.6 s** |
-| **stage duration** | **95.86 s** | **55.41 s — 0.58×** |
-| stage pieces, ink | 15, 2.0613 m | **16, 2.4165 m (+17.2 %)** |
-| arms with a timeline | 3 of 6 | **4 of 6** (arm 31 flies 0.355 m it could not) |
-| `active_pair` | +65.6 mm | **+138.6 mm** |
-| `solo` min over arms | +51.7 mm | **+167.9 mm** |
-| stage verdict | PASS | **FAIL — `frozen`, and only `frozen`** |
+**THE FIRST RE-RUN SAID FAIL, AND IT WAS RIGHT TO.**
+`out/staged_csail_h097_lf5_s150_v1.*`, the three fixes above and nothing else:
+stage A **55.41 s against 95.86**, over MORE ink (16 pieces / 2.4165 m, arm 31's
+follower bucket cut at the room boundary and flew 0.355 m the baseline could
+not), `active_pair` +138.6 mm and `solo` +167.9 mm against +65.6 and +51.7 --
+and **FAIL**.
 
 **THE FAIL WAS A FOURTH BUG, AND `frozen_failed` IS NOT WHAT ITS NAME
 SUGGESTS.** `scene_check`'s `frozen` term is NOT `frozen.partner_clearance` and
@@ -130,13 +119,49 @@ the 42 %. The stage verdict, duration and arm 71 pen-up under the fix are owed,
 from `out/staged_csail_h097_lf5_s150.*`; `out/staged_csail_h097_lf5_s150_v1.*`
 is the FAIL'ing run this entry diagnoses and is kept for the comparison.
 
+**THE CERTIFIED RE-RUN** (`out/staged_csail_h097_lf5_s150.*`, all four fixes,
+`--stages 0 --route-jobs 5`, cold on every route):
+
+| stage A | before (lf2) | **after (lf5)** |
+|---|---|---|
+| **stage duration** | **95.86 s** | **55.97 s — 0.58×** |
+| **verdict** | PASS | **PASS**, all six arms' `solo` ok |
+| pieces, ink | 15, 2.0613 m | **identical** |
+| arm 71 pieces, ink | 13, 1.838 m | **identical** |
+| **arm 71 pen-up** | **70.54 s (73.6 %)** | **27.04 s (48.3 %) — −61.7 %** |
+| arm 71 flip / tall legs | 4 / 5 | **2 / 1** |
+| arm 71 planning | 7.3 s | **21.3 s (2.9×)** |
+| `active_pair` / `solo` | +65.6 / +51.7 mm | **+196.7 / +168.7 mm** |
+
+**THE SAME DRAWING, 39.9 s SOONER, WITH EVERY CLEARANCE READING THREE TIMES
+BETTER.** The 0.355 m of follower ink the FAIL'ing run picked up does NOT
+survive the hold margin -- arm 31's bucket is back to not flying -- so the
+coverage win the intermediate run appeared to offer is withdrawn.
+
+**THE TALL LEGS ARE GONE COMPLETELY**: every one of arm 71's pen-up legs now
+reads `ztrav = 0.120 m`, `zmax = 0.060 m` -- the honest lift-and-lower -- against
+four legs at 0.64-0.79 m of vertical travel and 0.32-0.42 m of peak height.
+**What remains is named**: legs 2 and 10 (10.7 and 11.2 rad of TRAVEL, the
+piece-to-piece half the chain DP could not close now that the hold margin
+narrows the fiber) and leg 12 (15.1 rad, the go-home fold, which is the park
+pose and not a sheet choice). Three legs are 12.7 s of the remaining 27.0.
+
+**PLANNING GOT 2.9x DEARER FOR ARM 71 AND IT IS NOT THE MENUS** (~0.3 s a piece,
+~4 s for thirteen). It is `HOVER_HOLD_MARGIN`'s fallback fiber pass and
+`HOME_AFTER_LADDER` walking all seven rungs before the depot via. Twenty-one
+seconds of planning for forty of stage time is a good trade for a fixed
+programme and a bad one for an interactive loop.
+
 **WHAT IS NOT CLAIMED.** The classifier's thresholds are calibrated on this
 programme's honest legs and are deliberately conservative — arm 71's legs 4 and
 5 come out "honest" at `flip_rad` 3.0 and 0.1, under the 6 rad floor, where a
-hand read calls them flips. The three fixes are not separable in the re-run:
-they were measured together. And `HOME_AFTER_LADDER` makes a refused crossing
-walk the whole ladder before reaching the depot, which is a routing cost paid on
-exactly the crossings the depot used to answer cheaply.
+hand read calls them flips. **The four fixes are not separable in the re-run:
+they were measured together**, and the one component A/B that exists is the
+hover's (48.39 -> 16.76 rad of lift+lower on arm 71's 26 span ends). The
+41.6 % is stage A of one programme on one rig -- stages B and C are untouched
+and unmeasured here, and the `--stages 0,1` run that would have priced stage B
+was killed at eleven minutes to get stage A inside the clock. And the whole
+result rests on one run per configuration; nothing here is a distribution.
 
 ## THE ROW CONDUCTORS COMPOSE — AND THE ROOM WAS BEING THROWN AWAY (2026-09-14, SIXTH)
 
