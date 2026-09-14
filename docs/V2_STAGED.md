@@ -1666,3 +1666,49 @@ believes neither is not a build. The rule kept here, stated once:
   a conducted stage's whole timeline. Those are what `StageResult.ok` is, and
   they are computed with the planner's room thrown away (`_check_stage` calls
   `thaw()` first).
+
+### 24.4 What stage A measures, and what is still running
+
+**The cut fires, and on stage A it is not enough.** Both settings, exact rooms,
+seam bar in, CSAIL h = 0.970:
+
+| stage A, arm 31 (the only follower with ink there) | split +0.15 | whole bag |
+|---|---|---|
+| pieces offered | 3 (2.142 m) | 8 (5.026 m) |
+| refused at the ink gate, then CUT | 1 | **3** |
+| certified clear stretches kept by the cut | **1 (0.157 m)** | **5 (0.468 m)** |
+| …of the parents' ink | 0.328 m | 1.119 m |
+| poses clear, per cut piece | 49.3 % | 44.3 / 38.9 / 46.3 % |
+| hovers refused at the new ends (`PAIR_MARGIN` bar) | 0 | 0 |
+| **follower ink flown** | **0.000 m** | **0.000 m** |
+
+The parts are produced and then **dropped by the leg loop**: arm 31's bucket
+produces no timeline with any subset of them, so `_fly_or_defer` sheds pieces
+until the bucket is empty and defers the lot. That is the §22 leg problem
+unchanged, and §24.1's +53.7 mm says why it is not a tuning matter — every pose
+arm 31 can hold near its own ink stands 53.7 mm from leader 71's exact room,
+over the 50 mm pose gate and under the 63 mm routing floor, so `paper.route`
+has a knife edge and no slack to route in. **The cut removed the ink gate as
+stage A's binding constraint and exposed the one underneath it.**
+
+Stage B is where the cut should pay, because that is where a follower's bucket
+already flies (62.6 % of its offered ink in §23.4b) and where a piece is refused
+by the gate rather than stranded by its legs.
+
+**STILL RUNNING WHEN THIS BOX CLOSED.** Both `lf3` runs were in the
+`sequence.cost_matrix` route screen — stage B for split +0.15, stage A's drop
+loop for the whole bag — which is the same O(n²) wall §19 and §22 flagged, and
+which the cut makes *worse* per bucket because it adds pieces. Neither reached
+stage C or D, so the per-row conductors are measured here only on the
+partition (§24.2) and on a synthetic smoke run (three groups, 0.4 / 7.8 / 9.9 s
+of wall in parallel, merged whole-timeline check binding on the same pair the
+worst group did). **Pick-up:** `bash scripts/lf3_run.sh` re-runs both to
+`out/staged_csail_h097_lf3_{s150,whole}.{json,log,_program.json}`; the stage
+table and the makespan comparison against v19's 209.9 s and lf-whole's 273.3 s
+follow from those JSONs.
+
+**The 1 000-stroke model is NOT recalibrated**, for the same reason as §23.6 and
+one more: stages A and B do not yet carry the majority of the ink (stage A's
+follower still flies none), and the measured stage-C cost per metre this pass
+was meant to replace §22's 3 075 s / 11.5 m with is exactly the number the runs
+did not reach.
