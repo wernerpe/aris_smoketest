@@ -48,6 +48,7 @@ import datetime as _dt
 import json
 import os
 import sys
+import textwrap
 
 import numpy as np
 import matplotlib
@@ -99,6 +100,27 @@ LEG_BOTTOM = SM.LEG_BOTTOM                        # -27.38
 LEG_LEN = round(GRID_U - LEG_BOTTOM, 2)           # 1651.00
 FLOOR_Z, TABLE_TOP_Z = SM.FLOOR_Z, SM.TABLE_TOP_Z  # -636.68 / -2.00
 PAPER_ABOVE_FLOOR = round(-FLOOR_Z, 2)            # 636.68
+
+# --- the seam frame, where the two half-cages butt -------------------------
+# `system_model` section 3b, added 2026-09-14: the real rig is TWO copies of
+# the original three-arm half-cage (218.44 x 208.28 cm) butted along the
+# paper's long axis, and the steel that holds the two butted END RAILS up was
+# missing from every sheet this script has ever issued.  Read at run time like
+# everything else here — the eight boxes come straight out of
+# `system_model.seam_bodies()` and NOT ONE coordinate is restated below.
+SEAM_Y = SM.SEAM_Y                            # 1815.32, and it IS ROW_Y[1]
+HALF_CAGE_L = SM.HALF_CAGE_L                  # 2082.80, one half-cage in y
+SEAM_RAIL_RESIDUAL = SM.SEAM_RAIL_RESIDUAL_MM  # 0.78 — the whole argument
+SEAM_OVERLAP = SM.SEAM_OVERLAP_MM             # 153.96 = one doubled end frame
+SEAM_BRACE = tuple(float(v) for v in SM.SEAM_BRACE)   # 203.2 x 38.1 x 203.2
+SEAM_BRACE_RUN = SM.SEAM_BRACE_RUN            # 203.2 inboard off the post
+SEAM_BRACE_H = SM.SEAM_BRACE_H                # 203.2 of it under the rail
+
+# THE FLAG.  Verbatim, everywhere the seam frame appears — plan, both
+# elevations, the title-block banner, the cut list and the open items.  The
+# seam frame is REPORTED steel (Pete Werner, 2026-09-14) that nobody has
+# photographed; it must never read as surveyed.
+SEAM_FLAG = "CONFIRM ON HARDWARE — photo requested"
 
 # --- the arm-31 mount, lifted from the drawing -----------------------------
 POST_PITCH_X = SM.POST_PITCH_X                    # 317.6
@@ -172,6 +194,10 @@ CEIL_CODE = mounts.MOUNTS.ceiling_z * MM          # 2340.0, the buggy datum
 
 REV_NOTE = ("REV A — SUPERSEDES THE 1435 / 1525 DROP POSTS of "
             "out/ceiling_8020_layout.*")
+# the banner line the seam frame adds to BOTH sheets' title blocks
+SEAM_BANNER = (f"  SEAM FRAME items I + J — the two half-cages butt at "
+               f"y = {SEAM_Y:.2f} and the steel that holds their two butted "
+               f"end rails up is NEW ON THIS REVISION:  {SEAM_FLAG}.")
 TODAY = _dt.date.today().isoformat()
 
 
@@ -183,6 +209,70 @@ def post_length(h):
 def zl(h):
     """The z ladder at `h`, straight out of `system_model.z_ladder`."""
     return SM.z_ladder(float(h))
+
+
+# ---------------------------------------------------------------------------
+# THE SEAM FRAME — enumerated from the model, never from a literal
+# ---------------------------------------------------------------------------
+def seam_members():
+    """Every seam member -> [Body], straight out of `system_model`."""
+    return list(SM.seam_bodies())
+
+
+def seam_posts():
+    """The four half-cage end-frame corner posts -> [Body]."""
+    return [b for b in seam_members() if b.name.startswith("seam_post")]
+
+
+def seam_braces_are_bodies():
+    """True if the model carries the corner braces as collision bodies."""
+    return any(b.name.startswith("seam_brace") for b in seam_members())
+
+
+def seam_braces():
+    """The four corner brace clusters -> [(lo, hi)] boxes in mm.
+
+    `system_model.seam_bodies()` deliberately does NOT carry these as bodies:
+    a brace is bolted to its post's FACES, so any axis-aligned box that
+    contains the brace also contains the post, and the model's own
+    interpenetration test rightly refuses that geometry (see the comment at
+    the end of `system_model.seam_bodies`).  They are still steel somebody has
+    to buy and hang, so this sheet draws them — built from the model's own
+    post boxes and `SEAM_BRACE_RUN` / `SEAM_BRACE_H`, never from a literal,
+    and drawn as a dashed outline that says it is not in the collision model.
+    If a later model does carry them as bodies, those are used instead.
+    """
+    named = [b for b in seam_members() if b.name.startswith("seam_brace")]
+    if named:
+        return [(b.lo, b.hi) for b in named]
+    out = []
+    for b in seam_posts():
+        # the brace runs inboard in x, toward the canvas, and inboard in y,
+        # into the half-cage its own post belongs to — the south post band is
+        # the NORTH half-cage's end frame, so its brace runs north
+        west = b.lo[0] < 0.5 * (FR_X0 + FR_X1)
+        south = b.lo[1] < SEAM_Y
+        out.append((
+            (b.lo[0] if west else b.lo[0] - SEAM_BRACE_RUN,
+             b.lo[1] if south else b.lo[1] - SEAM_BRACE_RUN,
+             GRID_U - SEAM_BRACE_H),
+            (b.hi[0] + SEAM_BRACE_RUN if west else b.hi[0],
+             b.hi[1] + SEAM_BRACE_RUN if south else b.hi[1],
+             GRID_U)))
+    return out
+
+
+def seam_post_length():
+    """Seam corner-post cut length (mm), measured off the model's own box."""
+    ps = seam_posts()
+    if not ps:
+        return round(GRID_U - LEG_BOTTOM, 2)
+    return round(ps[0].hi[2] - ps[0].lo[2], 2)
+
+
+def seam_clear_span():
+    """Clear runway span (mm) from a corner leg to the seam post beside it."""
+    return round((SEAM_Y - P) - (FR_Y0 + P), 2)
 
 
 def certified_area(h):
@@ -242,6 +332,27 @@ def cut_list(h):
          f"transverse pair and only {SM.GUSSET_GAP} exists; rotated, the "
          f"pair clears by {SM.GUSSET_PAIR_CLEAR}. No part number: see open "
          "item 4."),
+        ("I", "seam corner post", '3" x 3" T-slot', seam_post_length(),
+         len(seam_posts()),
+         f"{SEAM_FLAG}. The half-cage end-frame corner posts, tabletop "
+         f"({LEG_BOTTOM}) to runway underside ({GRID_U}), standing in the same "
+         f"x bands as the corner legs but at the seam, y = {SEAM_Y:.2f}. TWO "
+         f"PER SIDE, {P} apart in y — one per half-cage. These are the "
+         f"mid-span legs open item 3 said were almost certainly required; they "
+         f"exist, and they are the original drawing's own post_BL / post_BR. "
+         f"Same cut as item E."),
+        ("J", "seam corner brace", '8" x 8" x 1.5" gusset', SEAM_BRACE[0],
+         2 * len(seam_braces()),
+         f"{SEAM_FLAG}. {SEAM_BRACE[0]} x {SEAM_BRACE[2]} x {SEAM_BRACE[1]}, "
+         f"the drawing's brace_BL / brace_BR — two plates on each seam post's "
+         f"two INBOARD faces, running {SEAM_BRACE_RUN} into that post's OWN "
+         f"half-cage and {SEAM_BRACE_H} down from the runway underside. Four "
+         f"clusters, eight plates. Same envelope as item F and no part number "
+         f"either. DRAWN DASHED — these are NOT in the collision model: a box "
+         "that contains a face-bolted brace also contains its post, and "
+         "system_model refuses geometry that interpenetrates. Nothing rides "
+         f"on that, they sit {GRID_U - SEAM_BRACE_H - H_DESIGN:.0f} mm above "
+         f"the mount plane."),
     ]
 
 
@@ -261,6 +372,16 @@ def plate_list():
          "ENVELOPE ONLY — the drawing carries no part number. NEEDS A HOLE "
          "for the base cable — open item 2."),
     ]
+
+
+def _plate_size(item):
+    """Three-figure size string for a cut-list row that is NOT cut to length.
+
+    Items F and J are bought plates, so the table shows an envelope, not a
+    length.  Both come from the package; neither is a literal here.
+    """
+    box = {"J": SEAM_BRACE}.get(item, GUSSET)
+    return f"{box[0]} x {box[2]} x {box[1]}"
 
 
 def extrusion_m(h):
@@ -299,12 +420,16 @@ OPEN_ITEMS = [
      f"How many legs does a {SM.FR_L / 1000:.2f} m frame need, and where?  "
      f"Correcting the ceiling datum turned this cage from something hanging "
      f"off a room ceiling into something standing on the floor.  Four corner "
-     f"legs at {LEG_LEN} mm are drawn; the unsupported runway spans are "
-     f"{ROW_SP:.0f} mm.",
+     f"legs at {LEG_LEN} mm are drawn.  PARTLY ANSWERED 2026-09-14: the seam "
+     f"frame (item I, open item 7) puts FOUR more posts at the paper's "
+     f"mid-length, so the clear runway span is now "
+     f"{seam_clear_span():.2f} mm corner-to-seam, not the full frame — but "
+     f"those posts are REPORTED, NOT PHOTOGRAPHED, and nothing else has "
+     f"changed.",
      "A structural check of the unsupported spans, then a leg count and "
      "position — and a check that no mid-span leg lands in a certified "
-     "flight path.",
-     "BLOCKS the leg cut (item E qty) and any mid-span member."),
+     "flight path.  The seam posts do land in one: see open item 7.",
+     "BLOCKS the leg cut (item E qty) and any FURTHER mid-span member."),
     ("4", "GUSSET PART AND ATTACHMENT",
      f"The drawing has no part number for a gusset, and the {GUSSET[0]} x "
      f"{GUSSET[2]} x {GUSSET[1]} figure is its envelope, not a detail.  The "
@@ -333,6 +458,37 @@ OPEN_ITEMS = [
      "Send the steel design back for re-certification against the certified "
      "poses (minutes, not days) — system_model.reconciliation().",
      "BLOCKS final fabrication of the clusters and gussets."),
+    ("7", f"SEAM FRAME — {SEAM_FLAG}",
+     f"Pete Werner, 2026-09-14, on the real hardware: \"there are a few bars "
+     f"on the real hardware that are not in our model.  they are supports in "
+     f"the middle ... the real thing is essentially the two halves next to "
+     f"each other.\"  The rig is TWO of the original "
+     f"{SM.FR_W:.1f} x {HALF_CAGE_L:.1f} half-cages butted along the paper, "
+     f"and two butted halves are {2 * HALF_CAGE_L:.1f} against this frame's "
+     f"{SM.FR_L:.2f} — a difference of {SEAM_OVERLAP} mm, one doubled 3 in "
+     f"end frame to within {abs(SEAM_OVERLAP - 2 * P):.2f} mm.  Laid flush "
+     f"with this frame's own ends, each half's seam-side END RAIL lands "
+     f"within {SEAM_RAIL_RESIDUAL} mm of the MIDDLE RUNWAY already drawn: the "
+     f"runway IS the two butted end rails and is NOT cut twice.  What was "
+     f"missing is what holds them up — items I and J, {len(seam_posts())} "
+     f"posts and {len(seam_braces())} brace clusters straddling "
+     f"y = {SEAM_Y:.2f}.  The posts are model bodies; the braces are drawn "
+     f"DASHED because a box containing a face-bolted brace also contains its "
+     f"post and system_model will not carry interpenetrating geometry.  "
+     f"EVERY WORD OF THIS IS REPORTED, NOT PHOTOGRAPHED, "
+     f"and five assumptions ride on it "
+     f"(system_model.OPEN_QUESTIONS['seam_frame']): the seam plane, a zero "
+     f"butt gap, the end rails being the runway, no mid-width post, and the "
+     f"posts standing on the TABLETOP rather than the floor.",
+     "TWO PHOTOGRAPHS: one of the seam from inside the cage looking along the "
+     "paper, one looking down the seam from an end.  They settle how many "
+     "posts there are and at what x, whether there is a mid-width post or a "
+     "diagonal, whether the butt gap is really zero, and whether both end "
+     "rails are still there (two bars) or someone has removed one.",
+     "BLOCKS items I and J, and re-certification of the middle row — a seam "
+     "post stands 114.3 mm outboard of the canvas edge over the full "
+     f"{seam_post_length():.0f} mm, straight through the band a middle-row "
+     "arm's links sweep."),
 ]
 
 
@@ -415,12 +571,21 @@ def write_cut_list(path, h):
     a("| item | qty | profile | cut length | what it is |")
     a("|---|---:|---|---:|---|")
     for it, name, prof, ln, qty, what in cut_list(h):
-        disp = (f"{ln:.2f}" if "T-slot" in prof
-                else f"{GUSSET[0]} x {GUSSET[2]} x {GUSSET[1]}")
+        disp = f"{ln:.2f}" if "T-slot" in prof else _plate_size(it)
         a(f"| **{it}** {name} | {qty} | {prof} | **{disp}** | {what} |")
     a("")
     a(f"**Total 3-in T-slot extrusion at h = {h:.0f}: {extrusion_m(h):.2f} "
-      f"m.**  (Items A-E; the gussets are a bought bracket.)")
+      f"m.**  (Items A-E and I; the gussets F and the seam braces J are "
+      f"bought brackets.)")
+    a("")
+    a(f"> **Items I and J are the SEAM FRAME — {SEAM_FLAG}.**  They are the "
+      f"steel that holds up the two butted half-cage end rails at "
+      f"y = {SEAM_Y:.2f}, read at run time from "
+      f"`system_model.seam_bodies()` ({len(seam_members())} boxes).  The "
+      f"END RAILS THEMSELVES ARE NOT A NEW CUT: they are item C's middle "
+      f"runway, which this model already builds within "
+      f"{SEAM_RAIL_RESIDUAL} mm of where the two halves put them.  Open "
+      f"item 7.")
     a("")
     a("## Plate and fabricated parts")
     a("")
@@ -516,6 +681,12 @@ STEEL2 = "#6f7885"
 POSTC = "#4e5763"
 PLATEC = "#c8b99f"
 ARMC = "#b9bec6"
+
+# the seam frame gets its own ink, and it is deliberately NOT a steel grey:
+# it is reported hardware nobody has photographed, and it must not read like
+# the rest of the cage does
+SEAMC = "#8c4a17"
+SEAM_FC = "#e6c49f"
 
 A3 = (16.5354, 11.6929)         # A3 landscape, inches
 
@@ -662,21 +833,64 @@ class Sheet:
         ax.text(cols[4] + 0.010, 0.13, "scripts/draw_8020.py  ·  read-only "
                                        "against the package",
                 ha="left", va="center", fontsize=5.6, color=NOTEC)
-        # revision banner
+        # revision banner.  `extra` gets a LINE OF ITS OWN — one long line
+        # runs off the A3 sheet, and a flag that is clipped is not a flag.
         rb = self.textbox(x0, y0 + hh + 0.04, w, 0.20)
         rb.add_patch(Rectangle((0, 0), 1, 1, fc="#fdf1ea", ec=WARN, lw=0.9))
-        rb.text(0.008, 0.5, "  " + REV_NOTE + "  —  that grid datum read the "
-                            "drawing's 233,7 cm (FLOOR to top of cage) as if "
-                            "it were measured from the paper.  DO NOT CUT "
-                            "FROM THE OLD SHEET." + extra,
-                ha="left", va="center", fontsize=6.2, color=WARN,
-                fontweight="bold")
+        rev = ("  " + REV_NOTE + "  —  that grid datum read the drawing's "
+               "233,7 cm (FLOOR to top of cage) as if it were measured from "
+               "the paper.  DO NOT CUT FROM THE OLD SHEET.")
+        if extra:
+            rb.text(0.008, 0.72, rev, ha="left", va="center", fontsize=5.8,
+                    color=WARN, fontweight="bold")
+            rb.text(0.008, 0.27, extra, ha="left", va="center", fontsize=5.8,
+                    color=SEAMC, fontweight="bold")
+        else:
+            rb.text(0.008, 0.5, rev, ha="left", va="center", fontsize=6.2,
+                    color=WARN, fontweight="bold")
 
 
 def member(ax, x0, y0, x1, y1, fc=STEEL, ec=INK, lw=0.7, z=4, alpha=1.0,
            hatch=None):
     ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fc=fc, ec=ec, lw=lw,
                            zorder=z, alpha=alpha, hatch=hatch))
+
+
+def draw_seam(ax, ax0, ax1, lw=0.7, z=5.9, alpha=0.88):
+    """Project the SEAM FRAME onto axes (`ax0`, `ax1`) of the canvas frame.
+
+    (0, 1) is the plan, (0, 2) an x-z elevation, (1, 2) a y-z one — the same
+    axis-pair convention `draw_park` uses.  Every box is
+    `system_model`'s own: this function draws, it does not define.  Posts are
+    HATCHED rather than filled because in two of the three views they project
+    onto steel that is already there (the corner legs in x-z, the middle
+    row's drop posts in y-z) and a solid fill would simply hide it.  Braces
+    are a DASHED outline whenever the model does not carry them as bodies —
+    see `seam_braces`.
+    """
+    solid = seam_braces_are_bodies()
+    for lo, hi in seam_braces():
+        ax.add_patch(Rectangle((lo[ax0], lo[ax1]), hi[ax0] - lo[ax0],
+                               hi[ax1] - lo[ax1],
+                               fc=SEAM_FC if solid else "none", ec=SEAMC,
+                               lw=lw * 0.8, zorder=z,
+                               alpha=alpha * 0.62 if solid else 0.9,
+                               hatch="////" if solid else None,
+                               ls="solid" if solid else (0, (4, 2))))
+    for b in seam_posts():
+        member(ax, b.lo[ax0], b.lo[ax1], b.hi[ax0], b.hi[ax1], fc=SEAM_FC,
+               ec=SEAMC, lw=lw, z=z + 0.25, alpha=alpha, hatch="\\\\\\\\")
+    return len(seam_posts()), len(seam_braces())
+
+
+def seam_centre_line(ax, a0, a1, horizontal=True):
+    """The seam plane itself, as a long chain-dot line through a view."""
+    if horizontal:
+        ax.add_line(Line2D([a0, a1], [SEAM_Y, SEAM_Y], color=SEAMC, lw=0.7,
+                           ls=(0, (10, 3, 1.6, 3)), zorder=7.9))
+    else:
+        ax.add_line(Line2D([SEAM_Y, SEAM_Y], [a0, a1], color=SEAMC, lw=0.7,
+                           ls=(0, (10, 3, 1.6, 3)), zorder=7.9))
 
 
 def cmark(ax, x, y, r, c="#93a2b2", lw=0.5, z=7):
@@ -818,6 +1032,9 @@ def sheet_topdown(h, out_dir):
                    (FR_X1 - P, FR_Y1 - P)):
         member(ax, cx, cy, cx + P, cy + P, fc="#3b424c", ec=INK, lw=0.8,
                z=5.4)
+    # the seam frame — items I and J, straight out of system_model
+    seam_centre_line(ax, FR_X0 - 150, FR_X1 + 150)
+    draw_seam(ax, 0, 1)
 
     # runways + clusters
     for ry in ROW_Y:
@@ -900,8 +1117,25 @@ def sheet_topdown(h, out_dir):
              f"h = {h:.0f}.\nSee detail B.", ha="right", c=ORIGC, rad=0.15)
     s.leader(ax, (FR_X0 + P / 2, FR_Y0 + P / 2), (-1140, -500),
              "CORNER LEG  item E\nto the floor — the cage is\n"
-             "self-supporting.  MID-SPAN LEGS\nARE PROBABLY REQUIRED "
-             "(open item 3).", ha="left", c=WARN, rad=0.12)
+             "self-supporting.  THE MID-SPAN\nLEGS ARE THE SEAM FRAME "
+             "(item I).", ha="left", c=WARN, rad=0.12)
+    s.leader(ax, (FR_X1 - P / 2, SEAM_Y + P), (2410, 2530),
+             f"SEAM FRAME  items I + J\n{SEAM_FLAG}\n"
+             f"The rig is TWO half-cages "
+             f"{HALF_CAGE_L:.1f} long\nbutted at y = {SEAM_Y:.2f}.  "
+             f"{len(seam_posts())} posts + {len(seam_braces())} brace\n"
+             f"clusters hold up the two butted END RAILS\n"
+             f"— which ARE the middle runway already\n"
+             f"drawn, to {SEAM_RAIL_RESIDUAL} mm.  Open item 7.",
+             ha="right", c=SEAMC, rad=0.12)
+    s.leader(ax, (FR_X0 + P + SEAM_BRACE_RUN / 2, SEAM_Y - P - 30),
+             (-1140, 2530),
+             f"SEAM BRACE  item J\n{SEAM_BRACE[0]} x {SEAM_BRACE[2]} x "
+             f"{SEAM_BRACE[1]}, {SEAM_BRACE_RUN} inboard,\n"
+             f"{SEAM_BRACE_H} under the rail.  Each pair\n"
+             f"braces into its OWN half-cage.\n"
+             f"DASHED — not in the collision model.\n{SEAM_FLAG}",
+             ha="left", c=SEAMC, rad=-0.12)
     if CLOCKING == "uniform":
         s.leader(ax, (ARMS[17][0] + 210, ARMS[17][1]), (2410, 640),
                  "CONNECTOR SIDE\nAll six arms are clocked identically,\n"
@@ -1094,7 +1328,7 @@ def sheet_topdown(h, out_dir):
                  linespacing=1.42)
         yy -= 0.0125 * (1 + t.count("\n")) + (0.011 if kind == "h" else 0.006)
 
-    s.title_block(h, 1, "ARM SPACING — PLAN")
+    s.title_block(h, 1, "ARM SPACING — PLAN", extra=SEAM_BANNER)
     _save(fig, out_dir, "arm_spacing_topdown")
 
 
@@ -1125,6 +1359,14 @@ def _plan_notes(h, z, ca):
                    f"({2 * P:.1f} overall).  The seam lands ON the row\n"
                    f"line, so each arm's J1 axis lies on it and\n"
                    f"the 2 x 2 cluster straddles it."))
+    n.append(("h", f"4b  THE SEAM FRAME — items I + J"))
+    n.append(("w", SEAM_FLAG))
+    n.append(("n", f"The rig is TWO half-cages {HALF_CAGE_L:.1f} long\n"
+                   f"butted at y = {SEAM_Y:.2f}.  Their two seam-side\n"
+                   f"END RAILS *ARE* the middle runway already\n"
+                   f"drawn ({SEAM_RAIL_RESIDUAL} mm) — do not cut them twice.\n"
+                   f"{len(seam_posts())} posts + {len(seam_braces())} brace "
+                   f"clusters hold them up."))
     n.append(("h", "5  GUSSETS ARE ROTATED"))
     n.append(("n", f"The drawing's inboard orientation needs\n"
                    f"{SM.GUSSET_NEED} mm across a transverse pair and\n"
@@ -1140,7 +1382,10 @@ def _plan_notes(h, z, ca):
     n.append(("h", "7  OPEN ITEMS THAT BLOCK CUTTING"))
     for num, title, _w, _how, blocks in OPEN_ITEMS:
         if blocks.startswith("BLOCKS") and "nothing" not in blocks:
-            n.append(("w", f"  {num}  {title}"))
+            # the notes column is 2.55 in wide: a title that does not wrap
+            # runs off the sheet, and the seam item's title is the flag itself
+            n.append(("w", f"  {num}  "
+                           + "\n      ".join(textwrap.wrap(title, 36))))
     n.append(("n", "Full text in out/drawings/8020_cut_list.md."))
     n.append(("h", "8  WHAT THIS SHEET IS NOT"))
     n.append(("w", "NOTHING HERE IS A SURVEY."))
@@ -1201,6 +1446,12 @@ def sheet_side(h, out_dir):
                z=5.2)
         member(ax, cx, LEG_BOTTOM, cx + P, GRID_U, fc="#3b424c", ec=INK,
                lw=0.8, z=5.0)
+    # THE SEAM FRAME, items I + J.  This section is taken at an arm row, and
+    # the MIDDLE arm row IS the seam plane, so at that row these four posts
+    # stand exactly in the section — in this projection they land on the same
+    # x bands as the corner legs, which is why they are hatched.  The braces
+    # run inboard and are the one part of the seam that x-z shows on its own.
+    draw_seam(ax, 0, 2, z=5.6, alpha=0.55)
     # runway, cut through
     member(ax, IN_X0, GRID_U, IN_X1, GRID_T, fc=STEEL, ec=INK, lw=0.8, z=4.6)
     for i in range(70):
@@ -1304,10 +1555,22 @@ def sheet_side(h, out_dir):
              f"{GUSSET[2]} x {GUSSET[1]}, four per arm, rotated onto the\n"
              f"runway's OUTBOARD y faces, top flush with the steel.",
              ha="right", c=NOTEC, rad=-0.12)
+    s.leader(ax, (FR_X0 + P + SEAM_BRACE_RUN * 0.6,
+                  GRID_U - SEAM_BRACE_H / 2), (-880, 1985),
+             f"SEAM FRAME  items I + J  —  {SEAM_FLAG}\n"
+             f"AT THE MIDDLE ROW THIS SECTION IS THE SEAM: the two "
+             f"half-cages\nbutt at y = {SEAM_Y:.2f}, and "
+             f"{len(seam_posts())} end-frame corner posts (hatched, on the "
+             f"corner-leg\nx bands) carry the butted end rails — item C's "
+             f"middle runway.\nThe {len(seam_braces())} brace clusters run "
+             f"{SEAM_BRACE_RUN} inboard, {SEAM_BRACE_H} under the rail — "
+             f"DASHED, not in the collision model.",
+             ha="left", c=SEAMC, rad=0.10)
 
     # ---------------- panel B: section in y-z ---------------------------
     DEN_B = 30.0
-    axb = s.panel(9.95, 6.55, (-620, 4260), (-960, 2050), DEN_B,
+    # the lower limit carries THREE lines of seam note under the floor hatch
+    axb = s.panel(9.95, 6.22, (-620, 4260), (-1310, 2050), DEN_B,
                   "B   ELEVATION — SECTION ALONG THE SHORT AXIS",
                   f"looking along +x · scale 1 : {DEN_B:.0f}")
     ground(axb, -600, 4240, FLOOR_Z, depth=150)
@@ -1332,6 +1595,13 @@ def sheet_side(h, out_dir):
                z["clamp_top"], fc="#c3cad3", ec=INK, lw=0.6, z=6.2)
         member(axb, ry - PLATE[1] / 2, h, ry + PLATE[1] / 2, z["plate_top"],
                fc=PLATEC, ec=INK, lw=0.9, z=6.5)
+    # THE SEAM FRAME, items I + J — this is the view that shows it.  The four
+    # posts run TABLETOP to runway underside in the middle row's own y band,
+    # so from the tabletop up to the drop-post bottoms they stand alone: the
+    # mid-span legs.  Above that they project onto the middle cluster, hence
+    # the hatch.
+    draw_seam(axb, 1, 2, lw=0.6, z=6.55, alpha=0.45)
+    seam_centre_line(axb, LEG_BOTTOM - 260, GRID_T + 150, horizontal=False)
     axb.add_line(Line2D([-560, 4200], [h, h], color=GRN, lw=0.9,
                         ls=(0, (7, 3)), zorder=8))
 
@@ -1347,11 +1617,15 @@ def sheet_side(h, out_dir):
             f"{FR_Y1 - P - ROW_Y[2]:.1f}", over=0, txt_off=40)
     s.dim_h(axb, FR_Y0, FR_Y1, GRID_U + 560, f"{SM.FR_L:.2f}  FRAME OUTSIDE",
             over=0, txt_off=40)
-    axb.text((FR_Y0 + FR_Y1) / 2, -880,
-             f"UNSUPPORTED RUNWAY SPANS OF {ROW_SP:.0f} mm between the "
-             f"corner legs — mid-span legs are almost certainly required "
-             f"(open item 3)", ha="center", va="bottom", fontsize=FS_NOTE,
-             color=WARN, fontweight="bold")
+    axb.text((FR_Y0 + FR_Y1) / 2, -1280,
+             f"SEAM FRAME  items I + J  —  {SEAM_FLAG}\n"
+             f"{len(seam_posts())} posts tabletop to rail at y = "
+             f"{SEAM_Y:.2f} — two per side, {P} apart, one per half-cage — "
+             f"plus {len(seam_braces())} brace clusters (dashed)\n"
+             f"THESE ARE THE MID-SPAN LEGS OF OPEN ITEM 3: clear runway span "
+             f"corner to seam {seam_clear_span():.2f} mm",
+             ha="center", va="bottom", fontsize=FS_NOTE, color=SEAMC,
+             fontweight="bold", linespacing=1.5)
     s.dim_v(axb, LEG_BOTTOM, GRID_U, 4110, f"{LEG_LEN}   LEG  item E",
             ext_x=(FR_Y1, FR_Y1), over=0, txt_off=24)
     axb.text((FR_Y0 + FR_Y1) / 2, 790,
@@ -1465,7 +1739,8 @@ def sheet_side(h, out_dir):
              f"within {abs(post_length(940) - SM.O_POST_L):.1f} mm of it.",
              ha="left", va="top", fontsize=5.8, color=INK, linespacing=1.45)
 
-    s.title_block(h, 2, "CAGE — ELEVATIONS AND DROP-POST CUT")
+    s.title_block(h, 2, "CAGE — ELEVATIONS AND DROP-POST CUT",
+                  extra=SEAM_BANNER)
     _save(fig, out_dir, "cage_side_view")
 
 
