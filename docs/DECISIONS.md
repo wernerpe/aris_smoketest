@@ -51,8 +51,8 @@ and a pen-up at the shipped transit speed puts three times that between frames.
 whose own converged self bound cannot carry the residual their speed implies:
 `lb − 0.55 × rate × dt_play / dt ≥ 20 mm` solves for `dt` directly. The route,
 the poses and the ink are untouched; a leg already under the judge's margin is
-left for the judge to refuse. On the pinned leg 0.05 s → 0.097 s, and
-+16.18 mm → +21.1 mm. `SELF_PLAY_DT` 0.025, `SELF_PLAY_K` 0.55 and
+left for the judge to refuse. On the pinned leg, 0.05 s → 0.0969 s (1.94×) and
++16.33 mm → +21.28 mm. `SELF_PLAY_DT` 0.025, `SELF_PLAY_K` 0.55 and
 `SELF_PLAY_FLOOR` 0.020 are **restated** in `writing.py` on purpose, as
 `validate.py` restates `selfcoll.SELF_MARGIN`.
 
@@ -149,15 +149,28 @@ the best S, in stage A:
 | realised pair clearance while they do it | **+62.1 mm** | **+62.5 mm** |
 | stage A | **77.4 s** (was 95.9), **3.494 m** (was 2.061) | **109.6 s** (was 128.6), **5.982 m** (was 4.595) |
 
-**WHAT THIS BOX DID NOT BUY: A MAKESPAN.** All eight A + B runs were killed by
-their 25-minute cap inside stage B's `sequence.cost_matrix` route screen — the
-same O(n²) wall §19, §22 and §24 flagged, which the standoff makes worse per leg
-because every re-routed leg falls through to the RRT. So the sweep is **stage A
-only**, and the comparison against the S = 0 A + B makespans of **119.9 s**
-(split) and **145.9 s** (whole bag) is owed stage B's duration. What is already
-in hand is 18.5 s and 19.0 s out of stage A, and 1.43 m / 1.39 m of follower ink
-moved out of the pile stage C would otherwise conduct at §22's measured
-3 075 s / 11.5 m.
+**AND ONE A + B DID FIT.** The sweep itself is **stage A only** — all eight
+A + B runs were killed by their 25-minute cap inside stage B's
+`sequence.cost_matrix` route screen, the same O(n²) wall §19, §22 and §24
+flagged, which the standoff makes worse per leg because every re-routed leg
+falls through to the RRT. But the whole bag at S = 110 mm, re-run with four
+route jobs and a warm leg store, completed both stages with `all_ok` and
+`holds_ok` true:
+
+| | S = 0 (lf3) | S = 110 mm |
+|---|---|---|
+| **A + B makespan** | **145.9 s** | **111.2 s — 0.76×, 23.8 % faster** |
+| ink drawn in A + B | 4.623 m | **5.982 m (+29.4 %)** |
+| **deferred to stage C** | **10.023 m** | **7.188 m (−2.835 m)** |
+| time to first motion | 0.192 s | 0.184 s |
+
+**STAGE B COMES OUT EMPTY, AND THAT IS THE SHAPE OF THE WIN**: everything that
+can fly now flies in stage A with both arms of the row in the air, so the role
+swap has nothing left to draw and the pattern collapses from two main stages to
+one. Stage C is handed 2.835 m less, which at §22's measured 268 s/m of six-arm
+conduct is the larger half of what this lever is worth and is not in the 111.2 s
+at all. **The split +0.15 A + B is still owed**: `S090_s150_ab` hit the same cap
+in stage B, so the comparison against 119.9 s is unmeasured.
 
 `docs/V2_STAGED.md` §25 is the write-up; `tests/test_staged_standoff.py` holds
 the mechanism down; the runs are

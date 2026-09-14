@@ -2143,9 +2143,44 @@ moves — the route is the same route, the poses are the same poses, the ink is
 untouched. Only the beats that owe the residual pay it; a leg whose true
 clearance is already under the judge's margin cannot be rescued by any speed
 and is left for the judge to refuse, which is the right division of labour.
-On the pinned leg: 0.05 s → 0.097 s, and +16.18 mm → **+21.1 mm**.
+On the pinned leg: 0.05 s → 0.0969 s (1.94×), and +16.33 mm → **+21.28 mm**.
 
 The three numbers `writing` needs (`SELF_PLAY_DT` 0.025, `SELF_PLAY_K` 0.55,
 `SELF_PLAY_FLOOR` 0.020) are **restated** in `writing.py`, exactly as
 `validate.py` restates `selfcoll.SELF_MARGIN`: a producer that reached into the
 judge for its own floor would be marking its own homework.
+
+### 25.8 One A + B did fit — the whole bag at S = 110 mm
+
+`out/staged_csail_h097_lf4_S110_whole_ab.{json,log}`, `--stages 0,1`,
+`--route-jobs 4`, warm leg store, 785 s of wall:
+
+| stage | pieces | ink | duration | leader flown | follower flown / offered | `active_pair` | `solo` | verdict |
+|---|---|---|---|---|---|---|---|---|
+| A | 19 | **5.982 m** | **111.2 s** | 4.595 / 4.595 m | **1.387 / 4.981 m** | +56.1 mm | +157.3 mm | **PASS** |
+| B | 0 | 0.000 m | 0.0 s | — | — | — | +256.0 mm | **PASS** |
+
+| | S = 0 (lf3) | **S = 110 mm** |
+|---|---|---|
+| **A + B makespan** | **145.9 s** (128.6 + 17.3) | **111.2 s — 0.76×, 23.8 % faster** |
+| ink drawn in A + B | 4.623 m | **5.982 m (+29.4 %)** |
+| **deferred to stage C** | **10.023 m** | **7.188 m (−2.835 m)** |
+| follower ink kept | 0.000 m | **1.387 m (27.9 %)** |
+| time to first motion | 0.192 s | **0.184 s** |
+| `all_ok` / `holds_ok` | true / true | **true / true** |
+| coverage of the logo | 95.64 % | 95.64 % |
+
+**Stage B is EMPTY, and that is the shape of the win.** The whole bag's ink that
+can fly at all now flies in stage A with both arms of the row in the air, so
+there is nothing left for the role swap to draw — the pattern collapses from two
+main stages to one, and the 17.3 s stage B disappears along with the barrier
+before it. Stage C is handed **2.835 m less**, which at §22's measured
+268 s/m of six-arm conduct (or §24.5's 113 s/m per-row) is the larger half of
+what this lever is worth and is not in the 111.2 s at all.
+
+**The split +0.15 run did not get its stage B**: `S090_s150_ab` was killed by
+the same 25-minute cap in stage B's route screen, so the split's A + B makespan
+against 119.9 s is still owed. Its stage A at `--route-jobs 4` reads 18 pieces,
+3.494 m, 86.9 s, `active_pair` +62.0 mm, `solo` +134.4 mm, PASS — the same
+pieces and the same metres as the route-jobs-1 table above, with the tour's
+tie-breaks costing 9.5 s of stage duration.
