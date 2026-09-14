@@ -2184,3 +2184,282 @@ against 119.9 s is still owed. Its stage A at `--route-jobs 4` reads 18 pieces,
 3.494 m, 86.9 s, `active_pair` +62.0 mm, `solo` +134.4 mm, PASS — the same
 pieces and the same metres as the route-jobs-1 table above, with the tour's
 tie-breaks costing 9.5 s of stage duration.
+
+## 27. Where the pen-up time goes — the anatomy, and the three things that were wrong
+
+Pete, watching the animation: *"arm 71 is still spending an insane amount of
+time reconfiguring."* He is right, and on
+`out/staged_csail_h097_program_lf2_s150.json`, stage A, arm 71 (13 pieces,
+1.838 m of ink, 95.9 s) the measurement is:
+
+| | |
+|---|---|
+| pen-up legs | **70.5 s of 95.9 s — 73.6 %** |
+| ink + hovers | 25.3 s |
+| peak joint speed on almost every leg | 0.60 of the FR3 limit (`QD_FRAC` is in force) |
+
+**So pacing is not the cause.** The pen-up legs are slow because of what they
+do, not how fast they are allowed to do it. `scripts/penup_anatomy.py` was
+written to say what that is, and it runs on any staged programme:
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python scripts/penup_anatomy.py \
+    out/staged_csail_h097_program_lf2_s150.json --legs
+```
+
+### The rule it classifies on, stated once
+
+For each pen-up leg, off the programme's own trajectory: `dq` = joint path
+(Σ|Δq| over samples and joints), `net` = Σ|q_end − q_start|, `hop` =
+‖xy_end − xy_start‖, `ztrav` = Σ|Δz| of the tip, `zmax` = the highest tip z.
+An honest leg lifts `LIFT_Z`, crosses `hop` and lowers, so its honest vertical
+travel is `ZTRAV_REF = 0.12 m` and its honest joint path is about
+`RATE_REF × (hop + ztrav)`. `RATE_REF = 25 rad/m` is calibrated on the legs that
+ARE honest — they sit at 11–20 rad/m — and set deliberately high so only clear
+outliers are named. Then
+
+```
+climb_excess = max(0, ztrav − 0.12)          m of pointless climbing
+climb_rad    = RATE_REF × climb_excess       joint work the climb explains
+flip_rad     = max(0, dq − RATE_REF × (hop + ztrav))
+                                             joint work NOTHING explains
+
+flip    if  flip_rad ≥ 6 rad and flip_rad > climb_rad
+tall    elif climb_excess > 0.06 m or zmax > 0.13 m
+             or (dq ≥ 6 and dq > 2 × net)
+honest  otherwise
+```
+
+`flip` is tested first on purpose: a leg whose tip barely moves while the joints
+churn is a redundancy fault whatever its vertical profile, and `flip_rad`
+already has the climbing subtracted out, so a merely tall leg cannot be called a
+flip. The classifier is stricter than a hand read — arm 71's legs 4 and 5 come
+out "honest" at `flip_rad` 3.0 and 0.1, under the 6 rad floor — and that is the
+right way round for a number that is going to be quoted.
+
+### The measurement, on the lf2 s150 programme, every arm and both stages
+
+| st | arm | ink m | stage s | pen-up s | % | flip s | tall s | honest s |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 2 | 0.153 | 11.08 | 0.35 | 3.1 | 0.00 | 0.00 | 0.35 |
+| 0 | 13 | 0.070 | 4.13 | 0.25 | 6.0 | 0.00 | 0.00 | 0.25 |
+| **0** | **71** | **1.838** | **95.86** | **70.54** | **73.6** | **28.72** | **30.86** | **10.96** |
+| 1 | 13 | 0.728 | 13.05 | 0.23 | 1.8 | 0.00 | 0.00 | 0.23 |
+| 1 | 71 | 0.853 | 24.02 | 9.58 | 39.9 | 0.00 | 6.87 | 2.72 |
+| 1 | 97 | 0.028 | 17.30 | 4.80 | 27.7 | 0.00 | 4.80 | 0.00 |
+| | **fleet** | | | **85.75** | | **28.72 (33.5 %)** | **42.52 (49.6 %)** | **14.51 (16.9 %)** |
+
+**Five sixths of the fleet's pen-up time is one of two faults.** And because
+schema-2 programmes carry `hover_in` / `hover_out` per piece, each leg splits
+into LIFT (ink end → hover out), TRAVEL (hover out → hover in) and LOWER (hover
+in → ink start), which says WHICH fault:
+
+```
+leg   lift   travel  lower      hop
+  1   2.16    16.50  11.73     0.337    piece-to-piece sheet change
+  6   1.39    11.07  10.04     0.215    piece-to-piece sheet change
+  7   9.65     1.27  10.26     0.192    HOVER off the ink's sheet
+  8  10.75     0.55  10.20     0.053    HOVER off the ink's sheet
+  9  10.04     0.04   9.74     0.003    HOVER off the ink's sheet
+ 10  10.05     1.29   9.83     0.195    HOVER off the ink's sheet
+ 11  10.09     1.07   9.61     0.113    HOVER off the ink's sheet
+```
+
+**66.0 rad of the arm's flip cost is the hover, and 28.2 rad is the pieces.**
+Leg 9 is the cleanest statement of it: the arm spends 3.5 s lifting the pen 6 cm
+and 3.5 s putting it back down 3 mm away, and moves 19.8 rad of joint path
+doing it, because the pose it lifts ONTO is 10 rad from the pose it lifts FROM.
+
+### Fault 1 — the hover was chosen for clearance and never for nearness
+
+`writing.hover_solve` has two stages: a narrow scan (one tool yaw, q7 within
+±0.6 of the ink's own) and, where that fails, the whole fiber — 8 yaws × the
+whole q7 grid × every IK branch. The escalation test was **comfort alone**:
+
+```python
+if q is not None and (cap is None or score(q) >= cap - EPS):
+    return q                       # ← returns a pose 5.03 rad away
+```
+
+Asked about arm 71's piece 8: the narrow scan returns a pose that clears the
+static set comfortably and is **5.03 rad** from the ink — an IK branch flip
+inside the ±0.6 q7 window — so the fiber never opens. The fiber holds **23
+gated poses at that tip and height, and the nearest is 0.26 rad away.**
+
+The fix is `HOVER_NEAR = 1.0` rad: a narrow answer that is comfortable but
+further than that opens the fiber too, and the two answers are then compared on
+the SAME score with distance breaking the tie the score leaves (every
+comfortable candidate ties at the cap, which is what `lifted_config`'s
+sorted-then-argmax already relies on). **Nothing is relaxed.** Both paths run
+the identical `static_gate` — `CHAIN_CLEAR`, the full `FRAME_FLOOR`,
+`selfcoll.self_ok` — and the identical joint-margin filter. Continuity is a
+tie-break among poses that are already certified.
+
+Measured over arm 71's 13 pieces, both ends of each:
+
+| | lift + lower distance, Σ‖Δq‖∞ | wall |
+|---|---|---|
+| `HOVER_NEAR = ∞` (the old short-circuit) | **48.39 rad** | 0.4 s |
+| `HOVER_NEAR = 1.0` | **16.76 rad — −65.4 %** | 0.4 s |
+
+Ten of the twenty-six ends were on the wrong sheet; one still is (piece 1's
+exit, where the fiber genuinely has nothing nearer).
+
+### Fault 2 — the sheet was chosen piece by piece, never along the tour
+
+`stroke_api.plan_stroke` returns one plan and picks its (φ, q7, branch) sheet on
+that piece's own merits (maximin σ). Adjacent pieces in a tour therefore land
+on different sheets and the transit folds the arm over between them — legs 1 and
+6 above, 27.6 rad of travel between them.
+
+The repo already had the exact machinery: `menu.stroke_menu` enumerates a
+stroke's certified entry/exit fiber variants, and `allocate.sequence_arm_cluster`
++ `sequence.cluster_held_karp` decide order, direction and fiber in one DP.
+**It was built, flag-gated off as `allocate.CLUSTER`, and is not reachable from
+`staged.py` at all** — the verdict that gated it (`docs/CONCURRENCY.md`
+2026-08-20, `docs/BENCH.md` +3.4 % at rig speed) was taken on the old rig with
+long strokes and a `qd_frac` of 0.30.
+
+**It is still not the right shape for the staged path, for three reasons that
+have nothing to do with that verdict.** The staged bucket's order is decided by
+`sequence_arm` against a frozen room; `plan_bucket` re-plans the same bucket
+several times under the drop-and-defer loop, and the cluster DP's second
+`cost_matrix` pass on every retry is the cost centre that killed stage B under
+its wall cap (§25); and `sequence_arm_cluster` re-materialises its choice
+**without ever re-asking `staged.ink_vs_envelope`**, so a piece the room refused
+could come back certified.
+
+So the staged path gets the same idea in the cheaper shape a fixed order allows.
+`allocate.chain_sheets` is a **Viterbi over pieces × alternatives**, O(n·K²)
+instead of O(2ⁿ·n·K²), run after `sequence_arm` has fixed the tour:
+
+* alternative 0 is the plan the bucket already certified, so the worst case is
+  the programme it was handed;
+* the others are `menu` variants, which advertise their exact entry and exit
+  configurations **without planning anything** — so the whole DP runs on
+  endpoints and only the chosen variants are ever materialised;
+* a chosen variant is materialised through `stroke_api` (identical σ, margin and
+  independent-validator certificate) and then put back through `plan_bucket`'s
+  own ink-vs-room test; a refusal kills that alternative and the DP re-solves
+  (3 rounds), falling back to alternative 0;
+* the edge is `writing.transit_time`'s three beats — the **real capped transit
+  time**, the number `sequence.cost_matrix` prices a crossing at and
+  `writing.arm_program` lays down — with the depot legs substituted where the
+  tour goes home;
+* a variant's extra interior draw time (`menu`'s `surcharge`, capped at 0.05 s)
+  is charged on the node, so continuity cannot be bought with ink time.
+
+Menus cost 0.05 s per piece and a materialisation 0.035 s, measured on arm 71's
+pieces, so K = 4 is ~0.2 s per piece.
+
+### Fault 3 — the router's first draft was its last, and the depot jumped the queue
+
+`paper.route` returns the FIRST shape that certifies, and the shapes that
+certify most often are the ones with the most vias (`walk`/`traverse` lay one
+down every 12–30 cm of paper). Two changes, both inside `route`:
+
+**The depot via is no longer tried before the ladder.** `[q_home]` — the park
+pose, 42 cm up on this rig — was offered as a shape before the 8 cm rung. It is
+still offered, after the ladder, which is what "the lowest via that clears"
+means (`HOME_AFTER_LADDER`).
+
+**Every tier's output is shortcut before it is returned or stored.** Vias are
+dropped one at a time, the drop that saves the most joint-space time wins each
+pass, and a drop is kept ONLY when the shortened shape is re-certified end to
+end by `legs_ok` — the same bound, the same floors, the same self and static
+gates as the shape it replaces. A shortcut can therefore never be looser than
+what it replaces; it can only be shorter. A drop that saves no time is not taken
+(`paper.SHORTCUT`, `SHORTCUT_ROUNDS = 8`). `transit._shortcut` already did this
+for the RRT tier's output and nothing else.
+
+**The persistent leg store is namespaced on all of it.** `paper.ROUTE_REV`
+rides in `paper.cache_signature()`, so a warm store cannot serve pre-change
+routes, and `writing.HOVER_NEAR` is in `lifted_or_lower`'s memo key for the same
+reason. The re-run below is therefore COLD on every route.
+
+### The re-run: stage A of lf2 s150, with all three fixes
+
+`out/staged_csail_h097_lf5_s150.{json,log,_program.json}`, same lines, same
+pattern, same split, `--route-jobs 4`, and COLD on every route because
+`ROUTE_REV` moved:
+
+| stage A | lf2 s150 (before) | **lf5 s150 (after)** |
+|---|---|---|
+| **stage duration** | **95.86 s** | **55.4 s — 0.58×, 42 % faster** |
+| pieces flown | 15 | **16** |
+| ink drawn | 2.0613 m | **2.4162 m (+17.2 %)** |
+| arms with a timeline | 3 of 6 | **4 of 6** |
+| arm 71 (leader) | 13 pieces, 1.838 m | 13 pieces, 1.838 m — **unchanged** |
+| arm 31 (follower) | 0 pieces, 0.000 m | **1 piece, 0.355 m** |
+| sequencer's own transit cap, arm 71 | 19190 | **11100 (−42 %)** |
+| `active_pair` | +65.6 mm | **+138.6 mm** |
+| `solo` (min over arms) | +51.7 mm | **+167.9 mm** |
+| stage verdict | PASS | **FAIL** |
+
+**The ink is not unchanged and that is the point: it went UP.** Arm 71 draws
+exactly the same thirteen pieces in the same 1.838 m; the extra 0.355 m is arm
+31, a follower whose bucket the baseline could not fly at all and which now cuts
+at the room boundary into four clear parts and flies one of them. Both
+clearance readings improved by more than a factor of two, which is what a hover
+chosen near the ink and a route that does not climb to the park pose look like
+from the checker's side.
+
+**THE STAGE VERDICT IS FAIL, AND THE GATE THAT REFUSES IT IS `frozen`.**
+Re-deriving arm 71's `solo_check` off the shipped programme (1 109 frames at
+dt = 0.05):
+
+```
+ok False          min_clearance  0.16794 m      monotone True
+frame_failed []   paper_failed []   self_failed []   column_failed []
+frozen_failed 1   joint_margin  arm 71  0.1107 rad (all six > 0)
+```
+
+**Every distance gate passes and passes wide.** The real inter-arm capsule
+clearance is +167.9 mm against a 50 mm gate, the steel, the paper plane, the
+arm against itself and the joint limits are all clean, and the timeline is
+monotone. The single false boolean is `frozen_failed`, the planner's own
+installed frozen-partner room — which is bookkeeping about what arm 71 was
+PLANNED against, not a statement that it is near anything. Two consequences
+worth stating plainly:
+
+* **it is not the shortcutter's known hole.** `legs_ok` bounds the static and
+  self gates adaptively but bounds `chain_z`/`tip_z` on 33 samples with no
+  Lipschitz residual (`leg_bounds`), and a shortcut chord is longer than the
+  legs it replaces, so that was the first suspect. `paper_failed` is empty and
+  `self_failed` is empty at the judge's own density: it is not that.
+* **it is not diagnosed to a cause, and 55.4 s is therefore a measurement of
+  this timeline and not a certificate of it.** The next step is to attribute
+  `frozen_failed` to a leg and a partner — `frozen.partner_clearance` on arm
+  71's realised trajectory against the poses `freeze_stage` installed — which
+  is the same instrument §26 used on the stage-C composition bug, and to
+  establish whether the room the leader was planned against is the room the
+  re-check is reading. Until then the honest statement is: **the stage is 42 %
+  faster over more ink with every clearance gate improved, and one bookkeeping
+  verdict is unexplained.**
+
+**Sample-count note for whoever picks that up.** If it does turn out to be the
+paper gate on a long chord, the fix is to certify a shortcut chord at a sample
+count scaled to its length; `paper.sample_residual(P)` already returns the
+number `leg_bounds` would need to subtract.
+
+### The pen-up anatomy, before and after, off the two programmes' own trajectories
+
+`scripts/penup_anatomy.py` on each, stage A:
+
+| st | arm | pieces | ink m | stage s | pen-up s | flip legs | tall legs | plan s |
+|---|---|---|---|---|---|---|---|---|
+| A | 2 | 1 | 0.153 | 11.08 → **9.90** | 0.35 → 0.35 | 0 → 0 | 0 → 0 | 0.8 → 0.8 |
+| A | 13 | 1 | 0.070 | 4.13 → **4.13** | 0.25 → 0.25 | 0 → 0 | 0 → 0 | 1.1 → 0.6 |
+| A | 31 | 0 → **1** | 0.000 → **0.355** | — → **8.37** | — → 0.35 | — → 0 | — → 0 | 0.0 → 0.9 |
+| **A** | **71** | **13** | **1.838** | **95.86 → 55.41** | **70.54 → 22.04** | **4 → 0** | **5 → 0** | **7.3 → 6.6** |
+| A | 17, 97 | 0 | 0.000 | — | — | — | — | — |
+
+**Arm 71's pen-up falls 70.54 → 22.04 s, −68.8 %, over the identical thirteen
+pieces and the identical 1.838 m of ink**, and every one of its legs now
+classifies honest: the four flips and the five tall/wandering legs are gone, not
+reclassified. The stage falls 95.86 → 55.41 s, which is 40.45 s saved against
+48.50 s of pen-up removed — the rest is the taxi factor and the hovers. **Planning
+got slightly CHEAPER, not dearer** (7.3 → 6.6 s for arm 71): the menus and the
+Viterbi cost about a third of a second a piece, and the sequencer's route screen
+— which is where arm 71's `seq_s` actually goes — has fewer refused crossings to
+route once the hovers are near the ink.

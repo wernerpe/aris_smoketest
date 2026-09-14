@@ -86,6 +86,16 @@ SWEEP_FRAC = 0.55                           # `scene_check.check_timeline`'s own
 CHECK_DT = 0.05                             # s, the clock the checks sample on
 MAX_CHECK_POSES = 900                       # per arm, per stage, for check (a)
 LF_MAX_DROPS = 4            # pieces a bucket may shed before it is all deferred
+# THE SHEET CHOICE IS A CHAIN, NOT A PIECE-AT-A-TIME DECISION (2026-09-14).
+# `stroke_api.plan_stroke` picks each piece's (phi, q7, branch) sheet on its own
+# merits, so adjacent pieces in a tour land on different sheets and the pen-up
+# between them folds the arm over.  Once `sequence_arm` has fixed the order,
+# `allocate.chain_sheets` re-picks the sheets along the tour with a Viterbi pass
+# priced on the real capped transit time.  Every alternative it may choose is a
+# `menu` variant materialised through `stroke_api` (same sigma, margin and
+# validator certificate) AND put back through this module's ink-vs-room test.
+CHAIN_SHEETS = True
+CHAIN_K = allocate.CHAIN_K  # certified alternatives offered per piece
 CONDUCT_CAP_S = 1200.0      # s of WALL CLOCK any one conduct may take
 BAND_SHARE_MAX = 0.05       # dead-band ink above which it gets its own stage
 
@@ -1051,6 +1061,9 @@ class ArmStage:
     # WHAT THE ROOM-BOUNDARY CUT DID, per bucket: how many pieces were re-cut,
     # into how many parts, how much of their ink stayed and how much left.
     split: dict = field(default_factory=dict)
+    # WHAT THE CONTINUITY PASS DID: pieces re-sheeted, transit seconds and
+    # reconfiguration radians before and after.  {} when it did not run.
+    chain: dict = field(default_factory=dict)
     # THE EXTRA CLEARANCE THIS BUCKET WAS HELD TO, per partner, on top of every
     # gate -- {} for every arm that carried none, which is every arm at S = 0.
     standoff: dict = field(default_factory=dict)
@@ -1278,6 +1291,38 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
         st.order = [int(i) for i in order]
         st.programme = [dict(segs[i], flipped=False) for i in order]
     st.seq_s = time.perf_counter() - t0
+
+    # ...AND THE SHEETS, ALONG THE TOUR THE SEQUENCER JUST FIXED.  Every
+    # alternative is materialised through `stroke_api` and then asked the SAME
+    # ink-vs-room question the piece was accepted on, so a re-sheeted piece
+    # carries the certificate of the one it replaced and never less.
+    if CHAIN_SHEETS and len(st.programme) > 1:
+        t0 = time.perf_counter()
+
+        _base_clear: dict[int, float] = {}
+        _prog0 = list(st.programme)
+
+        def _accept(plan, i):
+            if not envelopes:
+                return True
+            d = float(ink_vs_envelope(plan, spec, h_inv, pens.get(arm)))
+            if gate is not None:
+                return d >= gate
+            # No gate means the ink check is a MEASUREMENT (see above), so the
+            # rule is "no worse than the plan it replaces" and the bucket's
+            # reported clearance stays true of what it ships.
+            if i not in _base_clear:
+                _base_clear[i] = float(ink_vs_envelope(
+                    _prog0[i]["plan"], spec, h_inv, pens.get(arm)))
+            return d >= _base_clear[i] - 1e-9
+        try:
+            st.programme, st.chain = allocate.chain_sheets(
+                st.programme, spec, opts=o, seq_opts=so, k=int(CHAIN_K),
+                accept=_accept, verbose=verbose)
+        except Exception as exc:                # a tie-break, not a promise
+            st.note = (st.note + "; " if st.note else "") + \
+                f"chain_sheets skipped ({type(exc).__name__}: {exc})"
+        st.seq_s += time.perf_counter() - t0
 
     t0 = time.perf_counter()
     try:

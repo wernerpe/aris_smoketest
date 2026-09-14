@@ -1010,6 +1010,26 @@ HOVER_LADDER = (LIFT_Z, 0.045, 0.03, 0.09, 0.12)
 # of every arm's crossings needing a route and a fifth of them.
 HOVER_COMFORT = 0.04    # m of static clearance ABOVE the floor, if it is there
 
+# ...AND COMFORT WAS NOT THE WHOLE ESCALATION CRITERION EITHER (2026-09-14).
+# MEASURED on `out/staged_csail_h097_program_lf2_s150.json`, stage A, arm 71:
+# five of the arm's thirteen pen-up legs spend ~10 rad lifting off the ink and
+# ~10 rad lowering back onto it, for hops of 3 to 20 cm -- 37.5 s of a 95.9 s
+# stage folding the arm over and straight back again.  The cause is one line of
+# `hover_solve`: the narrow scan (phi = 0, q7 within +-0.6 of the ink's own)
+# returns a pose that is COMFORTABLE and 5.03 rad away -- an IK BRANCH FLIP
+# inside the q7 window -- and comfort alone short-circuits the fiber, which
+# holds 23 gated poses of which the nearest is 0.26 rad away.
+#
+# So the escalation asks the second question the lift actually pays for: is the
+# narrow answer NEAR?  If it is not, the fiber opens and the two answers are
+# compared on the SAME score, with distance breaking the tie the score leaves.
+# Nothing is relaxed: every candidate on either path passes the identical
+# `static_gate` (CHAIN_CLEAR, the full FRAME_FLOOR, `selfcoll.self_ok`) and the
+# identical joint-margin filter.  Continuity is only the tie-break among poses
+# that are already certified, which is what it has to be.
+HOVER_NEAR = 1.0        # rad, ||dq||_inf: a narrow hover further than this
+#                         opens the fiber even when it is comfortable
+
 _HOVERS = {}                # (arm, pen, tool, h, q_ref, xy, tilt) -> (q, z)
 
 
@@ -1072,7 +1092,8 @@ def static_gate(spec, pen_ext=None, h_inv=H_INV_DEFAULT, floor=None,
 
 
 def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
-                pen_ext=None, tilt=None, margin_min=HOVER_MARGIN, ok=None):
+                pen_ext=None, tilt=None, margin_min=HOVER_MARGIN, ok=None,
+                near=None):
     """The best hover over (xy, z) that `ok` allows. -> q (7,) | None.
 
     Two stages, cheap first, and the first stage is bit-for-bit the call this
@@ -1096,23 +1117,44 @@ def hover_solve(spec, q_ref, xy, z=LIFT_Z, h_inv=H_INV_DEFAULT,
     and dragged it across the paper to the next stroke, and the only thing that
     ever said so was `arm_program`'s `lifts` list full of zeros.  With the
     fiber open it is 15 of 1200.
+
+    ...AND "COMFORTABLE" WAS NOT ENOUGH TO STOP ON.  `near` (default
+    `HOVER_NEAR`) is the second half of the escalation test: a narrow answer
+    that is comfortable but further than `near` rad (inf-norm) from the ink
+    opens the fiber too, because the lift and the lower each pay that distance
+    in full and the fiber routinely holds a pose an order of magnitude nearer.
+    Measured on arm 71's stage A: five legs at ~10 rad of lift and ~10 rad of
+    lower, against a nearest gated fiber pose 0.26 rad away.  The comparison
+    between the two answers is the same score either way — this reorders
+    CERTIFIED candidates and admits none that were not.  `near=None` means
+    `HOVER_NEAR`; `near=inf` restores the old short-circuit exactly.
     """
-    q, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
-                         margin_min=margin_min, tilt=tilt, ok=ok)
+    near = HOVER_NEAR if near is None else float(near)
+    q, dq = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                          margin_min=margin_min, tilt=tilt, ok=ok)
     cap = getattr(ok, "cap", None)
     if q is not None and (cap is None
-                          or float(np.asarray(ok(q[None, :]), float)[0])
-                          >= cap - paper.EPS):
+                          or (dq <= near
+                              and float(np.asarray(ok(q[None, :]), float)[0])
+                              >= cap - paper.EPS)):
         return q
-    w, _ = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
-                         margin_min=margin_min, tilt=tilt, phis=HOVER_YAWS,
-                         q7s=ik.Q7_GRID, ok=ok)
+    w, dw = lifted_config(spec, q_ref, xy, z=z, h_inv=h_inv, pen_ext=pen_ext,
+                          margin_min=margin_min, tilt=tilt, phis=HOVER_YAWS,
+                          q7s=ik.Q7_GRID, ok=ok)
     if w is None or q is None:
         return w if w is not None else q
-    # both exist: keep whichever the score prefers, the narrow one on a tie —
-    # it is the nearer pose and the shorter lift
+    # both exist: keep whichever the score prefers, and where the score is
+    # indifferent — which is every pair that is comfortable — keep the NEARER,
+    # because the difference between them is joint-space seconds the lift and
+    # the lower each pay in full.
+    if ok is None:
+        return q if dq <= dw else w
     s = np.asarray(ok(np.stack([q, w])), float)
-    return q if s[0] >= s[1] else w
+    if s[1] > s[0] + paper.EPS:
+        return w
+    if s[0] > s[1] + paper.EPS:
+        return q
+    return q if dq <= dw else w
 
 
 # ==========================================================================
@@ -1334,6 +1376,11 @@ def lifted_or_lower(spec, q_ref, xy, heights=HOVER_LADDER, h_inv=H_INV_DEFAULT,
            # changes either may not read an answer computed under the other.
            int(HOVER_DEPOT_TRIES), float(HOVER_LEAN_MAX_DEG),
            tuple(float(d) for d in HOVER_DEPOT_LEANS),
+           # ...and the fiber-escalation distance, for the same reason a third
+           # time: `HOVER_NEAR` decides whether the narrow answer is kept or
+           # the fiber is opened, so two runs at different values must not read
+           # each other's hovers.
+           float(HOVER_NEAR),
            # ...and the C-space tier, for the same reason again.  The depot
            # rescue below asks `hover_joins_depot`, which is three
            # `paper.route` calls, and those have a different answer with the

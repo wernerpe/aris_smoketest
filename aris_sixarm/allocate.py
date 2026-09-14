@@ -3374,6 +3374,264 @@ def build_menus(segs, spec, opts=None, n_cand=menu.N_CAND,
                      mean_variants=float(np.mean(sizes)) if sizes else 0.0)
 
 
+# ===========================================================================
+# THE SHEET CHOICE, MADE ALONG THE TOUR INSTEAD OF PIECE BY PIECE
+# ===========================================================================
+# `sequence_arm_cluster` below decides ORDER, DIRECTION and FIBER together and
+# is the right answer where a bag is a bag.  The staged pipeline's per-arm
+# bucket is not that case: its order is decided by `sequence_arm` against a
+# frozen room, its pieces are short fragments (mean 14 cm on the lf2 s150
+# programme), and `staged.plan_bucket` re-plans the same bucket several times
+# under the drop-and-defer loop.  Paying the cluster DP's second `cost_matrix`
+# pass on every one of those retries is the cost centre that killed stage B
+# under its wall cap (docs/V2_STAGED.md), and `sequence_arm_cluster`
+# re-materialises its choice without ever re-asking `staged.ink_vs_envelope`,
+# so a room refusal could reappear as a certified plan.
+#
+# So the staged path gets the SAME IDEA in the cheaper shape the fixed order
+# allows: once the tour is known, "which sheet does each piece stand on" is a
+# CHAIN, and a chain is a Viterbi pass — O(n K^2) instead of O(2^n n K^2), with
+# no second route screen and with every alternative put through the caller's
+# own acceptance test before it can be chosen.
+#
+# MEASURED, because that is why it is here.  On arm 71 stage A of the lf2 s150
+# programme, six of thirteen pen-up legs are redundancy flips: the pieces are
+# planned one at a time by maximin-sigma, adjacent pieces land on different IK
+# sheets, and the transit folds the arm over between them — 16.5 rad of joint
+# path to cross 34 cm on leg 1, 11.1 rad on leg 6.
+#
+# WHAT IT MAY AND MAY NOT DO.  An alternative is a `menu` variant MATERIALISED
+# through `stroke_api`, so it carries the identical sigma, margin and validator
+# certificate every shipped plan carries; on top of that `accept` is the
+# caller's room test and nothing is choosable that fails it.  Alternative 0 is
+# always the plan the bucket already certified, so the DP's worst case is the
+# programme it was handed.  Continuity is a TIE-BREAK among certified plans and
+# never a relaxation of what certifies.
+CHAIN_K = 4                 # certified alternatives offered per piece
+CHAIN_ROUNDS = 3            # re-solves after a chosen variant fails to plan
+
+
+def _chain_hovers(spec, q, xy, h_inv, pen_ext, memo):
+    """The hover over one end of one alternative, memoised per call. -> (7,)."""
+    k = (np.asarray(q, float).tobytes(), np.asarray(xy, float).tobytes())
+    hit = memo.get(k)
+    if hit is None:
+        hit = np.asarray(writing.lifted_or_lower(spec, q, xy, h_inv=h_inv,
+                                                 pen_ext=pen_ext)[0],
+                         float).reshape(7)
+        memo[k] = hit
+    return hit
+
+
+def chain_edge_s(spec, a, b, h_inv, pen_ext, transit_speed, qd_frac, hov,
+                 q_home=None):
+    """The capped transit seconds between two alternatives. -> float.
+
+    Exactly `writing.transit_time`'s three beats — lift, travel, lower — which
+    is the number `sequence.cost_matrix` prices a crossing at and the number
+    `writing.arm_program` will lay down, minus the router's surcharge (a route
+    can only make a crossing dearer, and it is not a function of the sheet
+    choice alone).  `q_home` is not None when the tour goes home between the
+    two, and then the crossing is the two depot legs instead of one.
+    """
+    ho = hov(a["exit_q"], a["exit_xy"])
+    hi = hov(b["entry_q"], b["entry_xy"])
+    if q_home is not None:
+        qh = np.asarray(q_home, float).reshape(7)
+        lift, home = writing.exit_time(a["exit_q"], ho, qh, qd_frac)
+        back, lower = writing.enter_time(qh, hi, b["entry_q"], qd_frac)
+        return float(lift + home + back + lower)
+    hop = float(np.linalg.norm(np.asarray(b["entry_xy"], float)
+                               - np.asarray(a["exit_xy"], float)))
+    return float(sum(writing.transit_time(a["exit_q"], ho, hi, b["entry_q"],
+                                          hop, transit_speed, qd_frac)))
+
+
+def chain_sheets(segs, spec, opts=None, seq_opts=None, k=CHAIN_K, accept=None,
+                 rounds=CHAIN_ROUNDS, menus=None, verbose=False):
+    """Re-pick each piece's entry/exit fiber for CONTINUITY along a FIXED tour.
+
+    `segs` is an ORDERED programme — `sequence_arm`'s output, directions
+    already applied — and comes back with the same entries in the same order,
+    each carrying the plan the chain DP chose.
+
+    `accept(plan, index) -> bool` is the caller's certification test on a
+    materialised alternative (the staged pipeline passes its ink-vs-room gate).
+    It is asked about every alternative except index 0, which is the plan the
+    caller already accepted, so the result can never be worse than the input.
+
+    -> (programme, stats).
+    """
+    so = dict(seq_opts or {})
+    h_inv = float(so.get("h_inv", H_INV_DEFAULT))
+    pen_ext = so.get("pen_ext")
+    ts = float(so.get("transit_speed", writing.TRANSIT_SPEED))
+    qf = float(so.get("qd_frac", writing.QD_FRAC))
+    q_start = so.get("q_start")
+    return_home = bool(so.get("return_home", True))
+    n = len(segs)
+    t0 = time.time()
+    stats = dict(n=n, k=int(k), n_changed=0, n_alt=0, rounds=0,
+                 before_s=0.0, after_s=0.0, wall=0.0,
+                 before_rad=0.0, after_rad=0.0)
+    if n < 2:
+        stats["wall"] = time.time() - t0
+        return list(segs), stats
+
+    if menus is None:
+        menus, _ = build_menus(segs, spec, opts, max_variants=int(k))
+    hov_memo = {}
+
+    def hov(q, xy):
+        return _chain_hovers(spec, q, xy, h_inv, pen_ext, hov_memo)
+
+    # THE ALTERNATIVES, AS ENDPOINTS ONLY.  A `menu` variant advertises the
+    # exact configurations it will start and end on without planning anything,
+    # so the whole DP runs on `entry_q`/`exit_q` and only the CHOSEN variants
+    # are ever materialised and certified.
+    alts = []
+    for i, s in enumerate(segs):
+        pl = s["plan"]
+        qs = np.asarray(pl["qs"], float)
+        pts = np.asarray(pl["pts"], float)
+        base = dict(entry_q=qs[0].copy(), exit_q=qs[-1].copy(),
+                    entry_xy=pts[0].copy(), exit_xy=pts[-1].copy(),
+                    surcharge=0.0, src=None, plan=pl)
+        rows = [base]
+        m = menus[i] if i < len(menus) else None
+        for j, v in enumerate(getattr(m, "variants", [])[:int(k)]):
+            if (np.max(np.abs(np.asarray(v["entry_q"], float) - qs[0])) < 1e-9
+                    and np.max(np.abs(np.asarray(v["exit_q"], float)
+                                      - qs[-1])) < 1e-9):
+                continue                 # the plan we already have
+            rows.append(dict(entry_q=np.asarray(v["entry_q"], float),
+                             exit_q=np.asarray(v["exit_q"], float),
+                             entry_xy=np.asarray(v["entry_xy"], float),
+                             exit_xy=np.asarray(v["exit_xy"], float),
+                             surcharge=float(v.get("surcharge", 0.0)),
+                             src=j, plan=None))
+        alts.append(rows)
+    stats["n_alt"] = int(sum(len(a) for a in alts))
+
+    homes = [bool(s.get("home_before", False)) for s in segs]
+
+    def solve(dead):
+        """Viterbi over pieces x alternatives. -> (choice, cost) | None."""
+        live = [[j for j in range(len(alts[i])) if (i, j) not in dead]
+                for i in range(n)]
+        if any(not c for c in live):
+            return None
+        # the depot leg onto the first piece, so the first choice is priced
+        best = []
+        for j in live[0]:
+            a = alts[0][j]
+            c = a["surcharge"] / max(qf, 1e-9)
+            if q_start is not None:
+                hi = hov(a["entry_q"], a["entry_xy"])
+                c += float(sum(writing.enter_time(
+                    np.asarray(q_start, float).reshape(7), hi, a["entry_q"],
+                    qf)))
+            best.append(c)
+        cost = {j: c for j, c in zip(live[0], best)}
+        back = [dict() for _ in range(n)]
+        for i in range(1, n):
+            nxt = {}
+            qh = (np.asarray(q_start, float).reshape(7)
+                  if (homes[i] and q_start is not None) else None)
+            for jb in live[i]:
+                b = alts[i][jb]
+                bc, bj = np.inf, None
+                for ja in live[i - 1]:
+                    c = cost[ja] + chain_edge_s(spec, alts[i - 1][ja], b,
+                                                h_inv, pen_ext, ts, qf, hov,
+                                                qh)
+                    if c < bc:
+                        bc, bj = c, ja
+                nxt[jb] = bc + b["surcharge"] / max(qf, 1e-9)
+                back[i][jb] = bj
+            cost = nxt
+        end = dict(cost)
+        if return_home and q_start is not None:
+            qh = np.asarray(q_start, float).reshape(7)
+            for j in live[n - 1]:
+                a = alts[n - 1][j]
+                end[j] += float(sum(writing.exit_time(
+                    a["exit_q"], hov(a["exit_q"], a["exit_xy"]), qh, qf)))
+        jb = min(end, key=lambda j: end[j])
+        chain, tot = [jb], float(end[jb])
+        for i in range(n - 1, 0, -1):
+            jb = back[i][jb]
+            chain.append(jb)
+        return list(reversed(chain)), tot
+
+    base_chain = [0] * n
+    dead = set()
+    got = None
+    for _ in range(max(1, int(rounds))):
+        stats["rounds"] += 1
+        got = solve(dead)
+        if got is None:
+            got = (base_chain, float("inf"))
+            break
+        chain, _ = got
+        bad = False
+        for i, j in enumerate(chain):
+            if j == 0 or alts[i][j]["plan"] is not None:
+                continue
+            r = menus[i].materialize(alts[i][j]["src"], opts)
+            if str(r.get("status")) != "ok" or (accept is not None
+                                                and not accept(r, i)):
+                dead.add((i, j))
+                bad = True
+                continue
+            alts[i][j]["plan"] = r
+        if not bad:
+            break
+    # WHAT SHIPPED, NOT WHAT THE LAST DP ASKED FOR.  A variant that ran out of
+    # rounds without materialising falls back to the plan the bucket certified,
+    # so the chain that is priced below is the chain the timeline will fly.
+    chain = [(j if (j == 0 or alts[i][j]["plan"] is not None) else 0)
+             for i, j in enumerate(got[0] if got else base_chain)]
+
+    def price(ch):
+        tot = 0.0
+        for i in range(1, n):
+            qh = (np.asarray(q_start, float).reshape(7)
+                  if (homes[i] and q_start is not None) else None)
+            tot += chain_edge_s(spec, alts[i - 1][ch[i - 1]], alts[i][ch[i]],
+                                h_inv, pen_ext, ts, qf, hov, qh)
+        return tot
+
+    def reconfig(ch):
+        tot = 0.0
+        for i in range(1, n):
+            a, b = alts[i - 1][ch[i - 1]], alts[i][ch[i]]
+            tot += float(np.abs(np.asarray(b["entry_q"], float)
+                                - np.asarray(a["exit_q"], float)).sum())
+        return tot
+
+    stats["before_s"], stats["after_s"] = price(base_chain), price(chain)
+    stats["before_rad"] = reconfig(base_chain)
+    stats["after_rad"] = reconfig(chain)
+    out = []
+    for i, s in enumerate(segs):
+        j = chain[i]
+        pl = alts[i][j]["plan"]
+        if j == 0 or pl is None:
+            out.append(s)
+            continue
+        stats["n_changed"] += 1
+        out.append(dict(s, plan=pl, pts=np.asarray(pl["pts"], float),
+                        length=float(pl["arc_len"])))
+    stats["wall"] = time.time() - t0
+    if verbose:
+        print(f"    chain: {stats['n_changed']}/{n} pieces re-sheeted, "
+              f"transit {stats['before_s']:.2f} -> {stats['after_s']:.2f} s, "
+              f"reconfiguration {stats['before_rad']:.1f} -> "
+              f"{stats['after_rad']:.1f} rad, {stats['wall']:.2f} s")
+    return out, stats
+
+
 def sequence_arm_cluster(segs, spec, menus, opts=None, seq_opts=None,
                          forbid=None, verbose=False):
     """Order, direction AND entry/exit fiber, in one exact DP. -> dict.

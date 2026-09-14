@@ -190,6 +190,30 @@ STATIC_SAFE = True
 # anything the logo needs, so "no route" means the geometry and not the ladder.
 VIA_HEIGHTS = (0.08, 0.12, 0.15, 0.18, 0.25, 0.32, 0.40)
 
+# ...AND "LOW FIRST" WAS ONLY TRUE OF THE LADDER (2026-09-14).  Two tiers used
+# to jump the queue in front of the 8 cm rung: the metal-only skirt, which is a
+# diagnosis and stays where it is, and the BARE DEPOT VIA `[q_home]`, which is
+# the park pose — 42 cm up on the proposed rig — offered as a shape before any
+# rung of the ladder had been tried.  Measured on arm 71's stage A, four of
+# thirteen pen-up legs climb 32 to 42 cm and travel 58 to 70 cm of vertical for
+# hops of 11 to 20 cm.  The depot via is still offered; it is offered AFTER the
+# ladder, which is what "the lowest via that clears" means.
+HOME_AFTER_LADDER = True
+
+# A ROUTED LEG IS A FIRST DRAFT.  Every tier returns the FIRST shape that
+# certifies, and the shapes that certify most often are the ones with the most
+# vias (`walk`/`traverse` lay one down every 12 to 30 cm of paper).  The
+# sequencer then pays for all of them.  So before a route is returned or
+# stored, vias are dropped one at a time, cheapest-first, and a drop is kept
+# ONLY when the shortened shape is re-certified end to end by `legs_ok` — the
+# same bound, the same floors, the same self and static gates as the shape it
+# replaces.  A shortcut can therefore never be looser than what it replaces; it
+# can only be shorter.  (`transit._shortcut` already does this for the RRT
+# tier's output and nothing else; this covers every tier, that one included.)
+SHORTCUT = True
+SHORTCUT_ROUNDS = 8        # passes of drop-one-via before giving up
+ROUTE_REV = 2              # bumped when route's tiers, vias or hovers change
+
 SAMPLES = 33               # configurations sampled along one straight move
 
 _CACHE = {}                # (spec key, pen, h_inv, q0, q1, floors) -> result
@@ -334,7 +358,13 @@ def cache_signature():
                    round(float(_frames.PEN_EXT_HOLDER), 12),
                    round(float(_frames.PEN_LAT_HOLDER), 12),
                    round(float(_frames.TCP_D), 12),
-                   bool(STATIC_SAFE), bool(SELF_SAFE), bool(RRT_SAFE))
+                   bool(STATIC_SAFE), bool(SELF_SAFE), bool(RRT_SAFE),
+                   # ...AND THE ROUTER'S OWN BEHAVIOUR, ONE NUMBER.  The tier
+                   # order, the via shortcutter and the hover-fiber escalation
+                   # distance all change which vias a stored leg holds, and a
+                   # warm store would serve the old ones silently.  Bumping
+                   # `ROUTE_REV` namespaces the store instead.
+                   int(ROUTE_REV))
 
 
 # ===========================================================================
@@ -1816,9 +1846,61 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
                     break
         return ok, cz, tz
 
+    def price(seq):
+        """What the sequencer will pay for this shape. -> seconds at full rate.
+
+        `writing._dq_time`'s shape without its speed fraction, so a shortcut is
+        ranked on exactly the number the tour is priced on.  Written out here
+        rather than imported because `writing` and `transit` both import this
+        module.
+        """
+        qs = [q0] + list(seq) + [q1]
+        return float(sum(np.max(np.abs(np.asarray(b, float)
+                                       - np.asarray(a, float))
+                                / _frames.QD_MAX)
+                         for a, b in zip(qs[:-1], qs[1:])))
+
+    def shorten(seq, cz, tz):
+        """Drop vias while `legs_ok` still certifies the whole shape.
+
+        Greedy, deterministic and subset-only: it can remove a via and never
+        invent one, so every pose in the result was already certified as a pose
+        and every leg of the result is certified here, end to end, at the
+        floors this route was called with.  The drop that saves the most time
+        wins each pass; a drop that does not save time is not taken.
+        """
+        cur = list(seq)
+        if not SHORTCUT or len(cur) < 1:
+            return cur, cz, tz, 0
+        n_cut = 0
+        for _ in range(int(SHORTCUT_ROUNDS)):
+            base, best = price(cur), None
+            for i in range(len(cur)):
+                cand = cur[:i] + cur[i + 1:]
+                p = price(cand)
+                if p >= base - 1e-9:
+                    continue
+                ok, c, t = legs_ok(cand)
+                if ok and (best is None or p < best[0]):
+                    best = (p, cand, c, t)
+            if best is None:
+                break
+            _, cur, cz, tz = best
+            n_cut += 1
+            if not cur:
+                break
+        return cur, cz, tz, n_cut
+
     def done(seq, name, cz, tz, tried):
+        seq, cz, tz, n_cut = shorten(list(seq), cz, tz)
+        # THE CUT COUNT RIDES ON THE MODE AND NOT ON A FIELD OF ITS OWN: the
+        # disk store round-trips exactly `vias/mode/chain_z/tip_z/tried`, so a
+        # field would be present on a fresh answer and absent on a cached one.
+        # A suffix survives, and nothing compares a mode for equality except
+        # the determinism test, which sees the same suffix both times.
         out = dict(vias=[np.asarray(v, float).reshape(7) for v in seq],
-                   mode=name, chain_z=float(cz), tip_z=float(tz), tried=tried)
+                   mode=(name if not n_cut else f"{name}-{n_cut}cut"),
+                   chain_z=float(cz), tip_z=float(tz), tried=tried)
         if ck is not None:
             cache_route(ck, out)
         return out
@@ -1874,12 +1956,18 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
         got, tried = skirts(tried)
         if got is not None:
             return got
-    if q_home is not None:
+    def bare_home(base):
+        """The depot offered as one via. -> (result, tried)."""
+        if q_home is None:
+            return None, base
         qh = np.asarray(q_home, float).reshape(7)
-        tried += 1
         ok, cz, tz = legs_ok([qh])
-        if ok:
-            return done([qh], "home", cz, tz, tried)
+        return (done([qh], "home", cz, tz, base + 1) if ok else None), base + 1
+
+    if not HOME_AFTER_LADDER:
+        got, tried = bare_home(tried)
+        if got is not None:
+            return got
     for z in heights:
         a0, _ = lift(spec, q0, xy0, z, pen_ext, h_inv, mm)
         a1, _ = lift(spec, q1, xy1, z, pen_ext, h_inv, mm)
@@ -1920,6 +2008,13 @@ def route(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     # buys clearance more cheaply has failed.  Skipped entirely when nothing
     # static is in the room, which is every legacy rig, and already spent above
     # when the metal was the whole problem.
+    # ...and the DEPOT as a bare via, which used to be tried before the 8 cm
+    # rung and is a 42 cm climb on this rig.  Every shape on the ladder is
+    # cheaper than it, so it is asked once they have all failed.
+    if HOME_AFTER_LADDER:
+        got, tried = bare_home(tried)
+        if got is not None:
+            return got
     if not metal_only:
         got, tried = skirts(tried)
         if got is not None:
