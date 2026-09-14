@@ -44,6 +44,84 @@ _OBSERVER = None
 
 _BAND = re.compile(r"^body:(\d+)_column\d+$")
 
+# ==========================================================================
+# THE PARTNER STANDOFF — an EXTRA requirement, never a gate change
+# ==========================================================================
+# WHAT IT IS FOR (docs/V2_STAGED.md §25).  In the leader/follower pattern the
+# LEADER plans first and is certified against its same-row partner's held pose
+# at exactly `PAIR_MARGIN` / `STATIC_MARGIN`, because it has no reason to keep
+# more.  Then the FOLLOWER has to route its own pen-up legs in what is left,
+# and `paper.route`'s floor is `paper.FRAME_FLOOR` (63 mm) — higher than the
+# 50 mm pose gate the leader was held to.  Measured on CSAIL stage A: every
+# pose arm 31 can hold near its own ink stands +53.7 mm from leader 71's exact
+# room, at every hover rung and over every x-y, which is legal to stand in and
+# impossible to route through.  The number is CONSTANT in the follower's pose,
+# so the binding geometry is the follower's links that do not move.
+#
+# MEASURED, which set those are.  Leader 71's realised stage-A trajectory
+# against follower 31's capsules at its held pose, per capsule (mm of surface
+# gap): base bands 207.0 / 243.8 / 192.2, **upper arm (chain 1->3) 103.2**,
+# elbow 314.2, forearm 331.4, wrist 613.3, hand 560.1, tool 519.8.  The
+# binding pair is the leader's FOREARM against the follower's UPPER ARM, whose
+# shoulder end (chain point 1) is where the base column ends and does not move
+# whatever the partner's joints do.  So the pose-invariant set carried here is
+# every capsule both of whose chain endpoints are in {0, 1, 3} — the four base
+# column bands (0->1) and the shoulder->elbow link (1->3), which is "base
+# column + link 0/1".  The elbow link (3->4) is 3x further away and is not in
+# it.
+#
+# WHAT IT IS NOT.  No gate constant moves: `PAIR_MARGIN`, `STATIC_MARGIN` and
+# `FRAME_FLOOR` are untouched, and `S = 0` reproduces every earlier number
+# exactly (`tests/test_staged_standoff.py`).  `S` is an ADDITIONAL requirement
+# on ONE named partner's pose-invariant capsules: `partner_clearance` returns
+# `min(gap_everywhere, gap_to_that_set - S)`, so every call site that compares
+# the result against its own floor `f` is thereby demanding `f + S` of that
+# set and `f` of everything else.  The leader loses the ink that needs to
+# reach in under its partner's shoulder; deferral already knows what to do
+# with it.
+STANDOFF_POINTS = (0, 1, 3)   # chain points a POSE-INVARIANT capsule spans
+
+_STANDOFF = {}      # {aid: S metres} — extra clearance, that partner's set only
+_INVARIANT = {}     # {aid: bool mask over that partner's capsule rows}
+
+
+def invariant_mask(tab, n_poses=1):
+    """Which rows of a partner's flat capsule block are pose-invariant.
+
+    `tab` is the capsule table the block was built from and `n_poses` how many
+    times it was tiled (`freeze_sets` stacks pose-major, which is what
+    `np.tile` on the radii already assumes).  -> (len(tab) * n_poses,) bool.
+    """
+    row = np.array([bool(c[0] in STANDOFF_POINTS and c[1] in STANDOFF_POINTS)
+                    for c in tab], bool)
+    return np.tile(row, int(n_poses)) if int(n_poses) != 1 else row
+
+
+def set_standoff(mapping):
+    """Demand S metres MORE of these partners' pose-invariant capsules.
+
+    `mapping` is {aid: S}; anything falsy clears it.  Call it AFTER `freeze` /
+    `freeze_sets`, which reset it — so a caller that does not ask for a
+    standoff cannot inherit one from the previous bucket.
+    """
+    global _STANDOFF
+    _STANDOFF = {int(a): float(s) for a, s in (mapping or {}).items()
+                 if float(s) > 0.0}
+
+
+def standoff():
+    """The live standoff. -> {aid: S}."""
+    return dict(_STANDOFF)
+
+
+def standoff_sig():
+    """A stable string for the memo and leg-cache keys. -> str.
+
+    EMPTY WHEN THERE IS NO STANDOFF, so every key an S = 0 run builds is the
+    key it built before this existed and a warm leg store still answers.
+    """
+    return "".join(f"{a}:{_STANDOFF[a]:.6f};" for a in sorted(_STANDOFF))
+
 
 def band_owner(name):
     """The arm a pose-invariant body band belongs to. -> int | None.
@@ -96,8 +174,9 @@ def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
     for the A/B (`ARIS_ROOM=spheres`).  Both arrive here and both leave through
     `partner_clearance`, which is the only seam either of them has.
     """
-    global _CAPS, _POSES
-    _CAPS, _POSES = {}, {}
+    global _CAPS, _POSES, _INVARIANT
+    _CAPS, _POSES, _INVARIANT = {}, {}, {}
+    set_standoff(None)
     for aid, Q in (sets or {}).items():
         aid = int(aid)
         if aid not in fleet:
@@ -126,6 +205,7 @@ def freeze_sets(sets, fleet, pens, h_inv, clusters=None):
         B = np.asarray(B, float)[:, keep].reshape(-1, 3)
         R = np.tile(np.array([c[2] for c in tab], float), len(Q))
         _CAPS[aid] = (A, B, R)
+        _INVARIANT[aid] = invariant_mask(tab, len(Q))
         _POSES[aid] = Q[0].copy()
 
 
@@ -135,8 +215,9 @@ def freeze(parks, fleet, pens, h_inv):
     `parks` is {aid: q}; `fleet` and `pens` supply each arm's base transform and
     tool.  Replaces any previous frozen set.
     """
-    global _CAPS, _POSES
-    _CAPS, _POSES = {}, {}
+    global _CAPS, _POSES, _INVARIANT
+    _CAPS, _POSES, _INVARIANT = {}, {}, {}
+    set_standoff(None)
     for aid, q in (parks or {}).items():
         aid = int(aid)
         if aid not in fleet:
@@ -166,13 +247,18 @@ def freeze(parks, fleet, pens, h_inv):
                           (A, B, R))
         else:
             _CAPS[aid] = (A, B, R)
+        # THE MASK IS OVER `blk[3] or blk[:3]`, the SHIPPED capsule block, which
+        # is the block the standoff pass below reads.  Under the sphere model
+        # that is `blk[3]` and it is `(A, B, R)` either way.
+        _INVARIANT[aid] = invariant_mask(tab, 1)
         _POSES[aid] = np.asarray(q, float).reshape(7).copy()
 
 
 def thaw():
     """Back to the shipped pose-invariant model."""
-    global _CAPS, _POSES, _OBSERVER
-    _CAPS, _POSES, _OBSERVER = {}, {}, None
+    global _CAPS, _POSES, _OBSERVER, _INVARIANT
+    _CAPS, _POSES, _OBSERVER, _INVARIANT = {}, {}, None, {}
+    set_standoff(None)
 
 
 def observe(aid):
@@ -291,6 +377,39 @@ def partner_clearance(P, C=None, floor=None):
                                           P[:, j][:, None, :],
                                           Acap[None, :, :], Bcap[None, :, :])
             worst = np.minimum(worst, (d - (Rcap[None, :] + r)).min(axis=1))
+    # ...AND THE STANDOFF, WHICH IS A SECOND PASS OVER A SUBSET.  Nothing above
+    # changed: this only folds in `gap_to_the_invariant_set - S`, so the number
+    # that comes back is still a clearance and every caller's own floor is what
+    # decides.  The subset is a subset of what the loop above already measured,
+    # so with S = 0 this is a no-op by construction and with S > 0 it can only
+    # LOWER the answer -- it never licenses anything.
+    so = np.full(len(P), np.inf)
+    for aid, S in _STANDOFF.items():
+        if aid == _OBSERVER or aid not in _CAPS or S <= 0.0:
+            continue
+        blk = _CAPS[aid]
+        if isinstance(blk, exact_room.ExactRoom):
+            # A ROOM IS NOT SPLIT INTO ITS INVARIANT ROWS HERE, so the whole
+            # room wears the standoff.  That is conservative, and in the
+            # leader/follower sweep it never fires: a leader plans before every
+            # follower, so a partner it holds a standoff against is always a
+            # single held POSE and never a trajectory room.  The floor is
+            # raised with it, or a floored query could return a bound above
+            # `floor` that subtraction pushes below it.
+            f = None if floor is None else float(floor) + float(S)
+            so = np.minimum(so, blk.chain_clearance(P, caps, f) - S)
+            continue
+        m = _INVARIANT.get(aid)
+        if m is None or not m.any():
+            continue
+        Acap, Bcap, Rcap = blk[3] if len(blk) > 3 else (blk[0], blk[1], blk[2])
+        Ai, Bi, Ri = Acap[m], Bcap[m], Rcap[m]
+        for (i, j, r) in caps:
+            d = coordination.seg_seg_dist(P[:, i][:, None, :],
+                                          P[:, j][:, None, :],
+                                          Ai[None, :, :], Bi[None, :, :])
+            so = np.minimum(so, (d - (Ri[None, :] + r)).min(axis=1) - float(S))
+    worst = np.minimum(worst, so)
     if C is None:
         return worst
     sel = slice(None) if floor is None else np.flatnonzero(worst < float(floor))
@@ -318,7 +437,10 @@ def partner_clearance(P, C=None, floor=None):
         lean_w = np.minimum(lean_w, d.reshape(len(Ps), -1).min(axis=1))
     out = worst.copy()
     out[sel] = np.maximum(worst[sel], lean_w)
-    return out
+    # THE SPHERE MODEL MAY NOT UNDO THE STANDOFF.  `max` is the intersection of
+    # the two envelopes and is right for the obstacle; the standoff is not an
+    # obstacle, it is an extra requirement, so it survives both readings.
+    return np.minimum(out, so)
 
 
 def chain_clearance(P, room, C=None, floor=None):

@@ -1,5 +1,103 @@
 # Decisions — the numbers, and where each one is anchored
 
+## A SAME-ROW PAIR *CAN* DRAW TOGETHER — THE LEADER'S PARTNER STANDOFF (2026-09-14, FIFTH of five)
+
+**The claim this overturns is our own.** §22 §4b's *"no pattern may ever put a
+same-row pair in the air together"*, re-anchored on rooms in §23 and given a
+number in §24 — *"every pose arm 31 can hold near its own ink stands +53.7 mm
+from leader 71's exact room, legal to stand in and impossible to route
+through"* — was read as a fact about the pair's geometry. **It is a fact about
+the LEADER'S TOUR.** With leader 71 reduced to the pose it holds, follower 31's
+own hover stations read a median **+192.0 mm** and **39 of 45 clear the 63 mm
+routing floor**; with 71 at its park, 45 of 45 clear at a minimum of +135.2 mm.
+The +53.7 mm was the leader's swept trajectory, and the leader had no reason to
+keep more than the 50 mm it was certified at.
+
+**WHAT WAS BUILT — `frozen.set_standoff`, and NO GATE CONSTANT MOVED.**
+`PAIR_MARGIN` 0.050, `rig_final.STATIC_MARGIN` 0.050, `SELF_PLAN_MARGIN` 0.023
+and `paper.FRAME_FLOOR` 0.063 are untouched and a test pins all four. `S` is an
+ADDITIONAL requirement: `frozen.partner_clearance` returns
+`min(gap everywhere, gap to that partner's POSE-INVARIANT capsules − S)`, so
+every call site that compares the answer against its own floor `f` demands
+`f + S` of the named set and `f` of everything else. One seam — the ink gate,
+`writing.arm_program`, all four `paper.route` tiers and
+`effective_static_floor` already reach the partner model through `frozen`.
+`scene_check` shares none of it and stays the judge.
+
+**THE SET IS MEASURED, NOT ASSUMED.** Leader 71's realised stage-A trajectory
+against follower 31's capsules at its held pose: base bands 207.0 / 243.8 /
+192.2 mm, **upper arm (chain 1→3) 103.2 mm**, elbow 314.2, forearm 331.4,
+wrist 613.3, hand 560.1, tool 519.8. The binding pair is the leader's FOREARM
+against the follower's UPPER ARM, whose shoulder end is chain point 1 and does
+not move. So the standoff set is every capsule both of whose chain endpoints are
+in {0, 1, 3} — the four base column bands and the shoulder→elbow link, "base
+column + link 0/1". The elbow link is three times further away and is not in it.
+
+**ONLY A LEADER OWES IT, AND ONLY TO ITS SAME-ROW FOLLOWER** (`lf_standoffs`).
+A cross-row pair clears by +194 mm with each row inside its own band, so
+charging one would cost a leader ink and buy a follower nothing. **S = 0 is a
+no-op**: no standoff installed, the leg-cache signature and the plan-memo room
+key bit-identical to what they were before this existed, and a `--partner-standoff 0`
+run reproduces the live baseline line for line (15 pieces, 2.0613 m, 95.864 s,
+pair +65.58, solo +51.66, PASS, arm 31's park +53.7 mm, 0/45 stations, the same
+cut and the same two drops).
+
+**MEASURED — the sweep, CSAIL h = 0.970, stage A.** The leader's ink flown is
+**2.061 m at every S** (split +0.15) and **4.595 m at every S** (whole bag):
+the same metres and the same pieces, because **not one of the leader's ink poses
+is inside the bar at any S** — 0.0 % of its drawing samples, against 35–50 % of
+its pen-up ones. The standoff constrains where the leader's LEGS may fly and
+nothing else.
+
+| S | split +0.15: follower flown / offered | verdict | whole bag: follower flown / offered | verdict |
+|---|---|---|---|---|
+| 0 | **0.000 / 2.142 m — 0 %** | PASS | **0.000 / 5.026 m — 0 %** | PASS |
+| 70 mm | 0.955 / 2.142 m — 44.6 % | FAIL (held pose) | 0.000 / 5.018 m — 0 % | PASS |
+| **90 mm** | **1.433 / 2.141 m — 66.9 %** | **PASS** | 1.526 / 5.020 m — 30.4 % | FAIL (held pose) |
+| **110 mm** | 1.433 / 2.141 m — 66.9 % | FAIL (held pose) | **1.387 / 4.981 m — 27.8 %** | **PASS** |
+| 130 mm | 1.568 / 2.140 m — 73.2 % | FAIL, `active_pair` **+42.7 mm** | 1.790 / 5.020 m — 35.7 % | FAIL, `active_pair` **−8.3 mm** |
+
+**AND THE FOLLOWER'S CLEARANCE GOES STRAIGHT TO THE CEILING.** At every S ≥ 70
+the log reads `arm 31 [follower] tuck: park +80.2 mm, 1/1 stations clear >= 73 mm`
+— up from +53.7 mm, and +80.2 mm is exactly the S → ∞ value. The lever does not
+buy the follower part of the room; at 70 mm it has already bought all of it.
+
+**THERE IS A REAL OPTIMUM AND THE SWEEP BRACKETS IT.** Below it the follower
+cannot route its legs; above it the follower takes so much ink that the two
+realised trajectories close on each other — S = 130 reads +42.7 mm on the split
+and **−8.3 mm** on the whole bag, which is a genuine gate violation and the one
+thing in this sweep that is. Every other not-ok stage has BOTH clearance numbers
+over their gates and fails `solo_check`'s per-arm flag: the case measured is
+**leader 71's HELD BARRIER POSE at 111 mrad of joint-1 margin against
+`scene_check`'s 150 mrad bar** (frame +69.3 mm, self +105.7 mm, tip z 60 mm all
+fine). That is `park_policy` / `hold_gap`'s business, not the pattern's.
+
+**THE DECISIVE NUMBER.** Row 1 is arms 31 and 71 at 0.61 m of base spacing. At
+the best S, in stage A:
+
+| | split +0.15, S = 90 mm | whole bag, S = 110 mm |
+|---|---|---|
+| row 1's ink drawn **with both arms of the row flying** | **3.271 m of 3.979 m — 82.2 %** | **5.024 m of 8.618 m — 58.3 %** |
+| …**drawn simultaneously**, in the overlap window | **2.438 m — 61.3 %** (29.45 s) | **2.027 m — 23.5 %** (24.59 s) |
+| the same, at S = 0 | **0.000 m — 0.0 %** | **0.000 m — 0.0 %** |
+| realised pair clearance while they do it | **+62.1 mm** | **+62.5 mm** |
+| stage A | **77.4 s** (was 95.9), **3.494 m** (was 2.061) | **109.6 s** (was 128.6), **5.982 m** (was 4.595) |
+
+**WHAT THIS BOX DID NOT BUY: A MAKESPAN.** All eight A + B runs were killed by
+their 25-minute cap inside stage B's `sequence.cost_matrix` route screen — the
+same O(n²) wall §19, §22 and §24 flagged, which the standoff makes worse per leg
+because every re-routed leg falls through to the RRT. So the sweep is **stage A
+only**, and the comparison against the S = 0 A + B makespans of **119.9 s**
+(split) and **145.9 s** (whole bag) is owed stage B's duration. What is already
+in hand is 18.5 s and 19.0 s out of stage A, and 1.43 m / 1.39 m of follower ink
+moved out of the pile stage C would otherwise conduct at §22's measured
+3 075 s / 11.5 m.
+
+`docs/V2_STAGED.md` §25 is the write-up; `tests/test_staged_standoff.py` holds
+the mechanism down; the runs are
+`out/staged_csail_h097_lf4_S{070,090,110,130}_{s150,whole}.{json,log}` with the
+capped A + B logs alongside as `*_ab.log`.
+
 ## PIECES ARE CUT AT THE ROOM BOUNDARY, AND THE FINAL PASS IS ONE CONDUCTOR PER ROW (2026-09-14, FOURTH of four)
 
 **Two decisions, both of the same shape: cut where the geometry changes, and do

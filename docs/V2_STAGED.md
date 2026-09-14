@@ -1933,3 +1933,95 @@ carry forward instead is the measured final-pass cost, and it is the one real
 improvement this pass bought: **113 s of wall per metre of deferred ink, against
 §22's 268 s/m** — provided the composition is fixed, because the stage that
 produced it does not pass.
+
+### 25.5 The sweep — S ∈ {0, 70, 90, 110, 130} mm, CSAIL h = 0.970, stage A
+
+`--partner-standoff`, exact rooms, seam bar in, the cut on, `--stages 0,1`.
+**Stage B did not fit the 25-minute cap at any setting** — all eight A+B runs
+were killed inside stage B's `sequence.cost_matrix` route screen, which is the
+same O(n²) wall §19, §22 and §24 flagged and which the standoff makes worse per
+leg because every re-routed leg falls through to the RRT. The stage-A numbers
+below are from the stage-A-only re-runs (`--stages 0`, warm leg store), which
+reproduce the A+B runs' stage A **line for line** at every setting; the A+B logs
+are kept as `out/staged_csail_h097_lf4_S*_{s150,whole}_ab.log`.
+
+**Split +0.15 m**, `out/staged_csail_h097_lf4_S{070,090,110,130}_s150.{json,log}`:
+
+| S | pieces | stage ink | stage s | **leader ink flown** | follower offered | **follower flown** | fit | `active_pair` | `solo` | buckets | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **0** | 15 | 2.061 m | 95.9 | 2.061 / 2.061 m | 2.142 m | **0.000 m** | **0.0 %** | +65.6 mm | +51.7 mm | 3/3 | PASS |
+| **70** | 16 | 3.016 m | 77.0 | 2.061 / 2.061 m | 2.142 m | **0.955 m** | **44.6 %** | +64.7 mm | +107.5 mm | 4/4 | FAIL |
+| **90** | 18 | **3.494 m** | **77.4** | 2.061 / 2.061 m | 2.141 m | **1.433 m** | **66.9 %** | +62.1 mm | +134.4 mm | 4/4 | **PASS** |
+| **110** | 18 | 3.494 m | 75.1 | 2.061 / 2.061 m | 2.141 m | 1.433 m | 66.9 % | +61.5 mm | +157.3 mm | 4/4 | FAIL |
+| **130** | 18 | 3.629 m | 70.1 | 2.061 / 2.061 m | 2.140 m | 1.568 m | 73.2 % | **+42.7 mm** | +172.4 mm | 4/4 | FAIL |
+
+**Whole bag**, `out/staged_csail_h097_lf4_S{070,090,110,130}_whole.{json,log}`
+(the S = 0 row is the live lf3 baseline):
+
+| S | pieces | stage ink | stage s | **leader ink flown** | follower offered | **follower flown** | fit | `active_pair` | `solo` | buckets | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **0** | 17 | 4.595 m | 128.6 | 4.595 / 4.595 m | 5.026 m | **0.000 m** | **0.0 %** | +78.7 mm | +51.2 mm | 3/3 | PASS |
+| **70** | 17 | 4.595 m | 110.7 | 4.595 / 4.595 m | 5.018 m | 0.000 m | 0.0 % | +169.6 mm | +107.5 mm | 3/3 | PASS |
+| **90** | 21 | 6.122 m | 110.6 | 4.595 / 4.595 m | 5.020 m | 1.526 m | 30.4 % | +51.1 mm | +134.4 mm | 4/4 | FAIL |
+| **110** | 19 | **5.982 m** | **109.6** | 4.595 / 4.595 m | 4.981 m | **1.387 m** | **27.8 %** | +62.5 mm | +157.3 mm | 4/4 | **PASS** |
+| **130** | 23 | 6.386 m | 105.1 | 4.595 / 4.595 m | 5.020 m | 1.790 m | 35.7 % | **−8.3 mm** | +188.3 mm | 4/4 | FAIL |
+
+**The leader loses nothing.** `leader_ink_flown` is **2.061 m at every S** on the
+split and **4.595 m at every S** on the whole bag — the same metres, the same
+pieces, the same three buckets — which is §25.4's prediction landing exactly:
+not one of the leader's ink poses was ever inside the bar, so the standoff was
+only ever a constraint on where its pen-up legs may fly.
+
+**And the follower's own clearance goes straight to the ceiling.** At every
+S ≥ 70 mm the log reads `arm 31 [follower] tuck: park +80.2 mm, 1/1 stations
+clear >= 73 mm` — up from **+53.7 mm** at S = 0, and **+80.2 mm is exactly the
+S → ∞ value of §25.3**. The lever does not move the follower part of the way; at
+70 mm it has already bought all there is.
+
+**The wall was never the pair's fixed geometry. It was the leader's tour.**
+
+### 25.6 The three failures, named
+
+Of the six not-ok stages in the sweep, **only two are clearance failures and
+both are over-provisioned S**:
+
+| setting | why not ok |
+|---|---|
+| S = 130, split +0.15 | `active_pair` **+42.7 mm** — the realised trajectories are under the 50 mm gate. The follower took 73 % of its ink and the row closed up. |
+| S = 130, whole bag | `active_pair` **−8.3 mm** — an actual interpenetration of the gate. Same mechanism, further. |
+| S = 70 / 110 split, S = 90 whole | **not a clearance at all.** Both independent numbers are over their gates (pair +64.7 / +61.5 / +51.1 mm, solo +107.5 / +157.3 / +134.4 mm). `solo_check` refuses on its per-arm flag, and the case measured — S = 70, split +0.15, from `out/staged_csail_h097_lf4_S070_s150_stageA_program.json` — is **leader 71's HELD BARRIER POSE at 111 mrad of joint-1 margin against `scene_check`'s 150 mrad bar**, with frame clearance +69.3 mm, self +105.7 mm and tip z 60 mm all fine. The standoff moved the leader's tour, the tour ends on a different last stroke, and its exit hover is near a joint limit. That is a barrier-pose problem — `park_policy` and `hold_gap`'s business — and not a statement about the pattern. |
+
+**So there is a real optimum in S and the sweep brackets it**: below it the
+follower cannot route, above it the two arms close on each other. On this
+picture it is **S = 90 mm on the split** and **S = 110 mm on the whole bag**.
+
+### 25.7 The decisive number — the row, drawing concurrently
+
+Row 1 is arms **31 and 71**, the same-row pair §22 §4b said may never be in the
+air together. Stage A, at the best S:
+
+| | split +0.15, **S = 90 mm** | whole bag, **S = 110 mm** |
+|---|---|---|
+| row 1's stage-A ink on offer (71's bag + 31's bag) | 3.979 m | 8.618 m |
+| drawn in the stage with **both arms of the row flying** | **3.271 m — 82.2 %** | **5.024 m — 58.3 %** |
+| …of which drawn in the window where **both are drawing at once** | **2.438 m — 61.3 %** (29.45 s of overlap) | **2.027 m — 23.5 %** (24.59 s of overlap) |
+| the same two numbers at S = 0 | **0.000 m — 0.0 %** | **0.000 m — 0.0 %** |
+| realised pair clearance while they do it | **+62.1 mm** (gate 50) | **+62.5 mm** (gate 50) |
+| stage A duration | **77.4 s** (was 95.9 s, **−19.3 %**) | **109.6 s** (was 128.6 s, **−14.8 %**) |
+| stage A ink | **3.494 m** (was 2.061 m, **+69.5 %**) | **5.982 m** (was 4.595 m, **+30.2 %**) |
+| time to first motion | 0.243 s | 0.206 s |
+| stage verdict | **PASS** | **PASS** |
+
+**A same-row pair CAN be in the air together on this rig.** They draw 2.4 m of
+the picture simultaneously at 0.61 m of base spacing, at +62 mm of realised
+clearance against a 50 mm gate, and the leader gives up not one millimetre of
+ink for it.
+
+**The makespan line is owed a stage B and does not have one.** Against the
+S = 0 A + B baselines of **119.9 s** (split +0.15 = 95.9 + 24.0) and **145.9 s**
+(whole bag = 128.6 + 17.3), the best S already takes **18.5 s** and **19.0 s**
+out of stage A alone, and it moves 1.43 m / 1.39 m of the followers' ink out of
+the deferred pile that stage C would otherwise have to conduct — which is the
+term §22 measured at 3 075 s of wall for 11.5 m. Stage B's own duration at the
+best S is the number this box did not buy, and it is the only thing between
+these tables and a makespan.

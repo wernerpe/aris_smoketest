@@ -178,7 +178,8 @@ def shipped_parks(specs=None) -> dict[int, np.ndarray]:
 
 def freeze_partners(arm: int, parks: dict[int, np.ndarray], specs=None,
                     pens=None, h_inv=H_INV_DEFAULT, leg_cache=True,
-                    leg_cache_root=None) -> tuple[int, ...]:
+                    leg_cache_root=None, standoff=None,
+                    partners=None) -> tuple[int, ...]:
     """Model every arm but `arm` by its REAL capsules at its park. -> the ids.
 
     This is the parked half of the safety argument and it is the whole of it:
@@ -196,39 +197,118 @@ def freeze_partners(arm: int, parks: dict[int, np.ndarray], specs=None,
     poses gives each (stage, arm) its own directory, which is both correct --
     arm 13's routes past a parked 17 are not arm 17's routes past a parked 13 --
     and warm across runs, which is the whole point of build item 1.
+
+    `partners` NAMES WHICH ARMS ARE STANDING STILL, and it is not cosmetic.  In
+    a two-arm conduct the OTHER MOVER is not a pose, it is a trajectory, and the
+    conductor separates it in time; putting its entry pose in the room would
+    route this arm's legs around a pose the arm leaves.  `None` keeps the
+    shipped behaviour -- every other arm in `parks`.
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
+    keep = None if partners is None else {int(a) for a in partners}
     others = {int(a): np.asarray(q, float).reshape(7)
-              for a, q in parks.items() if int(a) != int(arm) and a in fl}
+              for a, q in parks.items() if int(a) != int(arm) and a in fl
+              and (keep is None or int(a) in keep)}
     frozen.freeze(others, fl, pens, h_inv)
     frozen.observe(int(arm))
+    frozen.set_standoff(_standoff_for(int(arm), standoff, others))
     paper.clear_cache()                 # the memos are not keyed on the set
     if leg_cache:
         paper.disk_cache_open(leg_cache_root,
-                              signature=leg_cache_signature(others))
+                              signature=leg_cache_signature(
+                                  others, None, frozen.standoff()))
     else:
         paper.disk_cache_close()
     return tuple(sorted(others))
 
 
+def freeze_conduct(partners, poses, specs=None, pens=None,
+                   h_inv=H_INV_DEFAULT, rooms=None, leg_cache=True,
+                   leg_cache_root=None) -> tuple[int, ...]:
+    """The room a CONDUCT flies in, installed for the whole of it. -> the ids.
+
+    THE DEFECT THIS CLOSES, MEASURED 2026-09-14 (docs/V2_STAGED.md §26).
+    `idle.conduct` does not merely re-time the timelines `plan_bucket` built --
+    it calls `writing.arm_program` again and ROUTES EVERY PEN-UP LEG AGAIN.  The
+    row conductor thawed the frozen set before handing over, so every leg the
+    conductor emitted was routed against the pose-invariant base columns and
+    nothing else: the four arms outside the group were neither routed around
+    (thawed) nor scheduled against (not in the conduct), and arm 31 flew through
+    arm 2's standing chain at -204.6 mm with every gate in the stack satisfied.
+    A six-arm conduct never showed it because there is no arm outside the group.
+
+    So the arms this conduct does NOT move stay in the room for the length of
+    it.  `poses` is what each of them holds; `rooms` names the ones that are
+    themselves MOVING in this stage under an earlier priority group, and carries
+    `trajectory_room`'s `(room, radii, digest)` for each -- a static swept
+    obstacle that contains every pose that arm takes, which is the whole pair
+    certificate and not a snapshot of it.
+
+    No observer is named: the arms this conduct moves are not in the frozen set
+    at all, so there is nothing for an observer to exclude, and `static_boxes`
+    already drops a spec's own band.
+    """
+    fl = FLEET if specs is None else specs
+    pens = {a: fl[a].pen for a in fl} if pens is None else pens
+    sets = {int(a): np.asarray(poses[a], float).reshape(1, 7)
+            for a in sorted(int(x) for x in partners) if a in fl}
+    env = {int(a): v for a, v in (rooms or {}).items() if int(a) in sets}
+    frozen.freeze_sets(sets, fl, pens, h_inv, clusters=env or None)
+    frozen.observe(None)
+    frozen.set_standoff(None)
+    paper.clear_cache()
+    if leg_cache:
+        paper.disk_cache_open(leg_cache_root,
+                              signature=leg_cache_signature(
+                                  {a: sets[a][0] for a in sets}, env or None,
+                                  None))
+    else:
+        paper.disk_cache_close()
+    return tuple(sorted(sets))
+
+
+def _standoff_for(arm, standoff, partners) -> dict:
+    """The standoff this arm actually carries. -> {aid: S}.
+
+    A standoff names PARTNERS, and only ones that are in the room: an entry for
+    the observer itself, or for an arm nobody froze, is dropped here so the
+    memo and cache keys record what was really demanded.
+    """
+    return {int(a): float(s) for a, s in (standoff or {}).items()
+            if float(s) > 0.0 and int(a) != int(arm) and int(a) in partners}
+
+
 def leg_cache_signature(frozen_poses: dict[int, np.ndarray],
-                        envelopes: dict | None = None) -> str:
+                        envelopes: dict | None = None,
+                        standoff: dict | None = None) -> str:
     """`paper.cache_signature()` plus the frozen room it is valid under.
 
     The room is the parked partners' poses AND, in a stage, the active
     partners' envelopes — both change `static_boxes` without changing any memo
     key, so both have to be in the store's namespace or a leg bought in one
     room would be served in another.
+
+    ...AND SO DOES THE PARTNER STANDOFF, for exactly the same reason: it makes
+    `paper.route` refuse legs it used to grant without touching one memo key.
+    It is written into the blob ONLY when it is non-empty, so every signature an
+    S = 0 run builds is bit-identical to the one it built before the standoff
+    existed and a warm leg store still answers.
     """
-    blob = json.dumps(dict(
+    d = dict(
         base=paper.cache_signature(),
         frozen={str(int(a)): [round(float(x), 9)
                               for x in np.asarray(q, float).ravel()]
                 for a, q in sorted(frozen_poses.items())},
         envelopes={str(int(a)): list(room_sig(v))
-                   for a, v in sorted((envelopes or {}).items())}),
-        sort_keys=True)
+                   for a, v in sorted((envelopes or {}).items())})
+    if standoff:
+        d["standoff"] = {str(int(a)): round(float(s), 9)
+                         for a, s in sorted(standoff.items())
+                         if float(s) > 0.0}
+        if not d["standoff"]:
+            d.pop("standoff")
+    blob = json.dumps(d, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -435,7 +515,8 @@ def stage_envelopes(pattern, stage, atlas_dir, specs=None, pens=None,
 
 
 def freeze_stage(arm, parks, envelopes=None, specs=None, pens=None,
-                 h_inv=H_INV_DEFAULT, leg_cache=True, leg_cache_root=None):
+                 h_inv=H_INV_DEFAULT, leg_cache=True, leg_cache_root=None,
+                 standoff=None, partners=None):
     """Install the room `arm` has to fly in for one stage. -> the frozen ids.
 
     Every partner is modelled by what it IS for the whole of this stage: a
@@ -447,16 +528,20 @@ def freeze_stage(arm, parks, envelopes=None, specs=None, pens=None,
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
-    env = {int(a): v for a, v in (envelopes or {}).items() if int(a) != int(arm)}
+    who = fl if partners is None else [int(a) for a in partners]
     sets = {int(a): np.asarray(parks[a], float).reshape(1, 7)
-            for a in fl if int(a) != int(arm)}
+            for a in who if int(a) != int(arm)}
+    env = {int(a): v for a, v in (envelopes or {}).items()
+           if int(a) != int(arm) and int(a) in sets}
     frozen.freeze_sets(sets, fl, pens, h_inv, clusters=env)
     frozen.observe(int(arm))
+    frozen.set_standoff(_standoff_for(int(arm), standoff, sets))
     paper.clear_cache()
     if leg_cache:
         paper.disk_cache_open(leg_cache_root,
                               signature=leg_cache_signature(
-                                  {a: sets[a] for a in sets}, env))
+                                  {a: sets[a] for a in sets}, env,
+                                  frozen.standoff()))
     else:
         paper.disk_cache_close()
     return tuple(sorted(sets))
@@ -906,7 +991,11 @@ def _room_key(envelopes=None) -> str:
         return "-"
     env = "".join(f"{int(a)}:{room_sig(v)};"
                   for a, v in sorted((envelopes or {}).items()))
-    return f"{tuple(frozen.frozen_ids())}|{frozen.observer()}|{env}"
+    # THE STANDOFF IS PART OF THE ROOM for the same reason the envelope is: it
+    # changes what `ink_vs_envelope` and the legs answer without changing an id.
+    # Empty appends nothing, so an S = 0 key is the key it always was.
+    return (f"{tuple(frozen.frozen_ids())}|{frozen.observer()}|{env}"
+            + (f"|S{frozen.standoff_sig()}" if frozen.standoff() else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +1051,9 @@ class ArmStage:
     # WHAT THE ROOM-BOUNDARY CUT DID, per bucket: how many pieces were re-cut,
     # into how many parts, how much of their ink stayed and how much left.
     split: dict = field(default_factory=dict)
+    # THE EXTRA CLEARANCE THIS BUCKET WAS HELD TO, per partner, on top of every
+    # gate -- {} for every arm that carried none, which is every arm at S = 0.
+    standoff: dict = field(default_factory=dict)
     plan_s: float = 0.0
     seq_s: float = 0.0
     prog_s: float = 0.0
@@ -1014,7 +1106,8 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                 sequencer="opt", seq_opts=None, leg_cache=True,
                 leg_cache_root=None, fly=True, on_piece: Callable | None = None,
                 envelopes=None, lift_ladder=None, ink_gate=None,
-                park_policy=writing.PARK_HOME, verbose=False) -> ArmStage:
+                park_policy=writing.PARK_HOME, standoff=None, partners=None,
+                verbose=False) -> ArmStage:
     """Plan, order and fly one (stage, arm) bucket. -> ArmStage.
 
     The four steps, and none of them is new machinery:
@@ -1060,7 +1153,8 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
     # stage's pair clearance a property of the routing (see `freeze_stage`).
     if envelopes:
         st.frozen_partners = freeze_stage(arm, parks, envelopes, fl, pens,
-                                          h_inv, leg_cache, leg_cache_root)
+                                          h_inv, leg_cache, leg_cache_root,
+                                          standoff, partners)
         st.envelope_partners = tuple(sorted(int(a) for a in envelopes
                                             if int(a) != int(arm)))
         # THE CERTIFICATE NAMES WHAT IT DEPENDS ON.  A pose-union envelope is a
@@ -1076,9 +1170,11 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                         else "envelope")
     else:
         st.frozen_partners = freeze_partners(arm, parks, fl, pens, h_inv,
-                                             leg_cache, leg_cache_root)
+                                             leg_cache, leg_cache_root,
+                                             standoff, partners)
     st.frozen_poses = {int(a): [float(x) for x in q]
                        for a, q in frozen.poses().items()}
+    st.standoff = {int(a): float(s) for a, s in frozen.standoff().items()}
     ladder0 = writing.HOVER_LADDER
     if lift_ladder is not None:
         # THE SECOND LEVER, AND IT IS A CALLER'S KNOB NOT A CONSTANT CHANGE.
@@ -1765,6 +1861,7 @@ class StagedResult:
     envelope_s: float = 0.0
     summary_dp: dict = field(default_factory=dict)
     holds: list = field(default_factory=list)   # the HELD pose set per barrier
+    partner_standoff: float = 0.0   # m demanded of a leader, above every gate
 
     @property
     def makespan(self) -> float:
@@ -1819,7 +1916,8 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         follower_ink_gate=PAIR_MARGIN, lf_max_drops=LF_MAX_DROPS, sub=2,
         tuck=True, split_rounds=SPLIT_ROUNDS, split_min_m=SPLIT_MIN_M,
         conduct_rows=True, conduct_cap_s=CONDUCT_CAP_S, conduct_jobs=3,
-        verbose=True, on_piece=None) -> StagedResult:
+        row_compose="priority",
+        partner_standoff=0.0, verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
     `lines` are polylines in paper metres, `pattern` a `traces.Pattern` (the
@@ -1956,7 +2054,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                         s, [ROW_ARMS[j] for j in sorted(ROW_ARMS)], buckets,
                         rowdef, fl, pens, entry, parks, h_inv, opts, leg_cache,
                         leg_cache_root, dt, sub, conduct_jobs, conduct_cap_s,
-                        verbose)
+                        verbose, mode=row_compose)
                     chk["partition"] = {str(k): v for k, v in pstats.items()}
                 else:
                     arms, chk, c_s = _conduct_stage(
@@ -1972,7 +2070,8 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                     s, acts, roles[s], buckets, fl, pens, entry, h_inv, opts,
                     leg_cache, leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER,
                     follower_ink_gate, lf_max_drops, writing.PARK_FREEZE,
-                    tuck, verbose, split_rounds, split_min_m)
+                    tuck, verbose, split_rounds, split_min_m,
+                    partner_standoff)
                 # A DEFERRAL GOES TO THE NEXT STAGE THIS ARM *LEADS*, and only
                 # then to the conductor.  A follower keeps what fits and the
                 # rest is its own remainder: in stage B the same arm has
@@ -2140,7 +2239,8 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                        {int(a): [float(x) for x in np.asarray(q).ravel()]
                         for a, q in parks.items()},
                        refusals=rlog, envelope_s=env_s,
-                       summary_dp=tplan.summary(), holds=holds)
+                       summary_dp=tplan.summary(), holds=holds,
+                       partner_standoff=float(partner_standoff or 0.0))
     return res
 
 
@@ -2473,6 +2573,38 @@ def clear_out(spec, q_from, q_tuck, h_inv=H_INV_DEFAULT, pen_ext=None):
         return None
 
 
+def lf_standoffs(actives, roles: dict, standoff_m: float) -> dict:
+    """Who owes an extra standoff to whom, in one stage. -> {leader: {foll: S}}.
+
+    ONLY A LEADER OWES IT, AND ONLY TO ITS SAME-ROW FOLLOWER.  The leader is the
+    arm that plans first and is certified at exactly `PAIR_MARGIN` against the
+    partner's held pose, so it is the arm whose plan eats the room the follower
+    then has to route its legs in; and the pair that has no room to give is the
+    same-ROW one, because a cross-row pair clears by +194 mm with each row
+    inside its own band (docs/V2_WORKCELLS.md section 4b).  Charging a cross-row
+    partner would cost a leader ink and buy a follower nothing.
+
+    `standoff_m` = 0 returns {}, which is what makes S = 0 a no-op all the way
+    down: no standoff is set, no cache signature changes, no key moves.
+    """
+    S = float(standoff_m or 0.0)
+    if S <= 0.0:
+        return {}
+    foll = {int(a) for a in actives
+            if str(roles.get(int(a), "active")) == "follower"}
+    out = {}
+    for a in (int(x) for x in actives):
+        if str(roles.get(a, "active")) != "leader":
+            continue
+        row = traces_mod.ROW_OF.get(a)
+        mates = {p: S for p in sorted(foll)
+                 if p != a and row is not None
+                 and traces_mod.ROW_OF.get(p) == row}
+        if mates:
+            out[a] = mates
+    return out
+
+
 def role_order(roles: dict, actives, buckets, stage) -> tuple[int, ...]:
     """The order the six actives of a main stage choose their paths in.
 
@@ -2494,7 +2626,7 @@ def role_order(roles: dict, actives, buckets, stage) -> tuple[int, ...]:
 def _fly_or_defer(s, a, pieces, fl, pens, parks, h_inv, opts, leg_cache,
                   leg_cache_root, on_piece, envelopes, gate, max_drops,
                   park_policy, verbose, split_rounds=SPLIT_ROUNDS,
-                  split_min_m=SPLIT_MIN_M):
+                  split_min_m=SPLIT_MIN_M, standoff=None):
     """Plan one bucket in the room it is given, deferring what will not fit.
 
     -> (ArmStage, [Piece] deferred).
@@ -2530,7 +2662,7 @@ def _fly_or_defer(s, a, pieces, fl, pens, parks, h_inv, opts, leg_cache,
                            leg_cache=leg_cache, leg_cache_root=leg_cache_root,
                            fly=True, on_piece=on_piece, envelopes=envelopes,
                            ink_gate=gate, park_policy=park_policy,
-                           verbose=False)
+                           standoff=standoff, verbose=False)
 
     st = plan(keep)
     # THE CUT, BEFORE ANYTHING IS DEFERRED.  Only where there is a gate to fail
@@ -2600,7 +2732,8 @@ def _fly_or_defer(s, a, pieces, fl, pens, parks, h_inv, opts, leg_cache,
 def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
               leg_cache, leg_cache_root, on_piece, dt, cluster, gate,
               max_drops, park_policy, tuck, verbose,
-              split_rounds=SPLIT_ROUNDS, split_min_m=SPLIT_MIN_M):
+              split_rounds=SPLIT_ROUNDS, split_min_m=SPLIT_MIN_M,
+              partner_standoff=0.0):
     """One six-arm main stage of the leader/follower pattern.
 
     -> (arms, order, rooms, {arm: [Piece] deferred}).
@@ -2610,8 +2743,25 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
     moved yet in this stage is in the static room as the pose it is actually
     holding (Pete, 2026-09-14).  In stage A those are the parks; after that they
     are the hovers the previous stage stopped at.
+
+    `partner_standoff` (S, metres) is the one lever of docs/V2_STAGED.md §25: a
+    LEADER is held to `gate + S` against its SAME-ROW FOLLOWER's pose-invariant
+    capsules and to the ordinary gate against everything else.  The leader's
+    plan is what eats the follower's routing room -- it was certified at exactly
+    `PAIR_MARGIN` against that partner's held pose and had no reason to keep
+    more -- so this is where the room is bought back.  S = 0 asks for nothing
+    and reproduces every number this module measured before it existed.
     """
     order = role_order(roles, actives, buckets, s)
+    # WHO OWES WHOM, and only same-row: the cross-row pairs clear by +194 mm
+    # with each row inside its own band (docs/V2_WORKCELLS.md section 4b), so
+    # charging them would cost a leader ink and buy a follower nothing.
+    S = float(partner_standoff or 0.0)
+    standoffs = lf_standoffs(actives, roles, S)
+    if verbose and standoffs:
+        print(f"  stage {s} partner standoff S = {1000 * S:.0f} mm: "
+              + "  ".join(f"{a}->{sorted(v)}"
+                          for a, v in sorted(standoffs.items())))
     fixed: dict[int, tuple] = {}
     arms: dict[int, ArmStage] = {}
     deferred: dict[int, list] = {}
@@ -2661,7 +2811,8 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
                                  leg_cache_root, on_piece,
                                  (dict(fixed) if fixed else None), g,
                                  max_drops, park_policy, verbose,
-                                 split_rounds, split_min_m)
+                                 split_rounds, split_min_m,
+                                 standoffs.get(int(a)))
         st.role, st.priority = role, int(k)
         # THE CLEAR-OUT IS PART OF THE TRAJECTORY, not a prologue to it.  Spliced
         # in here, it reaches `trajectory_room` (so the next arm avoids it),
@@ -2708,7 +2859,7 @@ def _conducted_phases(phases, prog_idx, dt, M):
 
 def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
                    leg_cache, leg_cache_root, on_piece, dt, sub, verbose,
-                   only=None):
+                   only=None, rooms=None, outside_poses=None):
     """THE FINAL PASS: everything A and B could not fly, conducted.
 
     -> (arms, check_report, seconds).
@@ -2740,18 +2891,34 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
     from . import idle as idle_mod
     t0 = time.perf_counter()
     who = sorted(int(a) for a in (fl if only is None else only))
+    # THE ARMS THIS CONDUCT DOES NOT MOVE ARE THE ROOM, and they stay in it for
+    # the whole conduct -- `freeze_conduct` says why.  `outside_poses` is what
+    # each of them holds while this group runs (its stage entry pose for a group
+    # that has not started, its park for one that has already finished and gone
+    # home), and `rooms` upgrades an outside arm that is itself moving in this
+    # stage from a pose to its whole realised swept trajectory.
+    outside = sorted(int(a) for a in fl if int(a) not in set(who))
+    op = dict(held if outside_poses is None else outside_poses)
+    rooms = {int(a): v for a, v in (rooms or {}).items() if int(a) in outside}
     arms: dict[int, ArmStage] = {}
     segs: dict[int, list] = {}
     for a in who:
         pcs = list(buckets.get((s, int(a)), [])) + list(deferred.get(int(a), []))
-        st = plan_bucket(s, a, pcs, fl, pens, held, h_inv, opts,
+        room_poses = dict(held)
+        room_poses.update(op)
+        st = plan_bucket(s, a, pcs, fl, pens, room_poses, h_inv, opts,
                          leg_cache=leg_cache, leg_cache_root=leg_cache_root,
-                         fly=True, on_piece=on_piece, envelopes=None,
+                         fly=True, on_piece=on_piece,
+                         envelopes=(rooms or None), partners=outside,
                          park_policy=writing.PARK_HOME, verbose=False)
         st.role, st.conducted = "conductor", True
         arms[int(a)] = st
         segs[int(a)] = list(st.programme)
-    thaw()
+    if outside:
+        freeze_conduct(outside, op, fl, pens, h_inv, rooms, leg_cache,
+                       leg_cache_root)
+    else:
+        thaw()
     home = {int(a): np.asarray(parks[a], float).reshape(7)
             for a in who if not segs.get(int(a))}
     # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME.  `plan_bucket` returns
@@ -2778,6 +2945,7 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
     if not any(segs.values()) and not moved:
         for st in arms.values():
             st.timeline = None
+        thaw()
         return arms, dict(ok=True, empty=True, min_clearance=float("inf")), \
             time.perf_counter() - t0
     if verbose:
@@ -2803,6 +2971,7 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
             print(f"  stage {s}: the conductor refused ({exc}); the final pass "
                   "falls back to one arm at a time")
         worst, ok = float("inf"), True
+        thaw()          # the CHECK does not inherit the conductor's own room
         for st in arms.values():
             st.conducted = False
             if st.timeline is None:
@@ -2813,6 +2982,7 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
             ok = ok and bool(rep.get("ok", False))
         return arms, dict(ok=bool(ok), serialised=True, reason=str(exc),
                           min_clearance=float(worst)), time.perf_counter() - t0
+    thaw()              # the CHECK does not inherit the conductor's own room
     sch, samp, progs = out["sch"], out["samp"], out["progs"]
     M = int(sch["M"])
     ts = dt * np.arange(M)
@@ -2967,10 +3137,11 @@ def _row_job(payload):
     answer crossable.
     """
     (s, who, buckets, defer, fl, pens, held, parks, h_inv, opts, leg_cache,
-     leg_cache_root, dt, sub, verbose) = payload
+     leg_cache_root, dt, sub, verbose, rooms, op) = payload
     arms, rep, secs = _conduct_stage(s, buckets, defer, fl, pens, held, parks,
                                      h_inv, opts, leg_cache, leg_cache_root,
-                                     None, dt, sub, verbose, only=who)
+                                     None, dt, sub, verbose, only=who,
+                                     rooms=rooms, outside_poses=op)
     return {int(a): _thin_stage(st) for a, st in arms.items()}, rep, float(secs)
 
 
@@ -2981,7 +3152,17 @@ def _pad(v, M):
     return np.concatenate([v, np.repeat(v[-1:], M - len(v), axis=0)])
 
 
-def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub):
+def _lead(v, n, first):
+    """`n` frames of `first` in front of `v`. -> array."""
+    v = np.asarray(v)
+    if n <= 0:
+        return v
+    return np.concatenate([np.repeat(np.asarray(first).reshape((1,) + v.shape[1:]),
+                                     n, axis=0), v])
+
+
+def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub,
+                    offsets=None):
     """Several disjoint conducts on one clock. -> (arms, report).
 
     Each group was conducted alone; the groups overlap in TIME, which is the
@@ -2989,12 +3170,20 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub):
     an assertion and the whole-timeline `scene_check` below is what discharges
     it -- over all six arms, on the conductor's own margin, with the sweep
     residual, sharing no code with any of this.
+
+    `offsets` is {arm: frames} and is what `--row-compose serial` needs: a
+    group that runs AFTER another one starts its own clock where the earlier one
+    stopped, holds its stage entry pose until then, and holds its finishing pose
+    afterwards.  `None` is the overlapping form, every group starting at frame
+    zero -- which is the composition §24.5 measured and refused.
     """
     arms: dict[int, ArmStage] = {}
     for a, st in ((int(a), st) for g in parts for a, st in g[0].items()):
         arms[a] = st
-    M = max([1] + [len(np.asarray(st.timeline["t"], float))
-                   for st in arms.values() if st.timeline is not None])
+    off = {int(a): int(v) for a, v in (offsets or {}).items()}
+    M = max([1] + [int(off.get(int(a), 0))
+                   + len(np.asarray(st.timeline["t"], float))
+                   for a, st in arms.items() if st.timeline is not None])
     ts = dt * np.arange(M)
     qtraj, segs = {}, {}
     for a in sorted(fl):
@@ -3011,16 +3200,28 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub):
             qtraj[int(a)] = np.repeat(
                 np.asarray(held[a], float).reshape(1, 7), M, axis=0)
             continue
+        n = int(off.get(int(a), 0))
         tl = st.timeline
-        q = _pad(np.asarray(tl["q"], float), M)
-        tl = dict(tl, t=ts, q=q, seg=_pad(np.asarray(tl["seg"], int), M),
-                  u=_pad(np.asarray(tl["u"], float), M),
+        q0 = np.asarray(held[a], float).reshape(7)
+        q = _pad(_lead(np.asarray(tl["q"], float), n, q0), M)
+        tl = dict(tl, t=ts,
+                  q=q,
+                  seg=_pad(_lead(np.asarray(tl["seg"], int), n, -1), M),
+                  u=_pad(_lead(np.asarray(tl["u"], float), n, 0.0), M),
+                  phases=[dict(ph, t0=float(ph["t0"]) + n * dt,
+                               t1=float(ph["t1"]) + n * dt)
+                          for ph in (tl.get("phases") or [])],
                   duration=float(ts[-1]) if M > 1 else 0.0,
                   q_end=np.asarray(q[-1], float))
         st.timeline = tl
         qtraj[int(a)] = q
         if st.programme:
             segs[int(a)] = list(st.programme)
+    # EVERY ARM'S t = 0 POSE, PAIRWISE, BEFORE ANYTHING IS BELIEVED ABOUT THE
+    # MOTION.  The merge stands six arms in one scene for the first time, and
+    # `hold_gap` is the same proof the stage barriers already carry.
+    t0h = hold_gap({int(a): np.asarray(v, float)[0] for a, v in qtraj.items()},
+                   fl, pens, h_inv)
     rep = scene_check.check_timeline(
         qtraj, dt, PAIR_MARGIN, programs=segs or None, h_inv=h_inv,
         pen_ext={int(a): scene_check.pen_len(pens.get(a), a) for a in fl},
@@ -3036,6 +3237,10 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub):
            if min(rep.get("joint_margin", {1: 1.0}).values()) <= 0.0 else []))
     rep["margin_m"] = float(PAIR_MARGIN)
     rep["makespan_s"] = float(ts[-1]) if M > 1 else 0.0
+    rep["t0_holds"] = dict(min_m=float(t0h["min_m"]), ok=bool(t0h["ok"]))
+    if not t0h["ok"]:
+        rep["failed"] = sorted(set(rep["failed"]) | {"t0_holds"})
+        rep["ok"] = False
     rep["groups"] = [dict(arms=sorted(int(a) for a in g[0]),
                           ok=bool(g[1].get("ok", False)),
                           min_clearance_m=float(g[1].get("min_clearance",
@@ -3044,27 +3249,78 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub):
     return arms, rep
 
 
+ROW_COMPOSE = ("parallel", "priority", "serial")
+
+
+def group_order(groups, deferred, buckets, stage) -> list[tuple]:
+    """The order the row groups choose their paths in. -> [(arm, ...)].
+
+    BUSIEST FIRST, exactly as `priority_order` orders the arms inside a stage
+    and for the same reason: the group with the most ink has the least freedom,
+    so it plans first and its trajectory is then final.  Ties break on the
+    sorted arm ids, so the order is a function of the plan.
+    """
+    def ink(who):
+        return sum(p.length_m
+                   for a in who
+                   for p in (list((deferred or {}).get(int(a), []))
+                             + list((buckets or {}).get((int(stage), int(a)),
+                                                        []))))
+    return sorted((tuple(g) for g in groups),
+                  key=lambda g: (-ink(g), tuple(sorted(g))))
+
+
+def _group_payload(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
+                   opts, leg_cache, leg_cache_root, dt, sub, rooms, op):
+    return (s, tuple(who), buckets,
+            {int(a): list(v) for a, v in (deferred or {}).items()
+             if int(a) in set(int(x) for x in who)},
+            fl, pens, held, parks, h_inv, opts, leg_cache, leg_cache_root,
+            dt, sub, False, (rooms or None), (op or None))
+
+
 def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                     opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
-                    verbose):
-    """Run several disjoint conducts CONCURRENTLY. -> (arms, report, seconds).
+                    verbose, mode="parallel"):
+    """Run several disjoint conducts. -> (arms, report, seconds).
 
-    `groups` is [(arm, ...)].  One process each, forked, so each group pays its
-    own `sequence.cost_matrix` screen in parallel with the others -- which is
-    the wall §22 measured (3 075 s for stage C, and it was the route screen and
-    not the DP).  A group that overruns `cap_s` is ABANDONED and its ink is
-    reported as residue, because a final pass nobody can wait for is not a
-    final pass.
+    `groups` is [(arm, ...)] and `mode` is how they COMPOSE, which is the whole
+    subject of docs/V2_STAGED.md §26:
+
+    * `parallel` -- every group starts at stage time zero and plans with the
+      other groups' arms STANDING at their stage entry poses.  That is what the
+      code has always claimed and (with `freeze_conduct` in) now actually does;
+      it is still an assertion that four arms leaving four held poses at once
+      stay apart, and §24.5 measured that assertion failing at -191.9 mm.  Kept
+      as the control.
+    * `priority` -- the groups are conducted BUSIEST FIRST, in a pipeline, and
+      each later group sees every earlier group's REALISED trajectory as an
+      exact swept room.  A pair (i, k) with i < k is then certified against the
+      path arm i actually flies, at every instant, which is the same argument
+      `_priority_stage` makes between arms inside a stage.  The wall is the SUM
+      of the groups rather than the max; the motion still overlaps.
+    * `serial` -- the groups run one after another in TIME.  Each group plans
+      with the earlier groups at their PARKS (they have gone home) and the later
+      ones at their entry poses, so all three still plan CONCURRENTLY; what is
+      paid is the motion, which becomes the sum.
+
+    A group that overruns `cap_s` is ABANDONED and its ink is reported as
+    residue, because a final pass nobody can wait for is not a final pass.
     """
     import concurrent.futures as _fut
     import multiprocessing as _mp
     t0 = time.perf_counter()
+    mode = str(mode or "parallel")
+    if mode not in ROW_COMPOSE:
+        raise ValueError(f"row compose {mode!r} is not one of {ROW_COMPOSE}")
+    if mode in ("priority", "serial") and len(groups) > 1:
+        return _compose_groups(s, groups, buckets, deferred, fl, pens, held,
+                               parks, h_inv, opts, leg_cache, leg_cache_root,
+                               dt, sub, jobs, cap_s, verbose, mode, t0)
     jobs = max(1, min(int(jobs), len(groups)))
-    payloads = [(s, who, buckets,
-                 {int(a): list(v) for a, v in (deferred or {}).items()
-                  if int(a) in set(who)},
-                 fl, pens, held, parks, h_inv, opts, leg_cache, leg_cache_root,
-                 dt, sub, False) for who in groups]
+    payloads = [_group_payload(s, who, buckets, deferred, fl, pens, held, parks,
+                               h_inv, opts, leg_cache, leg_cache_root, dt, sub,
+                               None, None) for who in groups]
     parts, lost = [], []
     if jobs == 1 or len(groups) == 1:
         for pay in payloads:
@@ -3110,6 +3366,131 @@ def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                         abandoned=[sorted(w) for w, _ in lost]), \
             time.perf_counter() - t0
     arms, rep = _merge_conducts(s, parts, fl, pens, held, parks, h_inv, dt, sub)
+    rep["compose"] = "parallel"
+    rep["abandoned"] = [sorted(int(a) for a in w) for w, _ in lost]
+    rep["abandoned_why"] = [why for _, why in lost]
+    return arms, rep, time.perf_counter() - t0
+
+
+def _one_group(pay, cap_s):
+    """One group's conduct in its own forked process, under a wall cap.
+
+    -> (part, why_lost).  Exactly one of the two is `None`.
+    """
+    import concurrent.futures as _fut
+    import multiprocessing as _mp
+    ex = _fut.ProcessPoolExecutor(max_workers=1,
+                                  mp_context=_mp.get_context("fork"))
+    try:
+        f = ex.submit(_row_job, pay)
+        try:
+            return f.result(timeout=max(1.0, float(cap_s))), None
+        except _fut.TimeoutError:
+            return None, f"over the {cap_s:.0f} s cap"
+        except Exception as exc:                       # noqa: BLE001
+            return None, f"{type(exc).__name__}: {exc}"
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
+def _compose_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
+                    opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
+                    verbose, mode, t0):
+    """`priority` and `serial`. -> (arms, report, seconds).  See `_conduct_groups`."""
+    order = group_order(groups, deferred, buckets, s)
+    parks7 = {int(a): np.asarray(parks[a], float).reshape(7) for a in fl}
+    held7 = {int(a): np.asarray(held[a], float).reshape(7) for a in fl}
+    parts, lost, rooms, done = [], [], {}, set()
+    offsets: dict[int, int] = {}
+    if verbose:
+        print(f"  stage {s} compose {mode}: "
+              + " then ".join(str(sorted(g)) for g in order))
+    if mode == "serial":
+        # EVERY GROUP'S ROOM IS KNOWN BEFORE ANY OF THEM RUNS, so they still
+        # plan at once: the groups before it have gone home (`PARK_HOME`), the
+        # groups after it have not moved yet.
+        pay = []
+        for k, who in enumerate(order):
+            op = {}
+            for j, other in enumerate(order):
+                if j == k:
+                    continue
+                for a in other:
+                    op[int(a)] = parks7[int(a)] if j < k else held7[int(a)]
+            pay.append(_group_payload(s, who, buckets, deferred, fl, pens,
+                                      held7, parks, h_inv, opts, leg_cache,
+                                      leg_cache_root, dt, sub, None, op))
+        import concurrent.futures as _fut
+        import multiprocessing as _mp
+        n = max(1, min(int(jobs), len(pay)))
+        if n == 1:
+            got = [(_row_job(p), None) for p in pay]
+        else:
+            ex = _fut.ProcessPoolExecutor(max_workers=n,
+                                          mp_context=_mp.get_context("fork"))
+            futs = [ex.submit(_row_job, p) for p in pay]
+            got = []
+            for f in futs:
+                try:
+                    got.append((f.result(timeout=max(1.0, float(cap_s))), None))
+                except Exception as exc:               # noqa: BLE001
+                    got.append((None, f"{type(exc).__name__}: {exc}"))
+            ex.shutdown(wait=False, cancel_futures=True)
+        m = 0
+        for who, (part, why) in zip(order, got):
+            if part is None:
+                lost.append((who, why))
+                continue
+            parts.append(part)
+            for a in who:
+                offsets[int(a)] = m
+            m += max([1] + [len(np.asarray(st.timeline["t"], float))
+                            for st in part[0].values()
+                            if st.timeline is not None]) - 1
+    else:
+        for who in order:
+            op = {int(a): (parks7[int(a)] if int(a) in done else held7[int(a)])
+                  for g in order for a in g if int(a) not in set(who)}
+            # An arm an earlier group MOVED is in the room as its whole realised
+            # trajectory, not as either endpoint.
+            op.update({int(a): held7[int(a)] for a in rooms})
+            pay = _group_payload(s, who, buckets, deferred, fl, pens, held7,
+                                 parks, h_inv, opts, leg_cache, leg_cache_root,
+                                 dt, sub, dict(rooms), op)
+            part, why = _one_group(pay, cap_s)
+            if part is None:
+                lost.append((who, why))
+                if verbose:
+                    print(f"  stage {s} group {sorted(who)}: ABANDONED ({why})")
+                continue
+            parts.append(part)
+            for a, st in part[0].items():
+                done.add(int(a))
+                if st.timeline is not None:
+                    rooms[int(a)] = trajectory_room(st, fl, pens, h_inv, dt)
+            if verbose:
+                print(f"  stage {s} group {sorted(who)} -> room "
+                      + ", ".join(f"{a}={room_size(rooms[a])}"
+                                  for a in sorted(int(x) for x in who)
+                                  if a in rooms))
+    if verbose:
+        for g in parts:
+            print(f"  stage {s} group {sorted(int(a) for a in g[0])}: "
+                  f"{sum(st.ink_m for st in g[0].values()):.3f} m, "
+                  f"{g[2]:.1f} s wall, "
+                  f"{1000 * float(g[1].get('min_clearance', np.nan)):+.1f} mm, "
+                  + ("PASS" if g[1].get("ok") else "FAIL"))
+    if not parts:
+        return {}, dict(ok=False, empty=True, compose=mode,
+                        min_clearance=float("inf"),
+                        abandoned=[sorted(w) for w, _ in lost]), \
+            time.perf_counter() - t0
+    arms, rep = _merge_conducts(s, parts, fl, pens, held7, parks, h_inv, dt, sub,
+                                offsets=(offsets if mode == "serial" else None))
+    rep["compose"] = mode
+    rep["group_order"] = [sorted(int(a) for a in g) for g in order]
+    rep["pipeline_wall_s"] = float(sum(g[2] for g in parts)) \
+        if mode == "priority" else float(max([0.0] + [g[2] for g in parts]))
     rep["abandoned"] = [sorted(int(a) for a in w) for w, _ in lost]
     rep["abandoned_why"] = [why for _, why in lost]
     return arms, rep, time.perf_counter() - t0
@@ -3394,6 +3775,9 @@ def summary(res: StagedResult) -> dict:
                        if sr.conducted else None),
             split={str(a): st.split for a, st in sorted(sr.arms.items())
                    if st.split and st.split.get("parents")},
+            standoff={str(a): {str(p): round(float(v), 4)
+                               for p, v in sorted(st.standoff.items())}
+                      for a, st in sorted(sr.arms.items()) if st.standoff},
             deferred_m=round(sr.deferred_m, 4),
             deferred_in_m=round(sr.deferred_in, 4),
             deferred_arms={str(a): round(float(sum(p.length_m
@@ -3421,6 +3805,7 @@ def summary(res: StagedResult) -> dict:
     planned = sum(len(st.planned) for sr in res.stages
                   for st in sr.arms.values())
     return dict(pattern=res.pattern, stages=rows,
+                partner_standoff_m=round(float(res.partner_standoff), 4),
                 n_pieces_dp=int(n_pieces), n_pieces_planned=int(planned),
                 n_refused=int(refused),
                 refused_frac=(refused / planned if planned else 0.0),
@@ -3609,6 +3994,138 @@ def refusal_table(res: StagedResult) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 6c.  THE FINAL PASS, RE-RUN OFF A PROGRAMME
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS.  Stages A and B cost 1 980 s of planning wall on the CSAIL
+# logo and stage C is the only stage the composition question is about, so
+# measuring three compositions against each other must not mean three whole
+# programmes.  Everything the final pass needs is already written down: the
+# stage's entry pose set is the barrier's `holds`, and the ink it was offered is
+# the pieces the conducted stages actually carry -- each with its own polyline,
+# in paper metres, which is exactly what a `Piece` is.
+#
+# WHAT IT CANNOT RECOVER, STATED RATHER THAN HIDDEN.  A piece the conduct
+# REFUSED is written out without its geometry (`programme()` records a refusal
+# by id, status and reason), so a re-run is offered the accepted set.  On the
+# lf3 s150 programme that is 1 piece of 50, and a piece `plan_stroke` refused
+# once it refuses again, so nothing that flew is missing.
+def pieces_from_programme(doc: dict, stage: int, also=()) -> dict:
+    """The ink a conducted stage was offered. -> {arm: [Piece]}."""
+    out: dict[int, list] = {}
+    want = {int(stage)} | {int(s) for s in also}
+    for one in doc.get("stages", []):
+        if int(one.get("stage", -1)) not in want:
+            continue
+        for a, v in (one.get("arms") or {}).items():
+            for p in v.get("pieces") or []:
+                pts = np.asarray(p["pts"], float).reshape(-1, 2)
+                out.setdefault(int(a), []).append(
+                    Piece(stage=int(stage), arm=int(a), line=int(p["line"]),
+                          k=int(p["piece"]), pts=pts,
+                          length_m=float(p.get("length_m",
+                                               traces_mod.cumlen(pts)[-1]))))
+    return out
+
+
+def holds_from_programme(doc: dict, stage: int) -> dict:
+    """The pose set a stage starts from. -> {arm: q}."""
+    for b in doc.get("barriers", []):
+        if b.get("before_stage") is not None \
+                and int(b["before_stage"]) == int(stage) and b.get("holds"):
+            return {int(a): np.asarray(q, float).reshape(7)
+                    for a, q in b["holds"].items()}
+    raise SystemExit(f"no barrier with holds before stage {stage}")
+
+
+def run_conducted(doc: dict, stage: int = 2, band_stage: int | None = None,
+                  specs=None, pens=None, parks=None, h_inv=H_INV_DEFAULT,
+                  opts=None, leg_cache=True, leg_cache_root=None,
+                  dt=CHECK_DT, sub=2, conduct_jobs=3,
+                  conduct_cap_s=CONDUCT_CAP_S, row_compose="priority",
+                  verbose=True) -> StagedResult:
+    """Re-run ONE conducted stage (and its dead-band stage) off a programme."""
+    t_all = time.perf_counter()
+    fl = FLEET if specs is None else specs
+    pens = {a: fl[a].pen for a in fl} if pens is None else pens
+    parks = shipped_parks(fl) if parks is None else parks
+    band_stage = (stage + 1) if band_stage is None else band_stage
+    held = holds_from_programme(doc, stage)
+    # THE PARTITION IS NOT RE-TAKEN, IT IS READ BACK.  `partition_deferred` ran
+    # once in the original programme and its answer is written into that
+    # programme's own stages: what the row conductors took is stage C's pieces
+    # and what the dead band took is stage D's.  Re-partitioning here would ask
+    # `piece_row` about the stage's DP bucket as well, which never went through
+    # it, and would move ink between the stages the comparison is about.
+    offered = pieces_from_programme(doc, stage)
+    band = pieces_from_programme(doc, band_stage)
+    buckets = {(int(stage), int(a)): list(v) for a, v in offered.items()}
+    row_m = sum(p.length_m for v in offered.values() for p in v)
+    band_m = sum(p.length_m for v in band.values() for p in v)
+    pstats = dict(row_m={str(traces_mod.ROW_OF.get(int(a))): float(
+        sum(p.length_m for p in v)) for a, v in sorted(offered.items())},
+        band_m={str(int(a)): float(sum(p.length_m for p in v))
+                for a, v in sorted(band.items())},
+        total_m=float(row_m + band_m),
+        band_frac=float(band_m / max(row_m + band_m, 1e-12)))
+    if verbose:
+        print(f"  stage {stage} offered {row_m:.3f} m in "
+              f"{sum(len(v) for v in offered.values())} pieces; dead band "
+              f"{band_m:.3f} m in {sum(len(v) for v in band.values())} pieces "
+              f"({100 * pstats['band_frac']:.1f} %)")
+    out, holds, plan_s = [], [], 0.0
+    entry = {int(a): np.asarray(q, float).reshape(7) for a, q in held.items()}
+    holds.append(dict(before_stage=int(stage),
+                      q={str(a): [float(x) for x in q]
+                         for a, q in sorted(entry.items())},
+                      **hold_gap(entry, fl, pens, h_inv)))
+    t1 = time.perf_counter()
+    arms, chk, c_s = _conduct_groups(
+        stage, [ROW_ARMS[j] for j in sorted(ROW_ARMS)], buckets, {}, fl, pens,
+        entry, parks, h_inv, opts, leg_cache, leg_cache_root, dt, sub,
+        conduct_jobs, conduct_cap_s, verbose, mode=row_compose)
+    chk["partition"] = {str(k): v for k, v in pstats.items()}
+    sr = StageResult(int(stage), tuple(sorted(int(a) for a in fl)), arms,
+                     wall_s=time.perf_counter() - t1, conducted=True,
+                     conducted_check=chk,
+                     deferred_in=float(pstats["total_m"]), conduct_s=float(c_s))
+    plan_s += time.perf_counter() - t1
+    out.append(sr)
+    if verbose:
+        _report_stage(sr)
+    for a, st in sr.arms.items():
+        entry[int(a)] = np.asarray(st.q_end, float).reshape(7)
+    if band:
+        who = sorted(int(a) for a, v in band.items() if v)
+        holds.append(dict(before_stage=int(band_stage),
+                          q={str(a): [float(x) for x in q]
+                             for a, q in sorted(entry.items())},
+                          **hold_gap(entry, fl, pens, h_inv)))
+        t1 = time.perf_counter()
+        arms, chk, c_s = _conduct_groups(
+            band_stage, [tuple(who)], {}, band, fl, pens, entry, parks, h_inv,
+            opts, leg_cache, leg_cache_root, dt, sub, 1, conduct_cap_s, verbose)
+        sd = StageResult(int(band_stage), tuple(sorted(int(a) for a in fl)),
+                         arms, wall_s=time.perf_counter() - t1, conducted=True,
+                         conducted_check=chk,
+                         deferred_in=float(sum(p.length_m for v in band.values()
+                                               for p in v)),
+                         conduct_s=float(c_s))
+        plan_s += time.perf_counter() - t1
+        out.append(sd)
+        if verbose:
+            _report_stage(sd)
+    thaw()
+    from . import sequence as _sequence
+    _sequence.close_pool()
+    return StagedResult(str(doc.get("pattern", "")) + f"/stage{stage}-only",
+                        out, [p for v in offered.values() for p in v],
+                        0.0, plan_s, 0.0, time.perf_counter() - t_all, None,
+                        {int(a): [float(x) for x in np.asarray(q).ravel()]
+                         for a, q in parks.items()},
+                        holds=holds)
+
+
+# ---------------------------------------------------------------------------
 # 7.  CLI
 # ---------------------------------------------------------------------------
 def main(argv=None):
@@ -3703,14 +4220,75 @@ def main(argv=None):
                          "six-arm conduct (the pre-2026-09-14 behaviour, "
                          "3 075 s of wall on the CSAIL logo) instead of three "
                          "two-arm conductors, one per row, in parallel")
+    ap.add_argument("--partner-standoff", type=float, default=0.0,
+                    help="leader_follower only: metres of clearance a LEADER "
+                         "must keep, ON TOP OF every gate it already meets, "
+                         "from its SAME-ROW follower's pose-invariant capsules "
+                         "(base column + shoulder->elbow).  No gate constant "
+                         "moves; 0.0 (the default) is exactly the pre-existing "
+                         "behaviour.  The leader loses the ink that needs to "
+                         "reach in under its partner's shoulder and that ink "
+                         "is deferred as usual (docs/V2_STAGED.md section 25)")
     ap.add_argument("--conduct-jobs", type=int, default=3,
                     help="row conductors run at once (<= 3)")
     ap.add_argument("--conduct-cap-s", type=float, default=CONDUCT_CAP_S,
                     help="wall-clock seconds any one conduct may take before "
                          "it is abandoned and its ink reported as residue")
+    ap.add_argument("--row-compose", choices=ROW_COMPOSE, default="priority",
+                    help="how the row conductors COMPOSE (docs/V2_STAGED.md "
+                         "section 26).  'parallel': every group starts at stage "
+                         "time zero and plans with the others STANDING at their "
+                         "entry poses -- the pre-2026-09-14 behaviour, and the "
+                         "one whose merge failed at -191.9 mm.  'priority' "
+                         "(default): busiest group first, each later group "
+                         "conducted against the earlier groups' REALISED "
+                         "trajectories as exact swept rooms; the wall becomes a "
+                         "pipeline.  'serial': the groups run one after another "
+                         "in TIME and still plan at once; the motion becomes "
+                         "the sum of the rows")
+    ap.add_argument("--stage-c-only", default=None, metavar="PROGRAMME.json",
+                    help="re-run ONLY the conducted final pass (and its "
+                         "dead-band stage) off an existing programme JSON: the "
+                         "stage entry poses come from its barrier and the ink "
+                         "from the pieces it carries.  Stages A and B are not "
+                         "re-planned")
+    ap.add_argument("--stage-c-index", type=int, default=2,
+                    help="--stage-c-only: which stage of that programme is the "
+                         "conducted final pass")
     ap.add_argument("--json", default=None)
     ap.add_argument("--programme", default=None)
     a = ap.parse_args(argv)
+
+    if a.stage_c_only:
+        doc = json.loads(Path(a.stage_c_only).read_text())
+        print(f"=== {Path(a.stage_c_only).name}: stage {a.stage_c_index} only, "
+              f"compose {a.row_compose} ===")
+        from . import sequence as _sequence
+        if a.route_jobs is not None:
+            _sequence.ROUTE_JOBS = int(a.route_jobs)
+        res = run_conducted(doc, stage=a.stage_c_index,
+                            opts=dict(tilt_max_deg=a.tilt_max_deg),
+                            leg_cache=not a.no_leg_cache,
+                            leg_cache_root=a.leg_cache, dt=a.dt, sub=2,
+                            conduct_jobs=a.conduct_jobs,
+                            conduct_cap_s=a.conduct_cap_s,
+                            row_compose=a.row_compose)
+        d = summary(res)
+        d["compose"] = a.row_compose
+        d["source_programme"] = str(a.stage_c_only)
+        d["stage_ab_s"] = round(float(sum(
+            float(one.get("duration_s", 0.0))
+            for one in doc.get("stages", [])
+            if int(one.get("stage", -1)) < int(a.stage_c_index))), 3)
+        d["makespan_abcd_s"] = round(d["stage_ab_s"] + res.makespan, 3)
+        print(json.dumps(d, indent=1))
+        if a.json:
+            Path(a.json).write_text(json.dumps(d, indent=1))
+            print("wrote", a.json)
+        if a.programme:
+            Path(a.programme).write_text(json.dumps(programme(res)))
+            print("wrote", a.programme)
+        return 0
 
     if a.lines:
         lines = traces_mod.load_lines(a.lines)
@@ -3748,7 +4326,9 @@ def main(argv=None):
               tuck=not a.no_tuck, split_rounds=a.split_rounds,
               split_min_m=a.split_min_m,
               conduct_rows=not a.no_conduct_rows,
-              conduct_jobs=a.conduct_jobs, conduct_cap_s=a.conduct_cap_s)
+              conduct_jobs=a.conduct_jobs, conduct_cap_s=a.conduct_cap_s,
+              row_compose=a.row_compose,
+              partner_standoff=a.partner_standoff)
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))
