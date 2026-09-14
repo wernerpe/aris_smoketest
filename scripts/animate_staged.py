@@ -46,22 +46,55 @@ MAX_INK_SEGMENTS = 5000            # hard cap; the sampler decimates to meet it
 # ---------------------------------------------------------------------------
 # 1.  THE FLEET CLOCK
 # ---------------------------------------------------------------------------
+ROLE_TAG = {"leader": "L", "follower": "F", "conductor": "C", "active": ""}
+
+
 class ArmTrack:
-    """One (stage, arm) joint trajectory placed on the fleet clock."""
+    """One (stage, arm) joint trajectory placed on the fleet clock.
+
+    THE THREE POSES ARE NOT ALL THE PARK, AND SCHEMA 2 IS WHY.  Under a HELD
+    BARRIER an arm does not go home between stages: it holds the last pen-up
+    hover it reached (`q_hold`) until its next stage starts, and that next
+    stage's trajectory begins THERE.  So:
+
+      q_start  the pose the arm enters this stage at.  This is the per-stage
+               `q_park` field, which under schema 2 is the stage's START pose
+               (= the previous stage's `q_hold`) and NOT the fleet park; under
+               schema 1 the two coincide and nothing changes.
+      q_tuck   an optional pre-stage clear-out the arm ramps to over
+               `clear_out_s` before its own trajectory runs.
+      q_hold   the pose it holds from the end of its trajectory to the next
+               barrier.  Absent (schema 1) -> it goes back to q_start.
+
+    Only the programme's very first barrier is the true park, and — on a run
+    that stops before the last stage — the last hold need not be the park
+    either.  `Programme` asserts the chain is CONTINUOUS rather than assuming
+    it, because a silent 3-radian jump is exactly the lie an animation would
+    tell most convincingly.
+    """
 
     def __init__(self, arm, d, t_start):
         self.arm = int(arm)
-        self.q_park = np.asarray(d["q_park"], float).reshape(7)
+        self.q_start = np.asarray(d["q_park"], float).reshape(7)
+        qh = d.get("q_hold")
+        self.q_hold = (self.q_start.copy() if qh is None
+                       else np.asarray(qh, float).reshape(7))
+        qt = d.get("q_tuck")
+        self.q_tuck = None if qt is None else np.asarray(qt, float).reshape(7)
+        self.clear_out = float(d.get("clear_out_s") or 0.0)
+        self.role = str(d.get("role") or "active")
         self.residue = bool(d["residue"])
         self.priority = d.get("priority")
         self.duration = float(d["duration_s"])
         self.ink_m = float(d["ink_m"])
         self.n_pieces = int(d["n_pieces"])
-        self.t_start = float(t_start)
+        self.deferred = d.get("deferred") or []
+        self.t_start = float(t_start)            # the stage's own start
         tr = d.get("trajectory")
+        self.has_traj = tr is not None
         if tr is None:
             self.t = np.zeros(1)
-            self.q = self.q_park[None, :].copy()
+            self.q = self.q_start[None, :].copy()
             self.seg = np.full(1, -1)
         else:
             self.t = np.asarray(tr["t"], float)
@@ -69,28 +102,55 @@ class ArmTrack:
             self.seg = np.asarray(tr["seg"], int)
 
     @property
+    def tag(self):
+        return f"{self.arm}{ROLE_TAG.get(self.role, '?')}"
+
+    @property
+    def t_draw0(self):
+        """When its own trajectory starts: after any clear-out tuck."""
+        return self.t_start + self.clear_out
+
+    @property
     def t_end(self):
-        return self.t_start + self.duration
+        return self.t_draw0 + self.duration
 
     def sample(self, ts):
-        """Fleet-clock times -> ((N,7) q, (N,) pen-down).  Outside: the park."""
-        ts = np.asarray(ts, float)
-        tau = np.clip(ts - self.t_start, self.t[0], self.t[-1])
-        q = np.column_stack([np.interp(tau, self.t, self.q[:, j])
-                             for j in range(7)])
-        # pen-down on [t_i, t_{i+1}) iff BOTH ends of the sample interval draw:
-        # `writing.arm_program` marks the touchdown sample with the stroke id
-        # and every lifted sample with -1.
-        i = np.clip(np.searchsorted(self.t, tau, "right") - 1, 0,
-                    len(self.t) - 1)
-        j = np.minimum(i + 1, len(self.t) - 1)
-        down = (self.seg[i] >= 0) & (self.seg[j] >= 0)
-        live = (ts >= self.t_start - 1e-9) & (ts <= self.t_end + 1e-9)
-        return q, down & live
+        """Fleet-clock times -> ((N,7) q, (N,) pen-down, (N,) moving).
 
-    def live(self, ts):
+        Before the window: `q_start`, ramping through `q_tuck` if there is a
+        clear-out.  After it: `q_hold`.  A parked-and-holding arm is NOT
+        "moving" and the banner must not claim it is.
+        """
         ts = np.asarray(ts, float)
-        return (ts >= self.t_start - 1e-9) & (ts <= self.t_end + 1e-9)
+        n = len(ts)
+        q = np.repeat(self.q_start[None, :], n, axis=0)
+        moving = np.zeros(n, bool)
+        down = np.zeros(n, bool)
+
+        if self.clear_out > 0 and self.q_tuck is not None:
+            m = ((ts >= self.t_start - 1e-9) & (ts <= self.t_draw0 + 1e-9))
+            if m.any():
+                u = np.clip((ts[m] - self.t_start) / self.clear_out, 0, 1)
+                q[m] = (self.q_start[None, :] * (1 - u)[:, None]
+                        + self.q_tuck[None, :] * u[:, None])
+                moving[m] = True
+            q[ts > self.t_draw0 + 1e-9] = self.q_tuck
+        if self.has_traj:
+            m = (ts >= self.t_draw0 - 1e-9) & (ts <= self.t_end + 1e-9)
+            if m.any():
+                tau = np.clip(ts[m] - self.t_draw0, self.t[0], self.t[-1])
+                q[m] = np.column_stack([np.interp(tau, self.t, self.q[:, j])
+                                        for j in range(7)])
+                # pen-down on [t_i, t_{i+1}) iff BOTH ends of the interval
+                # draw: `writing.arm_program` marks the touchdown sample with
+                # the stroke id and every lifted sample with -1.
+                i = np.clip(np.searchsorted(self.t, tau, "right") - 1, 0,
+                            len(self.t) - 1)
+                j = np.minimum(i + 1, len(self.t) - 1)
+                down[m] = (self.seg[i] >= 0) & (self.seg[j] >= 0)
+                moving[m] = True
+        q[ts > self.t_end + 1e-9] = self.q_hold
+        return q, down, moving
 
 
 class Programme:
@@ -98,6 +158,7 @@ class Programme:
 
     def __init__(self, doc):
         self.doc = doc
+        self.schema = int(doc.get("schema", 1))
         self.pattern = doc["pattern"]
         self.n_stages = int(doc["n_stages"])
         self.parks = {int(a): np.asarray(q, float).reshape(7)
@@ -111,7 +172,8 @@ class Programme:
             tracks, conc = {}, 0.0
             for a, d in s["arms"].items():
                 if not d["residue"]:
-                    conc = max(conc, float(d["duration_s"]))
+                    conc = max(conc, float(d.get("clear_out_s") or 0.0)
+                               + float(d["duration_s"]))
             cursor = conc
             # residues are serialised in the order the planner ranked them
             res = sorted((a for a, d in s["arms"].items() if d["residue"]),
@@ -123,20 +185,52 @@ class Programme:
             for a in res:
                 d = s["arms"][a]
                 tracks[int(a)] = ArmTrack(a, d, t + cursor)
-                cursor += float(d["duration_s"])
+                cursor += (float(d.get("clear_out_s") or 0.0)
+                           + float(d["duration_s"]))
             assert abs(cursor - float(s["duration_s"])) < 1e-6, (
                 f"stage {s['stage']}: max(concurrent)+sum(residue) = {cursor} "
                 f"but duration_s = {s['duration_s']}")
+            roles = {int(a): tr.role for a, tr in tracks.items()}
             self.stages.append(dict(
-                stage=int(s["stage"]), t0=t, t1=t + cursor,
-                duration=float(s["duration_s"]),
+                stage=int(s["stage"]),
+                label=(chr(ord("A") + int(s["stage"])) if self.schema >= 2
+                       else str(s["stage"])),
+                t0=t, t1=t + cursor, duration=float(s["duration_s"]),
                 actives=[int(x) for x in s["actives"]],
                 residues=[int(a) for a in res],
                 concurrent=conc, n_pieces=int(s["n_pieces"]),
                 ink_m=float(s["ink_m"]), checks=s.get("checks", {}),
+                roles=roles, deferred_m=float(s.get("deferred_m") or 0.0),
                 tracks=tracks, raw=s))
             t += cursor
         assert abs(t - self.makespan) < 1e-6, (t, self.makespan)
+        self._check_hold_chain()
+
+    def _check_hold_chain(self):
+        """Every stage must START each arm where the last one LEFT it.
+
+        Under a held barrier that is the whole content of the barrier, and it
+        is the one thing a renderer can get wrong invisibly: drawing a jump
+        from the hold back to the park would look like a plausible retreat and
+        would be a fabrication.  So it is checked, not assumed.
+        """
+        self.tail = {}                       # arm -> pose held at the very end
+        for a in self.arms:
+            cur, where = self.parks[a], "the fleet park"
+            for s in self.stages:
+                tr = s["tracks"].get(a)
+                if tr is None:
+                    continue
+                d = float(np.abs(tr.q_start - cur).max())
+                assert d < 1e-6, (
+                    f"arm {a} enters stage {s['stage']} at a pose {d:.4f} rad "
+                    f"from {where}; the programme is discontinuous and this "
+                    "script will not animate a jump it invented")
+                cur, where = tr.q_hold, f"its stage-{s['stage']} hold"
+            self.tail[a] = cur
+        self.ends_parked = {
+            a: float(np.abs(self.tail[a] - self.parks[a]).max())
+            for a in self.arms}
 
     def stage_at(self, ts):
         """-> (N,) stage index for each fleet-clock time."""
@@ -145,35 +239,79 @@ class Programme:
                        - 1, 0, len(self.stages) - 1)
 
     def sample(self, ts):
-        """-> (Q {arm: (N,7)}, DOWN {arm: (N,)}, LIVE {arm: (N,)}, stage (N,))."""
+        """-> (Q {arm: (N,7)}, DOWN {arm: (N,)}, LIVE {arm: (N,)}, stage (N,)).
+
+        LIVE means MOVING, not "named in `actives`": under a held barrier an
+        arm that has finished its bucket is holding a hover pose over the
+        paper, which looks nothing like a park and is still not motion.
+        """
         ts = np.asarray(ts, float)
         n = len(ts)
-        Q = {a: np.repeat(self.parks[a][None, :], n, axis=0) for a in self.arms}
+        Q = {a: np.zeros((n, 7)) for a in self.arms}
         DOWN = {a: np.zeros(n, bool) for a in self.arms}
         LIVE = {a: np.zeros(n, bool) for a in self.arms}
-        for s in self.stages:
-            win = (ts >= s["t0"] - 1e-9) & (ts < s["t1"] + 1e-9)
-            if not win.any():
-                continue
-            for a, tr in s["tracks"].items():
-                q, down = tr.sample(ts[win])
-                lv = tr.live(ts[win])
+        for a in self.arms:
+            cur = self.parks[a]                 # what it holds entering stage 0
+            Q[a][:] = cur
+            for k, s in enumerate(self.stages):
+                last = k == len(self.stages) - 1
+                win = ((ts >= s["t0"] - 1e-9)
+                       & (ts < s["t1"] + (1e-9 if not last else 1e9)))
+                tr = s["tracks"].get(a)
                 idx = np.nonzero(win)[0]
-                Q[a][idx] = np.where(lv[:, None], q, self.parks[a][None, :])
+                if tr is None:
+                    Q[a][idx] = cur             # it simply keeps holding
+                    continue
+                q, down, mv = tr.sample(ts[win])
+                Q[a][idx] = q
                 DOWN[a][idx] = down
-                LIVE[a][idx] = lv
+                LIVE[a][idx] = mv
+                cur = tr.q_hold
+            Q[a][ts > self.makespan + 1e-9] = cur
         return Q, DOWN, LIVE, self.stage_at(ts)
+
+    def roles_at(self, k):
+        return self.stages[k]["roles"]
+
+    def tag(self, a, k):
+        tr = self.stages[k]["tracks"].get(a)
+        return tr.tag if tr is not None else str(a)
 
     def table(self):
         rows = []
         for s in self.stages:
             rows.append(dict(
-                stage=s["stage"], t0=s["t0"], t1=s["t1"],
+                stage=s["stage"], label=s["label"], t0=s["t0"], t1=s["t1"],
                 duration=s["duration"], actives=s["actives"],
                 residues=s["residues"],
-                per_arm={a: (tr.t_start, tr.t_end, tr.duration, tr.residue)
-                         for a, tr in sorted(s["tracks"].items())}))
+                per_arm={a: tr for a, tr in sorted(s["tracks"].items())}))
         return rows
+
+    def idle(self):
+        """{arm: (moving_s, idle_s, [longest idle window])} over the makespan.
+
+        "Idle" is the honest word for a held barrier: the arm is powered, at a
+        hover pose, and drawing nothing.
+        """
+        out = {}
+        for a in self.arms:
+            spans = []
+            for s in self.stages:
+                tr = s["tracks"].get(a)
+                if tr is not None and (tr.has_traj or tr.clear_out > 0):
+                    spans.append((tr.t_start, tr.t_end))
+            spans.sort()
+            mv = sum(b - x for x, b in spans)
+            gaps, prev = [], 0.0
+            for x, b in spans:
+                if x - prev > 1e-9:
+                    gaps.append((prev, x))
+                prev = max(prev, b)
+            if self.makespan - prev > 1e-9:
+                gaps.append((prev, self.makespan))
+            longest = max(gaps, key=lambda g: g[1] - g[0], default=None)
+            out[a] = (mv, self.makespan - mv, longest)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -249,12 +387,20 @@ def analyse(prog, h_inv, dt=0.05, verbose=True):
                 continue
             z = ch[a][DOWN[a], 9, 2]
             pen[a] = (float(z.min()), float(z.max()))
-        # did anything move that should have been held?
+        # did anything move that should have been HELD?  Under schema 2 the
+        # pose it should hold is not the park, so the reference is whatever
+        # the arm's own pose was at the first held sample, not `parks`.
         drift = {}
         for a in prog.arms:
-            held = ~LIVE[a]
-            if held.any():
-                drift[a] = float(np.abs(Q[a][held] - prog.parks[a]).max())
+            held = np.nonzero(~LIVE[a])[0]
+            if not len(held):
+                continue
+            # contiguous held runs; each must be constant within itself
+            cuts = np.nonzero(np.diff(held) > 1)[0]
+            wd = 0.0
+            for run in np.split(held, cuts + 1):
+                wd = max(wd, float(np.abs(Q[a][run] - Q[a][run[0]]).max()))
+            drift[a] = wd
         rows.append(dict(stage=s["stage"], t0=s["t0"], t1=s["t1"],
                          worst=worst[:4], pen_z=pen, park_drift=drift))
         if verbose:
@@ -272,7 +418,7 @@ def analyse(prog, h_inv, dt=0.05, verbose=True):
                       f"[{1000 * lo:+.2f}, {1000 * hi:+.2f}] mm")
             bad = {a: v for a, v in drift.items() if v > 1e-9}
             if bad:
-                print(f"        PARK DRIFT (should be empty): {bad}")
+                print(f"        HOLD DRIFT (should be empty): {bad}")
     return rows
 
 
@@ -478,13 +624,15 @@ class MeshcatScene:
         g, tf = self.g, self.tf
         try:
             for k, s in enumerate(self.prog.stages):
-                act = " ".join(str(a) for a in s["actives"])
+                act = " ".join(self.prog.tag(a, k) for a in s["actives"])
                 res = (f"  residue {' '.join(map(str, s['residues']))}"
                        if s["residues"] else "")
                 png = _caption_png(
-                    f"STAGE {k} / {self.n_stages - 1}",
-                    f"active {act}{res}   t {s['t0']:.0f}-{s['t1']:.0f} s"
-                    f"   ink {s['ink_m']:.2f} m")
+                    f"STAGE {s['label']}   {act}",
+                    f"t {s['t0']:.0f}-{s['t1']:.0f} s   ink {s['ink_m']:.2f} m"
+                    f"{res}"
+                    + ("   L leader / F follower" if self.prog.schema >= 2
+                       else ""))
                 self.vis[f"title/s{k}"].set_object(
                     g.Box([2.6, 0.012, 0.42]),
                     g.MeshBasicMaterial(map=g.ImageTexture(g.PngImage(png))))
@@ -778,14 +926,18 @@ def render_gif(prog, args, h_inv, path, view="top"):
         # not off the stage's `actives`: an active arm that has finished its
         # bucket is HELD at its park until the barrier, and with more than
         # three actives in a stage that difference is the whole picture.
-        mv = [a for a in prog.arms if LIVE[a][i]]
-        pk = [a for a in prog.arms if not LIVE[a][i]]
-        banner.set_text(f"stage {k}/{prog.n_stages - 1}   t = {ts[i]:6.1f} s"
-                        f"   moving: {' '.join(map(str, mv)) or '(barrier)'}"
-                        f"   |  parked: {' '.join(map(str, pk)) or '-'}")
-        sub.set_text(f"{prog.pattern}   stage actives {s['actives']}"
+        mv = [prog.tag(a, k) for a in prog.arms if LIVE[a][i]]
+        pk = [prog.tag(a, k) for a in prog.arms if not LIVE[a][i]]
+        holding = "holding" if prog.schema >= 2 else "parked"
+        banner.set_text(f"stage {s['label']}   t = {ts[i]:6.1f} s"
+                        f"   moving: {' '.join(mv) or '(barrier)'}"
+                        f"   |  {holding}: {' '.join(pk) or '-'}")
+        sub.set_text(f"{prog.pattern}   stage {s['label']} actives "
+                     f"{s['actives']}"
                      f"{'  residue ' + str(s['residues']) if s['residues'] else ''}"
-                     f"   makespan {prog.makespan:.1f} s   {args.gif_rate:g}x")
+                     f"   makespan {prog.makespan:.1f} s   {args.gif_rate:g}x"
+                     + ("   L = leader, F = follower" if prog.schema >= 2
+                        else ""))
         fig.canvas.draw()
         im = Image.frombuffer("RGBA", fig.canvas.get_width_height(),
                               fig.canvas.buffer_rgba(), "raw", "RGBA", 0, 1)
@@ -868,12 +1020,31 @@ def main(argv=None):
     print("  fleet clock (stage: [t0, t1) s  actives / residue):")
     for r in prog.table():
         rs = f"  residue {r['residues']}" if r["residues"] else ""
-        print(f"    stage {r['stage']}: [{r['t0']:7.2f}, {r['t1']:7.2f})  "
+        print(f"    stage {r['label']}: [{r['t0']:7.2f}, {r['t1']:7.2f})  "
               f"{r['duration']:6.2f} s  actives {r['actives']}{rs}")
-        for arm, (t0, t1, d, res) in r["per_arm"].items():
-            print(f"        arm {arm:>3}: [{t0:7.2f}, {t1:7.2f}]  {d:6.2f} s"
-                  + ("   RESIDUE (serialised after the concurrent part)"
-                     if res else ""))
+        for arm, tr in r["per_arm"].items():
+            hold = float(np.abs(tr.q_hold - tr.q_start).max())
+            print(f"        arm {arm:>3} {tr.role:<9}"
+                  f" [{tr.t_draw0:7.2f}, {tr.t_end:7.2f}]  {tr.duration:6.2f} s"
+                  f"  ink {tr.ink_m:5.2f} m"
+                  + (f"  tuck {tr.clear_out:.2f} s" if tr.clear_out else "")
+                  + ("   (no trajectory: holds all stage)"
+                     if not tr.has_traj else
+                     f"   -> holds a pose {hold:.2f} rad from where it started")
+                  + ("   RESIDUE" if tr.residue else "")
+                  + (f"   deferred {len(tr.deferred)}" if tr.deferred else ""))
+    if prog.schema >= 2:
+        print("  held barriers: an arm keeps its last pen-up hover between "
+              "stages (checked continuous to 1e-6 rad)")
+        tail = {k: round(v, 3)
+                for k, v in prog.ends_parked.items() if v > 1e-6}
+        if tail:
+            print(f"  NOT PARKED AT THE END (rad from park): {tail}")
+        print("  idle (arm: moving s / idle s / longest idle window):")
+        for arm_id, (mv, idl, gap) in sorted(prog.idle().items()):
+            g = "-" if gap is None else f"[{gap[0]:.1f}, {gap[1]:.1f}]"
+            print(f"      arm {arm_id:>3}: {mv:7.2f} moving  {idl:7.2f} idle "
+                  f"({100 * idl / prog.makespan:5.1f} %)  longest {g}")
     dup = ink_twice(prog)
     print(f"  pieces planned twice: {len(dup)}"
           + (f"  {dup[:5]}" if dup else "  (none)"))
