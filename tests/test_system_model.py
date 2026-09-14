@@ -325,7 +325,7 @@ def test_the_inverted_base_cable_is_carried_as_a_finding():
 def test_the_open_questions_are_the_ones_that_block_fabrication():
     want = {"plate_offset_direction", "ceiling_survey", "penholder_cradle",
             "cable_dress", "cage_legs", "gusset_attachment",
-            "base_cable_passthrough"}
+            "base_cable_passthrough", "seam_frame"}
     assert set(SM.OPEN_QUESTIONS) == want
     for k, q in SM.OPEN_QUESTIONS.items():
         assert set(q) == {"what", "why", "rides_on", "answer_by", "blocking"}, k
@@ -1355,3 +1355,134 @@ def test_no_gltf_asks_for_a_texture_that_is_not_there():
         for buf in d.get("buffers", []):
             assert (g.parent / buf["uri"]).is_file(), f"{g.name}: {buf['uri']}"
     assert n == 27, n      # 3 maps x (link0..7 + hand); finger has none
+
+
+# ---------------------------------------------------------------------------
+# THE SEAM FRAME — the steel where the two half-cages meet
+# ---------------------------------------------------------------------------
+def test_the_seam_is_the_papers_mid_length_and_the_middle_arm_row():
+    """One plane, three independent derivations, and they agree exactly.
+
+    The paper's mid-length, the frame's own mid-length, the middle arm row,
+    and `rig_final6.MIRROR_PLANE_CANVAS_Y` (which was derived years earlier
+    from the drawing's own outer back face) are all the same number.
+    """
+    from aris_sixarm import rig_final6
+    assert SM.SEAM_Y == pytest.approx(0.5 * (SM.FR_Y0 + SM.FR_Y1), abs=1e-9)
+    assert SM.SEAM_Y == pytest.approx(SM.CANVAS_L / 2, abs=1e-9)
+    assert SM.SEAM_Y == pytest.approx(SM.ROW_Y[1], abs=1e-6)
+    assert SM.SEAM_Y / 1000.0 == pytest.approx(
+        rig_final6.MIRROR_PLANE_CANVAS_Y, abs=1e-6)
+
+
+def test_two_half_cages_butted_are_this_models_frame_plus_one_end_frame():
+    """THE COROBORATION THE WHOLE SEAM SECTION RESTS ON.
+
+    The half-cage is 2082.8 mm long (the drawing's post_BL/post_BR outer
+    face).  Two of them butted are 4165.6; this model's frame is 4011.64.
+    The difference is one doubled 3 in end frame — 152.4 — to within 1.56 mm,
+    and laying each half flush with this model's own frame ends puts its
+    seam-side end rail within 0.78 mm of the middle runway this model already
+    builds there.  So the middle runway IS the two butted end rails, and
+    `seam_bodies` must not build them a second time.
+    """
+    assert SM.HALF_CAGE_L == pytest.approx(2082.8, abs=1e-6)
+    assert SM.SEAM_OVERLAP_MM == pytest.approx(2 * SM.HALF_CAGE_L - SM.FR_L,
+                                               abs=1e-6)
+    assert SM.SEAM_OVERLAP_MM == pytest.approx(153.96, abs=1e-6)
+    assert abs(SM.SEAM_OVERLAP_MM - 2 * SM.PROFILE) < 1.6
+    assert SM.SEAM_RAIL_RESIDUAL_MM == pytest.approx(0.78, abs=1e-6)
+    assert abs(SM.SEAM_RAIL_RESIDUAL_MM) < 1.0
+    # and no seam body is a rail: the runway carries that steel already
+    names = {b.name for b in SM.seam_bodies()}
+    assert not any("rail" in n for n in names), names
+
+
+def test_the_seam_frame_is_four_posts_and_four_braces_off_the_drawing():
+    """Present, positioned per the drawing, and DRAWING-sourced."""
+    seam = SM.seam_bodies()
+    posts = [b for b in seam if b.name.startswith("seam_post_")]
+    # the corner braces are a QUESTION, not geometry: bolted on the posts'
+    # faces they overlap the post in any AABB, the model's own four corner
+    # legs carry none either, and they sit 450 mm above anything reachable
+    assert len(seam) == 4 and len(posts) == 4
+    assert {b.name for b in posts} == {"seam_post_SW", "seam_post_SE",
+                                       "seam_post_NW", "seam_post_NE"}
+    for b in seam:
+        assert b.provenance == "DRAWING", (b.name, b.provenance)
+        assert b.kind == "cage"
+    for b in posts:
+        # 3 in square, the drawing's own MTEXT
+        assert b.size[0] == pytest.approx(SM.PROFILE, abs=1e-6)
+        assert b.size[1] == pytest.approx(SM.PROFILE, abs=1e-6)
+        # tabletop to rail underside — the same cut as a corner leg
+        assert b.lo[2] == pytest.approx(SM.LEG_BOTTOM, abs=1e-6)
+        assert b.hi[2] == pytest.approx(SM.GRID_U, abs=1e-6)
+        assert b.size[2] == pytest.approx(1651.0, abs=1e-6)
+        # x band is the frame corner, exactly a corner leg's
+        assert b.lo[0] in (pytest.approx(SM.FR_X0, abs=1e-6),
+                           pytest.approx(SM.FR_X1 - SM.PROFILE, abs=1e-6))
+        # y band is one 3 in profile on ONE side of the seam
+        assert (b.lo[1] == pytest.approx(SM.SEAM_Y - SM.PROFILE, abs=1e-6)
+                or b.lo[1] == pytest.approx(SM.SEAM_Y, abs=1e-6))
+    # the two bands together are exactly the doubled end frame, and exactly
+    # the middle runway's own y band
+    ylo = min(b.lo[1] for b in posts)
+    yhi = max(b.hi[1] for b in posts)
+    assert yhi - ylo == pytest.approx(2 * SM.PROFILE, abs=1e-6)
+    runways = [b for b in SM.cage_bodies() if b.name.startswith("runway_r1_")]
+    assert min(b.lo[1] for b in runways) == pytest.approx(ylo, abs=1e-6)
+    assert max(b.hi[1] for b in runways) == pytest.approx(yhi, abs=1e-6)
+    assert not [b for b in seam if "brace" in b.name]
+
+
+def test_every_seam_post_stands_under_a_runway_beam():
+    """A post that does not carry the beam above it is a modelling artefact."""
+    runways = [b for b in SM.cage_bodies() if b.name.startswith("runway_r1_")]
+    for p in [b for b in SM.seam_bodies() if b.name.startswith("seam_post_")]:
+        assert any(r.lo[1] <= p.lo[1] and p.hi[1] <= r.hi[1] for r in runways), \
+            p.name
+        # and it stops at the beam's underside, not inside it
+        assert p.hi[2] == pytest.approx(min(r.lo[2] for r in runways),
+                                        abs=1e-6)
+
+
+def test_the_seam_frame_is_in_the_manifest():
+    man = json.loads((DIR / "model_manifest.json").read_text())
+    names = {b["name"] for b in man["bodies"]}
+    for b in SM.seam_bodies():
+        assert b.name in names, b.name
+        rec = next(r for r in man["bodies"] if r["name"] == b.name)
+        assert rec["provenance"] == "DRAWING"
+        assert "CONFIRM" in rec["source"] or "seam_frame" in rec["source"]
+        for a, v in zip(b.lo, rec["lo_mm"]):
+            assert a == pytest.approx(v, abs=1e-6)
+        for a, v in zip(b.hi, rec["hi_mm"]):
+            assert a == pytest.approx(v, abs=1e-6)
+
+
+def test_mounts_hands_out_the_same_seam_frame_in_metres():
+    """`mounts.seam_frame_boxes` is the measurement side's door to it — and
+    it must never have been wired into the certified static set behind
+    anyone's back."""
+    boxes = mounts.seam_frame_boxes()
+    assert len(boxes) == 4
+    by = {b["name"]: b for b in boxes}
+    for b in SM.seam_bodies():
+        got = by[b.name]
+        for a, v in zip(b.lo, got["lo"]):
+            assert a / 1000.0 == pytest.approx(float(v), abs=1e-9)
+        assert got["tag"] == "seam"
+    # NOT in the certified static set: adding it is a re-certification
+    fl = layout.build_fleet(layout.LAYOUT_PROPOSED)
+    for spec in fl.values():
+        got = {b["name"] for b in spec.static_obstacles()}
+        assert not (got & set(by)), sorted(got & set(by))
+
+
+def test_the_seam_frame_has_an_open_question_naming_every_assumption():
+    q = SM.OPEN_QUESTIONS["seam_frame"]
+    assert "CONFIRM ON HARDWARE" in q["what"]
+    for word in ("SEAM PLANE", "ZERO GAP", "MID-WIDTH", "TABLETOP",
+                 "END RAILS"):
+        assert word in q["why"], word

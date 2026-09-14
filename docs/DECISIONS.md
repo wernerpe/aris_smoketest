@@ -1,5 +1,106 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE SEAM FRAME: the model gained 8 bodies and v19 now FAILS on steel (2026-09-14)
+
+**Pete Werner, on the real hardware:** *"there are a few bars on the real
+hardware that are not in our model. they are supports in the middle, I think
+the half-table drawing had them. the real thing is essentially the two halves
+next to each other."*
+
+`system_model.seam_bodies()` builds them from the drawing — **4 posts at
+y = 1815.32 mm**, the paper's mid-length, which is also the middle arm row.
+77 static bodies → **81**, `check_system_model.py` ALL PASS. (The posts' corner
+brace plates are carried as a question, not geometry: as AABBs they overlap the
+posts they bolt to, the model's own corner legs have never had them, and they
+sit 450 mm above anything reachable.)
+Full derivation in docs/SYSTEM_MODEL.md §3b; the one-line corroboration is that
+two half-cages butted are 4165.60 mm against this model's 4011.64, and the
+153.96 mm difference is one doubled 3″ end frame — so **the middle runway IS
+the two butted end rails** (they agree to 0.78 mm) and what was missing is the
+four posts holding them up.
+
+### THE STATIC SET IS UNCHANGED, DELIBERATELY
+
+`layout.StudySpec.static_obstacles` returns the neighbours' mount boxes and
+base columns **and nothing else** — every certified number on the proposed rig
+was earned against a fleet in an empty room, with no cage at all. Wiring the
+seam in re-decides everything and is a re-certification; it waits on the photo
+(`OPEN_QUESTIONS['seam_frame']`). `mounts.seam_frame_boxes()` is the door;
+`scripts/seam_impact.py` walks through it and changes nothing on disk.
+
+### WHAT IT COSTS — measured, h = 0.970
+
+**1. PARKS.** Whole-chain clearance to the seam steel, by `scene_check.
+static_clearance_lb` (the independent derivation), against the two floors:
+STATIC_MARGIN 50 mm and FRAME_FLOOR 63 mm.
+
+| park set | worst | arm | < 50 | < 63 |
+|---|---:|---:|---:|---:|
+| `Q_PARK_PROPOSED` | **50.9 mm** | 31 | 0 | 1 |
+| `stage_parks[0]` | **49.9 mm** | 31 | 1 | 1 |
+| `stage_parks[1]` | 50.9 mm | 31 | 0 | 1 |
+| `stage_parks[2]` | **−35.3 mm** | 31 **and** 71 | 2 | 2 |
+| `stage_parks[3]` | 91.8 mm | 31 | 0 | 0 |
+| `stage_parks[4]`, `[5]` | 50.9 mm | 31 | 0 | 1 |
+| `stage_parks[6]` | **−35.3 mm** | 31 | 1 | 1 |
+| `stage_parks[7]` | 50.9 mm (71: 51.0) | 31 | 0 | 2 |
+
+**Only arms 31 and 71 are ever the offender — the middle row, exactly as
+expected: their J1 axes are ON the seam plane.** The shipped
+`Q_PARK_PROPOSED` scrapes the 50 mm static margin by **0.9 mm** and misses the
+63 mm router floor by **12.1 mm**. Two staged parks — stages **2** and **6** —
+are **35.3 mm INSIDE the steel**: those are interpenetrations, not tight
+margins, and they are the ones to move first. Seven of eight stages hold a
+park that fails at least one floor.
+
+**2. THE CERTIFIED AREA** (`out/certified_area_h0970.json`, re-decided on the
+draw-pose layer):
+
+| | before | after |
+|---|---:|---:|
+| live cells | 16 184 | **16 019** (−165, −1.02 %) |
+| hole-free block | 1.50 × 3.64 m, 13 650 cells | **1.50 × 3.64 m, 13 650 cells — UNCHANGED** |
+| arm 31's cells | 3 765 | 3 680 (−85) |
+| arm 71's cells | 3 772 | 3 692 (−80) |
+
+**The hole-free block survives intact.** It runs x ∈ [0.16, 1.64], and the
+nearest seam post face is at x = −0.1143 / 1.9177 — 274.3 mm away, past the
+205 mm a link needs. The 165 lost cells are all at the canvas's x extremes on
+the seam row, and all of them belonged to 31 or 71. **This is a LOWER BOUND:**
+only the draw pose is on disk, so a cell that keeps its draw pose may still
+lose its hover or its routing leg, and only a full re-sweep can say.
+`remap_dead_cells.py` cannot answer it — it re-decides DEAD cells against a
+SUPERSET atlas, and adding steel makes a SUBSET.
+
+**3. THE SHIPPED PROGRAMME — v19 FAILS.**
+`out/csail_schedule_h097_v19.npz`, whole merged timeline, 5 038 steps
+re-sampled to 10 075, 6 arms:
+
+```
+self-collision              63.1 mm  (margin 20)   PASS
+inter-arm                   50.3 mm  (margin 50)   PASS
+neighbour base columns     131.5 mm  (margin 50)   PASS
+paper: chain 26.0 / tip -7.9 mm                    PASS
+frame (STEEL)              -59.4 mm  (margin 50)   FAIL: arms [31, 71]
+                                     arm 31 at t = 13.94 s
+VERDICT                                            FAIL
+```
+
+**59.4 mm inside the seam steel.** Nothing else moved: the seam frame is the
+single reason the verdict flipped, and it is the middle row again.
+
+**The staged v6 programme ships no frames** (`out/staged_csail_h097_v6.json` is
+a programme, not a timeline), so no merged-timeline verdict was computed for
+it. Its **parks** are the `stage_parks[*]` rows above, and two of them
+interpenetrate.
+
+### WHAT THIS DOES NOT SAY
+
+Nothing here is a survey and no gate constant, tool transform or layout grid
+value moved. The seam frame is built from the drawing and reported by Pete; it
+has **not been photographed**, and five assumptions ride on it — see
+`OPEN_QUESTIONS['seam_frame']` and docs/BUILD_SHEET.md §9.
+
 ## v6: EVERY BUCKET FLIES, 100 % OF THE INK, SEVEN OF EIGHT STAGES (2026-09-11, last)
 
 `out/staged_csail_h097_v6.json` — priority rooms + order search + residue, RRT

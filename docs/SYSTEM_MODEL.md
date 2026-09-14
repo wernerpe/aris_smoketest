@@ -160,6 +160,104 @@ Plus, per arm × 6:
   pair and need 406.4 mm where only **216.20 mm** exists. Rotated, each plate
   is centred on its own post and the pair clears by **89.20 mm**.
 
+### 3b. The seam frame — the two half-cages, and the steel where they meet
+
+> **Pete Werner, 2026-09-14:** *"we need to be a bit careful with the parking
+> poses — there are a few bars on the real hardware that are not in our model.
+> they are supports in the middle, I think the half-table drawing had them. the
+> real thing is essentially the two halves next to each other."*
+
+**Four new bodies, `system_model.seam_bodies()`: the four posts straddling
+y = 1815.32 mm.** They take the model from 77 static bodies to 81. Both are
+provenance **DRAWING** — they are the original's own `post_BL` / `post_BR`,
+moved to the seam. Their **corner brace plates are a question, not geometry**:
+bolted on the posts' faces they overlap the post in any AABB, the two halves'
+braces pass each other across the seam, the model's own four corner legs carry
+none either, and they sit at z 1420…1624 — 450 mm above anything a certified
+pose reaches. See `OPEN_QUESTIONS['seam_frame']`.
+
+#### The arithmetic that says where the seam is
+
+The drawing describes ONE self-supporting cage, **218.44 × 208.28 cm**.
+`rig_final6` already reads the installation as two of those abutting
+back-to-back (`MIRROR_PLANE_CANVAS_Y` = 1.81532 m). This module's cage was
+never built that way: it is one long frame, `FR_L` = 4011.64 mm, derived from
+the canvas. **Those turn out to be the same statement**, and that is the whole
+corroboration:
+
+| | mm |
+|---|---:|
+| two half-cages butted, outer face to outer face | 2 × 2082.8 = **4165.60** |
+| this model's frame | **4011.64** |
+| difference | **153.96** = one doubled 3″ end frame (152.4) **+ 1.56** |
+
+Lay each half flush with this model's own outer frame end and its seam-side
+**end rail** lands on this model's own **middle runway**:
+
+| | y band, mm |
+|---|---|
+| half A (south), y ∈ [−190.5, 1892.30] — its N end rail | 1816.10 … 1892.30 |
+| `runway_r1_N` | 1815.32 … 1891.52 |
+| half B (north), y ∈ [1738.34, 3821.14] — its S end rail | 1738.34 … 1814.54 |
+| `runway_r1_S` | 1739.12 … 1815.32 |
+
+**0.78 mm, both of them, in opposite directions** (`SEAM_RAIL_RESIDUAL_MM`).
+
+So **the middle runway *is* the two butted end rails**. That steel is already
+in the model and must not be counted twice — `seam_bodies()` builds no rail,
+and `tests/test_system_model.py` refuses one. The middle arm row's J1 axes lie
+on the seam plane because that is where two half-cages put a beam; the seam
+plane, the paper's mid-length, the frame's mid-length, the middle row and
+`rig_final6.MIRROR_PLANE_CANVAS_Y` are one number, pinned four ways.
+
+#### What was actually missing: what holds those rails up
+
+Each half-cage end frame stands on **two corner posts** (76.2 sq, tabletop to
+rail underside). Butted, that is four posts:
+
+| body | x, mm | y, mm | z, mm |
+|---|---|---|---|
+| `seam_post_SW` / `seam_post_NW` | −190.5 … −114.3 | 1739.12…1815.32 / 1815.32…1891.52 | −27.38 … 1623.62 |
+| `seam_post_SE` / `seam_post_NE` | 1917.7 … 1993.9 | as above | −27.38 … 1623.62 |
+
+Post cut length **1651.0 mm — the same cut as a corner leg.** These are
+exactly the mid-span legs `OPEN_QUESTIONS['cage_legs']` said were *"almost
+certainly required — the original spans 2.08 m"*. They are, they exist, and
+they are the drawing's own.
+
+#### What the seam frame is NOT
+
+- **No mid-width post.** The drawing's front view looks along y, so BOTH end
+  frames project onto it, and it shows exactly two verticals above the
+  tabletop — the corner posts — with nothing between them but arm 31's own
+  drop-post pair.
+- **Nothing below the paper.** The nine 3 × 3 blobs in the top view are the
+  **table's** legs and levelling feet: the table has a mid-width leg and a
+  mid-depth cross rail, both under the tabletop, both already inside this
+  model's solid `table` body.
+- **No diagonals above the table.** The X-bracing in the front view is all in
+  the 63.5 cm table frame. Above it there are corner gussets only.
+
+#### The corner braces, at the seam and at the frame's own corners
+
+`brace_FL`…`brace_BR` exist in the drawing and in
+`rig_final.FRAME_BOXES_W_CM`, and this model has never built them anywhere. A
+pre-existing omission, now flagged rather than fixed — z 1420…1624 is 450 mm
+above anything a certified pose reaches.
+
+#### What it costs — `scripts/seam_impact.py`
+
+**The seam frame is NOT in the certified static set.** `StudySpec.
+static_obstacles` returns the neighbours' mount boxes and base columns and
+nothing else: every certified number on the proposed rig was earned against a
+fleet standing in an empty room with no cage around it. Adding steel re-decides
+every certified cell, so it is a re-certification and it waits on the photo.
+`mounts.seam_frame_boxes()` is the door for anyone who wants to ask what it
+costs without pre-empting the answer; the numbers are in **DECISIONS.md**.
+
+Every assumption is in `OPEN_QUESTIONS['seam_frame']`, and every one of them is
+a question for **one photo of the seam**.
+
 ## 4. The textures — solved by vendoring, not by stripping
 
 The vendored glTFs referenced **65 image files that were never copied

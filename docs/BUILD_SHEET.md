@@ -245,3 +245,63 @@ Full text with what each one blocks and how it closes is in
 Software-side, not builder-blocking: pen-holder fingertip-cradle geometry
 (tool offset verification), and on-site base survey / touch-off calibration at
 commissioning.
+
+
+## 9. The seam frame — CONFIRM ON HARDWARE, photo requested
+
+**Added 2026-09-14** after Pete reported bars at the middle of the real rig
+that the model did not have. The real installation is **two copies of the
+original 3-arm half-cage (218.44 × 208.28 cm) butted along the paper's long
+axis**, and where they meet — at the paper's mid-length, **y = 1815.32 mm**,
+which is the middle arm row — each half contributes its own end frame.
+
+**Cut list (adds to §6):**
+
+| qty | member | section | cut length | position |
+|---:|---|---|---:|---|
+| 4 | seam post | 3″ × 3″ T-slot | **1651.0 mm** | x = −190.5…−114.3 and 1917.7…1993.9; y = 1739.12…1815.32 and 1815.32…1891.52; z = −27.38 (tabletop) to 1623.62 (runway underside) |
+| (8) | corner brace plate | 8″ × 1.5″ × 8″ | 203.2 mm | two per post, on its two inboard faces, top flush with the runway underside — **not in the collision model**, see docs/SYSTEM_MODEL.md §3b |
+
+The post cut is **the same 1651.0 mm as the four corner legs** — one more line
+on the same cut, not a new part.
+
+**The seam's END RAILS are already in the build sheet**: they are
+`runway_r1_S` / `runway_r1_N`, the middle double-beam runway. Two butted end
+rails and this sheet's middle runway agree to **0.78 mm**. Do not order them
+twice.
+
+### CONFIRM ON HARDWARE — the photo, and the five questions it answers
+
+**Two photographs: one from inside the cage looking along the paper at the
+seam, one looking down the seam from an end.**
+
+1. **How many posts at the seam, and at what x?** This sheet builds four — two
+   per half-cage, at the frame's own x corners. Is there a **mid-width** post?
+   The drawing says no (its front view looks along y and shows only the two
+   corner verticals above the tabletop), but the drawing is a plan and the rig
+   is built.
+2. **Two bars or one?** Do the two half-cages' end rails sit side by side
+   (152.4 mm of steel, which is what this sheet assumes and what the middle
+   runway is), or has someone removed one and bolted the halves to a single
+   rail?
+3. **Is the gap really zero?** `rig_final6.GAP_CM` = 0 assumes the frames butt
+   outer face to outer face. The levelling-foot pads overhang the leg lines by
+   3.3 mm, so two frames touching **at the pads** stand 6.6 mm apart.
+4. **Any diagonal at the seam?** The drawing puts X-bracing only in the 63.5 cm
+   table frame, and corner gussets only above it. A diagonal across the seam
+   bay would be new steel in the band the middle row's links sweep.
+5. **Do the posts stand on the tabletop or on the floor beside the table?**
+   This sheet stands them on the tabletop at z = −27.38, the way the drawing's
+   own `post_FL` does.
+
+### Why it matters — the middle row
+
+Arms **31 and 71** have their J1 axes **on the seam plane**. The west and east
+seam posts stand 114.3 mm outboard of the canvas edge over the whole 1651 mm
+from the tabletop to the runway — through the mount plane, and through the band
+a middle-row arm's links sweep when it reaches its own x extreme. Measured
+(`scripts/seam_impact.py`, docs/DECISIONS.md): the shipped `Q_PARK_PROPOSED`
+clears by **0.9 mm** against the 50 mm static margin, two staged parks are
+**35.3 mm inside the steel**, and the v19 programme reads **−59.4 mm** and
+fails. The certified area loses 165 cells of 16 184 and the 1.50 × 3.64 m
+hole-free block is untouched.

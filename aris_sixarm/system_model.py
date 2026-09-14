@@ -189,6 +189,82 @@ GUSSET_PAIR_CLEAR = round((COL_X[1] - PLATE_OFF - POST_PITCH_X / 2
 CLUSTER_W = round(POST_PITCH_X + PROFILE, 2)            # 393.8, plan x
 CLUSTER_D = POST_Y_BAND                                 # 152.4, plan y
 
+# ---------------------------------------------------------------------------
+# 3b.  THE SEAM FRAME — the steel where the two half-cages meet
+# ---------------------------------------------------------------------------
+# Pete Werner, 2026-09-14, on the real hardware: "there are a few bars on the
+# real hardware that are not in our model.  they are supports in the middle, I
+# think the half-table drawing had them.  the real thing is essentially the
+# two halves next to each other."
+#
+# THE HALF-CAGE, AND WHY THE SEAM IS WHERE IT IS.  The original drawing
+# describes ONE self-supporting cage 218.44 (x) x 208.28 (y) cm — the
+# extraction's own post_FL..post_BR / top_slab outer faces.  `rig_final6`
+# already reads the installation as two of those units abutting back-to-back
+# on the face the hanging arms live on (MIRROR_PLANE_W_CM = 208.28,
+# MIRROR_PLANE_CANVAS_Y = 1.81532 m).  This module's own cage was never built
+# that way: it is ONE long frame, FR_L = 4011.64 mm, derived from the canvas.
+#
+# Those two statements turn out to be the same statement, and that is the
+# corroboration this section rests on.  Two half-cages butted OUTER FACE TO
+# OUTER FACE are 2 x 2082.8 = 4165.6 mm long; this model's frame is 4011.64.
+# The difference is 153.96 mm — one doubled 3 in end frame (152.4) to within
+# 1.56 mm.  Lay each half flush with this model's own outer frame end and its
+# seam-side END RAIL lands on this model's own MIDDLE RUNWAY:
+#
+#     half A (south), y in [-190.5, 1892.30]   its N end rail 1816.10..1892.30
+#     runway_r1_N                                            1815.32..1891.52
+#     half B (north), y in [1738.34, 3821.14]  its S end rail 1738.34..1814.54
+#     runway_r1_S                                            1739.12..1815.32
+#
+# 0.78 mm, both of them, in opposite directions.  So:
+#
+#   * THE MIDDLE RUNWAY *IS* THE TWO BUTTED END RAILS.  The model already
+#     carries that steel; it is not missing and must not be added twice.  The
+#     middle arm row's J1 axes lie on the seam plane because that is where the
+#     two half-cages' end rails put a beam.  `SEAM_RAIL_RESIDUAL_MM` is the
+#     0.78, and tests/test_system_model.py pins it.
+#   * WHAT IS MISSING IS WHAT HOLDS THOSE RAILS UP.  Each half-cage end frame
+#     stands on TWO corner posts (the drawing's post_BL / post_BR, 76.2 sq,
+#     tabletop to rail underside) with a corner brace plate pair at the top
+#     (brace_BL / brace_BR).  Butted, that is FOUR posts and FOUR brace
+#     clusters straddling the seam — mid-span legs at the paper's mid-length.
+#     This model had four corner legs and nothing between them, and said so:
+#     OPEN_QUESTIONS['cage_legs'], "mid-span legs are almost certainly
+#     required — the original spans 2.08 m".  They are required, they exist,
+#     and they are the drawing's own.
+#
+# WHAT THE SEAM FRAME IS NOT.  It is not a mid-WIDTH post: the drawing's front
+# view (which looks along y, so both end frames project onto it) shows exactly
+# two verticals above the tabletop, the corner posts, and nothing between them
+# but arm 31's own drop-post pair.  The nine 3 x 3 blobs in the top view are
+# the TABLE's legs and levelling feet — the table has a mid-width leg and a
+# mid-depth cross rail, both below the tabletop, and both already inside this
+# model's solid `table` body.  Nothing the seam adds is below the paper.
+#
+# EVERY ASSUMPTION IS IN OPEN_QUESTIONS['seam_frame'].
+_PBL_LO, _PBL_HI = _dbox("post_BL")        # the half-cage's own seam-side...
+_PBR_LO, _PBR_HI = _dbox("post_BR")        # ...corner posts, in the W frame
+_XBL_LO, _XBL_HI = _dbox("brace_BL")       # and their corner brace clusters
+_XBR_LO, _XBR_HI = _dbox("brace_BR")
+
+# the half-cage's own length, off the two posts that sit on the abutting face
+# (rig_final6.MIRROR_PLANE_W_CM re-derives the same 208.28 from the same boxes)
+HALF_CAGE_L = round(float(max(_PBL_HI[1], _PBR_HI[1])) * 10.0, 2)     # 2082.80
+SEAM_Y = round(0.5 * (FR_Y0 + FR_Y1), 2)                # 1815.32 == ROW_Y[1]
+SEAM_HALF_A_Y1 = round(FR_Y0 + HALF_CAGE_L, 2)          # 1892.30
+SEAM_HALF_B_Y0 = round(FR_Y1 - HALF_CAGE_L, 2)          # 1738.34
+# how far each half-cage's own end rail sits from the runway beam this model
+# already builds there — the whole argument, in one number
+SEAM_RAIL_RESIDUAL_MM = round(SEAM_HALF_A_Y1 - PROFILE - SEAM_Y, 2)      # 0.78
+SEAM_OVERLAP_MM = round(2 * HALF_CAGE_L - FR_L, 2)                       # 153.96
+# the corner brace cluster, as the drawing's own extraction encloses it: two
+# 203.2 x 38.1 x 203.2 plates on the post's two inboard faces, carried as the
+# single box post+run square that contains them both
+SEAM_BRACE = (203.2, PROFILE_THIN, 203.2)      # 8 x 1.5 x 8 in, brace_BL/BR
+SEAM_BRACE_RUN = round(float(_XBL_HI[0] - _XBL_LO[0]) * 10.0 - PROFILE, 2)
+SEAM_BRACE_H = round(float(_XBL_HI[2] - _XBL_LO[2]) * 10.0, 2)           # 203.2
+
 
 def plate_centre_x(x_axis):
     """Plate centre x for a J1 axis at `x_axis` (mm), canvas frame.
@@ -433,6 +509,56 @@ def cage_bodies(h=None):
                            f"with {PLATE_SIDE_CLEAR} mm each side (the "
                            f"drawing's own booms leave {POST_GAP}, i.e. "
                            f"{(POST_GAP - PLATE[0]) / 2:.2f} each side)"))
+    out += seam_bodies()
+    return out
+
+
+def seam_bodies():
+    """The steel where the two half-cages meet -> [Body].  See section 3b.
+
+    FOUR posts and FOUR corner brace clusters, straddling `SEAM_Y`.  The
+    seam's own END RAILS are NOT here: they are `runway_r1_S` / `runway_r1_N`,
+    which this model already builds within `SEAM_RAIL_RESIDUAL_MM` = 0.78 mm
+    of where the two half-cages put them.  Adding them again would be 152.4 mm
+    of steel counted twice.
+    """
+    out = []
+    xs = (("W", FR_X0), ("E", FR_X1 - PROFILE))
+    # south band = half B's S end frame, north band = half A's N end frame
+    ys = (("S", SEAM_Y - PROFILE), ("N", SEAM_Y))
+    for xt, x0 in xs:
+        for yt, y0 in ys:
+            out.append(_b(f"seam_post_{yt}{xt}", "cage",
+                          (x0, y0, LEG_BOTTOM),
+                          (x0 + PROFILE, y0 + PROFILE, GRID_U),
+                          "DRAWING",
+                          f"half-cage end-frame corner post = the drawing's "
+                          f"post_B{'L' if xt == 'W' else 'R'}, {PROFILE} sq, "
+                          f"tabletop ({LEG_BOTTOM}) to rail underside "
+                          f"({GRID_U}), cut length "
+                          f"{round(GRID_U - LEG_BOTTOM, 2)}.  Plan x is the "
+                          f"frame corner, the same x band as "
+                          f"leg_F{'L' if xt == 'W' else 'R'}; plan y is the half-"
+                          f"cage butt, which lands on this model's own middle "
+                          f"runway to {SEAM_RAIL_RESIDUAL_MM} mm.  REPORTED ON "
+                          f"THE REAL HARDWARE (Pete Werner 2026-09-14) and "
+                          f"NOT PHOTOGRAPHED — see "
+                          "OPEN_QUESTIONS['seam_frame']",
+                          _STEEL_DARK,
+                          note="the mid-span legs OPEN_QUESTIONS['cage_legs'] "
+                               "said were almost certainly required"))
+    # THE CORNER BRACES ARE NOT BUILT, and the reason is not laziness.  Each
+    # post carries two 203.2 x 38.1 x 203.2 plates on its inboard faces
+    # (brace_BL / brace_BR).  Bolted on the post's FACES they overlap the post
+    # in any AABB that contains them, and the two half-cages' braces pass each
+    # other across the seam at different offsets inside the 76.2 profile — so
+    # the honest box model is four bodies that interpenetrate, and
+    # `tests/test_system_model.py::test_no_two_static_bodies_interpenetrate`
+    # rightly refuses it.  The same is true of the model's own FOUR CORNER
+    # legs, which have never carried braces either.  Nothing rides on it: the
+    # braces live at z 1420.42 .. 1623.62, more than 450 mm above the highest
+    # point any certified pose reaches.  Carried as a question rather than as
+    # bad geometry — OPEN_QUESTIONS['seam_frame'].
     return out
 
 
@@ -666,6 +792,56 @@ OPEN_QUESTIONS = {
                  "stand up at all in the room it is going into.",
         answer_by="survey the room",
         blocking="cutting the grid"),
+    "seam_frame": dict(
+        what="CONFIRM ON HARDWARE — PHOTO REQUESTED.  Exactly what steel "
+             "stands where the two half-cages meet, at the paper's "
+             f"mid-length y = {SEAM_Y} mm?",
+        why="Pete Werner, 2026-09-14: \"there are a few bars on the real "
+            "hardware that are not in our model.  they are supports in the "
+            "middle, I think the half-table drawing had them.  the real thing "
+            "is essentially the two halves next to each other.\"  This model "
+            "was built as ONE long frame on four corner legs and said, at "
+            "OPEN_QUESTIONS['cage_legs'], that mid-span legs were almost "
+            "certainly required.  Section 3b builds them from the drawing's "
+            "own post_BL/post_BR and brace_BL/brace_BR.  "
+            "THE ASSUMPTIONS, " + "FIVE, every one of them.  (1) THE SEAM PLANE is the "
+                    f"paper's mid-length, {SEAM_Y} mm, which is also the "
+                    "middle arm row and rig_final6.MIRROR_PLANE_CANVAS_Y.  "
+                    "(2) THE TWO HALVES BUTT WITH ZERO GAP — the same "
+                    "assumption rig_final6.GAP_CM flags, and the levelling-"
+                    "foot pads overhang the leg lines by 3.3 mm, so real "
+                    "frames touching at the PADS stand 6.6 mm apart.  (3) THE "
+                    "SEAM END RAILS ARE THE MIDDLE RUNWAY and are therefore "
+                    "NOT added again; the two readings differ by "
+                    f"{SEAM_RAIL_RESIDUAL_MM} mm and the posts are snapped to "
+                    "the runway rather than to the butt, so each post stands "
+                    "under the beam it carries.  (4) THE END FRAME HAS NO "
+                    "MID-WIDTH POST.  The drawing's front view looks along y, "
+                    "so BOTH end frames project onto it, and it shows exactly "
+                    "two verticals above the tabletop.  The nine blobs in the "
+                    "top view are the TABLE's 3 x 3 legs and levelling feet, "
+                    "all below the tabletop and already inside the solid "
+                    "`table` body.  (5) THE POSTS STAND ON THE TABLETOP, at "
+                    f"LEG_BOTTOM = {LEG_BOTTOM}, the way the drawing's own "
+                    "post_FL does — not on the floor beside the table.",
+        rides_on="The middle row.  Arms 31 and 71 have their J1 axes ON the "
+                 "seam plane, and the west/east seam posts stand 114.3 mm "
+                 "outboard of the canvas edge over the whole 1651 mm from the "
+                 "tabletop to the rail — i.e. straight through the mount "
+                 "plane and straight through the band a middle-row arm's "
+                 "links sweep when it reaches for its own x extreme.  A pen "
+                 "on the canvas edge clears a post by 14.3 mm against the "
+                 "50 mm static margin; a LINK there misses by 90.7 mm.",
+        answer_by="ONE PHOTO of the seam, from inside the cage looking along "
+                  "the paper, plus one looking down the seam from an end.  "
+                  "The questions it answers are in docs/SYSTEM_MODEL.md "
+                  "and BUILD_SHEET.md: how many posts, at what x; is there a "
+                  "mid-width post or a diagonal; is the gap really zero; do "
+                  "the two end rails sit side by side (two bars) or has "
+                  "someone removed one (one bar).",
+        blocking="re-certification of the middle row's parks and of every "
+                 "certified cell within 205 mm of the canvas's x edges at "
+                 "the seam row"),
     "penholder_cradle": dict(
         what="Which fingers are on the arms, and how far in is the blade's "
              "foot bolted?  (THE LEAN IS SETTLED, 2026-09-07: 23 deg, the "

@@ -1536,6 +1536,86 @@
     <child link="plate97" />
     <origin xyz="1.2318500000000001 3.0255333 0.97635" />
   </joint>
+  <link name="seam_post_SW">
+    <visual>
+      <geometry>
+        <box size="0.0762 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+      <material name="seam_post_SW_mat">
+        <color rgba="0.46 0.49 0.54 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.0762 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="seam_post_SW_weld" type="fixed">
+    <parent link="world" />
+    <child link="seam_post_SW" />
+    <origin xyz="-0.1524 1.77722 0.7981199999999999" />
+  </joint>
+  <link name="seam_post_NW">
+    <visual>
+      <geometry>
+        <box size="0.0762 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+      <material name="seam_post_NW_mat">
+        <color rgba="0.46 0.49 0.54 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.0762 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="seam_post_NW_weld" type="fixed">
+    <parent link="world" />
+    <child link="seam_post_NW" />
+    <origin xyz="-0.1524 1.85342 0.7981199999999999" />
+  </joint>
+  <link name="seam_post_SE">
+    <visual>
+      <geometry>
+        <box size="0.07620000000000005 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+      <material name="seam_post_SE_mat">
+        <color rgba="0.46 0.49 0.54 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.07620000000000005 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="seam_post_SE_weld" type="fixed">
+    <parent link="world" />
+    <child link="seam_post_SE" />
+    <origin xyz="1.9558 1.77722 0.7981199999999999" />
+  </joint>
+  <link name="seam_post_NE">
+    <visual>
+      <geometry>
+        <box size="0.07620000000000005 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+      <material name="seam_post_NE_mat">
+        <color rgba="0.46 0.49 0.54 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.07620000000000005 0.07620000000000005 1.6509999999999998" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="seam_post_NE_weld" type="fixed">
+    <parent link="world" />
+    <child link="seam_post_NE" />
+    <origin xyz="1.9558 1.85342 0.7981199999999999" />
+  </joint>
   <link name="arm13_panda_link0">
     <inertial>
       <mass value="2.92" />

@@ -270,6 +270,47 @@ def arm_mount_boxes(mount, xy, yaw=0.0, h=0.850, tag="mount", m=MOUNTS):
     raise ValueError(f"no schematic mount for mount={mount!r}")
 
 
+# ---------------------------------------------------------------------------
+# THE SEAM FRAME — steel this module never had, because nobody had seen it
+# ---------------------------------------------------------------------------
+# `StudySpec.static_obstacles` (layout.py) returns the neighbours' mount boxes
+# and base columns AND NOTHING ELSE.  Every certified number on the proposed
+# rig — the atlas, the certified area, v19, the staged programme — was earned
+# against a fleet standing in an EMPTY ROOM with no cage around it at all.
+# That was defensible while the cage was a 4.01 m frame on four corner legs
+# whose steel all sat outboard of the canvas or 1.6 m above it.
+#
+# It stopped being defensible on 2026-09-14, when Pete Werner reported that
+# the real installation is two half-cages side by side and that the half-cage
+# END FRAME — which now stands at the paper's MID-LENGTH, on the middle arm
+# row — is real steel we do not model.  `system_model.seam_bodies` builds it
+# from the drawing; this function is the same four posts and four braces in
+# the box shape the gates here consume.
+#
+# IT IS NOT WIRED IN.  `obstacles_for` and `StudySpec.static_obstacles` do not
+# call it, deliberately: adding steel to the static set silently re-decides
+# every certified cell in the repo, and this module's whole convention is that
+# a disagreement with the system model is REPORTED, not resolved
+# (`system_model.reconciliation`).  A caller that wants to know what the seam
+# costs asks for it — `scripts/seam_impact.py` does exactly that — and the
+# answer is in docs/DECISIONS.md.  Wiring it in is the re-certification, and
+# it waits on the photo (`system_model.OPEN_QUESTIONS['seam_frame']`).
+def seam_frame_boxes(tag="seam"):
+    """The half-cage seam frame -> boxes in the canvas frame, METRES.
+
+    Same dict shape as `arm_mount_boxes`: name / lo / hi / source / tag, so a
+    caller can concatenate it onto `spec.static_obstacles()` unchanged.
+    """
+    from . import system_model      # local: system_model imports this module
+    out = []
+    for b in system_model.seam_bodies():
+        out.append(dict(name=b.name,
+                        lo=np.asarray(b.lo, float) / 1000.0,
+                        hi=np.asarray(b.hi, float) / 1000.0,
+                        source=b.source, tag=tag))
+    return out
+
+
 def fleet_mount_boxes(fleet, h=0.850, m=MOUNTS):
     """Every arm's hardware -> {arm_id: [boxes]}, tagged mount:<arm_id>."""
     out = {}
