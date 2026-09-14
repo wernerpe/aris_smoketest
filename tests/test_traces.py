@@ -594,3 +594,70 @@ def test_the_park_erosion_gives_back_the_side_the_partner_stands_on():
     lo = T.park_erode(T.row_band(0), 13, 0.74)
     hi = T.park_erode(T.row_band(0), 17, 0.74)
     assert lo[2] == pytest.approx(hi[0])
+
+
+# ---------------------------------------------------------------------------
+# PETE'S LEADER/FOLLOWER PATTERN
+# ---------------------------------------------------------------------------
+def test_the_main_stages_tile_the_row_bands_and_the_seams_go_to_the_conductor():
+    """Nothing is offered twice and nothing is offered to nobody.
+
+    The two main stages between them hand every point of every row band to
+    exactly one (arm, role) -- the arm whose column half it is in, leading or
+    following -- and the y dead bands, which no row band covers, go to the
+    conducted final pass.  A point offered twice is a line drawn twice; a point
+    offered never is a hole.
+    """
+    pat = T.leader_follower_pattern()
+    main = [c for c in pat.cells if c.stage < 2]
+    seam = [c for c in pat.cells if c.stage == 2]
+    xs = np.linspace(T.BLOCK[0] + 0.01, T.BLOCK[2] - 0.01, 40)
+    ys = np.linspace(T.BLOCK[1] + 0.01, T.BLOCK[3] - 0.01, 60)
+    X, Y = np.meshgrid(xs, ys)
+    n_main = sum(c.contains(X, Y).astype(int) for c in main)
+    n_seam = sum(c.contains(X, Y).astype(int) for c in seam)
+    in_band = np.zeros_like(X, bool)
+    for j in (0, 1, 2):
+        in_band |= T.rect_contains((T.row_band(j),), X, Y)
+    assert (n_main[in_band] == 1).all(), "a row-band point is offered once"
+    assert (n_main[~in_band] == 0).all(), "the dead band is not a row band"
+    assert (n_seam[~in_band] >= 1).all(), "every dead-band point has a drawer"
+    assert (n_seam[in_band] == 0).all(), "a seam cell never leaves the band"
+
+
+def test_the_leader_owns_the_contested_middle_and_the_follower_the_outer_strip():
+    """The rule, as geometry: the leader draws toward its partner.
+
+    A follower's safe pieces are the ones FAR from the arm it is yielding to, so
+    an arm draws its half of the contested middle -- the paper between the two
+    base columns, which only a priority planner can be trusted with -- as
+    leader, and the strip between its own base column and the rim as follower.
+    """
+    for a in T.ARMS:
+        lead = T.role_region(a, "leader")[0]
+        foll = T.role_region(a, "follower")[0]
+        base = T.COL_X[T.COL_OF[a]]
+        # the boundary is the arm's own base column when the split is zero
+        if T.COL_OF[a] == 0:
+            assert lead[0] == pytest.approx(base) and foll[2] == pytest.approx(base)
+            assert lead[2] == pytest.approx(T.X_MID)     # in to the mid-line
+            assert foll[0] == pytest.approx(T.BLOCK[0])  # out to the rim
+        else:
+            assert lead[2] == pytest.approx(base) and foll[0] == pytest.approx(base)
+            assert lead[0] == pytest.approx(T.X_MID)
+            assert foll[2] == pytest.approx(T.BLOCK[2])
+    # the leaders are the 1-2-1 -- one arm per row, columns alternating -- which
+    # is the zigzag's own stage 0, so the LEADERS are separated exactly as before
+    assert T.LEADERS == (13, 71, 2)
+    assert [T.ROW_OF[a] for a in T.LEADERS] == [0, 1, 2]
+    assert [T.COL_OF[a] for a in T.LEADERS] == [0, 1, 0]
+    assert sorted(T.LEADERS + T.FOLLOWERS) == sorted(T.ARMS)
+
+
+def test_the_pattern_name_records_the_split_it_was_built_with():
+    assert T.leader_follower_pattern().name == "leader-follower-y20-split+000"
+    assert T.leader_follower_pattern(split_m=0.15).name == \
+        "leader-follower-y20-split+150"
+    assert T.leader_follower_pattern(whole_bag=True).name == \
+        "leader-follower-y20-whole"
+    assert T.leader_follower_pattern(split_m=0.0) == T.leader_follower_pattern()

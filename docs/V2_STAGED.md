@@ -1115,3 +1115,163 @@ argued. Arithmetic with measured terms, not a run, and it assumes the priority
 order and the residue scale: at 572 pieces in a stage-0 bucket the residue could
 be far more than 2.4 %, and that is the number the next scaling pass owes.
 
+
+
+## 22. The pattern was not the one that was specified — Pete's leader/follower, built and measured
+
+**Pete Werner, 2026-09-14, on reading §21:** the zigzag is not the pattern he
+asked for. His is *"the pattern where we did the 1-2-1 for planning the lead arm
+with priority and then the other arm in the column would only try to knock out
+lines in its cell that were safe to draw. and then in the end we would do the
+coordination of all arms to fill in the gaps if needed"* — and, on the cells,
+*"restrict their cells as completely occupied so they can run asynchronously …
+for the occupied cells we want to also make sure that the free space motions
+never intersect with those … there will likely still be lines we can't draw in
+the critical regions in the middle which we will need to handle in a final
+pass."* **All six arms move in every main stage.**
+
+### Why the zigzag's premise does not carry the weight it was given
+
+The zigzag parks a leader's same-row partner for the whole stage. The reason
+recorded for that (`docs/V2_WORKCELLS.md` §4b, repeated in
+`ARCHITECTURE_V2` §2b and in `traces.zigzag_pattern`'s own docstring) is a
+measurement of **two full work-cell ENVELOPES** against each other: every arm's
+elbow swings within 0.10 m of the mid-line while it draws, so a transverse
+pair's envelopes interpenetrate by 135–262 mm and *"no pattern may ever put a
+same-row pair in the air together."*
+
+That conclusion is one quantifier too strong. An envelope is the union over
+every pose an arm **could** hold anywhere in its cell; the question Pete asked
+is about one arm drawing a **restricted subset** while the other's **realised
+trajectory** is the occupied volume. §15 already built the second object —
+`staged.trajectory_room` — and §19 already measured what it is worth: arm 13's
+room is a factor of **12** smaller than its envelope, and priority rooms took
+the flown ink from 34.4 % to 97.6 %. The envelope argument was applied to a pair
+the room argument was never asked about. That is the whole of the correction.
+
+### What was built — `traces.leader_follower_pattern`, three stages
+
+| stage | who | how they are certified |
+|---|---|---|
+| **A** | leaders **13, 71, 2** (priority 0–2) + followers **17, 31, 97** (3–5) | the existing priority sweep: arm *k* plans against the FINAL trajectory rooms of arms 1…*k*−1 |
+| **B** | the roles swapped | the same |
+| **C** | all six, **`idle.conduct`** | the whole conducted timeline, `scene_check.check_timeline` |
+
+The leaders are the **1-2-1** — one arm per row with the columns alternating —
+which is the zigzag's own stage 0, so leader-vs-leader separation is the 0.40 m
+row dead band, unchanged and re-measured. The new adjacency is the same-row
+**leader/follower** pair, and it is exactly where the argument has to be new:
+the follower plans against the leader's realised stage trajectory as a static
+keep-out, which makes it **asynchronous by construction** and certifies its
+free-space legs against the occupied volume with the same room machinery.
+
+**A piece that does not fit is DEFERRED, never serialised.** §20.3's residue
+pass flies a stranded bucket alone after the others park; that is right for the
+zigzag and is precisely what this pattern exists to avoid, because serialising
+inside a stage gives back the concurrency six active arms were meant to buy.
+Here the piece leaves the stage: first to the stage where **that same arm
+leads** (a follower's remainder is ink it can plan free next time), and only
+then to the conducted final pass.
+
+**The bag split is the pattern's one design freedom.** The min-pieces DP hands
+each arm a bag by cell; each arm draws part of it leading and part following. A
+follower's safe pieces are the ones far from its leader, so an arm draws its
+half of the **contested middle** (the paper between the two base columns) as
+leader and its **outer strip** as follower. `split_m` moves that boundary
+outward from the arm's own base column and is swept.
+
+### And the barrier stopped being a trip
+
+**Pete, the same day, watching the v6 animation:** *"a lot of excessive parking …
+once the 1-2-1 arms have their TSP tour we should be just executing that plan as
+efficiently as possible."* So under this pattern a stage ends at the hover above
+its last stroke and **holds** there; the next stage starts from that pose, and
+every arm not yet moving is in its neighbours' static room as the pose it is
+**actually holding** rather than as its park. Parks survive where they are
+load-bearing — the start of the programme, the end of it, and the fault-recovery
+home — and nowhere else.
+
+The park's own guarantee had to be replaced, not dropped. `Q_PARK_PROPOSED` was
+searched to be mutually clear, so a park barrier was safe by construction; a
+held barrier is wherever the ink happened to end. It is safe by a different
+argument — an arm's trajectory room contains its last sample, and every later
+arm was routed clear of that room — and `staged.hold_gap` asserts that argument
+at every barrier, with `scene_check`'s own capsules and the same 50 mm gate.
+
+### One correction to the check, found by the first run
+
+Six named actives of which most are holding broke `active_pair_gap`. It takes
+the **cross product** of two timelines and subtracts a 1-Lipschitz residual
+computed on the **decimated** grid, because two asynchronous arms have no common
+clock. Against an arm that is standing still there is no cross product to take,
+and charging the still arm the moving one's decimation residual cost **30 mm of
+a 50 mm gate** on the first CSAIL run and measured nothing: stage 0 read
++22.7 mm where `solo_check` — which measures exactly that pair, at the full rate,
+and refines a borderline verdict — read +52.4 mm. `active_pair_gap` now sees
+only the arms that move. Still arms are `solo_check`'s and `hold_gap`'s.
+
+### What it measures on the CSAIL logo — and the finding is not the one the design hoped for
+
+The complete run in hand is `out/staged_csail_h097_lf_smoke.json`, split
+**+0.15 m**, taken **before** the held barrier and the pair-check correction
+landed (so it still pays v6's park trips and reads the pessimistic pair number):
+
+| stage | roles | pieces | ink (m) | stage (s) | deferred (m) | flown |
+|---|---|---|---|---|---|---|
+| A | lead 13,71,2 / foll 17,31,97 | 6 | 0.763 | 61.9 | **3.770** | 1/1 |
+| B | lead 17,31,97 / foll 13,71,2 | 9 | 2.209 | 47.9 | **2.865** | 3/3 |
+| C | **conductor, all six** | 50 | **13.097** | 151.2 | 0.000 | 6/6 |
+
+| | v19 conducted | v6 zigzag | **leader/follower** |
+|---|---|---|---|
+| makespan | 209.9 s | 432.6 s | **261.0 s** (1.24× v19, **0.60× v6**) |
+| ink in the main stages | — | 15.840 m | **2.97 m of 16.08 m** |
+| ink in the final pass | 16.80 m | 0.385 m residue | **13.097 m (81 %)** |
+| follower ink offered | — | — | 7.288 m |
+| follower ink that fitted | — | — | **0.806 m — 11.1 %** (A: **0 %**, B: 21.9 %) |
+| logo coverage | — | 94.2 % | **95.6 %** |
+| time to first motion | 3 712.4 s | 0.280 s | **0.183 s** |
+| park overhead, critical path | — | 92.7 s (21.4 %) | 55.0 s (21.1 %) |
+| planning, serial | — | 769.0 s | 912.5 s |
+| check | — | — | 95.9 s |
+
+**The honest headline: the followers keep almost nothing, and the conducted
+final pass ends up drawing the picture.** Stage A's three followers flew **zero
+pieces** at every split tried. The pattern does not fail — it is 1.7× faster
+than the zigzag and it draws more of the logo — but it does not work the way it
+was meant to. What it actually is, on this rig, is *a short two-stage
+leaders-only warm-up followed by v19*.
+
+**And the reason is not the per-piece ink gate.** The fourth run of the sweep
+turns that gate back into a measurement (`--no-follower-gate`) and its stage A
+is **identical to the gated run's, piece for piece and metre for metre**:
+15 pieces, 2.061 m, the same three leader buckets flown and the same three
+follower buckets deferred. A follower is not losing its ink to "your stroke
+passes through the leader's trajectory"; **its bucket produces no timeline at
+all** — `writing.arm_program` cannot route the pen-up legs out of the held pose,
+into the first stroke and between the pieces with the leaders' rooms in the way.
+That is the leg problem of §3 and §8 again, one row down, and it is where the
+next pass has to go: the follower needs a hover ladder or an entry pose chosen
+*against* the leader's room, not merely checked against it.
+
+### The split sweep
+
+`scripts/lf_sweep.sh` runs four settings concurrently; `scripts/lf_report.py`
+prints the tables from the `--json` summaries. Stage A, with the held barrier and
+the corrected pair check, **passes both checks at every setting**:
+
+| split | stage-A pieces | stage-A ink (m) | stage-A (s) | active-pair (mm) | solo (mm) | follower buckets flown | verdict |
+|---|---|---|---|---|---|---|---|
+| **whole** (Pete's literal) | 17 | 4.595 | 129.4 | **+85.0** | +51.2 | 0 of 3 | PASS |
+| **+0.00** | 11 | 1.480 | 78.2 | **+192.9** | +52.4 | 0 of 3 | PASS |
+| **+0.15** | 15 | 2.061 | 97.0 | **+131.8** | +52.6 | 0 of 3 | PASS |
+| **+0.15, gate off** | 15 | 2.061 | 97.0 | +131.8 | +52.6 | 0 of 3 | PASS |
+
+More split is more leader ink and a wider, slower stage A, monotonically — and
+it is monotone in the clearance too, because a leader drawing further out draws
+closer to its partner's held pose. **No setting buys a single follower bucket**,
+which is the same statement the gate control makes from the other side. The
+complete cross-run table — makespan, deferred metres, what stage C cost, the
+recalibrated 1 000-stroke model — waits on the four runs, which were still in
+stage C when this box closed; re-run `scripts/lf_report.py
+out/staged_csail_h097_lf_*.json` once they land.

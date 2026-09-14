@@ -263,6 +263,7 @@ class StageCell:
     arm: int
     region: tuple[Rect, ...]
     name: str = ""
+    role: str = "active"        # active | leader | follower | conductor
 
     def contains(self, x, y) -> np.ndarray:
         return rect_contains(self.region, x, y)
@@ -270,10 +271,19 @@ class StageCell:
 
 @dataclass(frozen=True)
 class Pattern:
-    """A stage sequence: who may draw where, in which stage."""
+    """A stage sequence: who may draw where, in which stage.
+
+    `same_row_ok` is a DECLARATION, not a permission: `staged.run` refuses a
+    stage that puts a transverse pair in the air together unless the pattern
+    says in as many words that the pair is meant to be there and that something
+    else -- the leader's realised trajectory as an occupied volume, plus a
+    per-piece refusal -- is carrying the separation argument instead of the
+    envelope.  The zigzag does not set it and never should.
+    """
     name: str
     cells: tuple[StageCell, ...]
     note: str = ""
+    same_row_ok: bool = False
 
     @property
     def n_stages(self) -> int:
@@ -281,6 +291,14 @@ class Pattern:
 
     def stage(self, s: int) -> tuple[StageCell, ...]:
         return tuple(c for c in self.cells if c.stage == s)
+
+    def roles(self, s: int) -> dict[int, str]:
+        """{arm: role} for one stage.  Everything else about the arm is a cell."""
+        return {int(c.arm): str(c.role) for c in self.stage(s)}
+
+    def is_conducted(self, s: int) -> bool:
+        """Does this stage go through the six-arm CONDUCTOR rather than rooms?"""
+        return any(c.role == "conductor" for c in self.stage(s))
 
 
 def row_band(j: int, dead_band_m: float = DEAD_BAND_M) -> Rect:
@@ -389,6 +407,151 @@ def zigzag_pattern(dead_band_m: float = DEAD_BAND_M,
                    + (f", cells eroded {park_erode_m:.2f} m in x toward each "
                       "arm's transverse partner's base" if park_erode_m > 0
                       else ""))
+
+
+# ---------------------------------------------------------------------------
+# 2b.  THE LEADER/FOLLOWER PATTERN -- six arms in every main stage
+# ---------------------------------------------------------------------------
+# PETE'S SPECIFICATION, 2026-09-14, and the correction of the zigzag's premise.
+#
+# The zigzag parks a leader's same-row partner for the whole stage, and the
+# reason recorded for that (docs/V2_WORKCELLS.md section 4b) is a measurement of
+# two FULL work-cell envelopes against each other: 135-262 mm of
+# interpenetration between the two arms of a transverse pair.  That is a fact
+# about two arms each free to hold any pose anywhere in its cell.  It is NOT a
+# fact about one arm drawing a restricted subset while the other's REALISED
+# trajectory stands as the occupied volume -- which is exactly the object
+# `staged.trajectory_room` already builds, and exactly the object the priority
+# sweep already routes around.  The zigzag's eight stages and its 2x makespan
+# are the price of never asking that second question.
+#
+# So this pattern asks it.  Every main stage has SIX active arms:
+#
+#   * three LEADERS -- the 1-2-1, arms 13 / 71 / 2, one per row with the columns
+#     alternating, which is the zigzag's own stage-0 set and is separated by the
+#     0.40 m row dead band exactly as before.  They plan FIRST, in ink order,
+#     with priority: leader 1 plans free, leader k against the final trajectory
+#     rooms of 1..k-1.
+#   * three FOLLOWERS -- 17 / 31 / 97, the same-row partner of each leader.  A
+#     follower plans against the rooms of every leader and of the followers
+#     already fixed, so the leader's stage trajectory IS the occupied cell and
+#     the follower is asynchronous by construction.  A follower piece that does
+#     not fit that room is REFUSED and DEFERRED to the final pass; it is never
+#     serialised into the stage, which would give the barrier back.
+#
+# Stage B swaps the roles.  Stage C is the final pass: everything deferred from
+# A and B, plus the y seam bands no row band covers, through the six-arm
+# conductor with the whole timeline checked by `scene_check`.
+#
+# THE BAG SPLIT IS THE DESIGN FREEDOM.  The DP hands each arm a bag of pieces by
+# cell; each arm draws part of it as leader and part as follower.  A follower's
+# safe pieces are the ones FAR from its leader, so the rule is: an arm draws the
+# half of the contested middle on ITS side of the mid-line as LEADER (that is
+# the ink nearest its partner, which only a priority planner can be trusted
+# with), and its OUTER STRIP -- the paper between its own base column and the
+# rim -- as FOLLOWER.  `split_m` moves the boundary between the two, outward
+# from the arm's own base column, and it is the parameter to sweep: larger means
+# more leader ink and a narrower, further-out, safer follower strip.
+LEADERS = (13, 71, 2)               # the 1-2-1: column 0, 1, 0 down the rows
+FOLLOWERS = (17, 31, 97)            # ...and each one's same-row partner
+
+
+def column_split_x(arm: int, split_m: float = 0.0) -> float:
+    """Where an arm's own cell divides into LEADER ink and FOLLOWER ink. -> x.
+
+    `split_m = 0` puts the boundary exactly on the arm's own base column, so its
+    leader region is its half of the contested middle (the paper between the two
+    base columns) and its follower region is its outer strip.  POSITIVE MOVES
+    THE BOUNDARY OUTWARD, toward the arm's own rim: more leader ink, and less
+    follower ink, further from the partner and therefore safer.  Negative is the
+    other way: the follower strip eats into the contested middle.
+    """
+    x = COL_X[COL_OF[int(arm)]]
+    c = x - (float(split_m) if COL_OF[int(arm)] == 0 else -float(split_m))
+    return float(min(max(c, BLOCK[0]), BLOCK[2]))
+
+
+def role_region(arm: int, role: str, split_m: float = 0.0,
+                dead_band_m: float = DEAD_BAND_M,
+                whole_bag: bool = False) -> tuple[Rect, ...]:
+    """The paper one arm may draw in one ROLE. -> (rect,).
+
+    Always inside the arm's own row band (the 0.40 m y dead band is untouched:
+    two arms in different rows stay separated in x-y exactly as the zigzag has
+    them) and inside its own column's half of the block.  The two roles tile
+    that half: leader takes the mid-line side of `column_split_x`, follower the
+    rim side.
+
+    `whole_bag` IS PETE'S LITERAL BASELINE and it is not a split at all: both
+    roles are offered the arm's WHOLE cell.  `capability` merges two cells that
+    offer the same arm the same region into one state and keeps the earlier
+    stage, so each arm's whole bag lands in the stage where it plans FIRST --
+    the leaders in A, the followers in A as followers -- and what a follower
+    cannot fit is deferred to the stage where that same arm leads.  "The leader
+    draws its whole bag; the follower takes whatever fits; the new leaders draw
+    the remainder", in the words it was specified in.
+    """
+    x0, y0, x1, y1 = row_band(ROW_OF[int(arm)], dead_band_m)
+    if whole_bag:
+        return ((x0, y0, X_MID, y1),) if COL_OF[int(arm)] == 0 \
+            else ((X_MID, y0, x1, y1),)
+    c = column_split_x(arm, split_m)
+    if COL_OF[int(arm)] == 0:               # stands at low x; middle is high x
+        c = min(max(c, x0), X_MID)
+        return ((c, y0, X_MID, y1),) if role == "leader" else ((x0, y0, c, y1),)
+    c = max(min(c, x1), X_MID)
+    return ((X_MID, y0, c, y1),) if role == "leader" else ((c, y0, x1, y1),)
+
+
+def leader_follower_pattern(dead_band_m: float = DEAD_BAND_M,
+                            split_m: float = 0.0,
+                            whole_bag: bool = False) -> Pattern:
+    """PETE'S PATTERN: two six-arm stages and one conducted final pass.
+
+    Stage 0 (A): leaders 13 / 71 / 2 on their halves of the contested middle,
+    followers 17 / 31 / 97 on their outer strips.
+    Stage 1 (B): the roles swapped.
+    Stage 2 (C): the seam bands the row bands give up to the y dead band, all
+    six arms, through the conductor -- and everything stages A and B deferred,
+    which `staged` adds to this stage's buckets at run time rather than through
+    the DP, because a deferral is a property of the plan and not of the picture.
+
+    A seam is offered to the arms whose TIP REACH covers it: SEAM0
+    (y in [1.01, 1.41]) to 13, 17, 31 and 71; SEAM1 (y in [2.22, 2.62]) to 31,
+    71, 2 and 97 (docs/V2_WORKCELLS.md section 4b's reach table).  The atlas
+    coverage gates the rest.
+    """
+    S = [seam_band(k, dead_band_m) for k in (0, 1)]
+    seams = {13: (S[0],), 17: (S[0],), 31: (S[0], S[1]), 71: (S[0], S[1]),
+             2: (S[1],), 97: (S[1],)}
+    cells: list[StageCell] = []
+    for s, (lead, foll) in enumerate(((LEADERS, FOLLOWERS),
+                                      (FOLLOWERS, LEADERS))):
+        for a in lead:
+            cells.append(StageCell(s, a, role_region(a, "leader", split_m,
+                                                     dead_band_m, whole_bag),
+                                   f"LEAD{ROW_OF[a]}", "leader"))
+        for a in foll:
+            cells.append(StageCell(s, a, role_region(a, "follower", split_m,
+                                                     dead_band_m, whole_bag),
+                                   f"FOLL{ROW_OF[a]}", "follower"))
+    for a in ARMS:
+        cells.append(StageCell(2, a, seams[a], "SEAMS", "conductor"))
+    name = (f"leader-follower-y{int(dead_band_m * 50):02d}-"
+            + ("whole" if whole_bag
+               else f"split{int(round(split_m * 1000)):+04d}"))
+    return Pattern(name, tuple(cells),
+                   "Pete's specification (2026-09-14): six arms in every main "
+                   "stage, leaders 13/71/2 planned with priority and followers "
+                   "17/31/97 planned against the leaders' REALISED trajectories "
+                   "as occupied cells, "
+                   + ("every arm offered its WHOLE cell in both roles"
+                      if whole_bag else
+                      f"bag split at {split_m:+.3f} m from each arm's own base "
+                      "column")
+                   + ", everything that does not fit deferred to the stage "
+                     "where that arm leads and then to a conducted final pass",
+                   same_row_ok=True)
 
 
 def single_stage_pattern() -> Pattern:

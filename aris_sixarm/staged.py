@@ -49,6 +49,7 @@ not invoke it, and says so in its output rather than pretending).
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import time
@@ -69,7 +70,12 @@ from .fleet import FLEET, H_INV_DEFAULT
 # two together is build item 5.  Until then the staged programme carries its own
 # version, and it is a superset of what item 5 has to absorb: stage id, barrier
 # list, per-piece entry/exit hover configurations and per-piece q_first/q_last.
-STAGED_SCHEMA_VERSION = 1
+#
+# 2 (2026-09-14) adds, for the leader/follower pattern: a per-arm `role`
+# ("leader" | "follower" | "conductor" | "active"), a per-stage `conducted`
+# flag, and a per-arm `deferred` list.  NOTHING WAS RENAMED OR REMOVED -- every
+# field version 1 wrote is still written, in the same place and the same shape.
+STAGED_SCHEMA_VERSION = 2
 
 ATLAS_DEFAULT = "out/atlas_proposed_h0970_lat0860_gated63"
 
@@ -77,6 +83,7 @@ PAIR_MARGIN = coordination.PAIR_MARGIN      # 50 mm, the arm-to-arm gate
 SWEEP_FRAC = 0.55                           # `scene_check.check_timeline`'s own
 CHECK_DT = 0.05                             # s, the clock the checks sample on
 MAX_CHECK_POSES = 900                       # per arm, per stage, for check (a)
+LF_MAX_DROPS = 4            # pieces a bucket may shed before it is all deferred
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +634,13 @@ class ArmStage:
     room_kind: str = "parked"          # parked | envelope | trajectory
     priority: int | None = None        # where in the stage's order it planned
     residue: bool = False              # ran ALONE, after the others parked
+    role: str = "active"               # active | leader | follower | conductor
+    deferred: list = field(default_factory=list)   # [Piece] sent to the final pass
+    conducted: bool = False            # its timeline came out of `idle.conduct`
     frozen_poses: dict[int, list[float]] = field(default_factory=dict)
     lift_ladder: tuple[float, ...] | None = None
     ink_clearance: list[float] = field(default_factory=list)
+    ink_clear: dict = field(default_factory=dict)  # {piece.key: clearance_m}
     plan_s: float = 0.0
     seq_s: float = 0.0
     prog_s: float = 0.0
@@ -652,6 +663,20 @@ class ArmStage:
     def ink_m(self) -> float:
         return float(sum(p.piece.length_m for p in self.accepted))
 
+    @property
+    def q_end(self) -> np.ndarray:
+        """The pose the arm HOLDS when the stage ends. -> (7,).
+
+        Its start pose if it never moved, the timeline's last sample otherwise.
+        Under `PARK_HOME` that is the park by construction; under `PARK_FREEZE`
+        it is the hover above the arm's last stroke, and it is the pose the NEXT
+        stage starts from and the pose every other arm's next-stage room is
+        built against.
+        """
+        if self.timeline is None:
+            return np.asarray(self.q_park, float).reshape(7)
+        return np.asarray(self.timeline["q"], float)[-1].reshape(7)
+
 
 def _seg_of(pp: PiecePlan, index: int) -> dict:
     """A `PiecePlan` in the `segs` contract `sequence` and `writing` already take."""
@@ -668,7 +693,7 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                 sequencer="opt", seq_opts=None, leg_cache=True,
                 leg_cache_root=None, fly=True, on_piece: Callable | None = None,
                 envelopes=None, lift_ladder=None, ink_gate=None,
-                verbose=False) -> ArmStage:
+                park_policy=writing.PARK_HOME, verbose=False) -> ArmStage:
     """Plan, order and fly one (stage, arm) bucket. -> ArmStage.
 
     The four steps, and none of them is new machinery:
@@ -688,11 +713,18 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
          draw -> exit hover -> ... -> park, with every pen-up leg a
          `paper.route` against the frozen room and the persistent store.
 
-    `park=PARK_HOME` is not the idle policy this repo usually runs, and it is
-    not a preference here either: a stage BARRIER is defined as every arm
-    pen-up, stopped, at the park the NEXT stage's envelopes were certified
-    against (docs/ARCHITECTURE_V2.md section 2e), so a stage programme that did
-    not end there would not be a stage programme.
+    `park_policy` IS THE BARRIER, AND IT HAS TWO READINGS.  `PARK_HOME` sends
+    the arm back to `q_park` at the end of the stage, which is what the zigzag's
+    envelope argument needs: its guarantee is indexed by WHICH park the next
+    stage's envelopes were certified against (docs/ARCHITECTURE_V2.md section
+    2e).  `PARK_FREEZE` stops the arm at the hover above its last stroke and
+    HOLDS it there, which is what a trajectory room needs and all it needs --
+    the room contains the arm's whole path, its endpoint included, so a held
+    pose is already inside the volume every neighbour was routed around.  Pete,
+    2026-09-14, watching the v6 animation: "a lot of excessive parking ... we
+    should be just executing that plan as efficiently as possible."  The park
+    trip then survives only where it is load-bearing: at the very start of the
+    programme and at the very end.
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
@@ -759,10 +791,19 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
         if hit is not None:
             st.planned.append(PiecePlan(pc, hit[0], hit[1], hit[2], 0.0,
                                         hit[3]))
+            # THE INK CLEARANCE RIDES ON THE MEMO, and it has to.  It is a
+            # function of exactly the memo key (the arm, the geometry and the
+            # room), and the drop-and-defer rule picks the piece that stands
+            # CLOSEST to the room -- so a memo hit that dropped the number would
+            # make that choice on whichever pieces happened to miss the cache.
+            if len(hit) > 4 and hit[4] is not None:
+                st.ink_clearance.append(float(hit[4]))
+                st.ink_clear[pc.key] = float(hit[4])
             continue
         r = stroke_api.plan_stroke(pc.pts, spec, o)
         status = str(r.get("status"))
         reason = str(r.get("reason") or "")
+        dist = None
         if status == "ok" and envelopes:
             # ...AND THE INK ITSELF HAS TO CLEAR THE OTHER ACTIVES.
             # `plan_stroke` never consults the static set, so a piece can be
@@ -770,12 +811,14 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
             # piece that does is a REFUSAL like any other and goes back to the
             # DP with this (stage, arm) struck out of its capability set.
             d = ink_vs_envelope(r, spec, h_inv, pens.get(arm))
+            dist = float(d)
             st.ink_clearance.append(float(d))
+            st.ink_clear[pc.key] = float(d)
             if gate is not None and d < gate:
                 status, reason = "refused", "ink_vs_active_envelope"
         keep = r if status == "ok" else None
         star = float(r.get("s_star", 0.0) or 0.0)
-        _PLAN_MEMO[mk] = (status, reason, keep, star)
+        _PLAN_MEMO[mk] = (status, reason, keep, star, dist)
         st.planned.append(PiecePlan(pc, status, reason, keep,
                                     time.perf_counter() - t1, star))
     st.plan_s = time.perf_counter() - t0
@@ -789,8 +832,11 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
         return _finish(st, t_all, ladder0)
 
     segs = [_seg_of(p, i) for i, p in enumerate(good)]
+    # THE SEQUENCER'S COST MODEL IS THE TIMELINE'S CLOCK OR IT OPTIMISED A
+    # FICTION: it prices the go-home leg only if the timeline is going to fly
+    # one, so the tour and the programme have to agree about the barrier.
     so = dict(h_inv=h_inv, pen_ext=pens.get(arm), q_start=q_park,
-              return_home=True)
+              return_home=(str(park_policy) == writing.PARK_HOME))
     so.update(seq_opts or {})
     t0 = time.perf_counter()
     try:
@@ -815,7 +861,7 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
     try:
         st.timeline = writing.arm_program(
             spec, st.programme, h_inv=h_inv, pen_ext=pens.get(arm),
-            q_start=q_park, park=writing.PARK_HOME,
+            q_start=q_park, park=str(park_policy),
             transit_speed=so.get("transit_speed", writing.TRANSIT_SPEED),
             qd_frac=so.get("qd_frac", writing.QD_FRAC))
     except writing.PaperRefused as exc:
@@ -940,6 +986,38 @@ def active_pair_gap(stages: dict[int, ArmStage], specs=None, pens=None,
                 worst_at=at, per_pair=per, per_pair_ink=per_ink,
                 n_samples={int(a): int(len(Q[a])) for a in arms},
                 n_ink={int(a): int(DOWN[a].sum()) for a in arms})
+
+
+def hold_gap(poses: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT) -> dict:
+    """Is the HELD POSE SET at a barrier pairwise clear? -> dict(min_m, ...).
+
+    THE BARRIER USED TO BE A PARK SET AND IT IS A HELD SET NOW (Pete,
+    2026-09-14), so the thing that was true of the parks by construction --
+    `Q_PARK_PROPOSED` was searched to be mutually clear -- has to be PROVED of
+    the poses the arms actually stop in.  It is proved the same way and against
+    the same gate: the real capsules of the six poses, `scene_check`'s own
+    pair clearance, `PAIR_MARGIN`.
+
+    It should never fail, and the reason it should never fail is worth writing
+    down: an arm's trajectory room contains its whole path, its last sample
+    included, and every later arm was routed clear of that room, so the held
+    poses are separated by the same certificate that separated the motion.  This
+    is the assertion that the reasoning held, not a new hope.
+    """
+    fl = FLEET if specs is None else specs
+    pens = {a: fl[a].pen for a in fl} if pens is None else pens
+    arms = sorted(int(a) for a in poses)
+    rr = scene_check._radii_for(fl, arms)
+    P = {a: _chains(np.asarray(poses[a], float).reshape(1, 7), fl[a], h_inv,
+                    scene_check.pen_len(pens.get(a), a)) for a in arms}
+    per, worst = {}, float("inf")
+    for n, ai in enumerate(arms):
+        for aj in arms[n + 1:]:
+            d = float(scene_check.pair_clearance(P[ai], P[aj], rr)[0])
+            per[f"{ai}-{aj}"] = d
+            worst = min(worst, d)
+    return dict(min_m=float(worst), per_pair=per,
+                ok=bool(worst >= PAIR_MARGIN))
 
 
 def drop_bands(spec, owners: Iterable[int]):
@@ -1263,6 +1341,25 @@ class StageResult:
     order: tuple[int, ...] = ()
     order_rank: int = 0        # 0 = the ink-first order was enough
     orders_tried: int = 0
+    conducted: bool = False    # this stage went through `idle.conduct`
+    conducted_check: dict = field(default_factory=dict)
+    deferred_in: float = 0.0   # metres this stage took FROM an earlier one
+    conduct_s: float = 0.0
+
+    @property
+    def roles(self) -> dict[int, str]:
+        return {int(a): str(st.role) for a, st in sorted(self.arms.items())}
+
+    @property
+    def deferred_m(self) -> float:
+        """Metres this stage could not fly and handed to the final pass."""
+        return float(sum(p.length_m for st in self.arms.values()
+                         for p in st.deferred))
+
+    def role_ink(self, role: str, flown: bool = False) -> float:
+        return float(sum(st.ink_m for st in self.arms.values()
+                         if st.role == role
+                         and (st.timeline is not None or not flown)))
 
     @property
     def duration(self) -> float:
@@ -1312,6 +1409,16 @@ class StageResult:
 
     @property
     def ok(self) -> bool:
+        if self.conducted:
+            # A CONDUCTED STAGE HAS ONE CERTIFICATE AND IT IS THE WHOLE
+            # TIMELINE.  `active_pair_gap` is the right question for arms that
+            # never wait for each other and the WRONG one here: the conductor's
+            # whole job is to choose when each arm is where, so the cross
+            # product of two timelines is a set of instants the fleet never
+            # holds.  `scene_check.check_timeline` on the conducted clock is
+            # what v19 shipped on, and it is what this stage passes or fails on.
+            return bool(self.complete
+                        and self.conducted_check.get("ok", False))
         pair_ok = self.pair.get("min_m", np.inf) >= PAIR_MARGIN
         solo_ok = all(r.get("ok", False) for r in self.solo.values())
         return bool(self.complete and pair_ok and solo_ok)
@@ -1331,6 +1438,7 @@ class StagedResult:
     refusals: list = field(default_factory=list)
     envelope_s: float = 0.0
     summary_dp: dict = field(default_factory=dict)
+    holds: list = field(default_factory=list)   # the HELD pose set per barrier
 
     @property
     def makespan(self) -> float:
@@ -1346,17 +1454,28 @@ class StagedResult:
     def barriers(self) -> list[dict]:
         """The rendezvous between consecutive stages. -> [dict].
 
-        A barrier is not a time, it is a STATE: every arm pen-up, stopped, at
-        the specific park the next stage's envelope set was certified against,
-        with its queue drained and no un-cleared fault (docs/ARCHITECTURE_V2.md
-        section 2e).  Recorded here as the park identity per arm, because park
-        IDENTITY is what the guarantee is indexed by.
+        A barrier is not a time, it is a STATE: every arm pen-up, stopped, with
+        its queue drained and no un-cleared fault (docs/ARCHITECTURE_V2.md
+        section 2e), in the pose the next stage was certified against -- and the
+        pose IDENTITY is what the guarantee is indexed by.
+
+        UNDER THE LEADER/FOLLOWER PATTERN THAT POSE IS NOT THE PARK.  An arm
+        holds the hover above its last stroke and the next stage starts from
+        there, so the barrier carries the HELD set (`holds`) and its pairwise
+        proof alongside the parks, which are still what the programme starts and
+        ends at and still the fault-recovery home.
         """
         out = []
         for k, s in enumerate(self.stages):
-            out.append(dict(kind="stage", index=k, before_stage=s.stage,
-                            actives=[int(a) for a in s.actives],
-                            parks={str(a): q for a, q in self.parks.items()}))
+            one = dict(kind="stage", index=k, before_stage=s.stage,
+                       actives=[int(a) for a in s.actives],
+                       parks={str(a): q for a, q in self.parks.items()})
+            if k < len(self.holds):
+                h = self.holds[k]
+                one["holds"] = h["q"]
+                one["hold_min_mm"] = round(1000 * float(h["min_m"]), 2)
+                one["hold_ok"] = bool(h["ok"])
+            out.append(one)
         out.append(dict(kind="end", index=len(self.stages), before_stage=None,
                         actives=[], parks={str(a): q
                                            for a, q in self.parks.items()}))
@@ -1371,6 +1490,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
         refusal_rounds=REFUSAL_ROUNDS, lift_retry=True, env_kw=None,
         trajectory_rooms=False, room_iterations=1,
         room_order="priority", order_search=6, residue=True,
+        follower_ink_gate=PAIR_MARGIN, lf_max_drops=LF_MAX_DROPS, sub=2,
         verbose=True, on_piece=None) -> StagedResult:
     """The whole of build item 4: lines -> pieces -> plans -> legs -> checks.
 
@@ -1405,11 +1525,22 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                                                   arms=tuple(sorted(fl)))
     cap = traces_mod.capability(coverage, pattern)
     want = list(range(pattern.n_stages) if stages is None else stages)
+    roles = {s: pattern.roles(s) for s in want}
+    conducted = {s for s in want if pattern.is_conducted(s)}
+    # THE LEADER/FOLLOWER MODE IS DECLARED BY THE PATTERN, not by a flag.  A
+    # pattern that names a leader and a follower is asking for the six-arm
+    # stage, the role-ordered sweep and the conducted final pass, and asking for
+    # them together: half of that scheme is not a scheme.
+    lf = any(r in ("leader", "follower") for s in want for r in roles[s].values())
     for s in want:
         bad = same_row_pairs(stage_actives(pattern, s))
-        if bad:
+        if bad and not getattr(pattern, "same_row_ok", False):
             raise ValueError(f"stage {s} puts a same-ROW pair in the air "
                              f"together: {bad} -- see traces.zigzag_pattern")
+    if lf:
+        # The room IS the scheme here: a follower is certified against what its
+        # leader ACTUALLY does, which is `trajectory_room` and nothing else.
+        trajectory_rooms, envelopes, residue = True, False, False
 
     env: dict[int, dict] = {}
     env_s = 0.0
@@ -1453,8 +1584,77 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
 
     out: list[StageResult] = []
     plan_s = check_s = 0.0
+    deferred: dict[int, list] = {}
+    # THE HELD POSE SET, AND IT IS THE BARRIER NOW.  Stage A starts from the
+    # parks; every stage after it starts from wherever the last one stopped, and
+    # no arm flies home in between (Pete, 2026-09-14).  A barrier is still a
+    # rendezvous -- everybody finished, pen up, stopped -- but it is no longer a
+    # TRIP: the guarantee is indexed by the held pose set instead of the park
+    # set, which is why the set is recorded per barrier and proved pairwise.
+    held = {int(a): np.asarray(parks[a], float).reshape(7) for a in fl}
+    holds: list[dict] = []
     for s in want:
         acts = stage_actives(pattern, s)
+        if lf:
+            t1 = time.perf_counter()
+            entry = {int(a): np.asarray(q, float).reshape(7)
+                     for a, q in held.items()}
+            holds.append(dict(before_stage=int(s),
+                              q={str(a): [float(x) for x in q]
+                                 for a, q in sorted(entry.items())},
+                              **hold_gap(entry, fl, pens, h_inv)))
+            if s in conducted:
+                took = {int(a): list(v) for a, v in deferred.items() if v}
+                arms, chk, c_s = _conduct_stage(
+                    s, buckets, took, fl, pens, entry, parks, h_inv, opts,
+                    leg_cache, leg_cache_root, on_piece, dt, sub, verbose)
+                sr = StageResult(int(s), tuple(sorted(int(a) for a in fl)),
+                                 arms, wall_s=time.perf_counter() - t1,
+                                 conducted=True, conducted_check=chk,
+                                 deferred_in=float(sum(p.length_m for v in
+                                                       took.values()
+                                                       for p in v)),
+                                 conduct_s=float(c_s))
+                deferred = {}
+            else:
+                arms, order, rm, defer = _lf_stage(
+                    s, acts, roles[s], buckets, fl, pens, entry, h_inv, opts,
+                    leg_cache, leg_cache_root, on_piece, dt, ENVELOPE_CLUSTER,
+                    follower_ink_gate, lf_max_drops, writing.PARK_FREEZE,
+                    verbose)
+                # A DEFERRAL GOES TO THE NEXT STAGE THIS ARM *LEADS*, and only
+                # then to the conductor.  A follower keeps what fits and the
+                # rest is its own remainder: in stage B the same arm has
+                # priority, so the ink it could not take while yielding is ink
+                # it can plan free.  That is Pete's literal version of the
+                # pattern -- "the new leaders draw their remainder" -- and it is
+                # what keeps the conducted final pass to what nothing else could
+                # take.  Everything else waits for stage C.
+                for a, v in defer.items():
+                    nxt = next((t for t in want if t > s
+                                and roles[t].get(int(a)) == "leader"), None)
+                    if nxt is None:
+                        deferred.setdefault(int(a), []).extend(v)
+                        continue
+                    buckets.setdefault((int(nxt), int(a)), []).extend(
+                        dataclasses.replace(p, stage=int(nxt)) for p in v)
+                sr = StageResult(int(s), acts, arms,
+                                 wall_s=time.perf_counter() - t1,
+                                 room_passes=[{int(a): str(v[2])
+                                               for a, v in rm.items()}],
+                                 order=tuple(order))
+                if check and fly:
+                    t2 = time.perf_counter()
+                    _check_stage(sr, acts, fl, pens, entry, h_inv, dt,
+                                 max_check_poses)
+                    check_s += time.perf_counter() - t2
+            for a, st in sr.arms.items():
+                held[int(a)] = np.asarray(st.q_end, float).reshape(7)
+            plan_s += time.perf_counter() - t1
+            out.append(sr)
+            if verbose:
+                _report_stage(sr)
+            continue
         t1 = time.perf_counter()
         arms = _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts,
                            leg_cache, leg_cache_root, fly, on_piece,
@@ -1538,7 +1738,7 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                        {int(a): [float(x) for x in np.asarray(q).ravel()]
                         for a, q in parks.items()},
                        refusals=rlog, envelope_s=env_s,
-                       summary_dp=tplan.summary())
+                       summary_dp=tplan.summary(), holds=holds)
     return res
 
 
@@ -1679,6 +1879,321 @@ def _residue_pass(s, arms, buckets, fl, pens, parks, h_inv, opts, leg_cache,
     return done
 
 
+# ---------------------------------------------------------------------------
+# 5b.  THE LEADER/FOLLOWER STAGE, AND THE CONDUCTED FINAL PASS
+# ---------------------------------------------------------------------------
+# PETE'S SPECIFICATION, 2026-09-14 (see `traces.leader_follower_pattern` for the
+# pattern and for why the zigzag's premise was wrong).  Two things differ from
+# `_priority_stage` and they are the whole of the difference:
+#
+#   1. ALL SIX ARMS MOVE.  The priority order is by ROLE first -- the three
+#      leaders, busiest first, then the three followers, busiest first -- rather
+#      than by ink alone, because a follower is defined as the arm that yields
+#      and a leader as the one that does not.  Everything else is the existing
+#      sweep: arm k plans against the FINAL trajectory rooms of arms 1..k-1, so
+#      every pair is certified against a path that never moves again.
+#
+#   2. A PIECE THAT DOES NOT FIT IS DEFERRED, NOT SERIALISED.  The residue pass
+#      (docs/V2_STAGED.md section 20.3) flies a stranded bucket ALONE after the
+#      others park, which is correct and is exactly what this pattern exists to
+#      avoid: serialising inside a stage gives back the concurrency the six-arm
+#      stage was built to buy.  Here the piece leaves the stage altogether and
+#      goes to the conducted final pass, where all six arms are available and a
+#      shared clock -- not a static keep-out -- carries the safety argument.
+
+
+def role_order(roles: dict, actives, buckets, stage) -> tuple[int, ...]:
+    """The order the six actives of a main stage choose their paths in.
+
+    ROLE FIRST, INK SECOND.  `priority_order` ranks by ink because the busiest
+    arm has the least room to give; that is still the tie-break, but it is a
+    tie-break WITHIN a role now.  A follower that happened to carry more ink
+    than a leader must still plan after it, or "leader" and "follower" would be
+    labels on an order nobody enforced.
+    """
+    rank = {"leader": 0, "active": 1, "follower": 2, "conductor": 3}
+
+    def ink(a):
+        return sum(p.length_m for p in buckets.get((int(stage), int(a)), ()))
+    return tuple(sorted((int(a) for a in actives),
+                        key=lambda a: (rank.get(roles.get(int(a), "active"), 1),
+                                       -ink(a), a)))
+
+
+def _fly_or_defer(s, a, pieces, fl, pens, parks, h_inv, opts, leg_cache,
+                  leg_cache_root, on_piece, envelopes, gate, max_drops,
+                  park_policy, verbose):
+    """Plan one bucket in the room it is given, deferring what will not fit.
+
+    -> (ArmStage, [Piece] deferred).
+
+    TWO WAYS A PIECE FAILS THE ROOM AND BOTH END IN THE SAME PLACE.  Its INK can
+    pass through the room -- `plan_stroke` never consults the static set, so a
+    piece can be certified end to end and still be drawn through the leader's
+    trajectory -- and `ink_vs_envelope` catches that per piece, at the gate.  Or
+    its pen-up LEG can be unroutable, which `paper.route` reports by refusing
+    and `writing.arm_program` by raising, and which is a statement about the
+    bucket rather than about any one piece.  The first is a refusal and is
+    exact.  The second is answered by dropping the piece that stands CLOSEST to
+    the room and asking again, up to `max_drops` times, because the leg that
+    cannot be flown is the leg into or out of the piece that is buried deepest
+    in somebody else's trajectory.  A bucket that still will not fly is deferred
+    whole.
+    """
+    keep = list(pieces)
+    out: dict = {}          # piece.key -> Piece, deduplicated by construction
+
+    def plan(ps):
+        return plan_bucket(s, a, ps, fl, pens, parks, h_inv, opts,
+                           leg_cache=leg_cache, leg_cache_root=leg_cache_root,
+                           fly=True, on_piece=on_piece, envelopes=envelopes,
+                           ink_gate=gate, park_policy=park_policy,
+                           verbose=False)
+
+    st = plan(keep)
+    for pp in st.refused:
+        if pp.reason == "ink_vs_active_envelope":
+            out[pp.piece.key] = pp.piece
+    drops = 0
+    while st.timeline is None and st.accepted and drops < int(max_drops):
+        acc = [p.piece for p in st.accepted]
+        worst = min(acc, key=lambda p: st.ink_clear.get(p.key, float("inf")))
+        out[worst.key] = worst
+        keep = [p for p in keep if p.key != worst.key]
+        drops += 1
+        if verbose:
+            print(f"  stage {s} arm {a}: bucket will not fly; deferring "
+                  f"line {worst.line} piece {worst.k} "
+                  f"({worst.length_m:.3f} m) and retrying ({drops})")
+        st = plan(keep)
+        for pp in st.refused:
+            if pp.reason == "ink_vs_active_envelope":
+                out[pp.piece.key] = pp.piece
+    if st.timeline is None and st.accepted:
+        for pp in st.accepted:
+            out[pp.piece.key] = pp.piece
+        st = plan([])
+    st.deferred = [out[k] for k in sorted(out)]
+    return st, st.deferred
+
+
+def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
+              leg_cache, leg_cache_root, on_piece, dt, cluster, gate,
+              max_drops, park_policy, verbose):
+    """One six-arm main stage of the leader/follower pattern.
+
+    -> (arms, order, rooms, {arm: [Piece] deferred}).
+
+    `parks` here is the HELD POSE SET the stage begins at, not the shipped
+    parks: the arm's own entry is its start pose, and every partner that has not
+    moved yet in this stage is in the static room as the pose it is actually
+    holding (Pete, 2026-09-14).  In stage A those are the parks; after that they
+    are the hovers the previous stage stopped at.
+    """
+    order = role_order(roles, actives, buckets, s)
+    fixed: dict[int, tuple] = {}
+    arms: dict[int, ArmStage] = {}
+    deferred: dict[int, list] = {}
+    for k, a in enumerate(order):
+        role = str(roles.get(int(a), "active"))
+        # THE FOLLOWER IS THE ONE THAT YIELDS, so the ink gate is ITS gate.  A
+        # leader's ink is measured against the rooms of the leaders before it
+        # and reported (that is the pre-existing reading, docs/V2_STAGED.md
+        # section 8); a follower's is REFUSED at the gate, because "only try to
+        # knock out lines in its cell that were safe to draw" is a per-piece
+        # instruction and this is the per-piece test.
+        g = gate if (role == "follower" and fixed) else None
+        st, drop = _fly_or_defer(s, a, list(buckets.get((s, int(a)), [])),
+                                 fl, pens, parks, h_inv, opts, leg_cache,
+                                 leg_cache_root, on_piece,
+                                 (dict(fixed) if fixed else None), g,
+                                 max_drops, park_policy, verbose)
+        st.role, st.priority = role, int(k)
+        arms[int(a)] = st
+        if drop:
+            deferred[int(a)] = list(drop)
+        fixed[int(a)] = trajectory_room(st, fl, pens, h_inv, dt, cluster)
+        if verbose:
+            print(f"  stage {s} priority {k}: arm {a} [{role}] "
+                  f"({len(st.accepted)} pieces, {st.ink_m:.3f} m"
+                  + (f", {sum(p.length_m for p in drop):.3f} m deferred"
+                     if drop else "")
+                  + f") -> {len(fixed[int(a)][1])} spheres"
+                  + (f", avoiding {sorted(st.depends_on)}" if st.depends_on
+                     else ", free")
+                  + ("" if st.timeline is not None else "  [NO TIMELINE]"))
+    return arms, order, fixed, deferred
+
+
+def _conducted_phases(phases, prog_idx, dt, M):
+    """Nominal phase times, re-stamped on the CONDUCTED clock. -> [dict].
+
+    `sch["progress"][a][m]` is the NOMINAL sample index arm `a` has reached at
+    conducted frame `m`, and it is non-decreasing, so the conducted instant a
+    nominal sample p is first reached at is `dt x searchsorted(progress, p)`.
+    The phases are the only part of a conducted timeline that would otherwise
+    still be quoting the clock the conductor threw away.
+    """
+    p = np.asarray(prog_idx, int)
+    out = []
+    for ph in phases:
+        i0 = int(np.searchsorted(p, int(round(float(ph["t0"]) / dt)), "left"))
+        i1 = int(np.searchsorted(p, int(round(float(ph["t1"]) / dt)), "left"))
+        out.append(dict(ph, t0=float(dt * min(i0, M - 1)),
+                        t1=float(dt * min(max(i1, i0), M - 1))))
+    return out
+
+
+def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
+                   leg_cache, leg_cache_root, on_piece, dt, sub, verbose):
+    """THE FINAL PASS: everything A and B could not fly, all six arms, conducted.
+
+    -> (arms, check_report, seconds).
+
+    Pete's own words: "in the end we would do the coordination of all arms to
+    fill in the gaps if needed".  This is the one stage in the programme where
+    there IS a shared clock, and `idle.conduct` -- the machinery that made v19 --
+    is the tool, unchanged.  Its cost is the combinatorial one
+    `ARCHITECTURE_V2` section 2d warns about, and it is paid exactly once, on
+    exactly the ink nothing else could take.
+
+    THIS IS ALSO WHERE THE PARKS COME BACK.  Stages A and B end wherever the
+    ink ended -- that is the whole of Pete's "no excessive parking" -- so the
+    fleet is not at its parks when the final pass starts, and it has to be when
+    the programme ends: the park is the fault-recovery home and the pose the
+    next programme will be planned from.  So the conduct runs under
+    `POLICY_HOME` for the arms that draw, and every arm that draws NOTHING is
+    given its park as an `aside`, which `writing.arm_program` lays down as a
+    certified routed move on the real clock rather than as a teleport.
+
+    IF NOTHING WAS DEFERRED, THE SEAMS ARE EMPTY AND THE FLEET IS ALREADY HOME,
+    THIS STAGE COSTS NOTHING.  There is no conduct, no check and no barrier.
+    """
+    from . import idle as idle_mod
+    t0 = time.perf_counter()
+    arms: dict[int, ArmStage] = {}
+    segs: dict[int, list] = {}
+    for a in sorted(fl):
+        pcs = list(buckets.get((s, int(a)), [])) + list(deferred.get(int(a), []))
+        st = plan_bucket(s, a, pcs, fl, pens, held, h_inv, opts,
+                         leg_cache=leg_cache, leg_cache_root=leg_cache_root,
+                         fly=True, on_piece=on_piece, envelopes=None,
+                         park_policy=writing.PARK_HOME, verbose=False)
+        st.role, st.conducted = "conductor", True
+        arms[int(a)] = st
+        segs[int(a)] = list(st.programme)
+    thaw()
+    home = {int(a): np.asarray(parks[a], float).reshape(7)
+            for a in fl if not segs.get(int(a))}
+    # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME.  `plan_bucket` returns
+    # no timeline for an empty bucket, so an arm that drew in stage A or B and
+    # has no residue would simply stand at its hover for ever.  `arm_program`
+    # with no segments and an `aside` lays the go-home down as one certified
+    # routed move on the real clock -- the same object `idle.conduct` builds for
+    # it -- so the fallback path below has one too, and the programme ends at
+    # the parks whether the conductor takes it or not.
+    for a, q in sorted(home.items()):
+        if float(np.max(np.abs(np.asarray(held[a], float).reshape(7) - q))) \
+                <= 1e-9:
+            continue
+        try:
+            arms[a].timeline = writing.arm_program(
+                fl[a], [], h_inv=h_inv, pen_ext=pens.get(a),
+                q_start=np.asarray(held[a], float).reshape(7),
+                park=writing.PARK_HOME, aside=q)
+        except writing.PaperRefused as exc:
+            arms[a].note = f"go-home refused: {exc}"
+    moved = any(float(np.max(np.abs(np.asarray(held[a], float).reshape(7)
+                                    - np.asarray(parks[a], float).reshape(7))))
+                > 1e-9 for a in fl)
+    if not any(segs.values()) and not moved:
+        for st in arms.values():
+            st.timeline = None
+        return arms, dict(ok=True, empty=True, min_clearance=float("inf")), \
+            time.perf_counter() - t0
+    if verbose:
+        print("  stage %d CONDUCT: %s" % (s, ", ".join(
+            f"arm {a} {len(v)} pieces" for a, v in sorted(segs.items()) if v)))
+    try:
+        out = idle_mod.conduct(segs, {int(a): float(pens[a]) for a in fl}, dt,
+                               q_start={int(a): np.asarray(held[a],
+                                                           float).reshape(7)
+                                        for a in fl},
+                               policy=idle_mod.POLICY_HOME, aside=home,
+                               specs=fl, h_inv=h_inv, verbose=verbose)
+    except (idle_mod.Unconductable, RuntimeError) as exc:
+        # THE FLOOR UNDER THE WHOLE SCHEME IS THE ONE-ARM-AT-A-TIME PROGRAMME.
+        # A conductor that refuses has said "these timelines cannot share a
+        # clock", which is a statement about sharing and not about the ink: each
+        # arm's bucket was already planned and certified ALONE against the
+        # parked fleet, so the final pass falls back to flying them in turn.
+        # `solo_check` is the certificate for that, `active_pair_gap` never sees
+        # it because nothing else is moving, and the cost is the sum rather than
+        # the max -- which is announced, not hidden.
+        if verbose:
+            print(f"  stage {s}: the conductor refused ({exc}); the final pass "
+                  "falls back to one arm at a time")
+        worst, ok = float("inf"), True
+        for st in arms.values():
+            st.conducted = False
+            if st.timeline is None:
+                continue
+            st.residue = True
+            rep = solo_check(st, held, fl, pens, h_inv, PAIR_MARGIN, dt, sub)
+            worst = min(worst, float(rep.get("min_clearance", np.nan)))
+            ok = ok and bool(rep.get("ok", False))
+        return arms, dict(ok=bool(ok), serialised=True, reason=str(exc),
+                          min_clearance=float(worst)), time.perf_counter() - t0
+    sch, samp, progs = out["sch"], out["samp"], out["progs"]
+    M = int(sch["M"])
+    ts = dt * np.arange(M)
+    qtraj, prog_idx = {}, {}
+    for a, st in arms.items():
+        idx = np.clip(np.asarray(sch["progress"][a], int)[:M], 0,
+                      int(samp[a]["n"]) - 1)
+        prog_idx[int(a)] = idx
+        q = np.asarray(samp[a]["q"], float)[idx]
+        qtraj[int(a)] = q
+        p = progs[a]
+        st.timeline = dict(
+            t=ts, q=q, seg=np.asarray(samp[a]["seg"], int)[idx],
+            u=np.asarray(samp[a]["u"], float)[idx],
+            phases=_conducted_phases(p["phases"], idx, dt, M),
+            # EVERY ARM'S STAGE LASTS AS LONG AS THE STAGE.  The conductor
+            # pauses arms rather than shortening them, so an arm that finished
+            # early is still standing in this stage's timeline and still has to
+            # be drawn by the animation and seen by the check.
+            duration=float(ts[-1]) if M > 1 else 0.0,
+            draw_s=float(p["draw_s"]), transit_s=float(p["transit_s"]),
+            ink=p.get("ink"), q_end=np.asarray(q[-1], float))
+    rep = scene_check.check_timeline(
+        qtraj, dt, float(sch["margin"]), programs=segs,
+        h_inv=h_inv,
+        pen_ext={int(a): scene_check.pen_len(pens.get(a), a) for a in fl},
+        sub=int(sub), progress={int(a): v for a, v in prog_idx.items()},
+        verbose=False)
+    rep = dict(rep)
+    # WHY IT FAILED, IN THE STAGE LINE.  `check_timeline`'s verdict is one bool
+    # over seven gates and a FAIL that does not say which is a FAIL nobody can
+    # act on -- the conducted pass is the one stage where the inter-arm gate is
+    # not the likely culprit, because the conductor's whole job is that gate.
+    rep["failed"] = sorted(
+        ([f"clearance:{1000 * float(rep.get('min_clearance', np.nan)):+.1f}mm"]
+         if float(rep.get("min_clearance", np.inf)) < float(sch["margin"])
+         else [])
+        + [k.replace("_failed", "") for k in ("frame_failed", "paper_failed",
+                                              "self_failed")
+           if rep.get(k)]
+        + (["frozen"] if int(rep.get("frozen_failed", 0)) else [])
+        + (["joint_limit"]
+           if min(rep.get("joint_margin", {1: 1.0}).values()) <= 0.0 else [])
+        + ([] if rep.get("monotone", True) else ["monotone"]))
+    rep["margin_m"] = float(sch["margin"])
+    rep["makespan_s"] = float(ts[-1]) if M > 1 else 0.0
+    rep["pause_s"] = float(sch.get("pause_total", 0.0))
+    return arms, rep, time.perf_counter() - t0
+
+
 def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
                 leg_cache_root, fly, on_piece, env, ladders, verbose):
     return {a: plan_bucket(s, a, buckets.get((s, a), []), fl, pens, parks,
@@ -1691,7 +2206,19 @@ def _plan_stage(s, acts, buckets, fl, pens, parks, h_inv, opts, leg_cache,
 
 def _check_stage(sr, acts, fl, pens, parks, h_inv, dt, max_check_poses):
     thaw()              # the CHECK is not allowed to inherit the planner's room
-    conc = {a: st for a, st in sr.arms.items() if not st.residue}
+    # AN ARM THAT DOES NOT MOVE IS NOT AN ACTIVE PAIR, AND MEASURING IT AS ONE
+    # MAKES THE ANSWER WORSE FOR NOTHING.  `active_pair_gap` takes the cross
+    # product of two timelines and subtracts a 1-Lipschitz residual computed on
+    # the DECIMATED grid, because a pair of asynchronous arms has no common
+    # clock.  Against an arm that is standing still there is no cross product to
+    # take: it is one pose, `solo_check` already measures the whole moving
+    # timeline against it at the full rate AND refines a borderline verdict, and
+    # `hold_gap` measures the held poses against each other.  Under the
+    # leader/follower pattern six arms are named active and most of them may be
+    # holding, so charging a still arm the moving one's decimation residual cost
+    # 30 mm of a 50 mm gate on the first CSAIL run and measured nothing.
+    conc = {a: st for a, st in sr.arms.items()
+            if not st.residue and st.timeline is not None}
     sr.pair = (active_pair_gap(conc, fl, pens, h_inv, dt, max_check_poses)
                if len(conc) > 1
                else dict(min_m=float("inf"), min_ink_m=float("inf"),
@@ -1741,6 +2268,20 @@ def time_to_first_motion(buckets, want, specs, pens, parks, h_inv, opts,
 
 
 def _report_stage(sr: StageResult) -> None:
+    if sr.conducted:
+        c = sr.conducted_check
+        print(f"stage {sr.stage}: CONDUCTED  arms "
+              + ", ".join(f"{a}({len(st.accepted)})"
+                          for a, st in sorted(sr.arms.items()) if st.accepted)
+              + f"  {sr.n_pieces} pieces  {sr.ink_m:.3f} m  "
+              f"{sr.duration:.1f} s"
+              + ("  (empty)" if c.get("empty") else
+                 f"  whole-timeline {1000 * float(c.get('min_clearance', np.nan)):+.1f} mm")
+              + ("  serialised" if c.get("serialised") else "")
+              + (f"  failed: {','.join(c['failed'])}" if c.get("failed") else "")
+              + ("" if sr.complete else "  incomplete")
+              + f"  [{'PASS' if sr.ok else 'FAIL'}]")
+        return
     pm = sr.pair.get("min_m")
     sm = min((r.get("min_clearance", np.inf) for r in sr.solo.values()),
              default=np.inf)
@@ -1788,7 +2329,18 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
         one = dict(stage=int(sr.stage), actives=[int(a) for a in sr.actives],
                    duration_s=float(sr.duration), n_pieces=int(sr.n_pieces),
                    ink_m=float(sr.ink_m),
+                   conducted=bool(sr.conducted),
+                   roles={str(a): r for a, r in sr.roles.items()},
+                   deferred_m=float(sr.deferred_m),
                    checks=dict(active_pair=_jsonable(sr.pair),
+                               conducted=dict(
+                                   ok=bool(sr.conducted_check.get("ok", False)),
+                                   empty=bool(sr.conducted_check.get("empty",
+                                                                     False)),
+                                   min_clearance_m=float(
+                                       sr.conducted_check.get("min_clearance",
+                                                              np.nan)))
+                               if sr.conducted else None,
                                solo={str(a): dict(
                                    ok=bool(r.get("ok")),
                                    min_clearance_m=float(r.get("min_clearance",
@@ -1815,10 +2367,21 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
                     pts=np.round(np.asarray(sg["pts"], float), 5).tolist()))
             tl = st.timeline
             one["arms"][str(a)] = dict(
+                # `q_park` IS THE POSE THE STAGE STARTS FROM, which is the park
+                # in stage A and under the zigzag and is the pose the previous
+                # stage HELD otherwise; `q_hold` is where this stage leaves the
+                # arm.  The name is kept because it is the field the animation
+                # reads for "where this arm stands in this stage".
                 arm=int(a), q_park=[float(x) for x in np.asarray(st.q_park).ravel()],
+                q_hold=[float(x) for x in np.asarray(st.q_end).ravel()],
                 frozen_partners=[int(x) for x in st.frozen_partners],
                 room_kind=str(st.room_kind),
                 residue=bool(st.residue),
+                role=str(st.role), conducted=bool(st.conducted),
+                deferred=[dict(line=int(p.line), piece=int(p.k),
+                               length_m=float(p.length_m))
+                          for p in st.deferred],
+                deferred_m=float(sum(p.length_m for p in st.deferred)),
                 priority=(None if st.priority is None else int(st.priority)),
                 trajectory_digest=trajectory_digest(st),
                 depends_on={str(k): str(v) for k, v in st.depends_on.items()},
@@ -1890,6 +2453,28 @@ def summary(res: StagedResult) -> dict:
                                   if st.timeline is not None)),
             buckets_with_ink=int(sum(1 for st in sr.arms.values()
                                      if st.accepted)),
+            conducted=bool(sr.conducted),
+            roles={str(a): r for a, r in sr.roles.items()},
+            conducted_min_mm=(None if not sr.conducted else
+                              (None if sr.conducted_check.get("empty") else
+                               round(1000 * float(sr.conducted_check.get(
+                                   "min_clearance", np.nan)), 2))),
+            conducted_failed=(sr.conducted_check.get("failed")
+                              if sr.conducted else None),
+            conducted_serialised=bool(sr.conducted_check.get("serialised")),
+            deferred_m=round(sr.deferred_m, 4),
+            deferred_in_m=round(sr.deferred_in, 4),
+            deferred_arms={str(a): round(float(sum(p.length_m
+                                                   for p in st.deferred)), 4)
+                           for a, st in sorted(sr.arms.items()) if st.deferred},
+            leader_ink_m=round(sr.role_ink("leader"), 4),
+            leader_ink_flown_m=round(sr.role_ink("leader", True), 4),
+            follower_ink_m=round(sr.role_ink("follower"), 4),
+            follower_ink_flown_m=round(sr.role_ink("follower", True), 4),
+            follower_ink_deferred_m=round(float(sum(
+                p.length_m for st in sr.arms.values() if st.role == "follower"
+                for p in st.deferred)), 4),
+            conduct_s=round(sr.conduct_s, 2),
             room_kind=next((st.room_kind for st in sr.arms.values()), "parked"),
             depends_on={str(a): st.depends_on
                         for a, st in sr.arms.items() if st.depends_on},
@@ -1919,6 +2504,11 @@ def summary(res: StagedResult) -> dict:
                 ink_m=res.summary_dp.get("ink_m"),
                 gaps=res.summary_dp.get("gaps"),
                 stage_overhead=stage_overhead(res),
+                roles=role_summary(res),
+                holds=[dict(before_stage=int(h["before_stage"]),
+                            min_mm=round(1000 * float(h["min_m"]), 2),
+                            ok=bool(h["ok"])) for h in res.holds],
+                holds_ok=bool(all(h["ok"] for h in res.holds)),
                 buckets_flown=int(sum(1 for s_ in res.stages
                                       for st in s_.arms.values()
                                       if st.timeline is not None)),
@@ -1972,6 +2562,77 @@ def stage_overhead(res: StagedResult) -> dict:
                 park_frac_of_makespan=round(crit / mk, 4),
                 draw_s_total=round(sums["draw_s"], 2),
                 transit_s_total=round(sums["transit_s"], 2))
+
+
+def role_summary(res: StagedResult) -> dict:
+    """The number Pete's design hinges on: how much FOLLOWER ink fitted.
+
+    A follower is offered a bag and keeps what fits the leaders' rooms; the
+    fraction it keeps is the whole question the pattern asks, per stage, because
+    a follower that keeps nothing is a parked partner with extra steps.  The
+    deferred metres and what the conducted final pass cost to absorb them are
+    the other side of the same ledger.
+    """
+    def ink_mm(stages_, role):
+        """The clearance every piece of one role stood at, from the room. -> dict.
+
+        THE FIT FRACTION ON ITS OWN DOES NOT SAY WHY.  A follower that keeps
+        nothing has either been refused at the gate (its ink passes through the
+        occupied volume) or been unable to route a leg, and those are different
+        findings with different fixes.  The clearance distribution separates
+        them: a piece at -200 mm is inside the leader's trajectory and no gate
+        setting saves it; a piece at +45 mm is one the gate and nothing else
+        refused.
+        """
+        v = sorted(float(x) for sr_ in stages_ for st in sr_.arms.values()
+                   if st.role == role for x in st.ink_clearance)
+        if not v:
+            return None
+        q = np.percentile(np.asarray(v), [5, 25, 50, 75, 95])
+        return dict(n=len(v), min_mm=round(1000 * v[0], 2),
+                    p05_mm=round(1000 * float(q[0]), 2),
+                    p25_mm=round(1000 * float(q[1]), 2),
+                    median_mm=round(1000 * float(q[2]), 2),
+                    p75_mm=round(1000 * float(q[3]), 2),
+                    p95_mm=round(1000 * float(q[4]), 2),
+                    max_mm=round(1000 * v[-1], 2),
+                    under_gate=int(sum(1 for x in v if x < PAIR_MARGIN)))
+
+    per, total = {}, dict(leader_m=0.0, leader_flown_m=0.0, follower_m=0.0,
+                          follower_flown_m=0.0, deferred_m=0.0,
+                          conducted_m=0.0, conducted_s=0.0)
+    for sr in res.stages:
+        if sr.conducted:
+            total["conducted_m"] += float(sr.ink_m)
+            total["conducted_s"] += float(sr.duration)
+            continue
+        fdef = float(sum(p.length_m for st in sr.arms.values()
+                         if st.role == "follower" for p in st.deferred))
+        off = sr.role_ink("follower", True) + fdef
+        per[str(sr.stage)] = dict(
+            leader_m=round(sr.role_ink("leader"), 4),
+            leader_flown_m=round(sr.role_ink("leader", True), 4),
+            follower_offered_m=round(off, 4),
+            follower_flown_m=round(sr.role_ink("follower", True), 4),
+            follower_fit_frac=(round(sr.role_ink("follower", True) / off, 4)
+                               if off > 1e-9 else None),
+            deferred_m=round(sr.deferred_m, 4),
+            follower_ink_clearance=ink_mm([sr], "follower"),
+            busiest_arm_s=round(max((st.duration
+                                     for st in sr.arms.values()), default=0.0), 3))
+        total["leader_m"] += sr.role_ink("leader")
+        total["leader_flown_m"] += sr.role_ink("leader", True)
+        total["follower_m"] += off
+        total["follower_flown_m"] += sr.role_ink("follower", True)
+        total["deferred_m"] += sr.deferred_m
+    total = {k: round(float(v), 4) for k, v in total.items()}
+    total["follower_fit_frac"] = (round(total["follower_flown_m"]
+                                        / total["follower_m"], 4)
+                                  if total["follower_m"] > 1e-9 else None)
+    main = [sr for sr in res.stages if not sr.conducted]
+    return dict(per_stage=per, total=total,
+                follower_ink_clearance=ink_mm(main, "follower"),
+                leader_ink_clearance=ink_mm(main, "leader"))
 
 
 def refusal_table(res: StagedResult) -> dict:
@@ -2031,6 +2692,31 @@ def main(argv=None):
                          "which closes the fixed point in one sweep; "
                          "'simultaneous' is the superseded scheme that plans "
                          "everybody against everybody's previous pass")
+    ap.add_argument("--pattern", choices=("zigzag", "leader_follower"),
+                    default="zigzag",
+                    help="'zigzag': the eight-stage pattern of "
+                         "docs/V2_WORKCELLS.md section 4b, one arm per row with "
+                         "its same-row partner PARKED.  'leader_follower': "
+                         "Pete's specification (docs/V2_STAGED.md section 22) -- "
+                         "six arms in every main stage, leaders 13/71/2 planned "
+                         "with priority, followers 17/31/97 planned against the "
+                         "leaders' realised trajectories, and one conducted "
+                         "final pass for everything that did not fit")
+    ap.add_argument("--split-m", type=float, default=0.0,
+                    help="leader_follower only: how far OUTWARD from each arm's "
+                         "own base column its bag divides into leader ink "
+                         "(toward the mid-line) and follower ink (its outer "
+                         "strip).  Larger means more leader ink and a narrower, "
+                         "safer follower strip")
+    ap.add_argument("--whole-bag", action="store_true",
+                    help="leader_follower only: PETE'S LITERAL BASELINE -- no "
+                         "split at all.  Every arm is offered its WHOLE cell in "
+                         "both roles, so each arm's bag lands in the stage it "
+                         "plans first in and what a follower cannot fit is "
+                         "deferred to the stage where that same arm leads")
+    ap.add_argument("--no-follower-gate", action="store_true",
+                    help="leader_follower only: measure a follower's ink "
+                         "against the leaders' rooms instead of refusing it")
     ap.add_argument("--refusal-rounds", type=int, default=REFUSAL_ROUNDS)
     ap.add_argument("--env-stride", type=int, default=ENVELOPE_STRIDE)
     ap.add_argument("--route-jobs", type=int, default=6,
@@ -2053,9 +2739,14 @@ def main(argv=None):
                                          gate=a.gate,
                                          tilt_max_deg=a.tilt_max_deg)
     stages = None if not a.stages else [int(x) for x in a.stages.split(",")]
+    pat = (traces_mod.leader_follower_pattern(split_m=a.split_m,
+                                              whole_bag=a.whole_bag)
+           if a.pattern == "leader_follower" else traces_mod.zigzag_pattern())
     print(f"=== {name}: {len(lines)} lines, "
           f"{sum(float(traces_mod.cumlen(np.asarray(p, float))[-1]) for p in lines):.2f} m ===")
-    res = run(lines, coverage=cov, opts=dict(tilt_max_deg=a.tilt_max_deg),
+    print(f"=== pattern {pat.name}: {pat.n_stages} stages ===")
+    res = run(lines, pattern=pat, coverage=cov,
+              opts=dict(tilt_max_deg=a.tilt_max_deg),
               stages=stages, leg_cache=not a.no_leg_cache,
               leg_cache_root=a.leg_cache, check=not a.no_check,
               fly=not a.no_fly, dt=a.dt, route_jobs=a.route_jobs,
@@ -2066,7 +2757,8 @@ def main(argv=None):
               trajectory_rooms=a.trajectory_rooms,
               room_iterations=a.room_iterations,
               room_order=a.room_order, order_search=a.order_search,
-              residue=not a.no_residue)
+              residue=not a.no_residue, sub=2,
+              follower_ink_gate=(None if a.no_follower_gate else PAIR_MARGIN))
     d = summary(res)
     print(json.dumps(d, indent=1))
     print("refusals:", json.dumps(refusal_table(res)))

@@ -1005,3 +1005,333 @@ def test_the_pair_check_does_not_see_a_residue_arm(rig):
     # both arms still get a solo check, residue or not
     assert set(sr.solo) == {13, 71}
     staged.thaw()
+
+
+# ---------------------------------------------------------------------------
+# 10.  PETE'S LEADER/FOLLOWER PATTERN  (docs/V2_STAGED.md section 22)
+# ---------------------------------------------------------------------------
+def test_every_main_stage_of_the_leader_follower_pattern_has_six_actives():
+    """ALL SIX ARMS MOVE IN EVERY MAIN STAGE -- that is the whole correction.
+
+    The zigzag parks a leader's same-row partner for the stage, on the strength
+    of a measurement of two FULL work-cell envelopes.  That is a fact about two
+    arms free to hold any pose anywhere in their cells, not about a follower
+    drawing a restricted subset while the leader's REALISED trajectory is the
+    occupied volume.  Pete's pattern asks the second question, so its main
+    stages name every arm and its roles say which of them yields.
+    """
+    pat = T.leader_follower_pattern()
+    assert pat.n_stages == 3
+    for s in (0, 1):
+        acts = staged.stage_actives(pat, s)
+        assert sorted(acts) == sorted(T.ARMS), f"stage {s} is {acts}"
+        roles = pat.roles(s)
+        assert sorted(a for a, r in roles.items() if r == "leader") == \
+            sorted(T.LEADERS if s == 0 else T.FOLLOWERS)
+        assert sorted(a for a, r in roles.items() if r == "follower") == \
+            sorted(T.FOLLOWERS if s == 0 else T.LEADERS)
+        # ...and the same-row pair IS in the air together, which is the point
+        assert sorted(staged.same_row_pairs(acts)) == \
+            sorted([(13, 17), (31, 71), (2, 97)])
+    assert pat.is_conducted(2) and not pat.is_conducted(0)
+    assert pat.same_row_ok is True
+    # the zigzag is untouched, and still refuses to do any of this
+    assert T.zigzag_pattern().same_row_ok is False
+    assert T.zigzag_pattern().n_stages == 8
+
+
+def test_run_still_refuses_a_same_row_stage_that_does_not_declare_it():
+    """The refusal is relaxed by the PATTERN, never by the runner.
+
+    A pattern that puts a transverse pair in the air has to say so, because
+    saying so is what states that something else -- the leader's trajectory as
+    an occupied cell, and a per-piece refusal -- is carrying the separation
+    argument the envelope used to carry.
+    """
+    bad = T.Pattern("bad", (T.StageCell(0, 13, ((0.0, 0.0, 1.0, 1.0),)),
+                            T.StageCell(0, 17, ((1.0, 0.0, 2.0, 1.0),))))
+    cov = T.coverage_from_rects({13: [(0.0, 0.0, 1.0, 1.0)],
+                                 17: [(1.0, 0.0, 2.0, 1.0)]},
+                                extent=(0.0, 0.0, 2.0, 1.0))
+    line = np.column_stack([np.linspace(0.1, 0.9, 4), np.full(4, 0.5)])
+    with pytest.raises(ValueError, match="same-ROW"):
+        staged.run([line], pattern=bad, coverage=cov, check=False, fly=False,
+                   measure_ttfm=False, verbose=False)
+    ok = T.Pattern("ok", bad.cells, "", same_row_ok=True)
+    staged.run([line], pattern=ok, coverage=cov, check=False, fly=False,
+               measure_ttfm=False, verbose=False)
+
+
+@pytest.mark.parametrize("split", [-0.10, 0.0, 0.15, 0.30])
+def test_the_split_parameter_moves_the_bag_between_the_two_roles(split):
+    """THE SPLIT IS THE DESIGN FREEDOM, and it is one number.
+
+    Positive moves the boundary OUTWARD from the arm's own base column: more
+    leader ink, and the follower strip both narrower and further from the
+    partner it has to avoid.  The two roles always tile the arm's own half of
+    the block exactly -- no overlap, no hole -- because a bag drawn twice is a
+    line drawn twice and a bag drawn never is a gap.
+    """
+    pat = T.leader_follower_pattern(split_m=split)
+    for a in T.ARMS:
+        lead = T.role_region(a, "leader", split)[0]
+        foll = T.role_region(a, "follower", split)[0]
+        cell = T.row_band(T.ROW_OF[a])
+        half = ((cell[0], cell[1], T.X_MID, cell[3]) if T.COL_OF[a] == 0
+                else (T.X_MID, cell[1], cell[2], cell[3]))
+        # same row band, and together exactly the arm's own column half
+        assert lead[1] == foll[1] == half[1] and lead[3] == foll[3] == half[3]
+        xs = sorted([lead[0], lead[2], foll[0], foll[2]])
+        assert xs[0] == pytest.approx(half[0]) and xs[3] == pytest.approx(half[2])
+        assert xs[1] == pytest.approx(xs[2])        # they abut, exactly
+        # the leader always owns the mid-line side
+        assert (lead[2] == pytest.approx(T.X_MID) if T.COL_OF[a] == 0
+                else lead[0] == pytest.approx(T.X_MID))
+    # ...and more split is more leader, monotonically
+    w = [T.role_region(13, "leader", x)[0][2] - T.role_region(13, "leader", x)[0][0]
+         for x in (-0.10, 0.0, 0.15, 0.30)]
+    assert w == sorted(w)
+    assert pat.name.endswith(f"split{int(round(split * 1000)):+04d}")
+
+
+def test_the_whole_bag_extreme_puts_each_arm_s_bag_where_it_plans_first():
+    """PETE'S LITERAL BASELINE: no split at all, and the merge does the work.
+
+    Both roles are offered the arm's whole cell, `capability` merges two cells
+    that offer the same arm the same region and keeps the EARLIER stage, so
+    every arm's bag lands in stage A -- the leaders as leaders, the followers as
+    followers -- and stage B starts empty, to be filled only by what the
+    followers could not fit.  "The leader draws its whole bag; the follower
+    takes whatever fits; the new leaders draw the remainder."
+    """
+    pat = T.leader_follower_pattern(whole_bag=True)
+    cov = T.coverage_from_rects({a: [(0.16, 0.0, 1.64, 3.62)] for a in T.ARMS},
+                                extent=(0.0, 0.0, 1.84, 3.62))
+    cap = T.capability(cov, pat)
+    assert pat.name.endswith("whole")
+    assert [(c.stage, c.arm) for c in cap.states if c.stage < 2] == \
+        [(0, a) for a in sorted(T.ARMS)]
+    assert len(cap.merged) == 6         # every stage-1 cell merged into stage 0
+    # the two roles are offered the SAME paper, which is what makes them merge
+    for a in T.ARMS:
+        assert T.role_region(a, "leader", whole_bag=True) == \
+            T.role_region(a, "follower", whole_bag=True)
+
+
+def test_role_order_is_leaders_first_then_followers_by_ink():
+    """A follower yields BY DEFINITION, so ink is a tie-break inside a role.
+
+    `priority_order` ranks by ink alone because the busiest arm has the least
+    room to give; that is still true within a role and false across one.  A
+    follower carrying more ink than a leader must still plan after it, or the
+    two words would be labels on an order nobody enforced.
+    """
+    pat = T.leader_follower_pattern()
+    acts = staged.stage_actives(pat, 0)
+    def bag(a, m):
+        return [staged.Piece(0, a, 0, 0, np.zeros((2, 2)), float(m))]
+    buckets = {(0, 17): bag(17, 9.0),           # the busiest arm, a FOLLOWER
+               (0, 13): bag(13, 0.1),           # the idlest, a LEADER
+               (0, 71): bag(71, 5.0), (0, 2): bag(2, 1.0),
+               (0, 31): bag(31, 4.0), (0, 97): bag(97, 0.5)}
+    order = staged.role_order(pat.roles(0), acts, buckets, 0)
+    assert order == (71, 2, 13, 17, 31, 97)
+    # ink alone would have put the follower first, which is the thing ruled out
+    assert staged.priority_order(acts, buckets, 0)[0] == 17
+
+
+def test_a_piece_that_will_not_fly_is_deferred_and_never_serialised(monkeypatch):
+    """A FOLLOWER PIECE THAT DOES NOT FIT LEAVES THE STAGE.
+
+    The residue pass (section 20.3) flies a stranded bucket ALONE after the
+    others park, which is right for the zigzag and is exactly what this pattern
+    exists to avoid: serialising inside a stage gives back the concurrency six
+    active arms were meant to buy.  Here the piece is dropped from the bucket --
+    closest to the room first, because the leg that cannot be flown is the one
+    into or out of the piece buried deepest in somebody else's trajectory -- and
+    the bucket is asked again.
+    """
+    seen = []
+
+    def fake(stage, arm, pieces, *a, **kw):
+        seen.append([p.key for p in pieces])
+        st = staged.ArmStage(int(stage), int(arm), np.zeros(7))
+        for p in pieces:
+            st.planned.append(staged.PiecePlan(p, "ok", "", {"q": 0}, 0.0, 1.0))
+            st.ink_clear[p.key] = 0.01 * (p.k + 1)   # piece 0 is the tightest
+        if len(pieces) < 2:                          # ...flies once one is gone
+            st.timeline = (dict(q=np.zeros((2, 7)), t=np.zeros(2),
+                                seg=np.full(2, -1), u=np.zeros(2), duration=1.0)
+                           if pieces else None)
+        return st
+
+    monkeypatch.setattr(staged, "plan_bucket", fake)
+    pcs = [staged.Piece(0, 17, 5, k, np.zeros((2, 2)), 0.5) for k in (0, 1)]
+    st, drop = staged._fly_or_defer(0, 17, pcs, None, None, None, 1.0, None,
+                                    False, None, None, {13: ()}, staged.PAIR_MARGIN,
+                                    staged.LF_MAX_DROPS, writing.PARK_FREEZE,
+                                    False)
+    assert [p.k for p in drop] == [0], "the piece closest to the room goes first"
+    assert st.residue is False, "a deferral is NOT a serialisation"
+    assert st.timeline is not None and [p.piece.k for p in st.accepted] == [1]
+    assert seen == [[(0, 17, 5, 0), (0, 17, 5, 1)]] + [[(0, 17, 5, 1)]]
+
+
+def test_a_bucket_that_never_flies_is_deferred_whole(monkeypatch):
+    """...and an arm that can fly nothing at all holds its pose and says so."""
+    def fake(stage, arm, pieces, *a, **kw):
+        st = staged.ArmStage(int(stage), int(arm), np.zeros(7))
+        for p in pieces:
+            st.planned.append(staged.PiecePlan(p, "ok", "", {"q": 0}, 0.0, 1.0))
+            st.ink_clear[p.key] = 0.05
+        return st                        # never a timeline
+
+    monkeypatch.setattr(staged, "plan_bucket", fake)
+    pcs = [staged.Piece(0, 17, 5, k, np.zeros((2, 2)), 0.5) for k in range(3)]
+    st, drop = staged._fly_or_defer(0, 17, pcs, None, None, None, 1.0, None,
+                                    False, None, None, {13: ()}, None, 1,
+                                    writing.PARK_FREEZE, False)
+    assert sorted(p.k for p in drop) == [0, 1, 2]
+    assert st.accepted == [] and st.timeline is None and st.residue is False
+
+
+def test_the_barrier_is_a_held_pose_set_and_it_is_proved_pairwise(rig):
+    """NO PARK TRIPS BETWEEN STAGES -- and the park's guarantee has to be replaced.
+
+    `Q_PARK_PROPOSED` was searched to be mutually clear, so a park barrier was
+    safe by construction.  A HELD barrier is not: it is wherever the ink
+    happened to end.  It is safe by a different argument -- an arm's trajectory
+    room contains its last sample, and every later arm was routed clear of that
+    room -- and `hold_gap` is that argument asserted rather than assumed, at the
+    same gate and with the same capsules.
+    """
+    parks = staged.shipped_parks(rig)
+    g = staged.hold_gap(parks, rig)
+    assert g["min_m"] >= staged.PAIR_MARGIN and g["ok"]
+    assert len(g["per_pair"]) == 15
+    # ...and it is the same number `scene_check` would give for the pair, so
+    # the barrier is checked with the gate the rest of the package is checked
+    # with and not with one of its own
+    import itertools
+    from aris_sixarm import scene_check
+    rr = scene_check._radii_for(rig, sorted(parks))
+    for i, j in itertools.combinations(sorted(parks), 2):
+        P = {a: staged._chains(np.asarray(parks[a]).reshape(1, 7), rig[a],
+                               1.0, rig[a].pen) for a in (i, j)}
+        assert g["per_pair"][f"{i}-{j}"] == pytest.approx(
+            float(scene_check.pair_clearance(P[i], P[j], rr)[0]))
+    # a transverse pair swung into each other does NOT pass, so the test is not
+    # true for want of a gate
+    q = dict(parks)
+    q[13] = np.asarray(parks[13], float).copy()
+    q[17] = np.asarray(parks[17], float).copy()
+    q[13][0] -= 1.6
+    q[17][0] += 1.6
+    assert staged.hold_gap(q, rig)["ok"] is False
+    staged.thaw()
+
+
+def test_freezing_the_barrier_is_what_removes_the_park_trip(rig):
+    """`park_policy` is the barrier, and it changes the timeline's last pose.
+
+    Under `PARK_HOME` the stage ends at the park, which is the pose identity the
+    zigzag's envelope guarantee is indexed by.  Under `PARK_FREEZE` it ends at
+    the hover above the last stroke and HOLDS there -- and `q_end` is that pose,
+    which is where the next stage starts and what every other arm's next-stage
+    room is built against.
+    """
+    st = staged.ArmStage(0, 13, np.zeros(7))
+    assert np.allclose(st.q_end, np.zeros(7))       # never moved: its own start
+    st.timeline = dict(q=np.array([np.zeros(7), np.full(7, 0.3)]),
+                       t=np.array([0.0, 1.0]), seg=np.full(2, -1),
+                       u=np.zeros(2), duration=1.0)
+    assert np.allclose(st.q_end, np.full(7, 0.3))
+
+
+def test_the_staged_programme_carries_the_role_and_the_conducted_flag(rig):
+    """The schema item 5 has to absorb, and the animation reads. -> schema 2.
+
+    `role`, `conducted`, `deferred` and `q_hold` are ADDED; nothing version 1
+    wrote was renamed or removed, because another agent is reading `actives`,
+    `arms`, `q_park`, `residue`, `priority`, `legs`, `pieces` and `trajectory`
+    out of the same document.
+    """
+    parks = staged.shipped_parks(rig)
+    st = _fake_stage(13, np.repeat(parks[13].reshape(1, 7), 3, axis=0),
+                     parks[13])
+    st.role, st.priority = "follower", 3
+    st.timeline["phases"] = []
+    st.deferred = [staged.Piece(0, 13, 1, 0, np.zeros((2, 2)), 0.7)]
+    sr = staged.StageResult(0, (13,), {13: st})
+    res = staged.StagedResult("lf", [sr], [], parks={13: list(parks[13])})
+    doc = staged.programme(res, trajectories=False)
+    assert doc["schema"] == 2 == staged.STAGED_SCHEMA_VERSION
+    one = doc["stages"][0]
+    assert one["roles"] == {"13": "follower"} and one["conducted"] is False
+    arm = one["arms"]["13"]
+    for k in ("arm", "q_park", "residue", "priority", "legs", "pieces",
+              "trajectory", "role", "conducted", "deferred", "q_hold"):
+        assert k in arm, k
+    assert arm["role"] == "follower" and arm["priority"] == 3
+    assert arm["deferred_m"] == pytest.approx(0.7)
+    assert one["deferred_m"] == pytest.approx(0.7)
+    staged.thaw()
+
+
+LF_LEADER_STROKE = np.column_stack([np.linspace(0.95, 1.15, 8), np.full(8, 1.70)])
+LF_FOLLOWER_STROKE = np.column_stack([np.linspace(0.20, 0.45, 8), np.full(8, 1.70)])
+
+
+def test_the_leader_follower_pipeline_runs_end_to_end(rig):
+    """Six arms in stage A, a held barrier, and a conducted final pass.
+
+    The same three questions the zigzag end-to-end test asks, of the pattern
+    that answers them differently: every bucket that has ink and a timeline
+    starts where the last stage left the arm; the concurrent actives are
+    measured against each other with no assumption about timing; and the seam
+    ink nobody's row band covers reaches the conductor.
+    """
+    lines = [LF_LEADER_STROKE, LF_FOLLOWER_STROKE, STROKE_IN_BAND]
+    pat = T.leader_follower_pattern()
+    res = staged.run(lines, pattern=pat, coverage=toy_coverage(),
+                     route_jobs=2, leg_cache=False, refusal_rounds=0,
+                     verbose=False)
+    assert res.pattern == pat.name
+    assert [sr.stage for sr in res.stages] == [0, 1, 2]
+    assert [sr.conducted for sr in res.stages] == [False, False, True]
+    # ALL SIX ARMS ARE ACTIVE IN BOTH MAIN STAGES, and each one has a role
+    for sr in res.stages[:2]:
+        assert sorted(sr.actives) == sorted(T.ARMS)
+        assert set(sr.roles.values()) == {"leader", "follower"}
+        assert sorted(sr.roles) == sorted(T.ARMS)
+        # the leaders planned first, the followers after them
+        pri = {a: st.priority for a, st in sr.arms.items()}
+        assert max(pri[a] for a, r in sr.roles.items() if r == "leader") < \
+            min(pri[a] for a, r in sr.roles.items() if r == "follower")
+        for a, st in sr.arms.items():
+            if st.accepted and st.timeline is not None:
+                assert np.allclose(st.timeline["q"][0], st.q_park, atol=1e-9)
+        assert not any(st.residue for st in sr.arms.values()), \
+            "the leader/follower pattern never serialises inside a stage"
+    # THE BARRIER IS A HELD POSE SET, one per stage, and each is pairwise clear
+    assert len(res.holds) == 3
+    assert [h["before_stage"] for h in res.holds] == [0, 1, 2]
+    assert all(h["ok"] for h in res.holds), [h["min_m"] for h in res.holds]
+    # stage A starts from the parks; nothing after it does unless nothing moved
+    assert all(np.allclose(res.holds[0]["q"][str(a)], res.parks[a])
+               for a in T.ARMS)
+    # ...and the conducted stage brings the fleet home again: every arm that
+    # left its park in A or B has a timeline in C, and it ends at the park
+    for a, st in res.stages[2].arms.items():
+        moved = not np.allclose(res.holds[2]["q"][str(a)], res.parks[a],
+                                atol=1e-9)
+        if moved and st.timeline is not None:
+            assert np.allclose(st.q_end, res.parks[a], atol=1e-6), a
+    # the seam stroke belongs to nobody's row band, so it reaches the conductor
+    assert sum(len(st.planned) for st in res.stages[2].arms.values()) > 0
+    doc = staged.programme(res, trajectories=False)
+    assert doc["stages"][2]["conducted"] is True
+    assert doc["barriers"][0]["hold_ok"] is True
+    d = staged.summary(res)
+    assert d["holds_ok"] is True
+    assert set(d["roles"]["total"]) >= {"follower_fit_frac", "deferred_m"}

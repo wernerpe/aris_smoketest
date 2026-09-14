@@ -1,6 +1,208 @@
 # Decisions — the numbers, and where each one is anchored
 
-## THE SEAM FRAME: the model gained 8 bodies and v19 now FAILS on steel (2026-09-14)
+## THE SEAM BAR IS IN THE CERTIFIED STATIC SET, AND THE MIDDLE ROW'S PARKS MOVED (2026-09-14, SECOND of two)
+
+**Pete Werner, settling what to model rather than photographing it:** *"just
+put a representative bar in the middle that is as wide as two of the corner
+struts."*
+
+So the entry below this one — four inferred end-frame posts, five photo
+questions, "the static set is unchanged, deliberately" — is superseded on both
+counts. The seam support is **one representative bar per side**,
+`seam_bar_W` / `seam_bar_E`, 76.2 (x) × 152.4 (y) × 1651.0 mm, centred on the
+seam plane y = 1815.32 and standing from the tabletop to the runway underside.
+And it is **in the planner's static set**: `mounts.obstacles_for` hands it to
+every arm, so `validate.check_pose`, `atlas.solve_cell`, `paper.route`,
+`planner` and `scene_check` all gate against it and every number earned after
+today has the seam in it. `ARIS_SEAM_POSTS=0` takes it back out, which is the
+only way to reproduce a number earned before today.
+
+**ONE TABLE**, `mounts.SEAM_BARS_MM` — two rows of six numbers. A hardware
+correction is an edit there and nowhere else; `system_model.seam_bodies()`
+reads it, and `test_the_seam_bar_table_is_the_drawings_own_arithmetic` pins it
+against the drawing's own derivation. It lives in `mounts` and not in
+`system_model` for an import-graph reason: `system_model` reads
+`layout.FLEET_PROPOSED` at import and `layout` builds that fleet through
+`mounts.obstacles_for`, so `mounts` cannot import `system_model`.
+
+### THE BAR COSTS EXACTLY WHAT THE FOUR POSTS DID — measured, not assumed
+
+The two posts at one x occupied y ∈ [SEAM_Y − 76.2, SEAM_Y] and
+[SEAM_Y, SEAM_Y + 76.2]. **Their union is this bar**, and a union of two AABBs
+that share a face is an AABB. So every clearance in the entry below reproduces
+to the digit against two bodies instead of four: `Q_PARK_PROPOSED` arm 31 at
+**50.9 mm**, stage parks 2 and 6 at **−35.3 mm**, certified area
+**16 184 → 16 019**, v19 at **−59.4 mm**. 79 static bodies, not 81;
+`check_system_model.py` ALL PASS.
+
+### THE FLOOR A PARK IS NOW SEARCHED AGAINST, AND WHY IT IS THE CHECKER'S
+
+Two floors and two derivations, and before today no park was ever near enough
+to either for the difference to matter — every arm stood 214–277 mm off the
+nearest steel, which was a neighbour's body column and not the cage at all.
+
+* `rig_final.STATIC_MARGIN` = **50 mm** is the POSE gate (`validate.check_pose`)
+  and what the atlas was swept at.
+* `paper.FRAME_FLOOR` = `rig_final.STATIC_PLAN_MARGIN` = **63 mm** is what the
+  ROUTER asks. **A depot the arm cannot fly out of is not a depot**, so that is
+  the floor a park set is searched against now.
+* and it is measured by `scene_check.static_clearance_lb` — the CHECKER's
+  independent derivation, the one `check_timeline` uses — which reads
+  **9.9 mm under** `rig_final.chain_static_clearance` for the same pose on this
+  rig. A park picked at 63 mm of PLANNER clearance is 53 mm to the checker and
+  fails the only verdict anybody ships. `layout.static_clearance` is that
+  number and `layout.stage_parks(static_floor=...)` is the gate.
+
+### 1. THE GLOBAL PARK SET — ONE ARM MOVED
+
+    ARIS_RIG=proposed ARIS_TOOL=lateral scripts/height_sweep.py park \
+        --h 0.970 --atlas out/atlas_proposed_h0970_lat0860 --jobs 6 \
+        --steel-floor 0.063 --out out/park_search_h0970_seam.json
+
+The same search that made the shipped grid — 24 bearings × 6 radii × 4 hovers
+= 576 candidates per arm, each gated by `certified_ready_pose`, scored against
+every other arm's INK **and** 6 cm LIFT layers, ranked on the depot's own
+flyability and tie-broken on the 5 mm clearance plateau — with one thing
+added: `--steel-floor 0.063`, the router's floor instead of the pose gate.
+2 048 s on 6 workers. **442–461 of 576** candidates per arm certify against the
+bars, where 496–497 certified against nothing.
+
+**FIVE OF THE SIX ARMS RE-WIN THEIR OWN TRIPLE EXACTLY.** Arms 2, 13, 17, 71
+and 97 get back the three numbers the empty room gave them, because the nearest
+steel to any of them is still a neighbour's body column at 267.5 mm and the
+bars never enter it. Their seven joint values are bit-identical.
+
+**Arm 31 moves across the seam and keeps its radius:** bearing **+150 → −150**,
+hover **0.30 → 0.35**, r = 0.62 unchanged. Its pen waits at **(0.060, 1.505)**
+instead of (0.060, 2.125) — the same standoff, mirrored to the south side of
+the bar it was leaning against.
+
+| chain-to-static, worst, mm (checker) | before | after |
+|---|---:|---:|
+| arm 2 | 267.5 | 267.5 |
+| arm 13 | 267.5 | 267.5 |
+| arm 17 | 267.5 | 267.5 |
+| **arm 31** | **50.9  FAIL** | **70.4  PASS** |
+| arm 71 | 214.0 | 214.0 |
+| arm 97 | 267.5 | 267.5 |
+
+and it is not only the steel that improves: park-vs-(ink AND lift) goes
+98.0 → **98.8 mm** and the cells arm 31 can fly to and home from go 18/24 →
+**19/24**. What it pays is 0.013 of conditioning — min(joint margin, 2.5 σ)
+0.692 → 0.680, against a 0.30 gate neither pose is near.
+
+**IT IS NOT THE SEARCH'S OWN TOP ROW, and that is the one judgement call
+here.** Ranked flyability-first the winner for arm 31 is (0.40, 0.10, −135.0)
+— 20/24 cells and 248.4 mm off the steel — but it parks the arm at
+(0.314, 1.532), well inside the canvas, and its park-vs-(ink AND lift) is
+**79.0 mm** against the **80 mm the conductor asks**, which is the criterion
+this whole grid was chosen on (2026-08-26). One more flyable cell is not worth
+the number that decides whether a phase can be conducted at all. The committed
+triple is the best-conditioned candidate that clears the router's floor **and**
+holds the 80 mm.
+
+**FLEET, on the committed set:** park-vs-park **250.0 mm** (the broad-phase
+cap, arms 2 and 13); worst park-vs-(ink AND lift) **97.7 mm** (arm 17,
+unchanged — arm 31 was never the binding one); entries and go-homes
+**113/144**; and all six clear the router's 63 mm floor.
+
+### 2. THE PER-STAGE PARKS — `out/stage_parks_h0970_seam.json`
+
+`scripts/stage_parks.py --atlas out/atlas_proposed_h0970_lat0860_gated63
+--stride 2`, now with `--static-floor 0.063`. 91.7 s.
+
+| stage | worst chain-to-steel, before | after | moved |
+|---|---:|---:|---|
+| 0 | **+49.9** | **+70.4** | 31 |
+| 1 | +50.9 | **+70.4** | 31 |
+| 2 | **−35.3** | **+67.3** | 31, 71 |
+| 3 | +91.8 | +91.8 | — |
+| 4 | +50.9 | **+70.4** | 31 |
+| 5 | +50.9 | **+70.4** | 17, 31 |
+| 6 | **−35.3** | **+105.7** | 31 |
+| 7 | +50.9 | **+70.4** | 31, 71 |
+
+Per arm, worst over the eight stages (mm):
+
+| arm | before | after |
+|---:|---:|---:|
+| 2 | 267.5 | 267.5 |
+| 13 | 267.5 | 267.5 |
+| 17 | 62.3 | **73.2** |
+| 31 | **−35.3** | **+67.3** |
+| 71 | **−35.3** | **+91.8** |
+| 97 | 267.5 | 267.5 |
+
+**AND IT COST NOTHING THE STAGES WERE BEING CHOSEN ON.** Park-vs-envelope is
+**+4.7 / +4.7 / +55.4 / +37.1 / +34.9 / +37.1 / +55.4 / +95.7 mm** — the same
+eight numbers, stage for stage, as the shipped set measured the same way.
+Park-vs-park is **≥ 142.7 mm** against the 50 mm `PAIR_MARGIN`; every active
+arm can fly from its park into its own cell and back (3/3, then 2/2 in every
+later stage); 13 of 42 stage transitions need a route and all 13 route.
+Stages 0 and 1 still do not certify their envelope gate, for the structural
+reason V2_WORKCELLS gives — a full-width row band leaves the other arm of a
+transverse pair nowhere to stand. That is unchanged and is not the seam.
+
+### 3. THE CERTIFIED AREA at h = 0.970 — the block survives
+
+`scripts/seam_impact.py --write-map out/fw_h0970_m50_map_seam.npz` re-decides
+every strict-GO draw pose of the shipped atlas against the bars; then
+`scripts/certified_area.py --map` on the result, which is the shipped script
+answering with its own machinery.
+
+| | before | after |
+|---|---:|---:|
+| live cells | 16 184 (97.72 %) | **16 019 (96.72 %)** — −165, −1.02 % |
+| **hole-free block** | 1.50 × 3.64 m, 5.460 m² | **1.50 × 3.64 m, 5.460 m² — UNCHANGED** |
+| centred, portrait | 5.460 m² | 5.460 m² |
+| near-square | 3.435 m² | 3.360 m² |
+| landscape | 1.793 m² | 1.793 m² |
+| largest component | 6.474 m², 0 holes | 6.406 m², 4 holes = 0.0032 m² |
+| arm 31's cells | 3 765 | 3 680 (−85) |
+| arm 71's cells | 3 772 | 3 692 (−80) |
+
+**The block that decides where a drawing may be placed does not move.** It runs
+x ∈ [0.16, 1.64] and the nearest bar face is at x = −0.1143 / 1.9177 — 274.3 mm
+away, past the 205 mm a link needs. The 165 lost cells are all at the canvas's
+x extremes on the seam row and all of them belonged to 31 or 71.
+
+**STILL A LOWER BOUND, and doubly so.** The map's live cells rest on three
+layers and only the draw pose is on disk, so a cell that keeps its draw pose
+may still lose its hover or its routing leg. And the shipped map was built with
+the partners FROZEN at the old parks; arm 31's park moved today, which a full
+`feasible_workspace` re-sweep would account for and this re-decision does not.
+The honest statement is: **at least 16 019 cells, and the hole-free block is
+whole.**
+
+### 4. THE SHIPPED v19 PROGRAMME STILL FAILS — and is not re-planned here
+
+`out/csail_schedule_h097_v19.npz`, whole merged timeline, 5 038 steps
+re-sampled to 10 075, 6 arms, `scene_check.check_timeline` against the seam
+fleet:
+
+```
+self-collision              63.1 mm  (margin 20)   PASS
+inter-arm                   50.3 mm  (margin 50)   PASS
+neighbour base columns     131.5 mm  (margin 50)   PASS
+paper: chain 26.0 / tip -7.9 mm                    PASS
+frame (STEEL)              -59.4 mm  (margin 50)   FAIL: arms [31, 71]
+                                     arm 31 at t = 13.94 s
+VERDICT                                            FAIL
+```
+
+**Deliberately not re-planned.** v19 is the staged pattern that is being
+replaced; the next programme is planned and certified with the bars in the
+static set from the first call, which is the point of wiring them in rather
+than measuring around them.
+
+## THE SEAM FRAME: the model gained 4 bodies and v19 now FAILS on steel (2026-09-14, FIRST of two)
+
+> **SUPERSEDED IN PART, the same day** — by the entry above it. The four
+> inferred end-frame posts are one representative bar per side now (Pete
+> Werner's own instruction), and the seam IS in the certified static set. Every
+> measurement below still stands to the digit: the bar is the exact union of
+> the two posts at each x, so it decides every clearance identically. Read the
+> "waits on a photo" paragraphs as history.
 
 **Pete Werner, on the real hardware:** *"there are a few bars on the real
 hardware that are not in our model. they are supports in the middle, I think
@@ -100,6 +302,66 @@ Nothing here is a survey and no gate constant, tool transform or layout grid
 value moved. The seam frame is built from the drawing and reported by Pete; it
 has **not been photographed**, and five assumptions ride on it — see
 `OPEN_QUESTIONS['seam_frame']` and docs/BUILD_SHEET.md §9.
+
+## THE PATTERN WAS NOT THE ONE PETE SPECIFIED — leader/follower, built (2026-09-14)
+
+**What was wrong.** `traces.zigzag_pattern` — the eight-stage pattern
+`docs/V2_STAGED.md` sections 8-21 measured and v6 shipped — parks a leader's
+same-row partner for the whole stage. Three arms draw, three stand still, and
+the picture takes eight barriers: on the CSAIL logo **432.6 s against the
+conducted v19's 209.9 s**, with **21.4 % of the critical path** spent flying out
+to a park and back. That is not what was asked for. Pete's specification was
+*"the 1-2-1 for planning the lead arm with priority and then the other arm in
+the column would only try to knock out lines in its cell that were safe to draw.
+and then in the end we would do the coordination of all arms to fill in the gaps
+if needed"* — **six arms moving in every main stage**, a per-piece "is this
+safe" test for the follower, and one conducted final pass.
+
+**Why the wrong one looked justified.** The parking was defended by
+`docs/V2_WORKCELLS.md` section 4b: two arms of a transverse pair interpenetrate
+by 135-262 mm, so *"no pattern may ever put a same-row pair in the air
+together."* That measurement is of two **full work-cell ENVELOPES** — the union
+over every pose either arm could hold anywhere in its cell. It is not a
+measurement of a follower drawing a restricted subset while the leader's
+**realised trajectory** is the occupied volume, and section 15 had already built
+that second object and section 19 had already measured it at a factor of 12
+smaller. A conclusion about envelopes was carried over to a question about
+rooms. **The envelope numbers stand; the prohibition drawn from them does not.**
+
+**What was built.** `traces.leader_follower_pattern` — stage A: leaders 13/71/2
+(priority 0-2) and followers 17/31/97 (3-5); stage B: the roles swapped; stage C:
+all six through `idle.conduct`, whole-timeline checked by `scene_check`. A
+follower plans against the leaders' realised trajectory rooms, so it is
+asynchronous by construction; a piece that does not fit is **deferred** — to the
+stage where that arm leads, then to stage C — and never serialised into the
+stage, which is what would give the barrier back. The row dead band (0.40 m) and
+every gate constant are unchanged. `zigzag_pattern` is kept and
+`--pattern zigzag|leader_follower` selects; both remain reproducible.
+
+**And the barrier stopped being a trip.** Pete, watching the v6 animation: *"a
+lot of excessive parking ... we should be just executing that plan as
+efficiently as possible."* A stage now ends at the hover above its last stroke
+and HOLDS there; the next stage starts from that pose and models every
+not-yet-moving arm at the pose it is actually holding rather than at its park.
+Parks are kept for the start of the programme, the end of it, and fault
+recovery. The park set was mutually clear BY CONSTRUCTION (it was searched to
+be); a held set is not, so `staged.hold_gap` proves it pairwise at every
+barrier, with `scene_check`'s own capsules and the same 50 mm gate.
+
+**One check was corrected on the way.** `active_pair_gap` takes the cross
+product of two timelines and subtracts a 1-Lipschitz residual on the DECIMATED
+grid, because two asynchronous arms share no clock. With six named actives, most
+of them holding, that charged a **still** arm the moving arm's decimation
+residual: CSAIL stage 0 read +22.7 mm where `solo_check` — the tool for exactly
+that pair, at the full rate and with refinement — read +52.4 mm.
+`active_pair_gap` now sees only arms that move; still arms belong to
+`solo_check` and `hold_gap`. With the fix stage 0 reads +85.0 / +131.8 /
++192.9 mm across the sweep and passes.
+
+**The measurements are in `docs/V2_STAGED.md` section 22**, from
+`out/staged_csail_h097_lf_*.json` and the four-way sweep `scripts/lf_sweep.sh`
+runs. `STAGED_SCHEMA_VERSION` is **2**: `role`, `conducted`, `deferred` and
+`q_hold` added, nothing renamed or removed.
 
 ## v6: EVERY BUCKET FLIES, 100 % OF THE INK, SEVEN OF EIGHT STAGES (2026-09-11, last)
 
