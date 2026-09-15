@@ -3345,3 +3345,39 @@ mechanism is identical and it is the vertical pen, not the reach. That is the
 strongest argument this section has for making the tilt cone the shipped
 default, and it is why the recommendation is not "patch the three CSAIL
 stretches".
+
+### 30.6 THE STAGED MODEL HAS NO INK DIMENSION, AND A TWO-COLOUR PICTURE IS WRONG RATHER THAN SLOW
+
+Pete's "any drawing out of the box" includes two-colour pictures, and this is
+the one place the staged pipeline does not merely lose metres — it produces a
+programme that is **incorrect**.
+
+| picture | strokes | m | **inks** | what the pattern did with them |
+|---|---|---|---|---|
+| hatch | 43 | 30.100 | 1 | — |
+| scatter | 70 | 8.636 | 1 | — |
+| starburst | 24 | 19.001 | 1 | — |
+| spiral | 1 | 13.933 | 1 | — |
+| **duotone** | 10 | 12.831 | **2 (grey, orange)** | **NOTHING — the colour never entered the planner** |
+
+`traces.load_lines` harvests `pts` and drops every other field, so `duotone`'s
+grey and orange bands reach the DP as ten indistinguishable polylines. The
+pattern's stages are COLLISION stages — who may be in the air with whom — and
+nothing anywhere in `traces`, `staged` or `writing` groups ink by colour or
+inserts a pen swap. A staged programme for `duotone` therefore has arms drawing
+orange bands with whatever pen they are holding, and every gate passes, because
+no gate is about ink.
+
+The v19 path does have it: `csail_schedule` builds one PHASE per ink with a
+human pen swap between them (`payload`'s `--pause`, `program_json`'s palette),
+and that is the structure `scripts/draw.py` writes out. So this is the same
+finding as §30.4's `--planner staged` blocker, stated as the planner question
+it is rather than as a plumbing one:
+
+**AN INK IS A CONSTRAINT ON WHICH ARM MAY DRAW A STROKE AT ALL, AND THE DP'S
+CAPABILITY MAP IS EXACTLY WHERE THAT BELONGS.** `traces.Capability` already maps
+(x, y) → the set of (stage, arm) cells that can draw there; an ink-aware version
+maps (x, y, ink) → the cells whose arm is holding that ink in that phase. The
+pattern gains a phase axis, `plan_lines` gains the ink per line, and the barrier
+list gains a swap. Until then the honest statement is: **the staged pipeline
+plans single-ink pictures, and `duotone` is a measurement of geometry only.**

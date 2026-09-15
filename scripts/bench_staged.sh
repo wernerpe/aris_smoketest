@@ -23,7 +23,7 @@ CAP=${CAP:-1500}
 NAMES=${NAMES:-"hatch scatter starburst spiral duotone"}
 SPLIT=${SPLIT:-0.15}
 STANDOFF=${STANDOFF:-0.09}
-TILT=${TILT:-0}
+TILT=${TILT:-15}
 
 run() {
     n=$1
