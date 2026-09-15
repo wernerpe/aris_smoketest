@@ -1,5 +1,55 @@
 # Decisions — the numbers, and where each one is anchored
 
+## THE LAST TWO DEFECTS — A PRIORITY ORDER INSIDE THE GROUP, AND A HOLD THAT IS VERIFIED (2026-09-14, NINTH)
+
+§28 shipped a programme with every fix of the day in it and no certificate, and
+named exactly two things in the way. Both are about **a pose somebody is
+STANDING IN while somebody else moves.** Measured in docs/V2_STAGED.md §29.
+
+**A REFUSED ROW GROUP'S TWO ARMS WERE NEVER IN EACH OTHER'S ROOM.** When
+`idle.conduct` refuses, the fallback flies the group's arms one at a time — but
+their routes came off `plan_bucket`, which runs BEFORE `freeze_conduct` with
+`partners=outside` only. The moving arm routed straight through its standing
+partner: **2 ↔ 97 at −161.3 mm, 31 ↔ 71 at −21.0 mm**, and in both the other
+arm's per-frame travel is 0.00 mm. `freeze_conduct`'s `still` set catches the
+arms inside a group that produce no timeline; it cannot catch a pair where both
+have ink, because neither is still at freeze time and the refusal is only
+discovered afterwards. **`_serialise_group` gives the group the argument
+`_priority_stage` already makes between arms in a stage:** busiest arm first
+against the frozen outside fleet *plus its partner at the pose that partner
+holds*; then the second arm against the outside fleet *plus the first arm's
+realised trajectory as an exact swept room*; every leg re-routed under that room
+rather than reused. The slots do not overlap — `_merge_conducts` lays a refused
+group end to end — so where the whole swept room costs the second arm a piece,
+that arm is re-planned against the partners' FINISHING POSES, which is the
+honest statement of the slot it actually flies in. `hold_gap` proves the pose
+set at every slot boundary. **And the merge learned the order:** it laid a
+refused group's slots down by ascending arm id, which would ship the
+certified-against arm flying second; it now reads `serial_order` off the group's
+own report.
+
+**A HELD HOVER THAT KEPT NEITHER THE JOINT MARGIN NOR THE ROOM WAS HELD
+ANYWAY.** `hover_solve`'s `hold` ask is a SETTLE: where the whole fiber has
+nothing that keeps `HOVER_HOLD_MARGIN`, it drops back to `HOVER_MARGIN` and
+returns that. Right for a travelling hover, wrong for the pose a barrier holds
+for a minute — `lf6_s150` stage B ended arm 31 on a pose at **0.1064 rad against
+`validate.MARGIN_GATE`'s 0.15**, and the stage was refused on `frozen_failed`
+with every distance gate passing wide. The ask is now VERIFIED
+(`writing.held_pose_ok`), and a pose that fails it is not held: the arm ends its
+stage on a certified retreat instead — **(a)** more air over the same stroke end,
+**(b)** a hover over an earlier stroke end of the same bucket, **(c)** the park,
+which is always valid — cheapest first, each rung asked the same gate the
+barrier will apply and each required to be routable from the final lift. Which
+one was taken rides on the timeline as `hold_kind`. **And the barrier itself now
+asks:** `hold_gap` proved the held set pairwise clear and nothing else, so
+`validate_pose` — the same gate with the same `PEN_PAPER` exemption
+`scene_check` makes — is asked of every held pose where the barrier is declared
+and gates its `ok`. A barrier may not hold a pose the judge would refuse.
+
+**NO GATE MOVED.** `PAIR_MARGIN` 0.050, self 23, static 50, frame floor 63,
+`MARGIN_GATE` 0.15, the tool transform, the layout and the rig are untouched;
+both fixes are about WHAT IS ASKED OF WHICH POSE, not about what passes.
+
 ## THE INTEGRATED RUN — AND TWO OF THE FOUR RESIDUALS WERE NAMED WRONGLY (2026-09-14, EIGHTH)
 
 Every fix of 2026-09-14 in one programme on the CSAIL logo at h = 0.970, and

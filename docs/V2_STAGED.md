@@ -2935,3 +2935,148 @@ plan the other against its realised trajectory, so the fallback's one-at-a-time
 programme is certified by construction rather than only measured. It is named
 here rather than shipped unmeasured, and it is the one thing between this
 programme and a certificate.
+
+## 29. The last two defects — a priority order inside the group, and a hold that is verified
+
+§28 left a programme with every fix of 2026-09-14 in it and **no certificate**,
+and it named exactly two things in the way. Both are about a pose somebody is
+STANDING IN while somebody else moves, and both are closed here.
+
+### 29.1 A refused group's arms were never in each other's room
+
+§28.8 measured it and named the fix; this is the fix. When `idle.conduct`
+refuses a row group, `_conduct_stage` falls back to flying its two arms one at a
+time — but the timelines it flies came out of `plan_bucket`, which runs BEFORE
+`freeze_conduct` and is handed `partners=outside` only. **A row's own two arms
+are therefore never in each other's room**, and the moving one routes straight
+through the standing one: 2 ↔ 97 at **−161.3 mm**, 31 ↔ 71 at **−21.0 mm**, in
+both cases against an arm whose per-frame travel is 0.00 mm.
+
+`freeze_conduct`'s `still` set (§28.3's sibling) catches the arms inside a group
+that produce NO timeline. It cannot catch a pair where both arms have ink,
+because neither is still at freeze time and the refusal is only discovered
+afterwards.
+
+**`_serialise_group` GIVES THE GROUP THE ARGUMENT `_priority_stage` ALREADY
+MAKES BETWEEN ARMS IN A STAGE**, one level down:
+
+1. **busiest arm first**, planned against the frozen outside fleet PLUS its own
+   row partner *at the pose that partner holds* — which is the pose nobody was
+   routing around;
+2. **the second arm** against the outside fleet PLUS the first arm's REALISED
+   TRAJECTORY as an exact swept room (`trajectory_room`, `freeze_conduct`'s own
+   machinery, the same object the main stages use);
+3. **every leg re-routed under that room.** Nothing is reused from
+   `plan_bucket`, because what `plan_bucket` produced is exactly what was wrong;
+4. **the room is the conservative reading of a slot that does not overlap.**
+   `_merge_conducts` lays a refused group's arms END TO END, so while the second
+   flies, the first has finished and is standing at its park — which its own
+   swept room contains. Where the whole room costs the second arm a piece, that
+   arm is re-planned against the partners' FINISHING POSES instead: a solo
+   against a frozen fleet, always routable or honestly refused, and it is the
+   honest statement of the slot it actually flies in. Which reading shipped is
+   recorded per arm (`room_kind`, `note`);
+5. **`hold_gap` at every slot boundary**, because a boundary is a barrier: six
+   arms standing in one scene while one of them hands over.
+
+...AND THE MERGE HAD TO LEARN THE ORDER. `_merge_conducts` laid a refused
+group's slots down in ascending ARM ID. The certificate is ordered — the second
+arm is certified against the first's trajectory — so the merge now reads
+`serial_order` off the group's report and lays the slots down in the order they
+were planned in. Without that, the programme would ship the certified-against
+arm flying second.
+
+### 29.2 A held hover that keeps neither the joint margin nor the room
+
+§27.1's room-aware ask is BEST-EFFORT by construction, and one layer down so is
+`hover_solve`: where the whole fiber has nothing that keeps `HOVER_HOLD_MARGIN`,
+it **settles back to `HOVER_MARGIN` and returns that**. That is the right answer
+for a travelling hover and the wrong one for the pose a barrier is about to hold
+for a minute. Measured on `lf6_s150` stage B: arm 31's last held hover came back
+at **0.1064 rad** against `validate.MARGIN_GATE`'s 0.15, `scene_check` judged the
+held pose with `validate_pose`, and the whole stage was refused on
+`frozen_failed` with every distance gate passing wide.
+
+**SO THE ASK IS VERIFIED, AND A POSE THAT FAILS IT IS NOT HELD.**
+`writing.held_pose_ok` asks the two questions the constants name — the strict
+joint margin, and `static_gate`'s whole admissibility test including the frozen
+partners at `HOVER_ROOM_FLOOR` — of the pose that came back rather than of the
+search. Where it fails, the arm ends its stage on a CERTIFIED RETREAT
+(`writing.hold_candidates`), cheapest first:
+
+| rung | what it is | why it is where it is |
+|---|---|---|
+| (a) `hover_z` | a different HEIGHT over the same stroke end (`HOLD_LADDER_EXTRA`) | same tip, same fiber, more air — the arm is already underneath it |
+| (b) `hover_prev` | a hover over an EARLIER stroke end of the same bucket, latest first | ink this arm has already drawn: airspace it has already been certified in, and the travel stays inside its own work area |
+| (c) `park` | the shipped park | **always valid** — it is the pose the fleet's pairwise argument is built on and the pose the next programme plans from. It costs a trip home, which is what `PARK_FREEZE` exists to avoid, so it is last and it is never refused |
+
+Every non-park rung is asked the same `held_pose_ok` the barrier will apply, and
+each candidate must also be ROUTABLE from the final lift — the first that is
+both ships. Which one was taken rides on the timeline as `hold_kind` and out
+through `programme()` per arm, so a barrier can say what it is holding rather
+than only that it holds something.
+
+**...AND THE BARRIER ITSELF NOW ASKS.** `hold_gap` proved the held set pairwise
+clear and nothing else; the half that failed is about each pose ALONE.
+`validate_pose` — the same gate, with the same `PEN_PAPER` exemption
+`scene_check` makes — is now asked of every held pose where the barrier is
+declared, and it gates `ok`. A barrier may not hold a pose the judge would
+refuse.
+
+### 29.3 The whole bag's final pass, re-run — and it is CERTIFIED
+
+`out/staged_csail_h097_lf6_whole_c4.*`, stage C only off the §28 programme
+(`--stage-c-only ..._lf6_whole_program.json --stage-c-index 2 --row-compose
+serial --conduct-jobs 3 --conduct-cap-s 1500`), stages A and B untouched.
+
+| group | `lf6_whole_c3` (§28.8) | **`lf6_whole_c4`** |
+|---|---|---|
+| [31, 71] | **−21.0 mm, REFUSED** | **+118.1 mm, PASS** (conductor refused; in-group priority) |
+| [13, 17] | +226.2 mm, PASS | +226.2 mm, PASS (conducted) |
+| [2, 97] | **−161.3 mm, REFUSED** | **+215.3 mm, PASS** (conductor refused; in-group priority) |
+| merged stage C | **−76.6 mm, FAIL** | **+118.1 mm, PASS** |
+| stage C motion | 116.7 s | **98.1 s** |
+| stage C cost per metre | 17.4 s/m | **14.7 s/m** |
+
+**BOTH REFUSED GROUPS NOW PASS, AND THE STAGE IS FASTER THAN THE ONE THAT
+FAILED.** The two arms of a refused row still fly one after the other — that is
+what a refusal means — but each one's legs are now routed in the room the other
+one is actually in, and a leg routed around the truth is shorter than a leg
+routed around nothing and then measured against the truth.
+
+...AND THE BAND RETRY IS PART OF IT. The first pass put group [31, 71] at
+**+36.4 mm** with the judge's FRAME gate refusing arm 71 — §28.3's disagreement
+between the room the conduct routes in and the room the judge measures in, now
+reached through the serialised re-plan as well. `CONDUCT_BANDS = "auto"` re-ran
+the set with the partners' bands kept and took it: **+36.4 → +118.1 mm**.
+`frozen.freeze_sets` CLEARS the keep-bands flag, so `freeze_stage` and
+`plan_bucket` had to learn to restate it (and to put it in the leg store's
+namespace) or the re-plan would silently route in the relaxed room the retry
+exists to leave behind.
+
+| stage | actives (roles) | pieces | ink m | stage s | inter-arm mm | solo mm | self mm | frame mm | paper mm | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | lead 2,13,71 / foll 17,31,97 | 17 | 4.595 | 84.7 | +183.0 | +175.3 | — | — | — | **PASS** |
+| B | lead 17,31,97 / foll 2,13,71 | 22 | 4.769 | 127.2 | +320.0 | +137.5 | — | — | — | **PASS** |
+| C | 3 row conductors, serial | 27 | 6.689 | **98.1** | **+118.1** | — | +39.9 | +56.4 | +43.9/−2.2 | **PASS** |
+| D | — | 0 | 0.000 | 0.0 | — | — | — | — | — | (none) |
+
+| | v19 | `lf6_whole` (§28.6) | **`lf6_whole_c4`** |
+|---|---|---|---|
+| makespan | **209.9 s** | 290.6 s (uncertified) | **309.9 s** |
+| certified | yes | no | **YES** |
+| ink drawn | 16.8 m | 16.083 m (95.7 %) | **16.083 m (95.7 %)** |
+| A + B share of the ink | — | 58.3 % | **58.3 %** |
+| time to first motion | — | 0.174 s | 0.174 s |
+| planning wall (A+B sum / busiest arm-stage) | — | 2 286 / 805 s | 2 286 / 805 s |
+| planning wall (stage C, wall / busiest group) | — | 93 s / 65 s | **1 428 s / 698 s** |
+| check | — | 49.7 s | 49.7 s |
+| stage-C cost per metre (motion) | — | 17.4 s/m | **14.7 s/m** |
+| fleet pen-up | — | 138.5 s | **111.6 s** (6.9 % flip, 40.3 % tall, 52.8 % honest) |
+
+**WHAT THE CERTIFICATE COSTS IS PLANNING WALL, AND IT IS THE ONLY THING THAT GOT
+WORSE.** A refused group is now planned TWICE — once by `plan_bucket` against
+the outside fleet, once again per arm under the in-group room — and each re-plan
+opens a leg-store namespace nothing has warmed, so every pen-up leg is routed
+from scratch. Stage C went from 93 s of wall to **1 428 s**. The motion it
+produces is 18.6 s shorter and it is the first stage C that ships.

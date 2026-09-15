@@ -111,6 +111,35 @@ HOVER_HOLD_MARGIN = 0.15  # rad, restated from `validate.MARGIN_GATE`.  Asked
 # at exactly 50 mm would not have moved it.
 HOVER_ROOM_FLOOR = 0.075    # m of frozen-partner clearance a HELD hover keeps
 
+# ...AND WHEN NOTHING ON THE FIBER HOLDS BOTH, THE ARM DOES NOT STOP THERE.
+# `hover_solve`'s `hold` ask is a SETTLE: where the whole fiber has nothing that
+# keeps `HOVER_HOLD_MARGIN`, it drops back to `HOVER_MARGIN` and returns that,
+# which is the honest answer for a TRAVELLING hover and the wrong one for the
+# pose a barrier is about to hold for a minute.  MEASURED 2026-09-14 on
+# `lf6_s150` stage B: arm 31's last held hover came back at 0.1064 rad against
+# `validate.MARGIN_GATE`'s 0.15, `scene_check` judged the held pose with
+# `validate_pose`, and the whole stage was refused.
+#
+# So the ask is VERIFIED rather than believed, and a pose that fails it is not
+# held: the arm ends its stage with a CERTIFIED RETREAT instead, cheapest first.
+#
+#   (a) `HOLD_LADDER_EXTRA` -- a different hover HEIGHT over the same stroke
+#       end.  Same tip, same fiber, more air: the cheapest possible retreat,
+#       because the arm is already directly underneath it.
+#   (b) a hover over an EARLIER stroke end of the same bucket, latest first --
+#       ink this arm has already drawn, so it is airspace this arm has already
+#       been certified in, and the travel is inside its own work area.
+#   (c) THE PARK, which is always valid: it is the pose the fleet's whole
+#       pairwise argument is built on and the pose the next programme plans
+#       from.  It costs a trip home, which is exactly what `PARK_FREEZE` exists
+#       to avoid -- so it is last, and it is never refused.
+#
+# Which one was taken rides on the timeline as `hold_kind` ("hover" when the
+# ordinary ask held and nothing was needed), so a barrier can say what it is
+# holding rather than only that it holds something.
+HOLD_LADDER_EXTRA = (0.15, 0.20, 0.25, 0.30)   # m, rung (a): more air
+HOLD_PREV_ENDS = 4          # rung (b): how many earlier stroke ends to offer
+
 HOVER_YAWS = tuple(np.linspace(0, 2 * np.pi, 8, endpoint=False))
 #   The TOOL YAW axis of the hover fiber, and it only became a real axis when
 #   the pen holder went lateral: with the tip 110 mm off the wrist axis, phi
@@ -1564,6 +1593,69 @@ PARK_FREEZE = "freeze"      # stop at the hover pose above the last stroke
 PARK_HOME = "home"          # the old behaviour: transit back to `spec.q_seed`
 
 
+def held_pose_ok(spec, q, pen_ext=None, h_inv=H_INV_DEFAULT, hold=None,
+                 room_floor=None) -> bool:
+    """May a BARRIER stop and hold this pose? -> bool.
+
+    The two questions `HOVER_HOLD_MARGIN` and `HOVER_ROOM_FLOOR` name, asked of
+    a pose that already exists rather than of a search: the strict joint margin
+    `validate.check_pose` will judge the held pose at, and `static_gate`'s whole
+    admissibility test -- the steel, the paper, self, and the frozen partners at
+    `room_floor`.  `hover_solve` SETTLES the first of those where the fiber has
+    nothing that keeps it, so the answer it hands back has to be verified and
+    not assumed (see `HOLD_LADDER_EXTRA`).
+    """
+    hold = HOVER_HOLD_MARGIN if hold is None else hold
+    q = np.asarray(q, float).reshape(7)
+    if hold is not None and float(joint_margin(q)) < float(hold) - paper.EPS:
+        return False
+    gate = static_gate(spec, pen_ext, h_inv, room_floor=room_floor)
+    if gate is None:
+        return True
+    return bool(np.isfinite(float(np.asarray(gate(q[None, :]), float)[0])))
+
+
+def hold_candidates(spec, dense, q_hover, pen_ext=None, h_inv=H_INV_DEFAULT,
+                    hold=None, room_floor=None):
+    """Poses this arm may STOP AND HOLD, cheapest retreat first. -> [(q, kind)].
+
+    Rungs (a), (b) and (c) of `HOLD_LADDER_EXTRA`'s note, in ascending cost:
+    more air over the same stroke end, a hover over an earlier stroke end, then
+    the park.  Every rung is asked the SAME question (`held_pose_ok`), so the
+    list is a list of poses a barrier may hold and the caller's only remaining
+    job is to find one it can also fly to.
+
+    The park is appended unconditionally and last: it is certified by the
+    fleet's own layout, so a caller that reaches it has an answer whatever the
+    fiber says.
+    """
+    hold = HOVER_HOLD_MARGIN if hold is None else hold
+    out: list[tuple[np.ndarray, str]] = []
+    q_ref = np.asarray(q_hover, float).reshape(7)
+
+    def offer(q_seed, xy, heights, kind):
+        got = lifted_or_lower(spec, q_seed, xy, heights=heights, h_inv=h_inv,
+                              pen_ext=pen_ext, hold=hold, room_floor=room_floor)
+        if got is None or float(got[1]) <= 0.0:
+            return
+        if held_pose_ok(spec, got[0], pen_ext, h_inv, hold, room_floor):
+            out.append((np.asarray(got[0], float).reshape(7), kind))
+
+    if dense:
+        # (a) the same tip, higher.  `q_ref` is the hover the arm is standing on
+        # after its final lift, so the nearest acceptable pose is the shortest
+        # move, and the ladder is walked from the bottom of the extra rungs up.
+        offer(q_ref, dense[-1]["pts"][-1], tuple(HOLD_LADDER_EXTRA), "hover_z")
+        # (b) an earlier stroke end of this same bucket, latest first.
+        for D in list(reversed(dense[:-1]))[:int(HOLD_PREV_ENDS)]:
+            offer(q_ref, D["pts"][-1],
+                  tuple(HOVER_LADDER) + tuple(HOLD_LADDER_EXTRA), "hover_prev")
+    # (c) the park -- always offered, never filtered: it is the pose the whole
+    # fleet argument is indexed by and the pose the next programme plans from.
+    out.append((np.asarray(spec.q_seed, float).reshape(7), "park"))
+    return out
+
+
 # ==========================================================================
 # THE SELF GATE AND THE JUDGE DISAGREED ABOUT DENSITY, NOT ABOUT GEOMETRY
 # ==========================================================================
@@ -1982,6 +2074,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                     taxi_s=0.0, retreat_s=0.0, aside_s=aside_s,
                     self_paced=int(n_pace), self_pace_s=float(s_pace),
                     q_end=np.array(Q[-1], float), park=str(park),
+                    hold_kind=("aside" if steps else "still"),
                     pen=ext_of(pen_ext), paper_modes=[r[1]] if steps else [],
                     paper_vias=int(len(steps) - 1) if steps else 0,
                     fallbacks=0, n_home=0)
@@ -2023,9 +2116,18 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
     # matters, because it is one pose and the search is told about the parked
     # partners at the same time so it can hold both.
     #
-    # BEST-EFFORT AND NEVER A REFUSAL.  If nothing on the whole fiber holds the
-    # hold margin AND the room, the ordinary answer stands -- exactly what
-    # shipped before this existed -- and the stage is judged on it as before.
+    # BEST-EFFORT IN WHAT IT ASKS, AND NEVER A REFUSAL OF THE INK.  If nothing
+    # on the whole fiber holds the hold margin AND the room, the ordinary answer
+    # still stands as the pose the arm LIFTS ONTO -- the ink, the route and the
+    # tour are untouched -- and what changes is only where the arm STOPS.
+    #
+    # ...AND BEST-EFFORT IS NOT GOOD ENOUGH FOR A POSE THE BARRIER HOLDS.
+    # `hover_solve`'s `hold` ask SETTLES back to `HOVER_MARGIN` where the fiber
+    # has nothing that keeps the strict gate, so what comes back has to be
+    # VERIFIED (`held_pose_ok`).  Where it does not hold, the arm does not stop
+    # there: `hold_need` is set and the retreat below ends the stage on a pose
+    # that does -- see `HOLD_LADDER_EXTRA`.
+    hold_kind, hold_need = str(park), False
     if dense and str(park) == PARK_FREEZE and HOVER_HOLD_MARGIN is not None:
         strict = lifted_or_lower(spec, dense[-1]["qd"][-1], dense[-1]["pts"][-1],
                                  h_inv=h_inv, pen_ext=pen_ext,
@@ -2033,6 +2135,9 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                                  room_floor=HOVER_ROOM_FLOOR)
         if strict is not None and float(strict[1]) > 0.0:
             hox[-1] = strict
+        hold_kind = "hover"
+        hold_need = not held_pose_ok(spec, hox[-1][0], pen_ext, h_inv,
+                                     HOVER_HOLD_MARGIN, HOVER_ROOM_FLOOR)
     q_home = np.asarray(spec.q_seed, float).reshape(7)
 
     def need(beat, what, k):
@@ -2146,13 +2251,33 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
         phases.append(dict(kind="transit", seg=k, t0=float(t0), t1=float(t)))
 
     retreat_s = 0.0
+    # WHAT THE ARM CREEPS TO AFTER THE FINAL LIFT, AND WHY THERE ARE TWO REASONS
+    # FOR ONE.  `retreat` is the caller's own (`idle.plan_retreat` choosing a
+    # pose out of somebody's way); `hold_need` is this module's, and it fires
+    # where the pose the stage would otherwise HOLD is not one a barrier may
+    # hold.  The second offers a LIST, cheapest first, and takes the first rung
+    # it can also certify a route to -- the park is on the end of that list, so
+    # the loop terminates with an answer or with an honest `PaperRefused`.
+    cands: list[tuple[np.ndarray, str]] = []
     if retreat is not None and park != PARK_HOME:
-        q_ret = np.asarray(retreat, float).reshape(7)
-        z_ret = float(paper.chain_tip_z(q_ret[None, :], spec, pen_ext, h_inv)[1][0])
-        r = _route(spec, hox[-1][0], q_ret, pen_ext, h_inv,
-                   paper.travel_floor(hox[-1][1], z_ret), qd_frac, T_LIFT_F,
-                   paper_safe)
+        cands = [(np.asarray(retreat, float).reshape(7), "retreat")]
+    elif hold_need:
+        cands = hold_candidates(spec, dense, hox[-1][0], pen_ext, h_inv,
+                                HOVER_HOLD_MARGIN, HOVER_ROOM_FLOOR)
+    if cands:
+        r, q_ret, kind = None, None, ""
+        for q_c, kind in cands:
+            q_ret = np.asarray(q_c, float).reshape(7)
+            z_ret = float(paper.chain_tip_z(q_ret[None, :], spec, pen_ext,
+                                            h_inv)[1][0])
+            r = _route(spec, hox[-1][0], q_ret, pen_ext, h_inv,
+                       paper.travel_floor(hox[-1][1], z_ret), qd_frac,
+                       T_LIFT_F, paper_safe)
+            if r is not None:
+                break
         need(None if r is None else dict(steps=r[0]), "retreat", len(dense) - 1)
+        if hold_need:
+            hold_kind = str(kind)
         if SELF_PACE:
             paced, n_, add_ = self_pace_block(spec, hox[-1][0], r[0],
                                               pen_ext, h_inv)
@@ -2178,7 +2303,7 @@ def arm_program(spec, segs, draw_speed=DRAW_SPEED_FLEET, transit_speed=TRANSIT_S
                 self_paced=int(self_paced), self_pace_s=float(self_pace_s),
                 room_paced=int(room_paced), room_pace_s=float(room_pace_s),
                 q_end=np.array(Q[-1], float),
-                park=str(park), pen=ext_of(pen_ext),
+                park=str(park), pen=ext_of(pen_ext), hold_kind=str(hold_kind),
                 draw_s=float(T[-1] - transit_s - taxi_s - retreat_s),
                 paper_modes=[m for mm in modes for m in mm],
                 paper_vias=int(sum(len(b) for b in beats)

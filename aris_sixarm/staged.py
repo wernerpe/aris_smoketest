@@ -537,7 +537,7 @@ def stage_envelopes(pattern, stage, atlas_dir, specs=None, pens=None,
 
 def freeze_stage(arm, parks, envelopes=None, specs=None, pens=None,
                  h_inv=H_INV_DEFAULT, leg_cache=True, leg_cache_root=None,
-                 standoff=None, partners=None):
+                 standoff=None, partners=None, keep_bands=False):
     """Install the room `arm` has to fly in for one stage. -> the frozen ids.
 
     Every partner is modelled by what it IS for the whole of this stage: a
@@ -557,12 +557,17 @@ def freeze_stage(arm, parks, envelopes=None, specs=None, pens=None,
     frozen.freeze_sets(sets, fl, pens, h_inv, clusters=env)
     frozen.observe(int(arm))
     frozen.set_standoff(_standoff_for(int(arm), standoff, sets))
+    # THE BANDS ARE A PROPERTY OF THE CONDUCT, NOT OF THE FREEZE.  `freeze_sets`
+    # clears the flag, so a caller flying under `CONDUCT_BANDS = "keep"` has to
+    # restate it here or its re-plan would silently route in the relaxed room
+    # the retry exists to leave behind (docs/V2_STAGED.md §28.3).
+    frozen.set_keep_bands(bool(keep_bands))
     paper.clear_cache()
     if leg_cache:
         paper.disk_cache_open(leg_cache_root,
                               signature=leg_cache_signature(
                                   {a: sets[a] for a in sets}, env,
-                                  frozen.standoff()))
+                                  frozen.standoff(), bool(keep_bands)))
     else:
         paper.disk_cache_close()
     return tuple(sorted(sets))
@@ -1135,7 +1140,7 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
                 leg_cache_root=None, fly=True, on_piece: Callable | None = None,
                 envelopes=None, lift_ladder=None, ink_gate=None,
                 park_policy=writing.PARK_HOME, standoff=None, partners=None,
-                verbose=False) -> ArmStage:
+                keep_bands=False, verbose=False) -> ArmStage:
     """Plan, order and fly one (stage, arm) bucket. -> ArmStage.
 
     The four steps, and none of them is new machinery:
@@ -1182,7 +1187,7 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
     if envelopes:
         st.frozen_partners = freeze_stage(arm, parks, envelopes, fl, pens,
                                           h_inv, leg_cache, leg_cache_root,
-                                          standoff, partners)
+                                          standoff, partners, keep_bands)
         st.envelope_partners = tuple(sorted(int(a) for a in envelopes
                                             if int(a) != int(arm)))
         # THE CERTIFICATE NAMES WHAT IT DEPENDS ON.  A pose-union envelope is a
@@ -1200,6 +1205,18 @@ def plan_bucket(stage: int, arm: int, pieces: Sequence[Piece], specs=None,
         st.frozen_partners = freeze_partners(arm, parks, fl, pens, h_inv,
                                              leg_cache, leg_cache_root,
                                              standoff, partners)
+        if keep_bands:
+            # ...AND THE SAME RESTATEMENT `freeze_stage` makes, one door over:
+            # `frozen.freeze` clears the flag, so the room a `CONDUCT_BANDS =
+            # "keep"` re-plan flies in has to be re-asked for -- along with the
+            # leg store's namespace, which the flag is part of.
+            frozen.set_keep_bands(True)
+            paper.clear_cache()
+            if leg_cache:
+                paper.disk_cache_open(leg_cache_root,
+                                      signature=leg_cache_signature(
+                                          frozen.poses(), None,
+                                          frozen.standoff(), True))
     st.frozen_poses = {int(a): [float(x) for x in q]
                        for a, q in frozen.poses().items()}
     st.standoff = {int(a): float(s) for a, s in frozen.standoff().items()}
@@ -1498,6 +1515,15 @@ def hold_gap(poses: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT) -> dict:
     included, and every later arm was routed clear of that room, so the held
     poses are separated by the same certificate that separated the motion.  This
     is the assertion that the reasoning held, not a new hope.
+
+    ...AND A BARRIER MAY NOT HOLD A POSE THAT IS NOT CERTIFIABLE ON ITS OWN.
+    Pairwise clearance is the half of the question that is about the FLEET; the
+    other half is about each pose by itself, and it is the half that failed
+    (`lf6_s150` stage B, arm 31 at 0.1064 rad of joint margin against
+    `validate.MARGIN_GATE`'s 0.15 -- docs/V2_STAGED.md §29).  `validate_pose` is
+    exactly the gate `scene_check` judges a held pose with, so it is asked here,
+    where the barrier is actually declared, rather than discovered afterwards by
+    the judge.  `writing.hold_candidates` is what an arm does about it.
     """
     fl = FLEET if specs is None else specs
     pens = {a: fl[a].pen for a in fl} if pens is None else pens
@@ -1511,8 +1537,27 @@ def hold_gap(poses: dict, specs=None, pens=None, h_inv=H_INV_DEFAULT) -> dict:
             d = float(scene_check.pair_clearance(P[ai], P[aj], rr)[0])
             per[f"{ai}-{aj}"] = d
             worst = min(worst, d)
+    # THE SAME READING `scene_check` TAKES, DOWN TO THE ONE EXEMPTION: a pen
+    # resting ON the paper is reported and is not a hard violation there, so it
+    # is not one here either, or the barrier would refuse a pose the judge
+    # passes.
+    pose_ok, margins, kinds = {}, {}, {}
+    for a in arms:
+        rep = scene_check.validate_pose(
+            np.asarray(poses[a], float).reshape(7), fl[a], h_inv,
+            scene_check.pen_len(pens.get(a), a))
+        hard = [v["kind"] for v in rep["violations"]
+                if v["kind"] != scene_check.PEN_PAPER]
+        pose_ok[a] = not hard
+        kinds[a] = hard
+        margins[a] = float((rep.get("worst") or {}).get("joint_margin",
+                                                        float("nan")))
+    bad = sorted(a for a in arms if not pose_ok[a])
     return dict(min_m=float(worst), per_pair=per,
-                ok=bool(worst >= PAIR_MARGIN))
+                poses_ok=bool(not bad), bad_poses=bad,
+                bad_why={str(a): kinds[a] for a in bad},
+                joint_margin={str(a): margins[a] for a in arms},
+                ok=bool(worst >= PAIR_MARGIN and not bad))
 
 
 def drop_bands(spec, owners: Iterable[int]):
@@ -2938,6 +2983,170 @@ def _conducted_phases(phases, prog_idx, dt, M):
     return out
 
 
+def _bucket_ink(a, s, buckets, deferred) -> float:
+    """The metres one arm is offered in one conducted stage. -> m."""
+    return float(sum(p.length_m
+                     for p in list((buckets or {}).get((int(s), int(a)), []))
+                     + list((deferred or {}).get(int(a), []))))
+
+
+def _serialise_group(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
+                     opts, leg_cache, leg_cache_root, dt, sub, verbose,
+                     outside, op, rooms, bands, why):
+    """A group the conductor REFUSED, re-planned IN PRIORITY ORDER.
+
+    -> (arms, report).
+
+    THE DEFECT THIS CLOSES, MEASURED 2026-09-14 (docs/V2_STAGED.md §28.8).  When
+    `idle.conduct` refuses, the fallback flies the group's arms one at a time --
+    but their routes came off `plan_bucket`, which runs BEFORE `freeze_conduct`
+    and is given `partners=outside` only, so a row's own two arms were never in
+    each other's room.  The moving arm then routed straight through its standing
+    partner: 2 ↔ 97 at **-161.3 mm**, 31 ↔ 71 at **-21.0 mm**, and in both the
+    other arm's per-frame travel is 0.00 mm -- it is standing still.
+    `freeze_conduct`'s `still` set catches the arms that produce NO timeline; it
+    cannot catch a pair where both arms have ink, because neither is still at
+    freeze time and the refusal is only discovered afterwards.
+
+    SO THE GROUP GETS THE SAME PRIORITY ARGUMENT `_priority_stage` MAKES BETWEEN
+    ARMS IN A STAGE, one level down.  Busiest arm first, against the frozen
+    outside fleet plus its partner AT THE POSE THAT PARTNER HOLDS; then the
+    second arm against the outside fleet plus the first arm's REALISED
+    TRAJECTORY as an exact swept room (`trajectory_room`, the same machinery the
+    main stages use).  Every leg is re-routed under that room -- nothing is
+    reused from `plan_bucket`, because what `plan_bucket` produced is exactly
+    what was wrong.
+
+    ...AND THE ROOM IS THE CONSERVATIVE READING OF A SLOT THAT DOES NOT OVERLAP.
+    `_merge_conducts` lays a refused group's arms END TO END, so while arm two
+    flies, arm one has finished and is standing at its park -- which its own
+    trajectory room contains.  Certifying against the whole room is therefore
+    strictly stronger than the programme needs, and it is what is asked FIRST.
+    Where it costs the second arm a piece, that piece is not thrown away: the
+    arm is re-planned against the first arm's FINISHING POSE alone, which is the
+    honest statement of the slot it actually flies in -- a solo against a frozen
+    fleet, always routable or honestly refused.  Which of the two shipped is
+    recorded per arm (`room_kind`, `note`).
+
+    `hold_gap` proves the pose set at every slot boundary, because a boundary is
+    a barrier: six arms standing in one scene while one of them hands over.
+    """
+    order = sorted((int(a) for a in who),
+                   key=lambda a: (-_bucket_ink(a, s, buckets, deferred), int(a)))
+    held7 = {int(a): np.asarray(q, float).reshape(7) for a, q in held.items()}
+    parks7 = {int(a): np.asarray(parks[a], float).reshape(7) for a in fl}
+    op = dict(op or {})
+    out_pose = {int(a): np.asarray(op.get(int(a), held7[int(a)]),
+                                   float).reshape(7) for a in outside}
+    base_env = {int(a): v for a, v in (rooms or {}).items() if int(a) in out_pose}
+    keep = (str(bands) == "keep")
+    arms: dict[int, ArmStage] = {}
+    fin: dict[int, np.ndarray] = {}          # where an arm that has flown stands
+    fin_room: dict[int, tuple] = {}          # ...and the room it swept to get there
+    slots: list[dict] = []
+    for k, a in enumerate(order):
+        pcs = list(buckets.get((int(s), int(a)), [])) \
+            + list((deferred or {}).get(int(a), []))
+        # WHAT EVERY OTHER ARM IS DOING WHILE THIS ONE FLIES ITS SLOT: an arm
+        # outside the group holds `op`; an arm of this group that has already
+        # flown is home and holding; one that has not started is standing at its
+        # stage entry pose, which is the thing nobody was routing around.
+        poses = dict(out_pose)
+        env = dict(base_env)
+        for b in order:
+            if b == a:
+                continue
+            poses[b] = fin.get(b, held7[b])
+            if b in fin_room:
+                env[b] = fin_room[b]
+        partners = sorted(poses)
+        start = dict(poses)
+        start[int(a)] = held7[int(a)]
+
+        def _plan(use_env):
+            return plan_bucket(s, a, pcs, fl, pens, start, h_inv, opts,
+                               leg_cache=leg_cache,
+                               leg_cache_root=leg_cache_root, fly=True,
+                               envelopes=(dict(use_env) or None),
+                               partners=partners,
+                               park_policy=writing.PARK_HOME,
+                               keep_bands=keep, verbose=False)
+
+        st = _plan(env)
+        if pcs and env and (st.timeline is None
+                            or len(st.accepted) < len(pcs)):
+            # THE PIECE THE ROOM COST IS OFFERED THE SLOT INSTEAD.  The room is
+            # a claim about arms that are no longer moving when this arm flies;
+            # dropping it for their finishing POSES is not a relaxation of the
+            # programme, it is the programme.
+            alt = _plan(base_env)
+            better = ((st.timeline is None and alt.timeline is not None)
+                      or (alt.timeline is not None
+                          and len(alt.accepted) > len(st.accepted)))
+            if better:
+                alt.note = (alt.note + "; " if alt.note else "") + \
+                    ("in-group priority: re-planned against the partners' "
+                     "finishing poses after the swept room refused "
+                     f"{len(pcs) - len(st.accepted)} piece(s)")
+                st = alt
+        st.role, st.conducted, st.residue = "conductor", False, True
+        st.priority = int(k)
+        # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME, and it gets there in
+        # the room it was just frozen into -- see `_conduct_stage`'s own aside.
+        q_home = parks7[int(a)]
+        if st.timeline is None and float(np.max(np.abs(held7[int(a)]
+                                                       - q_home))) > 1e-9:
+            try:
+                st.timeline = writing.arm_program(
+                    fl[a], [], h_inv=h_inv, pen_ext=pens.get(a),
+                    q_start=held7[int(a)], park=writing.PARK_HOME, aside=q_home)
+            except writing.PaperRefused as exc:
+                st.note = (st.note + "; " if st.note else "") + \
+                    f"go-home refused: {exc}"
+        arms[int(a)] = st
+        slots.append(dict(arm=int(a), poses=dict(poses),
+                          frames=_clock_frames(st.timeline, dt)))
+        fin[int(a)] = np.asarray(st.q_end, float).reshape(7)
+        if st.timeline is not None:
+            fin_room[int(a)] = trajectory_room(st, fl, pens, h_inv, dt)
+        if verbose:
+            print(f"  stage {s} group {sorted(int(x) for x in who)} priority "
+                  f"{k}: arm {a} ({len(st.accepted)}/{len(pcs)} pieces, "
+                  f"{st.ink_m:.3f} m) against {sorted(partners)}"
+                  + (f", rooms {sorted(env)}" if env else ", poses only"))
+    thaw()              # the CHECK does not inherit the planner's own room
+    worst, ok, holds = float("inf"), True, []
+    for sl in slots:
+        st = arms[int(sl["arm"])]
+        if st.timeline is None:
+            continue
+        rep = solo_check(st, sl["poses"], fl, pens, h_inv, PAIR_MARGIN, dt, sub)
+        worst = min(worst, float(rep.get("min_clearance", np.nan)))
+        ok = ok and bool(rep.get("ok", False))
+        sl["min_clearance_m"] = float(rep.get("min_clearance", np.nan))
+        sl["ok"] = bool(rep.get("ok", False))
+    # ...AND THE SLOT BOUNDARIES, WHICH ARE BARRIERS.  At the instant one arm
+    # stops and the next starts, six arms are standing in one scene and nothing
+    # is moving; `hold_gap` is the same proof the stage barriers carry.
+    for k, sl in enumerate(slots):
+        q = dict(sl["poses"])
+        q[int(sl["arm"])] = held7[int(sl["arm"])]
+        holds.append(dict(before=int(sl["arm"]), **hold_gap(q, fl, pens, h_inv)))
+    q_end = dict(out_pose)
+    q_end.update({int(a): fin[int(a)] for a in order})
+    holds.append(dict(before=None, **hold_gap(q_end, fl, pens, h_inv)))
+    hold_ok = all(bool(h["ok"]) for h in holds)
+    return arms, dict(
+        ok=bool(ok and hold_ok), serialised=True, reason=str(why),
+        min_clearance=float(worst), in_group_priority=True,
+        serial_order=[int(a) for a in order],
+        slots=[dict(arm=int(sl["arm"]), frames=int(sl["frames"]),
+                    min_clearance_m=float(sl.get("min_clearance_m", np.nan)),
+                    ok=bool(sl.get("ok", True))) for sl in slots],
+        slot_holds=[dict(before=h["before"], min_m=float(h["min_m"]),
+                         ok=bool(h["ok"])) for h in holds])
+
+
 def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
                    leg_cache, leg_cache_root, on_piece, dt, sub, verbose,
                    only=None, rooms=None, outside_poses=None, bands="drop"):
@@ -3076,23 +3285,12 @@ def _conduct_stage(s, buckets, deferred, fl, pens, held, parks, h_inv, opts,
         # the max -- which is announced, not hidden.
         if verbose:
             print(f"  stage {s}: the conductor refused ({exc}); the final pass "
-                  "falls back to one arm at a time")
-        worst, ok = float("inf"), True
-        thaw()          # the CHECK does not inherit the conductor's own room
-        for st in arms.values():
-            st.conducted = False
-            if st.timeline is None:
-                continue
-            st.residue = True
-            # ...against the poses the partners actually hold WHILE this group
-            # runs, which is `held` for a group that has not started and its
-            # park for one that already went home (`--row-compose serial`).
-            rep = solo_check(st, room_poses, fl, pens, h_inv, PAIR_MARGIN, dt,
-                             sub)
-            worst = min(worst, float(rep.get("min_clearance", np.nan)))
-            ok = ok and bool(rep.get("ok", False))
-        return arms, dict(ok=bool(ok), serialised=True, reason=str(exc),
-                          min_clearance=float(worst)), time.perf_counter() - t0
+                  "falls back to one arm at a time, IN PRIORITY ORDER")
+        arms, rep = _serialise_group(
+            s, who, buckets, deferred, fl, pens, held, parks, h_inv, opts,
+            leg_cache, leg_cache_root, dt, sub, verbose, outside, op, rooms,
+            bands, exc)
+        return arms, rep, time.perf_counter() - t0
     thaw()              # the CHECK does not inherit the conductor's own room
     sch, samp, progs = out["sch"], out["samp"], out["progs"]
     M = int(sch["M"])
@@ -3379,7 +3577,15 @@ def _merge_conducts(stage, parts, fl, pens, held, parks, h_inv, dt, sub,
         if not g[1].get("serialised"):
             continue
         base = max([0] + [int(off.get(int(a), 0)) for a in g[0]])
-        for a in sorted(int(x) for x in g[0]):
+        # THE ORDER THE SLOTS ARE LAID DOWN IN IS THE ORDER THEY WERE PLANNED
+        # IN, and it is not the arm ids.  `_serialise_group` plans the busiest
+        # arm first and certifies the second against the first's realised
+        # trajectory; laying them down the other way round would merge a
+        # programme with no certificate at all.
+        seq = [int(a) for a in (g[1].get("serial_order") or [])
+               if int(a) in g[0]]
+        for a in seq + [a for a in sorted(int(x) for x in g[0])
+                        if a not in set(seq)]:
             st = g[0][a]
             off[int(a)] = int(base)
             if st.timeline is not None:
@@ -3937,6 +4143,12 @@ def programme(res: StagedResult, trajectories: bool = True) -> dict:
                 q_tuck=(None if st.q_tuck is None else
                         [float(x) for x in np.asarray(st.q_tuck).ravel()]),
                 clear_out_s=float(st.clear_out_s),
+                # WHAT KIND OF POSE THE BARRIER IS HOLDING.  "hover" is the
+                # ordinary freeze; "hover_z", "hover_prev" and "park" are
+                # `writing.hold_candidates`' three retreats, taken where the
+                # hover the stage would have stopped on is not a pose a barrier
+                # may hold (docs/V2_STAGED.md §29).
+                hold_kind=(None if tl is None else str(tl.get("hold_kind", ""))),
                 frozen_partners=[int(x) for x in st.frozen_partners],
                 room_kind=str(st.room_kind),
                 residue=bool(st.residue),
@@ -4082,6 +4294,16 @@ def summary(res: StagedResult) -> dict:
                 roles=role_summary(res),
                 holds=[dict(before_stage=int(h["before_stage"]),
                             min_mm=round(1000 * float(h["min_m"]), 2),
+                            # ...AND WHAT EACH HELD POSE IS ON ITS OWN, which is
+                            # the half of the barrier `validate_pose` judges and
+                            # the half that failed (docs/V2_STAGED.md §29).
+                            poses_ok=bool(h.get("poses_ok", True)),
+                            bad_poses=[int(a) for a in
+                                       (h.get("bad_poses") or [])],
+                            joint_margin_min=round(min(
+                                [float(v) for v in
+                                 (h.get("joint_margin") or {}).values()]
+                                or [float("nan")]), 4),
                             ok=bool(h["ok"])) for h in res.holds],
                 holds_ok=bool(all(h["ok"] for h in res.holds)),
                 buckets_flown=int(sum(1 for s_ in res.stages
