@@ -1297,8 +1297,16 @@ def test_the_leader_follower_pipeline_runs_end_to_end(rig):
                      route_jobs=2, leg_cache=False, refusal_rounds=0,
                      verbose=False)
     assert res.pattern == pat.name
-    assert [sr.stage for sr in res.stages] == [0, 1, 2]
-    assert [sr.conducted for sr in res.stages] == [False, False, True]
+    # ...AND THE GO-HOME BEFORE THE FINAL PASS IS A STAGE OF ITS OWN.  It
+    # carries no ink and shares the conducted stage's index; `home_first` on
+    # its check is what tells the two apart (docs/V2_STAGED.md 30.7).
+    home = [sr for sr in res.stages if sr.conducted_check.get("home_first")]
+    assert len(home) <= 1
+    assert all(sr.n_pieces == 0 for sr in home)
+    assert [sr.stage for sr in res.stages
+            if not sr.conducted_check.get("home_first")] == [0, 1, 2]
+    assert [sr.conducted for sr in res.stages
+            if not sr.conducted_check.get("home_first")] == [False, False, True]
     # ALL SIX ARMS ARE ACTIVE IN BOTH MAIN STAGES, and each one has a role
     for sr in res.stages[:2]:
         assert sorted(sr.actives) == sorted(T.ARMS)
@@ -1322,15 +1330,18 @@ def test_the_leader_follower_pipeline_runs_end_to_end(rig):
                for a in T.ARMS)
     # ...and the conducted stage brings the fleet home again: every arm that
     # left its park in A or B has a timeline in C, and it ends at the park
-    for a, st in res.stages[2].arms.items():
+    final = next(sr for sr in res.stages if sr.conducted
+                 and not sr.conducted_check.get("home_first"))
+    for a, st in final.arms.items():
         moved = not np.allclose(res.holds[2]["q"][str(a)], res.parks[a],
                                 atol=1e-9)
         if moved and st.timeline is not None:
             assert np.allclose(st.q_end, res.parks[a], atol=1e-6), a
     # the seam stroke belongs to nobody's row band, so it reaches the conductor
-    assert sum(len(st.planned) for st in res.stages[2].arms.values()) > 0
+    assert sum(len(st.planned) for st in final.arms.values()) > 0
     doc = staged.programme(res, trajectories=False)
-    assert doc["stages"][2]["conducted"] is True
+    assert all(one["conducted"] for one in doc["stages"]
+               if int(one["stage"]) == final.stage)
     assert doc["barriers"][0]["hold_ok"] is True
     d = staged.summary(res)
     assert d["holds_ok"] is True

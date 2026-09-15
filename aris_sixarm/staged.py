@@ -2161,6 +2161,23 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                                  for a, q in sorted(entry.items())},
                               **hold_gap(entry, fl, pens, h_inv)))
             if s in conducted:
+                # EVERY SLOT STARTS FROM AN ALL-PARKED FLEET EXCEPT ITS OWN ROW
+                # (see `CONDUCT_HOME_FIRST`).  The go-home is its own conducted
+                # stage with no ink in it, so it is certified like any other.
+                if CONDUCT_HOME_FIRST:
+                    sh = _home_stage(int(s), fl, pens, entry, parks, h_inv,
+                                     opts, leg_cache, leg_cache_root, dt, sub,
+                                     conduct_cap_s, verbose)
+                    if sh is not None:
+                        for a, st in sh.arms.items():
+                            held[int(a)] = np.asarray(st.q_end,
+                                                      float).reshape(7)
+                        entry = {int(a): np.asarray(q, float).reshape(7)
+                                 for a, q in held.items()}
+                        plan_s += sh.wall_s
+                        out.append(sh)
+                        if verbose:
+                            _report_stage(sh)
                 took = {int(a): list(v) for a, v in deferred.items() if v}
                 took_m = float(sum(p.length_m for v in took.values()
                                    for p in v))
@@ -3824,6 +3841,54 @@ CONDUCT_BANDS = "auto"     # drop | keep | auto -- see `_conduct_groups`
 # against 1.914 m, for 24 s more motion and twice the wall.  So it stays
 # available and off: a search that is cheap only when it wins must be asked for.
 POST_SLOT_SEARCH = False
+# EVERY SLOT OF THE FINAL PASS STARTS FROM AN ALL-PARKED FLEET EXCEPT ITS OWN
+# ROW.  Under `PARK_FREEZE` an arm ends stage B holding the hover over its last
+# stroke, and the conducted final pass then plans every row group with the
+# OTHER FOUR arms standing in exactly those hovers -- over the sheet, in the
+# middle of the picture, and unmovable by a row conductor that does not own
+# them.  Measured on `lf6b_s150` stage C (2026-09-15): arm 31's 8 pieces
+# (1.914 m) are all `ok` out of `plan_stroke`, every routing floor is the full
+# 63 mm, and the bucket dies on one leg -- and the scene sweep says the arm in
+# the way is **arm 2**, which is in a DIFFERENT ROW and stands at its stage-B
+# hover for the whole of the [31, 71] slot.  No ordering inside the group can
+# reach it, which is why §29.5's reverse order recovered none of it.
+#
+# So the fleet goes HOME first.  One conducted stage with no ink in it, every
+# arm given its park as an `aside`, scheduled by `idle.conduct` exactly as
+# stage D's go-homes already are; the parks are the pose set the fleet's whole
+# pairwise argument is built on.  The row groups then plan against parks, come
+# out for their slot and go back (`PARK_HOME`, which the final pass already
+# uses).  It costs one park trip, once, in parallel.
+CONDUCT_HOME_FIRST = True
+
+
+def _home_stage(sd, fl, pens, held, parks, h_inv, opts, leg_cache,
+                leg_cache_root, dt, sub, cap_s, verbose):
+    """Send every arm that is not at its park home. -> (StageResult | None).
+
+    No ink, no buckets: `_conduct_stage` gives an arm with an empty bucket its
+    park as a routed `aside` and `idle.conduct` schedules the six of them
+    together.  Returns `None` when the fleet is already home, in which case
+    nothing is added to the programme at all.
+    """
+    who = [int(a) for a in sorted(fl)
+           if float(np.max(np.abs(np.asarray(held[a], float).reshape(7)
+                                  - np.asarray(parks[a], float).reshape(7))))
+           > 1e-9]
+    if not who:
+        return None
+    if verbose:
+        print(f"  stage {sd} HOME FIRST: arms {who} go to their parks so every "
+              "row group plans against a parked fleet")
+    t1 = time.perf_counter()
+    arms, chk, c_s = _conduct_groups(
+        sd, [tuple(sorted(fl))], {}, {}, fl, pens, held, parks, h_inv, opts,
+        leg_cache, leg_cache_root, dt, sub, 1, cap_s, verbose)
+    chk = dict(chk, home_first=True)
+    return StageResult(int(sd), tuple(sorted(int(a) for a in fl)), arms,
+                       wall_s=time.perf_counter() - t1, conducted=True,
+                       conducted_check=chk, deferred_in=0.0,
+                       conduct_s=float(c_s))
 
 
 def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
@@ -4924,6 +4989,17 @@ def run_conducted(doc: dict, stage: int = 2, band_stage: int | None = None,
                       q={str(a): [float(x) for x in q]
                          for a, q in sorted(entry.items())},
                       **hold_gap(entry, fl, pens, h_inv)))
+    if CONDUCT_HOME_FIRST:
+        sh = _home_stage(int(stage), fl, pens, entry, parks, h_inv, opts,
+                         leg_cache, leg_cache_root, dt, sub, conduct_cap_s,
+                         verbose)
+        if sh is not None:
+            for a, st in sh.arms.items():
+                entry[int(a)] = np.asarray(st.q_end, float).reshape(7)
+            plan_s += sh.wall_s
+            out.append(sh)
+            if verbose:
+                _report_stage(sh)
     t1 = time.perf_counter()
     arms, chk, c_s = _conduct_groups(
         stage, [ROW_ARMS[j] for j in sorted(ROW_ARMS)], buckets, {}, fl, pens,
@@ -5075,6 +5151,14 @@ def main(argv=None):
                          "behaviour.  The leader loses the ink that needs to "
                          "reach in under its partner's shoulder and that ink "
                          "is deferred as usual (docs/V2_STAGED.md section 25)")
+    ap.add_argument("--no-conduct-home-first", action="store_true",
+                    help="do NOT send the fleet to its parks before the "
+                         "conducted final pass.  The default sends it: under "
+                         "PARK_FREEZE an arm ends stage B holding the hover "
+                         "over its last stroke, and a row conductor cannot move "
+                         "an arm of another row out of its way -- measured on "
+                         "lf6b_s150, arm 2's stage-B hover is what stops arm "
+                         "31's whole 1.914 m bucket (docs/V2_STAGED.md 30.7)")
     ap.add_argument("--post-slot-search", action="store_true",
                     help="when a refused row group's arm cannot fly its bucket "
                          "in the ink-first order, plan the whole group AGAIN "
@@ -5115,6 +5199,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     globals()["POST_SLOT_SEARCH"] = bool(a.post_slot_search)
+    globals()["CONDUCT_HOME_FIRST"] = not bool(a.no_conduct_home_first)
     if a.stage_c_only:
         doc = json.loads(Path(a.stage_c_only).read_text())
         print(f"=== {Path(a.stage_c_only).name}: stage {a.stage_c_index} only, "
