@@ -357,17 +357,96 @@ def capsule_table(n_points):
             else coordination.CAPSULES)
 
 
-def ink_segments(prog, Q, DOWN, times, h_inv):
-    """{arm: (M,2,3)} world pen-tip segments, only where the pen is down."""
-    ch = chains_for(prog, Q, h_inv)
-    out = {}
+def ink_tracks(prog, min_frac=0.98, min_total=0.995):
+    """Every piece's PLANNED polyline, timed on the fleet clock.
+
+    THE POLYLINE IS THE TRUTH; THE SAMPLED TIP IS NOT.  Ink used to be drawn
+    between consecutive frames where BOTH ends were pen-down, which silently
+    dropped one sample interval at each end of every piece — about 26 mm per
+    end at 8x, so ~2 m of missing line over lf6b's 75 pieces, appearing as gaps
+    Pete could see and the planner had never planned.  A piece's `pts` is the
+    line the planner committed to, and `writing.arm_program` paces a stroke
+    linearly in ARC LENGTH (`add(t + uu * dur, ...)` with `uu` the normalised
+    arc parameter), so the exact instant each vertex is laid down is known:
+    `t0 + u * (t1 - t0)` over the stroke's own window.  Rendering that gives
+    the whole planned line, with no end effects and no interpolation guesswork.
+
+    -> ({arm: dict(seg (M,2,3), t (M,), cum (M,))} sorted by reveal time,
+        {arm: planned metres}, [orphan pieces]).  Each arm's `cum` is the
+    running rendered length, so "ink drawn so far" is a lookup, not a sum.
+    """
+    out = {a: dict(seg=[], t=[]) for a in prog.arms}
+    planned = {a: 0.0 for a in prog.arms}
+    short, orphan, want_total = [], [], 0.0
+    for s in prog.stages:
+        for a, tr in s["tracks"].items():
+            if not tr.has_traj:
+                continue
+            for pc in s["raw"]["arms"][str(a)]["pieces"]:
+                k = int(pc["order"])
+                m = tr.seg == k
+                pts = np.asarray(pc["pts"], float)
+                if len(pts) < 2:
+                    continue
+                if not m.any():
+                    # INK THE PROGRAMME CLAIMS BUT NEVER LAYS DOWN.  The piece
+                    # is listed with a length, but the arm's own timeline never
+                    # marks the pen down for it — lf6b's arm 31 spends the
+                    # whole conducted stage C on a single `aside` leg with
+                    # `seg` all -1 while still reporting 1.92 m over 8 pieces.
+                    # There is no instant to draw it at, and inventing one
+                    # would be a fabrication, so it is reported, not drawn.
+                    orphan.append((int(a), s["label"], int(pc["line"]),
+                                   int(pc["piece"]),
+                                   float(pc.get("length_m") or 0.0)))
+                    continue
+                t0 = tr.t_draw0 + float(tr.t[m].min())
+                t1 = tr.t_draw0 + float(tr.t[m].max())
+                step = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+                cum = np.concatenate([[0.0], np.cumsum(step)])
+                L = float(cum[-1])
+                if L <= 0:
+                    continue
+                # THE RENDERED PIECE MUST BE THE PLANNED PIECE.  It starts at
+                # pts[0] and ends at pts[-1] by construction, so this catches
+                # a truncated polyline rather than a dropped end.  The residual
+                # it tolerates is discretisation, not a gap: `length_m` is the
+                # arc length of the DENSE IK-resampled path while `pts` is the
+                # coarser input polyline, so on a curved stroke the polyline
+                # cuts the chord and comes up ~0.7 % short.  That is a shortcut
+                # of a few tenths of a millimetre per vertex, invisible at any
+                # zoom this animation is viewed at, and NOT a missing segment.
+                want = float(pc.get("length_m") or L)
+                want_total += want
+                if want > 0 and L < min_frac * want:
+                    short.append((int(a), int(pc["line"]), int(pc["piece"]),
+                                  L, want))
+                planned[a] += L
+                u = cum / L
+                xyz = np.column_stack([pts, np.zeros(len(pts))])
+                for i in range(len(pts) - 1):
+                    out[a]["seg"].append(xyz[i:i + 2])
+                    out[a]["t"].append(t0 + float(u[i + 1]) * (t1 - t0))
+    assert not short, (
+        "rendered polyline shorter than the planned piece length "
+        f"(arm, line, piece, rendered, planned): {short[:5]}")
+    # ...and the global one, which is the claim that matters: the picture
+    # carries essentially all the planned line.  It is tighter than the
+    # per-piece bound because chord error averages out over 75 pieces.
+    got = sum(planned.values())
+    assert want_total <= 0 or got >= min_total * want_total, (
+        f"rendered ink {got:.3f} m is under {100 * min_total:g} % of the "
+        f"planned {want_total:.3f} m")
     for a in prog.arms:
-        tip = ch[a][:, 9, :]                      # chain point 9 is the pen tip
-        d = DOWN[a]
-        keep = d[:-1] & d[1:]
-        segs = np.stack([tip[:-1][keep], tip[1:][keep]], axis=1)
-        out[a] = segs
-    return out
+        seg = (np.asarray(out[a]["seg"], float) if out[a]["seg"]
+               else np.zeros((0, 2, 3)))
+        t = np.asarray(out[a]["t"], float)
+        order = np.argsort(t, kind="stable")
+        seg, t = seg[order], t[order]
+        step = (np.linalg.norm(seg[:, 1] - seg[:, 0], axis=1) if len(seg)
+                else np.zeros(0))
+        out[a] = dict(seg=seg, t=t, cum=np.cumsum(step))
+    return out, planned, orphan
 
 
 # ---------------------------------------------------------------------------
@@ -731,21 +810,22 @@ def sample_grid(prog, dt, stage=None):
     return t0 + dt * np.arange(n)
 
 
-def build_ink_frames(prog, Q, DOWN, times, h_inv):
-    """{arm: dict(seg=(M,2,3), frame=(M,))} — each segment and when it lands."""
-    ch = chains_for(prog, Q, h_inv)
+def build_ink_frames(prog, ts):
+    """{arm: dict(seg=(M,2,3), frame=(M,))} — each planned segment and the
+    frame it is revealed on."""
+    tracks, _, _ = ink_tracks(prog)
     out, total = {}, 0
     for a in prog.arms:
-        tip = ch[a][:, 9, :]
-        d = DOWN[a]
-        keep = np.nonzero(d[:-1] & d[1:])[0]
-        seg = np.stack([tip[keep], tip[keep + 1]], axis=1)
-        out[a] = dict(seg=seg, frame=keep + 1)
-        total += len(seg)
+        tr = tracks[a]
+        frame = np.clip(np.searchsorted(ts, tr["t"], "left"), 0,
+                        max(len(ts) - 1, 0))
+        out[a] = dict(seg=tr["seg"], frame=frame)
+        total += len(tr["seg"])
     if total > MAX_INK_SEGMENTS:                      # pragma: no cover
         step = int(np.ceil(total / MAX_INK_SEGMENTS))
         for a in prog.arms:
-            out[a] = dict(seg=out[a]["seg"][::step], frame=out[a]["frame"][::step])
+            out[a] = dict(seg=out[a]["seg"][::step],
+                          frame=out[a]["frame"][::step])
         total = sum(len(v["seg"]) for v in out.values())
     return out, total
 
@@ -756,7 +836,7 @@ def meshcat_run(prog, args, h_inv):
     dt = args.rate / args.fps
     ts = sample_grid(prog, dt, args.stage)
     Q, DOWN, LIVE, STAGE = prog.sample(ts)
-    segs, n_ink = build_ink_frames(prog, Q, DOWN, ts, h_inv)
+    segs, n_ink = build_ink_frames(prog, ts)
     scene.build_ink(segs)
     url = f"http://{args.hostname}:{args.port}/static/"
     print(f"meshcat scene: {url}   ({len(ts)} frames, dt = {dt:.3f} s of "
@@ -889,7 +969,8 @@ class _Panel:
         self.caps = capsule_table(ch[prog.arms[0]].shape[1])
         self.A = {a: cap_endpoints(ch[a], self.caps) for a in prog.arms}
         self.tips = {a: ch[a][:, 9, :] for a in prog.arms}
-        self.ink_acc = {a: [] for a in prog.arms}
+        self.ink, self.planned, _ = ink_tracks(prog)
+        self.planned_total = sum(self.planned.values())
 
         ax = fig.add_axes(rect)
         self.ax = ax
@@ -952,6 +1033,8 @@ class _Panel:
         done = ts[i] > self.t_end + 1e-9
         return (f"stage {s['label']}   t = {min(ts[i], self.t_end):6.1f} s"
                 + ("  DONE" if done else "")
+                + f"   ink {getattr(self, 'drawn', 0.0):5.2f}"
+                f"/{self.planned_total:.2f} m"
                 + f"   moving: {' '.join(mv) or '(barrier)'}"
                 f"   |  {holding}: {' '.join(pk) or '-'}")
 
@@ -969,10 +1052,19 @@ class _Panel:
             self.arm_lc[a].set_alpha(0.9 if live else PARKED_ALPHA)
             self.arm_lc[a].set_zorder(5 if live else 4)
             self.base_pt[a].set_mfc(col)
-            if i and self.DOWN[a][i] and self.DOWN[a][i - 1]:
-                p, q = self.tips[a][i - 1], self.tips[a][i]
-                self.ink_acc[a].append([(p[h], p[v]), (q[h], q[v])])
-                self.ink_lc[a].set_segments(self.ink_acc[a])
+        self.drawn = self.reveal_ink(self.ts[i])
+
+    def reveal_ink(self, t):
+        """Show every planned segment whose instant has passed. -> metres."""
+        h, v = self.ax_h, self.ax_v
+        drawn = 0.0
+        for a in self.prog.arms:
+            tr = self.ink[a]
+            n = int(np.searchsorted(tr["t"], t, "right"))
+            self.ink_lc[a].set_segments(tr["seg"][:n][:, :, [h, v]])
+            if n:
+                drawn += float(tr["cum"][n - 1])
+        return drawn
 
 
 def _grab(fig):
@@ -1008,10 +1100,12 @@ def render_gif(prog, args, h_inv, path, view="top"):
                          1 - (0.82 + 0.40) / fig_h],
                    prog, h_inv, view, ts, args, fig_w=fig_w)
 
+    # the banner now carries a running ink total as well, so it is long: size
+    # it to the figure rather than letting it run off both edges
     banner = fig.text(0.5, 1 - 0.30 / fig_h, "", ha="center", va="top",
-                      fontsize=11, family="monospace")
-    sub = fig.text(0.5, 1 - 0.60 / fig_h, "", ha="center", va="top",
-                   fontsize=8, color="#555", family="monospace")
+                      fontsize=8.5, family="monospace")
+    sub = fig.text(0.5, 1 - 0.58 / fig_h, "", ha="center", va="top",
+                   fontsize=7, color="#555", family="monospace")
 
     frames_out = []
     for i in range(len(ts)):
@@ -1022,6 +1116,9 @@ def render_gif(prog, args, h_inv, path, view="top"):
                      f"{s['actives']}"
                      f"{'  residue ' + str(s['residues']) if s['residues'] else ''}"
                      f"   makespan {prog.makespan:.1f} s   {args.gif_rate:g}x"
+                     + (f"   planned {panel.planned_total:.2f} m of "
+                        f"{args.ink_total:.2f} m in the drawing"
+                        if args.ink_total else "")
                      + ("   L = leader, F = follower" if prog.schema >= 2
                         else ""))
         frames_out.append(_grab(fig))
@@ -1156,6 +1253,9 @@ def main(argv=None):
     ap.add_argument("--gif-fps", type=float, default=15.0)
     ap.add_argument("--gif-rate", type=float, default=8.0)
     ap.add_argument("--gif-dpi", type=int, default=78)
+    ap.add_argument("--ink-total", type=float, default=16.80,
+                    help="metres of line in the WHOLE drawing, for the "
+                         "coverage line (0 to hide it)")
     ap.add_argument("--mp4", action="store_true")
     ap.add_argument("--analyse", "--analyze", dest="analyse",
                     action="store_true", help="re-measure the clearances")
@@ -1206,6 +1306,25 @@ def main(argv=None):
     dup = ink_twice(prog)
     print(f"  pieces planned twice: {len(dup)}"
           + (f"  {dup[:5]}" if dup else "  (none)"))
+    tracks, planned, orphan = ink_tracks(prog)
+    drawable = sum(planned.values())
+    claimed = sum(s["ink_m"] for s in prog.stages)
+    print(f"  ink: {drawable:.3f} m rendered from the planned polylines, "
+          f"{claimed:.3f} m claimed by the stages "
+          f"({100 * drawable / claimed:.1f} %), "
+          f"{sum(len(v['seg']) for v in tracks.values())} segments")
+    if orphan:
+        by_arm = {}
+        for arm_id, lab, _line, _pc, seg_m in orphan:
+            row = by_arm.setdefault((arm_id, lab), [0, 0.0])
+            row[0] += 1
+            row[1] += seg_m
+        print("  INK WITH NO PEN-DOWN TIME — listed with a length, but the "
+              "arm's timeline never marks the pen down, so there is no "
+              "instant to draw it at:")
+        for (arm_id, lab), (n_pc, tot_m) in sorted(by_arm.items()):
+            print(f"      arm {arm_id} stage {lab}: {n_pc} pieces, "
+                  f"{tot_m:.3f} m (not drawn)")
 
     if a.analyse:
         print("  clearances re-measured on the fleet clock "

@@ -267,6 +267,59 @@ def test_moving_means_moving_even_inside_a_conducted_trajectory():
     assert longest is not None and longest[1] == pytest.approx(10.0)
 
 
+def test_ink_spans_the_whole_planned_piece_not_a_sample_short_at_each_end():
+    """The renderer used to drop one sample interval at each end of a piece.
+
+    Ink came from consecutive frames where BOTH were pen-down, so a piece lost
+    its first and last interval — ~2 m of visible gaps over lf6b's 75 pieces.
+    Ink now comes from the piece's own polyline, timed by the stroke window.
+    """
+    park = [0.0] * 7
+    pts = [[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]]          # exactly 1.0 m
+    d = _arm(1, park, 10.0, role="leader", n=5)
+    d["trajectory"]["seg"] = [-1, 0, 0, 0, -1]          # draws in the middle
+    d["pieces"] = [dict(stage=0, arm=1, line=0, piece=0, order=0,
+                        flipped=False, home_before=False, length_m=1.0,
+                        q_first=park, q_last=park, hover_in=None,
+                        hover_out=None, pts=pts)]
+    doc = dict(schema=2, pattern="ink", n_stages=1, parks={"1": park},
+               pair_margin_m=0.05, makespan_s=10.0, ttfm_s=None, timing={},
+               barriers=[],
+               stages=[dict(stage=0, actives=[1], duration_s=10.0, n_pieces=1,
+                            ink_m=1.0, checks={}, roles={}, arms={"1": d})])
+    p = animate_staged.Programme(doc)
+    tracks, planned, orphan = animate_staged.ink_tracks(p)
+    assert not orphan
+    assert planned[1] == pytest.approx(1.0)             # the WHOLE piece
+    seg = tracks[1]["seg"]
+    assert np.allclose(seg[0][0][:2], pts[0])           # starts at the first
+    assert np.allclose(seg[-1][1][:2], pts[-1])         # ends at the last
+    assert tracks[1]["cum"][-1] == pytest.approx(1.0)
+    # revealed progressively across the stroke's own window, not all at once
+    assert tracks[1]["t"].min() > 0.0
+    assert tracks[1]["t"].max() <= 10.0 + 1e-9
+
+
+def test_ink_with_no_pen_down_time_is_reported_not_invented():
+    """lf6b's arm 31 claims 1.9 m in a stage it spends on an `aside` leg."""
+    park = [0.0] * 7
+    d = _arm(1, park, 10.0, role="conductor", n=5)
+    d["trajectory"]["seg"] = [-1, -1, -1, -1, -1]       # pen never down
+    d["pieces"] = [dict(stage=0, arm=1, line=3, piece=1, order=0,
+                        flipped=False, home_before=False, length_m=2.0,
+                        q_first=park, q_last=park, hover_in=None,
+                        hover_out=None, pts=[[0.0, 0.0], [2.0, 0.0]])]
+    doc = dict(schema=2, pattern="aside", n_stages=1, parks={"1": park},
+               pair_margin_m=0.05, makespan_s=10.0, ttfm_s=None, timing={},
+               barriers=[],
+               stages=[dict(stage=0, actives=[1], duration_s=10.0, n_pieces=1,
+                            ink_m=2.0, checks={}, roles={}, arms={"1": d})])
+    p = animate_staged.Programme(doc)
+    tracks, planned, orphan = animate_staged.ink_tracks(p)
+    assert planned[1] == 0.0 and len(tracks[1]["seg"]) == 0
+    assert orphan == [(1, "A", 3, 1, 2.0)]              # reported, not drawn
+
+
 def test_six_arms_two_stages_all_leaders_and_followers():
     """The lf2 shape: six arms, every one active in both stages."""
     park = {a: [0.05 * a] * 7 for a in range(1, 7)}
