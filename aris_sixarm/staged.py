@@ -2926,11 +2926,32 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
         pieces = list(buckets.get((s, int(a)), []))
         pre = None
         # THE PRE-POSITION, AND ONLY FOR A FOLLOWER WITH A ROOM TO GET OUT OF.
-        # The clear-out is planned with the LEADERS STILL PARKED -- which is
-        # when it happens -- so the room it is routed in is the entry fleet and
-        # no trajectory rooms at all; the tuck it flies to is then chosen in
-        # the room WITH the leaders' trajectories in it, because that is the
-        # room the follower has to stand in for the rest of the stage.
+        # THE CLEAR-OUT IS ROUTED IN THE SAME ROOM ITS DESTINATION IS CHOSEN IN,
+        # AND IT DID NOT USE TO BE.  The old argument was "the clear-out happens
+        # while the leaders are still parked", so it was routed with
+        # `rooms=None` -- the entry fleet and no trajectory rooms at all -- while
+        # the tuck POSE it flies to was chosen with the leaders' trajectories in
+        # the scene.  The path and its destination were held to two different
+        # rooms.
+        #
+        # THAT IS A CLAIM ABOUT TIME INSIDE A CHECK THAT MAKES NONE.  The
+        # clear-out is spliced into the timeline four lines below precisely so
+        # that `active_pair_gap` sees it, and `active_pair_gap`'s claim is the
+        # minimum over the CROSS PRODUCT of two arms' pose sets -- for every
+        # pair of instants, one on each timeline -- because inside a stage the
+        # actives are asynchronous by construction.  "It happens first" is not
+        # a defence against a claim quantified over all pairs.
+        #
+        # Measured on `bench/scatter` stage 1 (2026-09-15): follower arm 2's
+        # clear-out leaves its entry pose at +63.3 mm against leader 97's
+        # realised room, dips to **-53.1 mm** 0.7 s later, and is back over
+        # +190 mm by t = 3.4 s.  The stage read **-53.13 mm** and failed; the
+        # offending pair of poses is 7.00 s apart on the two clocks and
+        # time-aligned the two arms are +169.5 mm apart.  Every ink gate was
+        # clear at +130 mm, because both pens are up.
+        #
+        # A clear-out that cannot be routed in the room comes back `None`, the
+        # arm stays where it is, and the stage goes on: refused, never flown.
         if role == "follower" and fixed and pieces and tuck:
             freeze_stage(int(a), start, None, fl, pens, h_inv,
                          leg_cache, leg_cache_root)
@@ -2940,8 +2961,6 @@ def _lf_stage(s, actives, roles, buckets, fl, pens, parks, h_inv, opts,
             q_t, info = tuck_pose(fl[int(a)], pieces, q_pre, h_inv,
                                   pens.get(int(a)))
             if q_t is not None and info["moved"]:
-                freeze_stage(int(a), start, None, fl, pens, h_inv,
-                             leg_cache, leg_cache_root)
                 pre = clear_out(fl[int(a)], q_pre, q_t, h_inv, pens.get(int(a)))
                 if pre is not None and float(pre["duration"]) <= TUCK_MAX_S:
                     start[int(a)] = np.asarray(q_t, float).reshape(7)

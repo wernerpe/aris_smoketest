@@ -104,3 +104,71 @@ def test_room_only_clearance_is_chain_clearance_without_the_partners(rig):
         staged.thaw()
     assert d == pytest.approx(b)            # the metal never moved
     assert float(c.min()) <= float(d.min()) + 1e-12   # partners only subtract
+
+
+# ---------------------------------------------------------------------------
+# THE CLEAR-OUT IS ROUTED IN THE ROOM ITS DESTINATION IS CHOSEN IN
+# ---------------------------------------------------------------------------
+def test_the_clear_out_is_routed_in_the_leaders_room(rig, monkeypatch):
+    """"IT HAPPENS FIRST" IS NOT A DEFENCE AGAINST A CROSS-PRODUCT CLAIM.
+
+    `_lf_stage` used to route a follower's clear-out with `rooms=None` -- the
+    entry fleet and no trajectory rooms at all -- while choosing the tuck POSE
+    it flies to WITH the leaders' trajectories in the scene, on the argument
+    that the clear-out happens while the leaders are still parked.  But the
+    clear-out is spliced into the timeline precisely so `active_pair_gap` sees
+    it, and that check's claim is the minimum over the CROSS PRODUCT of two
+    arms' pose sets, because inside a stage the actives are asynchronous by
+    construction.
+
+    Measured on `bench/scatter` stage 1: follower arm 2's clear-out left its
+    entry pose at +63.3 mm against leader 97's realised room, dipped to
+    -53.1 mm 0.7 s later and was back over +190 mm by t = 3.4 s; the stage read
+    **-53.13 mm** and failed.  Routed in the leaders' room the clear-out is
+    refused, the arm stays put, and the stage reads **+57.3 mm** and passes.
+
+    This pins the ROOM the clear-out is routed in, which is the fix.
+    """
+    seen = []
+    real_freeze = staged.freeze_stage
+
+    def spy(arm, poses, rooms, *a, **kw):
+        seen.append(None if rooms is None else tuple(sorted(rooms)))
+        return real_freeze(arm, poses, rooms, *a, **kw)
+
+    real_clear = staged.clear_out
+    calls = []
+
+    def clear_spy(*a, **kw):
+        calls.append(tuple(seen))          # the room in force AT THE CALL
+        return None                        # refuse: the arm stays put
+
+    monkeypatch.setattr(staged, "freeze_stage", spy)
+    monkeypatch.setattr(staged, "clear_out", clear_spy)
+    monkeypatch.setattr(staged, "tuck_pose",
+                        lambda *a, **kw: (np.asarray(a[2], float).reshape(7)
+                                          + 0.01,
+                                          dict(moved=True, park_mm=1.0, kept=1,
+                                               tried=1, need_mm=73.0,
+                                               best_mm=99.0)))
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    pcs = [staged.Piece(stage=0, arm=31, line=0, k=0,
+                        pts=np.array([[0.7, 1.7], [0.8, 1.7]]), length_m=0.1)]
+    staged._lf_stage(
+        0, (71, 31), {71: "leader", 31: "follower"},
+        {(0, 71): list(pcs), (0, 31): list(pcs)}, rig, pens, dict(parks),
+        staged.H_INV_DEFAULT, None, False, None, None, 0.05,
+        staged.ENVELOPE_CLUSTER, staged.PAIR_MARGIN, 4, writing_park(),
+        True, False, 0, staged.SPLIT_MIN_M, 0.0)
+    assert calls, "the clear-out was never reached"
+    # the freeze immediately before `clear_out` must carry the leader's room
+    last = calls[0][-1]
+    assert last is not None and 71 in last, (
+        f"the clear-out was routed with rooms={last!r}; it must see the "
+        "leaders' trajectories")
+
+
+def writing_park():
+    from aris_sixarm import writing as _w
+    return _w.PARK_FREEZE
