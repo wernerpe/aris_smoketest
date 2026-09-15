@@ -40,9 +40,14 @@ import numpy as np
 from aris_sixarm import staged as S
 from aris_sixarm import traces as T
 
-DS = 0.002          # m, the grid the logo is tested on
-TOL = 0.0025        # m, how near a drawn polyline a point must be to be INK
-MIN_GAP = 0.001     # m, below which a gap is sampling dust
+# THE MEASUREMENT ITSELF LIVES IN `staged`, because `staged.run` ASSERTS it.
+# Two implementations of "what is on the paper" is exactly one too many: this
+# script is the programme-file front end and the reason chain, and the geometry
+# is the module's.
+DS = S.INK_DS           # m, the grid the logo is tested on
+TOL = S.INK_TOL         # m, how near a drawn polyline a point must be to be INK
+MIN_GAP = S.INK_MIN_GAP  # m, below which a gap is sampling dust
+residual = S.residual_of
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +56,9 @@ MIN_GAP = 0.001     # m, below which a gap is sampling dust
 def drawn_pieces(doc: dict) -> tuple[dict, list]:
     """Every piece with PEN-DOWN SAMPLES, and the whole listed inventory.
 
-    -> ({line: [pts]}, [piece records]).  A record carries `flown`, which is
-    the only thing that decides whether its ink is on the paper.
+    -> ({line: [pts]}, [piece records]).  `staged.flown_ink` is the same
+    question asked of a live `StagedResult`; this asks it of a programme JSON,
+    which is what a run that has already shipped leaves behind.
     """
     ink: dict[int, list] = {}
     listed: list[dict] = []
@@ -71,53 +77,6 @@ def drawn_pieces(doc: dict) -> tuple[dict, list]:
                     ink.setdefault(int(pc["line"]), []).append(
                         np.asarray(pc["pts"], float).reshape(-1, 2))
     return ink, listed
-
-
-def _resample(p: np.ndarray, ds: float = 0.5 * DS) -> np.ndarray:
-    c = T.cumlen(p)
-    L = float(c[-1])
-    if L <= 0 or len(p) < 2:
-        return np.asarray(p, float).reshape(-1, 2)
-    return T.points_at(p, c, np.clip(np.arange(0.0, L + ds, ds), 0.0, L))
-
-
-def residual(lines, ink: dict, ds: float = DS, tol: float = TOL,
-             min_gap: float = MIN_GAP) -> tuple[list, float, float]:
-    """The logo minus the ink. -> ([gap], total_m, inked_m).
-
-    A gap is (line, s0, s1, length_m).  The test is per line -- a piece knows
-    which line it came from -- so ink lying across a neighbouring line can
-    never be read as covering it.
-    """
-    from scipy.spatial import cKDTree
-    gaps, total, missing = [], 0.0, 0.0
-    for li, l in enumerate(lines):
-        cum = T.cumlen(l)
-        L = float(cum[-1])
-        total += L
-        s = np.arange(0.0, L, ds) + 0.5 * ds
-        if len(s) == 0:
-            continue
-        P = T.points_at(l, cum, s)
-        if li not in ink:
-            cover = np.zeros(len(s), bool)
-        else:
-            Q = np.vstack([_resample(p) for p in ink[li]])
-            cover = cKDTree(Q).query(P)[0] <= tol
-        missing += float((~cover).sum()) * ds
-        i = 0
-        while i < len(s):
-            if cover[i]:
-                i += 1
-                continue
-            j = i
-            while j + 1 < len(s) and not cover[j + 1]:
-                j += 1
-            a0, a1 = max(0.0, s[i] - 0.5 * ds), min(L, s[j] + 0.5 * ds)
-            if a1 - a0 > min_gap:
-                gaps.append((int(li), float(a0), float(a1), float(a1 - a0)))
-            i = j + 1
-    return gaps, float(total), float(total - missing)
 
 
 # ---------------------------------------------------------------------------
