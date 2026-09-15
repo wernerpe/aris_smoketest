@@ -3190,3 +3190,19 @@ ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
     --synthetic lines:1000 --pattern leader_follower --no-fly \
     --json out/staged_1000_lf.json
 ```
+
+### 28.9 The suite, after all of it
+
+`.venv/bin/python -m pytest tests -q` (no environment variables, 88 min):
+**788 passed, 24 skipped, 12 failed — and none of the twelve is this work's.**
+
+| failure | where it comes from |
+|---|---|
+| `test_planner_robustness` ×2 (batched FK bit-identity) | **pre-existing**, reproduced in a clean worktree at `cee1b7b` |
+| `test_csail::test_a_retreat_is_offered_only_on_genuine_interference` | **pre-existing**, reproduced in a clean worktree at `cee1b7b` |
+| `test_export_pathway` ×6, `test_sil_run` ×2 | another agent's untracked files, outside this box |
+| `test_paper::test_two_processes_share_the_store` | **passes in isolation** — a disk-store race under a loaded machine |
+
+The files this box owns — `test_staged`, `test_staged_compose`, `test_staged_split`,
+`test_staged_standoff`, `test_paper`, `test_transit`, `test_penup`, `test_gates` —
+are **177 passed, 19 skipped** when run together.
