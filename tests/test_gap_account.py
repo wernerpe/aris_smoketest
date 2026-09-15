@@ -188,3 +188,21 @@ def test_every_gap_carries_one_of_the_declared_reason_codes():
     assert len(acc["gap_list"]) == 1
     assert acc["gap_list"][0]["reason"] in staged.GAP_REASONS
     assert acc["flown_m"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_all_ok_is_false_over_ink_the_timeline_never_draws_without_a_picture():
+    """THE GUARD MAY NOT DEPEND ON HAVING THE LINES.
+
+    `staged.run_conducted` re-runs one stage off a programme and never sees the
+    input polylines, so it has no coverage account -- and `lf7c_s150` shipped
+    2.520 m listed and never drawn while reporting `all_ok: true`, because the
+    guard read the account instead of the stages.
+    """
+    lines = [_line(0.0, 1.0, 0.0), _line(0.0, 1.0, 1.0)]
+    st = _arm_stage(0, 31, [(0, 0, lines[0]), (1, 0, lines[1])], {0})
+    res = staged.StagedResult("toy", [staged.StageResult(0, (31,), {31: st})], [])
+    assert res.coverage == {}                    # no picture, no account
+    assert staged.listed_not_flown_m(res) == pytest.approx(1.0, abs=1e-6)
+    d = staged.summary(res)
+    assert d["listed_not_flown_m"] == pytest.approx(1.0, abs=1e-4)
+    assert d["all_ok"] is False

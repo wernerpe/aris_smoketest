@@ -4349,6 +4349,19 @@ def flown_ink(res: "StagedResult") -> tuple[dict, list]:
     return ink, listed
 
 
+def listed_not_flown_m(res: "StagedResult") -> float:
+    """Metres a stage LISTED and whose bucket never drew them. -> m.
+
+    NEEDS NO PICTURE, so it is askable of every path -- including
+    `run_conducted`, which has no `lines` and therefore no coverage account.
+    That matters because it is the guard on `all_ok`, and a stage-C-only re-run
+    that shipped 2.520 m of listed-and-never-drawn ink reported `all_ok: true`
+    when the guard was keyed on the account instead (measured on
+    `lf7c_s150`, 2026-09-15).
+    """
+    return float(sum(p["m"] for p in flown_ink(res)[1] if not p["flown"]))
+
+
 def _ink_resample(p: np.ndarray, ds: float = 0.5 * INK_DS) -> np.ndarray:
     c = traces_mod.cumlen(p)
     L = float(c[-1])
@@ -4604,7 +4617,7 @@ def summary(res: StagedResult) -> dict:
                 gaps_m=res.coverage.get("gaps_m"),
                 gap_list=res.coverage.get("gap_list"),
                 gap_by_reason=res.coverage.get("by_reason"),
-                listed_not_flown_m=res.coverage.get("listed_not_flown_m"),
+                listed_not_flown_m=round(listed_not_flown_m(res), 4),
                 dp_coverage=res.summary_dp.get("covered_frac"),
                 dp_drawn_m=res.summary_dp.get("drawn_m"),
                 ink_m=res.summary_dp.get("ink_m"),
@@ -4637,8 +4650,7 @@ def summary(res: StagedResult) -> dict:
                 # and never flown; a stage whose bucket does not fly is not a
                 # stage that passed, whatever its clearances read.
                 all_ok=bool(all(s.ok for s in res.stages)
-                            and float(res.coverage.get("listed_not_flown_m",
-                                                       0.0)) <= 1e-9),
+                            and listed_not_flown_m(res) <= 1e-9),
                 stages_ok=bool(all(s.ok for s in res.stages)))
 
 
