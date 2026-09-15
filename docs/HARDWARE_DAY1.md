@@ -493,38 +493,51 @@ Measured on `unknown_h0970_home`, arm 71's clock displaced against arm 31's:
 | +5 s | 100.50 mm | PASS |
 | +10 s | 155.56 mm | PASS |
 
-**`certified_window_s` = 0.** Symmetrically, nothing is certified: −0.5 s
-already fails, so no |Δt| above zero survives. **On that number alone, rung D
-is cancelled.**
+**`certified_window_s` = 0 symmetrically.** −0.5 s already fails, so no |Δt|
+above zero survives in both directions at once. But the failure is strongly
+one-sided, and a 41-point sweep of the LATE side at 0.25 s steps
+(`out/unknown_h0970_home_timing_dense.json`) shows the structure:
 
-But the shape of the failure is the useful part, and it is strongly one-sided:
+| Δt band | min inter-arm over the band | |
+|---|---|---|
+| any negative | −24 mm down to −119 mm | **COLLISION** |
+| 0 → +0.75 s | 58.8 – 88.9 mm | PASS |
+| **+1.00, +1.25 s** | **48.0, 35.8 mm** | **FAIL — the notch** |
+| +1.50 s | 50.98 mm (+0.98 mm) | PASS, but marginal |
+| **+1.75 → +10 s** | **61 – 156 mm**, every one of 34 points | **PASS** |
 
-> **ARM 71 MUST NEVER START EARLY.** Arm 31 is priority 1 and draws first; arm
-> 71's own schedule already contains **14.5 s of conducted pause** before it
-> moves. Start arm 71 early and it walks into arm 31 while arm 31 is still
-> drawing — **−119 mm at −10 s is not a near miss, it is a collision.** Start it
-> late and arm 31 has already gone home, and everything from +2 s outwards
-> clears by 100–155 mm.
+> **ARM 71 MUST NEVER START EARLY. THIS IS THE SAFETY RULE OF THE DAY.** Arm 31
+> is priority 1 and draws first; arm 71's own schedule already contains
+> **14.5 s of conducted pause** before it moves. Start arm 71 early and it
+> walks into arm 31 while arm 31 is still drawing — **−119 mm at −10 s is not a
+> near miss, it is a collision.**
 >
-> The one blemish on the late side is a **notch at +1.0 s that fails by 2 mm**.
-> `out/unknown_h0970_home_timing_dense.json` sweeps 0 → +10 s at 0.25 s steps
-> to say exactly how wide that notch is. **Read it before running rung D**, and
-> if the notch is not narrow and isolated, do not run rung D at all.
+> **And "a second later" is exactly the wrong instruction.** The notch at
+> +1.00/+1.25 s is real, it bottoms at **35.8 mm**, and one second is precisely
+> the delay a person would pick by instinct. Two seconds is safe; one is not.
 
 **The decision rule for the day.** Rung D is permitted *only* if all of:
-1. the dense sweep shows a contiguous passing band, and you start arm 71
-   inside it (start arm 31 first, watch it finish its first stroke, then start
-   arm 71);
+
+1. **arm 31 is started first and is visibly drawing before arm 71 is started**,
+   with at least **2 s** between the two starts — not one — and ideally more,
+   since everything from +1.75 s to +10 s clears by 61 mm or better;
 2. somebody is on the e-stop watching the middle of the paper specifically;
 3. rung C has already run cleanly.
 
 Otherwise **rung C is the deliverable and rung D is skipped.** Pete's criterion
-is already met by rung C; the concurrent run buys a prettier demonstration and
-costs the only collision risk of the day.
+is already met by rung C; the concurrent run buys a livelier demonstration and
+carries the only collision risk of the day.
 
-That zero is itself the measurement `ARCHITECTURE_V2` §5 Q3 asks for: it says
-the cross-process fleet clock has to be built before six arms can ever run a
-piece like this concurrently.
+> **What the grid does not prove.** It is a grid. The band from +1.75 s to
+> +10 s passed at all 34 sampled points, but clearance is not monotone in the
+> skew — the notch is the proof — so a narrower notch between two samples
+> cannot be ruled out, and nothing beyond +10 s was tested. Re-run with
+> `--dense` or a finer `--shifts` list if this number has to carry more weight
+> than "start it late, and by more than a second".
+
+The symmetric zero is itself the measurement `ARCHITECTURE_V2` §5 Q3 asks for:
+it says the cross-process fleet clock has to be built before six arms can ever
+run a piece like this concurrently **without a stated start order**.
 
 **Log:** the realised inter-arm clearance against the certified one, and the
 skew actually achieved between the two starts (timestamp both, to the second).
@@ -705,9 +718,19 @@ powered attempt.
 4. Touchdowns on arm 31, or knowingly skip and accept §4.1 as the safety net.
 5. **Hover pass, per arm, then both.** Measure the tip height. **30 ± 5 mm or stop.**
 6. One stroke per arm on scrap, then on paper. 2 mm of plan.
-7. **The word, alternating.** This is the deliverable.
-8. Timing certificate → **only then** the word, concurrent, if the window allows.
+7. **The word, alternating** — `out/unknown_h0970_home_alt.npz`, 106 s,
+   155.56 mm of clearance. **This is the deliverable.**
+8. The word, concurrent — only with **arm 31 started first and arm 71 at least
+   2 s later, never earlier, never at 1 s.**
 9. One person on the e-stop, all day, doing nothing else.
+
+**The three numbers to carry in your head:**
+
+| | |
+|---|---|
+| **58.83 mm** | how close the two arms come, concurrent, on one clock |
+| **155.56 mm** | how close they come alternating — the safe run |
+| **2 s** | the minimum delay before starting arm 71. One second collides. |
 
 **Abort rule, every rung: the physical e-stop.** The software gate brakes at
 2 rad/s² and the watchdog latches at 20 mrad, and the driver's own notes say
