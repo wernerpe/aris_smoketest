@@ -2875,9 +2875,10 @@ programme.
 | ink drawn | 16.8 m | — | 16.07 m | 16.057 m (95.6 %) | 16.064 m (95.6 %) |
 | A + B share of the ink | — | — | 22.8 % | **58.3 %** | 47.2 % |
 | A + B makespan | — | — | 119.9 s | **211.9 s** | 193.9 s |
-| time to first motion | — | — | 0.196 s | **0.174 s** | 0.178 s |
-| planning wall (sum / busiest arm) | — | — | 1 980 / 1 102 s | 2 286 / 1 066 s | 2 361 / 1 137 s |
-| check | — | — | 49.7 s | 49.7 s | 49.7 s |
+| time to first motion | — | — | 0.196 s | **0.174 s** | 0.198 s |
+| planning wall (sum / busiest stage-arm) | — | — | 1 980 / 1 102 s | 2 286 / 805 s (arm 31, stage B) | 3 203 / 799 s (arm 31, stage B) |
+| check | — | — | 49.7 s | 49.7 s | 40.8 s |
+| stage-C cost per metre (motion) | — | — | 17.6 s/m | **17.4 s/m** | 20.4 s/m |
 | fleet pen-up | — | — | — | **138.5 s** (5.6 % flip, 48.5 % tall, 45.9 % honest) | **150.4 s** (2.7 % flip, 44.9 % tall, 52.3 % honest) |
 
 **STAGE A AND STAGE B ARE THE WIN, AND THEY ARE REAL.** The whole bag now draws
