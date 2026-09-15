@@ -1,0 +1,514 @@
+# Hardware day 1 — two arms write the word "unknown"
+
+**2026-09-16.  Three hours.  Arms 31 and 71 only.**
+
+Pete's success criterion, verbatim:
+
+> have them write the word unknown starting from underneath the one arm and
+> then to the other arm so we can see how the two arms interact. and test our
+> redundancy resolution planner on the real thing.
+
+Written 2026-09-15, the day before. **Nothing in this document has been run on
+a robot.** Every number in it is measured off a file in this repository or is
+explicitly marked as the thing a step exists to measure. It is the day-1
+instance of `docs/HARDWARE_LADDER.md`: rung 0 (survey), rung 1 (touchdown),
+rung 2 (one arm one stroke), rung 4 (two arms) — rungs 3 and 5 are not in
+today's box.
+
+---
+
+## 0. What the word is, and why it is where it is
+
+`scripts/text_strokes.py` writes `out/unknown_strokes.json`: the word
+"unknown" as **13 single-line Hershey strokes, 2.592 m of ink**, x-height
+120 mm, the 'k' reaching 180 mm, baseline at **y = 1.8153** — which is the
+middle row's own line, the line both arms stand on, and the seam plane
+(`mounts.SEAM_Y = 1815.32 mm`). The ink runs **x = 0.350 → 1.450 m**, so:
+
+| | x | why |
+|---|---|---|
+| first mark | 0.350 | 0.247 m outboard (west) of arm 31's J1 axis at 0.5967 |
+| arm 31 | 0.5967 | under the 'n' |
+| **hand-over** | **≈ 0.90** | the middle of the contested band — the point of the exercise |
+| arm 71 | 1.2067 | under the second 'w' |
+| last mark | 1.450 | 0.243 m outboard (east) of arm 71 |
+
+The word starts under one arm and finishes under the other, and the hand-over
+falls between them. That is Pete's sentence, turned into two numbers.
+
+Look at **`out/unknown_strokes.png`** before anything else. It is two panels:
+the whole 1.8034 × 3.63064 m sheet, and the contested middle with both J1 axes
+and both 0.855 m reach circles drawn on it.
+
+The letters are **centrelines, not outlines** — the pen path IS the glyph.
+That is what a single-stroke font is for and it is why an ordinary font was not
+used (§6 of `scripts/text_strokes.py`'s own docstring has the argument).
+
+**Re-cutting the word takes one second and no re-plan of anything else:**
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/text_strokes.py unknown \
+    --height 0.12 --x0 0.35 --x1 1.45 --y 1.8153 \
+    --out out/unknown_strokes.json --png out/unknown_strokes.png
+```
+
+`--height` is the **x-height** (how tall 'u', 'n', 'o', 'w' come out; the 'k'
+is 1.5× that). Every re-cut must be followed by a re-plan (§3) — the strokes
+file is an input to the conductor, not an output of it.
+
+---
+
+## 1. Prerequisites — before anything is powered
+
+Order matters: each step's output is the next step's input. Steps 1–3 are
+`docs/HARDWARE_LADDER.md` §3 verbatim, narrowed to two arms.
+
+### 1.1 Which height? — **ask Pete first, and do it first**
+
+The whole day forks here. `layout.LAYOUT_PROPOSED["h"] = 0.970` is what
+everything in `out/` was planned at; the steel **may be at 0.850**. Both are
+prepared (§3), but they are *different files* and running the wrong one puts
+the pen 120 mm into or above the paper.
+
+**Measure it, do not accept it.** The number wanted is the **underside of the
+mounting plate** above the **paper surface**, per arm, to ±3 mm.
+
+### 1.2 Survey the two bases
+
+`docs/BUILD_SHEET.md` §0 datum: origin at the marked paper corner, z = 0 at the
+**paper surface**. Per arm, the **joint-1 axis** x and y (to the base bolt
+circle centre, *not* a plate edge), the underside of the mounting plate z, and
+the base yaw. Plus the paper height at the four corners of the drawable area.
+
+```
+python3 scripts/asbuilt_layout.py --template > out/survey_20260916.json
+# fill in ONLY the 31 and 71 entries; delete the other four
+python3 scripts/asbuilt_layout.py --survey out/survey_20260916.json --check
+python3 scripts/asbuilt_layout.py --survey out/survey_20260916.json \
+        --out out/asbuilt_20260916.json
+```
+
+`asbuilt_layout.py` already accepts a **subset** of arms — its `build_asbuilt`
+loops over `survey["arms"]` and never cross-checks against six — so a two-arm
+survey is a legal survey and reports coplanarity and deviation over the two
+arms present.
+
+**Passes when** both arms are within ±10 mm of the build sheet in xy and z, the
+two plates are coplanar within 3 mm, and each yaw is within 1°.
+
+**Report every deviation. Do not re-centre one arm to hide the other's.**
+
+> **What to do when it fails.** A deviation that survives re-measurement is a
+> re-plan, not a shrug: §3's commands take `--h`, and per-arm z/yaw go through
+> `asbuilt_layout.load_asbuilt`. Note the standing caveat from the packaging
+> audit: `load_asbuilt` has **no consumer** — `draw.py` and `csail_schedule.py`
+> do not accept an as-built fleet. So an as-built survey today is a **report**
+> that tells you whether to re-plan at another `--h`, not a fleet you can hand
+> the conductor. If the survey disagrees with the nominal by more than the
+> ±10 mm bar, say so out loud and re-plan at the surveyed height; do not
+> hand-edit a fleet.
+
+### 1.3 Read back the gripper width, per pen
+
+The GUI commands **0.0432 m at 70 N** (`franka_control_gui.py::_PEN_GRASP_WIDTH`).
+libfranka only calls a grasp successful **above `width − epsilon_inner`**, so
+the number it reports back is a **lower bound on the real jaw gap** — and that
+bound is what rules the holder build in or out (`docs/SYSTEM_MODEL.md` §7).
+Record it in the survey's `gripper` block. It is the **only measurement** of
+the tool assembly that exists; everything else about the pen is CAD and a
+photograph.
+
+### 1.4 Touchdown the pen tip — or knowingly skip it
+
+**The shipped tip is a reading of a photograph.** `PEN_LAT_HOLDER = 0.0860369`
+and `PEN_EXT_HOLDER = 0.0460262` are USER-SPECIFIED, from a picture and the
+sentence *"it only juts out 3–4 cm max"*. The only measured tip in the whole
+project is the legacy inline pen's `PEN_EXT = 0.110` (arm 31, 2026-07-12).
+
+```
+python3 scripts/touchdown_calibrate.py --self-test
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/touchdown_calibrate.py \
+        out/touchdown_arm31.json --json out/touchdown_arm31_fit.json
+```
+
+6–8 contacts on one arm, **at different tool yaws and leans**, spread across
+its reach; log the **joint vector at contact** and the paper height there. Use
+`operator_impedance_helpers/jog_descend.py` (compliant descent at 0.003 m/s) or
+`probe_surface.sh`. The pen is 86 mm *across* the hand, so a single touchdown
+cannot separate lateral from axial — the script refuses a fit whose design
+matrix does not span (`cond(A) > 20`) rather than reporting three digits of
+noise.
+
+**Read the fit's verdict on the paper-chain gate before doing anything else
+with it.** A tip deeper than 0.0460262 eats the programme's thinnest margin
+first, and `touchdown_calibrate.py` prints exactly that and exits non-zero.
+
+**If the box will not hold a touchdown:** skip it, and then **the hover pass
+(§4.1) is not optional and the first pen-down is a single stroke on scrap.**
+An un-measured tip is exactly the error the hover pass exists to catch before
+it becomes force.
+
+### 1.5 Collision profile — write down which one is in force
+
+| | thresholds |
+|---|---|
+| installation operator, after a MoveIt launch | 40/40/36/36/32/28/24 Nm, 50/50/60/30/30/30 N |
+| `fr3drivers` default `sensitive` | 20/20/20/20/10/10/10 Nm + 20 N |
+
+The driver's default is **half** the installation's. Which one is in force is
+the difference between "the pen touched down" and "the arm crashed". Record it
+per arm, in the survey.
+
+### 1.6 Which stack
+
+Today's exports feed two, and they answer two different questions:
+
+| | file | what it proves |
+|---|---|---|
+| **B. Cartesian impedance** (`impedance_pathway_exec.py`, 50 Hz, k_z = 1500 N/m) | the pathway CSV of §5.1 | that the ink lands where the plan says, with a compliant pen |
+| **D. `fr3drivers`** (libfranka 1 kHz, `position_velocity_accel`) | the joint bundle of §5.2 | **the redundancy resolution** — D is the only stack that takes JOINT input and therefore the only one that does not throw the planner's answer away and re-solve it |
+
+Pete's second sentence — *"test our redundancy resolution planner on the real
+thing"* — is a statement about **D**, or about B **with the q1..q7 columns
+used as the nullspace reference**. B alone, ignoring those columns, re-solves
+the redundancy itself and tests nothing of ours.
+
+**Arm 71 has no IP and never has had one.** `backends.INSTALLATION_IPS[71] is
+None`; `franka_control_gui.py::LIVE_ARM_IDS` is `{13, 31, 17, 97, 2}` — five
+arms, not including 71. `Fr3BundleBackend.preflight` **refuses** a programme
+containing an arm it has no IP for, which is how this surfaces at a desk rather
+than at launch. **This is a prerequisite, not a footnote: arm 71 needs an IP
+before it can be driven by stack D at all.**
+
+### 1.7 The e-stop
+
+**The physical e-stop is the abort path.** The software gate brakes at
+2 rad/s² and the watchdog latches at 20 mrad, and `fr3drivers/STATUS.md` says
+in as many words that **neither of those is the abort**. The GUI's
+`emergency_stop()` is a software pause plus a kill. One person's only job, all
+day, is the button.
+
+---
+
+## 2. What the planner produced, and what each file is for
+
+All under `out/`. `<H>` is `h0970` or `h0850`.
+
+| file | what it is |
+|---|---|
+| `unknown_strokes.json` / `.png` | the word on the paper, and the picture of it |
+| `unknown_<H>_schedule.npz` + `_program.json` | the **concurrent** certified programme |
+| `unknown_<H>_recheck.json` | the independent whole-timeline `scene_check` verdict |
+| `unknown_<H>_hover_schedule.npz` | the **hover pass** (§4.1) |
+| `unknown_<H>_alt.npz` | the **alternating** programme (§4.3) |
+| `unknown_<H>_timing.json` | the **timing-tolerance certificate** (§4.4) |
+| `pathways/unknown_<H>_arm{31,71}.csv` | the impedance-stack pathway CSV, with q1..q7 |
+| `bundles/unknown_<H>_arm{31,71}.npz` | the `fr3drivers` joint bundle, re-timed |
+| `unknown_<H>_retime.json` | peak accel before/after, and the fleet rate |
+
+---
+
+## 3. The re-plan commands — the only thing to run if a measurement moves
+
+Everything below is `scripts/draw.py`, the **proven conductor path**: it is the
+path v19 took to draw the CSAIL logo at 100 % coverage. The one thing that is
+new is that its `source` may now be a stroke **case file** (`.json`), which
+skips the tracer *and the placement search* so the word stays exactly where it
+was put. Nothing else in the pipeline changed.
+
+**At the nominal height (h = 0.970):**
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/draw.py \
+    out/unknown_strokes.json --out unknown_h0970 --arms 31,71 \
+    --atlas out/atlas_proposed_h0970_lat0860 --tilt-max-deg 15 \
+    --min-len 0.02 --fps 48 --substeps 1 --subcheck 2 --program --no-anim
+```
+
+**At 0.850, if that is what the steel measures:**
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/replan_at_height.py \
+    --h 0.850 --atlas out/atlas_proposed_h0850_lat0860 \
+    --parks out/park_search_h0850_lat0860.json -- \
+    out/unknown_strokes.json --out unknown_h0850 --arms 31,71 \
+    --tilt-max-deg 15 --min-len 0.02 --fps 48 --substeps 1 --subcheck 2 \
+    --program --no-anim
+```
+
+Three things about these commands are deliberate and must not be "tidied":
+
+- **`--arms 31,71` restricts the ALLOCATION, not the scene.** The other four
+  arms stay in the model as parked metal. That is correct and it is measured:
+  for arms 31 and 71 the nearest box belonging to an absent arm is **1.003 m**
+  away, and the six-arm and two-arm static sets certify identical cells over
+  150 sampled cells each. Planning against six therefore costs nothing here and
+  keeps every published number comparable.
+- **`--substeps 1` with `--fps 48`** keeps the conductor's own 1/48 s
+  coordination clock while making the npz **un-decimated**. A strided npz is
+  what `Fr3BundleBackend.preflight` refuses and what `from_schedule` warns about
+  on every load: `scene_check` graded the full-rate path, so shipping the
+  decimated one ships a certificate for a file you are not flying.
+- **`--tilt-max-deg 15`** is what v19 used. Changing it changes the atlas the
+  run is entitled to read.
+
+---
+
+## 4. The run ladder — in this order, and no skipping
+
+Each rung: **what runs / what to log / passes when / abort rule.**
+The abort rule is the same for every rung and is stated once: **the physical
+e-stop.** Nothing below overrides it.
+
+### 4.1 Rung A — the hover pass, per arm, then both
+
+**The first thing to run, and it never touches the paper.**
+
+**What it is, and why it is a different file.** The hover programme is the same
+word planned with the arms **30 mm closer to the paper** (h = 0.940 against the
+0.970 rig; h = 0.820 against 0.850). Flown on the rig as built, the pen tip
+therefore rides **30 mm above** the paper everywhere. This is not the drawing
+programme with a flag set — it is a separately conducted, separately certified
+programme, because a trajectory whose pen is somewhere else is a different
+trajectory and `scene_check` has to say so.
+
+```
+# rehearse it in meshcat first, at quarter speed, one arm at a time
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 -m aris_sixarm.execute \
+    out/unknown_h0970_hover_schedule.npz out/unknown_h0970_hover_program.json \
+    --check --play --solo 31 --rate 0.25
+# ...then on the robot, through the stack chosen in §1.6
+```
+
+**Log:** joint tracking error per arm against the **20 mrad** latching watchdog
+(`--fr3_tracking_fault_rad = 0.020`, 3 ticks); the **joint-5 static offset**
+(the 2026-09-10 lab run measured ~**9 mrad** under position control, with
+tracking peaks of 8–12 mrad, on an arrival bar of 15–20 mrad — if joint 5 is
+quiet today, say so, because that would be new); and the **measured tip height
+above the paper** at three points along the word.
+
+**Passes when** both arms complete with no reflex, no tracking fault, no gate
+rejection, and the measured tip height is 30 ± 5 mm everywhere.
+
+> **If the tip height is not 30 mm, STOP and do not draw.** The discrepancy is
+> the tool transform, the mounting height, or the paper plane, and you now have
+> a number for it: a tip 8 mm low means either the plate is 8 mm lower than
+> surveyed or `PEN_EXT_HOLDER` is 8 mm long. Re-plan at the height that makes
+> it 30 mm and run the hover pass again. **This is the whole reason the hover
+> pass is first.**
+
+### 4.2 Rung B — one stroke per arm, on paper
+
+The smallest thing that makes ink. Use `--solo`, one arm, one stroke — the
+word's first stroke for arm 31, its last for arm 71 — and **on scrap taped over
+the real sheet** the first time.
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 -m aris_sixarm.execute \
+    out/unknown_h0970_schedule.npz out/unknown_h0970_program.json \
+    --solo 31 --check
+```
+
+> **`--solo` prints a frozen set and says it is not certified.**
+> `FleetProgram.solo()` returns the mover's track **and the poses the other
+> arms must be frozen at**, with `recheck_required = True`, because the
+> conducted timeline was certified with both arms MOVING. A frozen fleet is a
+> different scene. The re-check is `scripts/recheck_timeline.py` against the
+> serialised file of §4.3, which is a scene of exactly that shape — so **run
+> §4.3's re-check before §4.2, and read its verdict as §4.2's certificate.**
+
+**Log:** pen-down tip position against plan; the drawn line against the planned
+one, sampled at three points, against `validate.TIP_TOL` = **2 mm**; contact
+force or the absence of a reflex; the collision profile in force.
+
+**Passes when** the ink is on the paper, within 2 mm of plan, with no reflex.
+
+> **Joint position control is stiff.** A 1 mm height error becomes pen force
+> with nothing to absorb it — the installation's own answer to this is stack
+> B's Cartesian impedance (k_z = 1500 N/m), which stack D does not have.
+> Whether a position-controlled pen draws acceptably is **unmeasured**, and
+> this rung is where it gets measured. If the line is a scratch or a skip,
+> switch to stack B for the drawing rungs and keep D for the joint reference.
+
+### 4.3 Rung C — the word, ALTERNATING
+
+**This is the run that satisfies Pete's criterion, and it is the safe one.**
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/serialise_timeline.py \
+    out/unknown_h0970_schedule.npz --out out/unknown_h0970_alt.npz \
+    --order 31,71 --recheck --json out/unknown_h0970_alt_recheck.json
+```
+
+Two blocks. Arm 31 flies its whole track while arm 71 stands at the pose it was
+conducted to start from; then arm 71 flies its whole track while arm 31 stands
+at the pose it finished at. **The two arms are never both in motion.**
+
+The seam between the blocks has **no step in either arm** — 31 holds exactly
+the pose it ended on, 71 starts from exactly the pose it was held at — so there
+is no `Barrier.reposition` to supervise. That matters: `HARDWARE_LADDER` §2.4
+measured v18 stepping **0.0320 rad** at a barrier and calls it *uncertified
+motion into a stiff controller*. This file has none.
+
+**Why alternating is first.** The inter-arm certificate is a statement about
+two arms at the same instant on **one clock**, and there is no cross-process
+fleet clock (`ARCHITECTURE_V2` §5 Q3: the biggest structural gap in the
+ladder). With only one arm ever moving, the certificate does not depend on a
+clock at all, and a human can witness the hand-over.
+
+**Log:** the hand-over — where arm 31 stops and where arm 71 starts, and the
+realised gap between the pens at that moment; the joined letters across
+x ≈ 0.90 (is the 'k'/'n' junction continuous?); total ink against plan;
+makespan against the file.
+
+**Passes when** the word is legible, both hand-overs happened where the plan
+says, and no pair got closer than the re-check's certified minimum minus the
+calibration allowance.
+
+### 4.4 Rung D — the word, CONCURRENT — **only if the certificate allows**
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/timing_tolerance.py \
+    out/unknown_h0970_schedule.npz --shift-arm 71 \
+    --json out/unknown_h0970_timing.json
+```
+
+This re-checks the pair with arm 71's clock displaced by
+Δt ∈ {0, ±0.5, ±1, ±2, ±5, ±10 s} and reports `certified_window_s` — the
+largest |Δt| at which **every** tested shift of that magnitude or smaller still
+holds every gate.
+
+> **Read the number this way.** Two executors started by two hands are skewed
+> by however long it takes a person to press the second button — call it one to
+> three seconds, and more if one arm's `goto` to its start pose is slower than
+> the other's. **If `certified_window_s` is smaller than the skew you can
+> actually achieve, do not run rung D.** The alternating run already satisfies
+> the success criterion; the concurrent run is the bonus, and it is the one
+> that can put two arms in the same place at the same time.
+>
+> **If it is zero, rung D is cancelled.** That is a result, not a failure: it
+> is the measurement `ARCHITECTURE_V2` §5 Q3 asks for, and it says the fleet
+> clock has to be built before six arms can ever run this piece.
+
+**Log:** the realised inter-arm clearance against the certified one, and the
+skew actually achieved between the two starts (timestamp both).
+
+**Passes when** both arms complete, the realised clearance is above the
+certified minimum minus the calibration allowance, and the measured skew stayed
+inside the certified window the whole run.
+
+---
+
+## 5. The two export formats, and what each one carries
+
+### 5.1 The pathway CSV — for the impedance stack (B)
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 -m aris_sixarm.export.pathway \
+    --schedule out/unknown_h0970_schedule.npz \
+    --program  out/unknown_h0970_program.json \
+    --rig proposed --tool lateral --arms 31 71 \
+    --out out/pathways --name unknown_h0970
+```
+
+Columns, one file per arm:
+
+```
+stroke_idx,wp_idx,kind,x_m,y_m,z_m,qx,qy,qz,qw,intensity,q1..q7
+```
+
+- **Frame: the arm's own `fr3_link0`**, metres. The exporter never applies a
+  transform — the row poses come from `frames.fk(q)`, which already IS the base
+  frame. `T_world_base` is recorded in the manifest, not in the rows.
+- **Pose = the EE frame the robot is configured with** (`setEE`, the nominal
+  pen tip). Quaternion order in the file is `qx, qy, qz, qw` — **scalar last**.
+- `kind ∈ {travel, draw, lift}`. **The transits are in the file and they have
+  to be**: the planner RECONFIGURES the arm inside its pen-up transits (measured
+  on v18: 4.39 rad on joint 3 between two strokes), and a straight-line hover
+  travel cannot flip a wrist. A CSV of draw rows only is **not executable**.
+- `intensity` ∈ [0, 1] is **TONE**, the only channel by which the artwork
+  controls pressure. The production band is 0.7–1.0 N over 9 levels — one tone
+  step ≈ **0.04 N**. Today's export is a single constant intensity: the word is
+  one weight of line.
+- **`q1..q7` are on every row.** This is the file that answers *"test our
+  redundancy resolution on the real thing"*: it is the controller's nullspace
+  reference, the planner's own choice of arm configuration, carried alongside
+  the Cartesian pose rather than thrown away and re-solved.
+
+> **The baked `z_m` is advisory.** The executor overrides it with the live
+> measured plane and adds press along the pen axis. Say this out loud to
+> whoever runs it, because a CSV that looks like it commands a height does not.
+
+### 5.2 The joint bundle — for `fr3drivers` (D)
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/retime_bundle.py \
+    out/unknown_h0970_schedule.npz out/unknown_h0970_program.json \
+    --out out/bundles --tag unknown_h0970 --hz 1000 \
+    --json out/unknown_h0970_retime.json
+```
+
+**The acceleration problem, and exactly how far this closes it.** The gate is
+`--fr3_max_joint_acceleration = 10.0` rad/s², which the driver's own flags call
+*"the single most dangerous field"*. `pacing.py` bounds joint **velocity and
+nothing else** and says so: *"the v profile here is a ceiling, not a
+trajectory"*. The shipped six-arm programme demands 33–37 rad/s².
+
+`retime_bundle.py` applies a **time scaling and nothing else**. Scaling the
+clock by 1/s multiplies every sampled speed by s and every sampled acceleration
+by s², so the smallest admissible s is closed-form, not a search, and the
+duration grows by exactly 1/s. **Every control point is untouched**, which is
+the bundle format's own argument for why the collision certificate survives.
+
+> **What this does NOT fix, said plainly.** The path is piecewise linear in
+> joint space, so at a corner the TRUE acceleration is impulsive however slowly
+> it is flown. What the scaling bounds is the acceleration **the driver
+> measures between the samples it is sent**, which is what the gate tests. A
+> genuinely C1 path needs a blend or a real TOPP pass — a *planning* change
+> this script deliberately does not make. `--max-slowdown` refuses to call a
+> bundle flyable if the factor is absurd, and names the file
+> `..._NOT_FLYABLE.npz` so it cannot be picked up by accident.
+>
+> **One rate for the whole fleet.** The script reports a single `FLEET RATE` =
+> the slowest arm's. Re-timing one arm and not the other moves them against
+> each other at instants nobody certified — `execute.Governor`'s entire
+> argument, and the reason it is one scalar.
+
+The bundle is **degree 1** — exactly the chords `scene_check` graded, bit for
+bit, which is honest and which also means **discontinuous velocity at every
+knot**. Preflight with `fr3drivers/tools/fr3_sender.py --dry-run` and
+`tools/preflight.py` (three verdicts: CHAIN / ROBOT FIT / SCENE) before any
+powered attempt.
+
+---
+
+## 6. Every assumption in today's files, and what to do when it is wrong
+
+| # | assumption | where it lives | how you find out | what to do |
+|---|---|---|---|---|
+| 1 | **mounting height h = 0.970** | `layout.LAYOUT_PROPOSED["h"]` | §1.1/§1.2 survey; and the hover pass reads 30 mm | re-plan: §3's 0.850 command, or `replan_at_height.py --h <measured>` with the atlas and parks for that height |
+| 2 | **the pen tip** `PEN_EXT_HOLDER = 0.0460262`, `PEN_LAT_HOLDER = 0.0860369` | `frames.py` | §1.4 touchdown; the hover pass's measured height | **re-plan everything.** The tip is inside `atlas.is_current`'s model signature, so a moved tip stales every sweep in `out/` |
+| 3 | **the paper plane is flat and at z = 0** | the datum | four-corner probe in §1.2; the executor's own plane fit | the impedance stack measures the plane itself and overrides `z_m`; the joint bundle does **not** — a tilted plane is a reason to prefer stack B today |
+| 4 | **the seam bars are where `SEAM_BARS_MM` says** — x = −0.1905..−0.1143 and 1.9177..1.9939 m, y = 1.8153 ± 0.0762, z = −0.027..1.624 | `mounts.py` | eyes and a tape | they are the ROOM, not an arm, and they sit on this pair's own row. The word (x 0.35..1.45) clears them by >0.5 m, but a *park* or a *transit* may not — the 2026-09-14 re-search moved arm 31's park for exactly this reason |
+| 5 | **the other four arms are absent but modelled as parked metal** | `--arms 31,71` | — | measured harmless here: nearest absent-arm box is 1.003 m away, identical certification over 150 sampled cells. **Leave it alone.** |
+| 6 | **CSV frame = `fr3_link0`, quaternion `qx,qy,qz,qw` scalar-last, no yaw fudge** | `export/pathway.py` | the exporter's own FK-vs-pose gate on every row; `test_export_pathway.py` reproduces the deployed generator's `(1,0,0,0)` for a floor arm pen-down | if the operator's executor disagrees, **do not patch the exporter** — compare against the deployed generator's own output for the same arm first |
+| 7 | **arm 71 has an IP** | `backends.INSTALLATION_IPS[71] is None` | preflight refuses | §1.6. This is a networking job, not a planning one, and it blocks stack D for arm 71 entirely |
+| 8 | **park poses certify at the running height** | `layout.Q_PARK_PROPOSED` (searched at 0.970) | `scene_check`'s frozen-pose gate in the re-check | the 0.940 grid applied at 0.850 lands **−126 mm inside another arm's ink**. Never carry a park set across a height — use that height's own `park_search_*.json` |
+
+---
+
+## 7. The one-page card for the day
+
+1. **Ask Pete the height.** Everything forks there.
+2. Survey both bases → `asbuilt_layout.py --check`. Report deviations.
+3. Gripper width read-back, per pen. Collision profile, per arm. Write both down.
+4. Touchdowns on arm 31, or knowingly skip and accept §4.1 as the safety net.
+5. **Hover pass, per arm, then both.** Measure the tip height. **30 ± 5 mm or stop.**
+6. One stroke per arm on scrap, then on paper. 2 mm of plan.
+7. **The word, alternating.** This is the deliverable.
+8. Timing certificate → **only then** the word, concurrent, if the window allows.
+9. One person on the e-stop, all day, doing nothing else.
+
+**Abort rule, every rung: the physical e-stop.** The software gate brakes at
+2 rad/s² and the watchdog latches at 20 mrad, and the driver's own notes say
+neither of those is the abort path.

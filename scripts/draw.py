@@ -281,7 +281,12 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_args(ap)
     schedule_args(ap)
-    ap.add_argument("source", help="a raster (png/jpg/gif/...) or an .svg")
+    ap.add_argument("source",
+                    help="a raster (png/jpg/gif/...), an .svg, or a stroke "
+                         "CASE FILE (.json, from scripts/text_strokes.py) "
+                         "whose polylines are already in metres on the paper "
+                         "-- that one skips both the tracer and the placement "
+                         "search and draws the ink where the file puts it")
     ap.add_argument("--out", default=None,
                     help="output BASENAME under --outdir (default: the source "
                          "file's stem)")
@@ -368,42 +373,78 @@ def main(argv=None):
     t_all = time.time()
 
     # ---- 1. trace ------------------------------------------------------
-    t0 = time.time()
-    n_inks = None if str(a.inks).lower() in ("auto", "", "none") else int(a.inks)
-    with progress.stage("trace", source=str(a.source), inks=str(a.inks),
-                        work_px=int(a.work_px)) as _tend:
-        px, dbg = trace.trace_any(
-            a.source, n_inks=n_inks, work_px=a.work_px, rdp_tol=a.rdp,
-            min_px=a.min_px, fill_erode=a.fill_erode, fill_frac=a.fill_frac,
-            bridge=not a.no_bridge)
-        if px:
-            _tend.update(n_strokes=len(px),
-                         inks_found=list(dbg.get("names") or []),
-                         n_fill=sum(1 for s in px if s["kind"] == "fill"),
-                         n_outline=sum(1 for s in px
-                                       if s["kind"] == "outline"))
-    if not px:
-        raise SystemExit(f"{a.source}: nothing traced — is it blank, or is the "
-                         "background not what --work-px sees at the border?")
-    palette = artwork.palette_of(dbg)
-    a.palette = palette
-    names = list(dbg.get("names") or [])
-    print(f"traced {len(px)} strokes from {a.source} in {time.time() - t0:.1f} s")
-    print(f"  {len(names)} ink(s): " + ", ".join(
-        f"{nm} {palette[nm]}"
-        + (f" (fill-erode {dbg['per_ink'][nm]['fill_erode']}, line half-width "
-           f"{dbg['per_ink'][nm].get('halfwidth', 0) or 0:.1f} px)"
-           if nm in dbg.get("per_ink", {}) else "") for nm in names))
-    per_kind = {}
-    for s in px:
-        per_kind[s["kind"]] = per_kind.get(s["kind"], 0) + 1
-    print(f"  {per_kind.get('outline', 0)} centreline + {per_kind.get('fill', 0)} "
-          f"boundary strokes, {sum(trace.plen(s['pts']) for s in px):.0f} px of path")
-    trace_png(px, dbg, P("_trace.png"), a.name, a.source)
-    progress.artifact("trace_png", P("_trace.png"), stage="trace")
-    print(f"  wrote {P('_trace.png')}  <- LOOK AT THIS")
-    if a.trace_only:
-        return dict(px=px, dbg=dbg)
+    # ...OR DON'T.  A `.json` source is a stroke CASE FILE
+    # (`scripts/text_strokes.py`): polylines already in METRES on the paper,
+    # carrying the `(target_width, offset, rotate)` triple at which
+    # `trace.to_sheet` is the identity on them.  There is nothing to trace and
+    # nothing to PLACE — the whole point of such a file is that the ink is at a
+    # chosen place, and a placement search would move it.  Everything
+    # downstream is untouched: the allocator, the conductor and `scene_check`
+    # see exactly the pixel stroke set they would have seen from a picture.
+    case = str(a.source).lower().endswith(".json")
+    if case:
+        from text_strokes import load_case
+        c = load_case(a.source)
+        px, palette = c["px"], c["palette"]
+        a.palette = palette
+        a.name = a.title or c["name"]
+        a.placement, a.rotate = "off", str(c["rotate_deg"])
+        a.target_width, a.offset = c["target_width"], list(c["offset"])
+        short = min(trace.plen(s["pts"]) for s in px)
+        print(f"read {len(px)} single-line strokes from the case file "
+              f"{a.source}: "
+              + ", ".join(f"{k} {v}" for k, v in palette.items()))
+        print(f"  placement FIXED, not searched — target-width "
+              f"{a.target_width:.4f} m, offset ({a.offset[0]:+.4f}, "
+              f"{a.offset[1]:+.4f}), rotate {float(a.rotate):.0f} deg: the "
+              "triple at which to_sheet reproduces the file exactly")
+        if short < a.min_len:
+            raise SystemExit(
+                f"the shortest stroke is {1000 * short:.1f} mm and --min-len "
+                f"is {1000 * a.min_len:.1f} mm, so to_sheet would DROP it and "
+                f"the word would come out misspelt.  Pass --min-len "
+                f"{0.9 * short:.3f} or lower.")
+    else:
+        t0 = time.time()
+        n_inks = (None if str(a.inks).lower() in ("auto", "", "none")
+                  else int(a.inks))
+        with progress.stage("trace", source=str(a.source), inks=str(a.inks),
+                            work_px=int(a.work_px)) as _tend:
+            px, dbg = trace.trace_any(
+                a.source, n_inks=n_inks, work_px=a.work_px, rdp_tol=a.rdp,
+                min_px=a.min_px, fill_erode=a.fill_erode,
+                fill_frac=a.fill_frac, bridge=not a.no_bridge)
+            if px:
+                _tend.update(n_strokes=len(px),
+                             inks_found=list(dbg.get("names") or []),
+                             n_fill=sum(1 for s in px if s["kind"] == "fill"),
+                             n_outline=sum(1 for s in px
+                                           if s["kind"] == "outline"))
+        if not px:
+            raise SystemExit(f"{a.source}: nothing traced — is it blank, or is "
+                             "the background not what --work-px sees at the "
+                             "border?")
+        palette = artwork.palette_of(dbg)
+        a.palette = palette
+        names = list(dbg.get("names") or [])
+        print(f"traced {len(px)} strokes from {a.source} in "
+              f"{time.time() - t0:.1f} s")
+        print(f"  {len(names)} ink(s): " + ", ".join(
+            f"{nm} {palette[nm]}"
+            + (f" (fill-erode {dbg['per_ink'][nm]['fill_erode']}, line "
+               f"half-width {dbg['per_ink'][nm].get('halfwidth', 0) or 0:.1f} px)"
+               if nm in dbg.get("per_ink", {}) else "") for nm in names))
+        per_kind = {}
+        for s in px:
+            per_kind[s["kind"]] = per_kind.get(s["kind"], 0) + 1
+        print(f"  {per_kind.get('outline', 0)} centreline + "
+              f"{per_kind.get('fill', 0)} boundary strokes, "
+              f"{sum(trace.plen(s['pts']) for s in px):.0f} px of path")
+        trace_png(px, dbg, P("_trace.png"), a.name, a.source)
+        progress.artifact("trace_png", P("_trace.png"), stage="trace")
+        print(f"  wrote {P('_trace.png')}  <- LOOK AT THIS")
+        if a.trace_only:
+            return dict(px=px, dbg=dbg)
 
     # ---- 2. placement --------------------------------------------------
     arms = allocate.active_arms(_arms(a.arms))
