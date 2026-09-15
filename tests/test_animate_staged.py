@@ -25,7 +25,10 @@ def _arm(arm, park, dur, residue=False, priority=0, n=5, hold=None,
     end = start if hold is None else np.asarray(hold, float)
     t = np.linspace(0.0, dur, n)
     q = np.repeat(start[None, :], n, axis=0)
-    q[1:-1, 0] += 0.5                       # it moves...
+    # a smooth bump, NOT a plateau: the renderer's motion gate calls a
+    # constant stretch "holding" (rightly), so a fixture with one would be
+    # testing the gate rather than the clock
+    q[:, 0] = start[0] + 0.5 * np.sin(np.pi * np.arange(n) / (n - 1))
     q[-1] = end                             # ...and stops wherever it stops
     seg = np.array([-1] + [0] * (n - 2) + [-1])
     extra = {}
@@ -205,6 +208,63 @@ def test_sampling_past_the_makespan_freezes_rather_than_wrapping():
         assert np.allclose(Q[1][k], hold_b), ts[k]
     assert not LIVE[1][1:].any() and not DOWN[1][1:].any()
     assert (STAGE[1:] == p.n_stages - 1).all()         # pinned to the last
+
+
+def test_a_conducted_stage_does_not_re_serialise_its_residue_arms():
+    """A conducted stage is ALREADY one merged clock.
+
+    Every arm carries a trajectory spanning the whole stage with its waits
+    baked in, so `duration_s` is the stage itself and `residue` is a record of
+    how the bucket was won, not an instruction to append it.  Appending would
+    treble the stage and trip the duration assert.
+    """
+    park = {a: [0.05 * a] * 7 for a in range(1, 4)}
+    arms = {}
+    for a in range(1, 4):
+        d = _arm(a, park[a], 30.0, residue=(a > 1), priority=a,
+                 role="conductor")
+        d["conducted"] = True
+        arms[str(a)] = d
+    doc = dict(schema=2, pattern="conducted-test", n_stages=1,
+               parks={str(a): park[a] for a in range(1, 4)},
+               pair_margin_m=0.05, makespan_s=30.0, ttfm_s=None, timing={},
+               barriers=[],
+               stages=[dict(stage=0, actives=[1, 2, 3], duration_s=30.0,
+                            n_pieces=3, ink_m=1.0, checks={}, roles={},
+                            conducted=True, arms=arms)])
+    p = animate_staged.Programme(doc)
+    assert p.makespan == pytest.approx(30.0)
+    assert p.stages[0]["conducted"] is True
+    assert p.stages[0]["residues"] == []          # NOT appended
+    for a in range(1, 4):
+        assert p.stages[0]["tracks"][a].t_start == 0.0
+
+
+def test_moving_means_moving_even_inside_a_conducted_trajectory():
+    """An arm waiting its turn inside its own trajectory is HOLDING."""
+    park = [0.0] * 7
+    d = _arm(1, park, 10.0, role="conductor", n=5)
+    d["conducted"] = True
+    # a trajectory that sits still for its whole second half
+    t = [0.0, 2.5, 5.0, 7.5, 10.0]
+    q = [list(park), [0.5] + [0.0] * 6, [1.0] + [0.0] * 6,
+         [1.0] + [0.0] * 6, [1.0] + [0.0] * 6]
+    d["trajectory"] = dict(t=t, q=q, seg=[-1, 0, 0, -1, -1])
+    d["q_hold"] = [1.0] + [0.0] * 6
+    doc = dict(schema=2, pattern="c", n_stages=1, parks={"1": park},
+               pair_margin_m=0.05, makespan_s=10.0, ttfm_s=None, timing={},
+               barriers=[],
+               stages=[dict(stage=0, actives=[1], duration_s=10.0, n_pieces=1,
+                            ink_m=1.0, checks={}, roles={}, conducted=True,
+                            arms={"1": d})])
+    p = animate_staged.Programme(doc)
+    ts = np.linspace(0.0, 10.0, 21)
+    _, _, LIVE, _ = p.sample(ts)
+    assert LIVE[1][:10].all()                    # climbing: moving
+    assert not LIVE[1][12:].any()                # parked at 1.0 rad: holding
+    mv, idle, longest = p.idle(dt=0.1)[1]
+    assert mv == pytest.approx(5.0, abs=0.3)     # only the first half counts
+    assert longest is not None and longest[1] == pytest.approx(10.0)
 
 
 def test_six_arms_two_stages_all_leaders_and_followers():

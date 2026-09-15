@@ -40,6 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 GREY = (0.62, 0.62, 0.63)          # a parked arm
 PARKED_ALPHA = 0.55
 INK_CHUNK = 4                      # ink segments revealed as one meshcat object
+MOVE_EPS = 1e-5                    # rad between frames below which an arm is
+                                   # standing still, however its stage labels it
 MAX_INK_SEGMENTS = 5000            # hard cap; the sampler decimates to meet it
 
 
@@ -83,6 +85,8 @@ class ArmTrack:
         self.q_tuck = None if qt is None else np.asarray(qt, float).reshape(7)
         self.clear_out = float(d.get("clear_out_s") or 0.0)
         self.role = str(d.get("role") or "active")
+        self.hold_kind = (d.get("hold_kind") or "") or None
+        self.conducted = bool(d.get("conducted"))
         self.residue = bool(d["residue"])
         self.priority = d.get("priority")
         self.duration = float(d["duration_s"])
@@ -170,17 +174,25 @@ class Programme:
         t = 0.0
         for s in doc["stages"]:
             tracks, conc = {}, 0.0
+            # A CONDUCTED STAGE HAS ALREADY BEEN SERIALISED, ON ONE CLOCK.
+            # The conductor merges every arm onto a single timeline of the
+            # stage's full length with the waits baked in — so each arm's
+            # `duration_s` IS the stage, and `residue` is a record of how the
+            # bucket was won, not an instruction to append it again.  Honouring
+            # it here would triple the stage and break the duration assert.
+            conducted = bool(s.get("conducted"))
             for a, d in s["arms"].items():
-                if not d["residue"]:
+                if conducted or not d["residue"]:
                     conc = max(conc, float(d.get("clear_out_s") or 0.0)
                                + float(d["duration_s"]))
             cursor = conc
             # residues are serialised in the order the planner ranked them
-            res = sorted((a for a, d in s["arms"].items() if d["residue"]),
-                         key=lambda a: (s["arms"][a]["priority"] is None,
-                                        s["arms"][a]["priority"]))
+            res = ([] if conducted else
+                   sorted((a for a, d in s["arms"].items() if d["residue"]),
+                          key=lambda a: (s["arms"][a]["priority"] is None,
+                                         s["arms"][a]["priority"])))
             for a, d in s["arms"].items():
-                if not d["residue"]:
+                if conducted or not d["residue"]:
                     tracks[int(a)] = ArmTrack(a, d, t)
             for a in res:
                 d = s["arms"][a]
@@ -201,7 +213,7 @@ class Programme:
                 concurrent=conc, n_pieces=int(s["n_pieces"]),
                 ink_m=float(s["ink_m"]), checks=s.get("checks", {}),
                 roles=roles, deferred_m=float(s.get("deferred_m") or 0.0),
-                tracks=tracks, raw=s))
+                conducted=conducted, tracks=tracks, raw=s))
             t += cursor
         assert abs(t - self.makespan) < 1e-6, (t, self.makespan)
         self._check_hold_chain()
@@ -268,6 +280,18 @@ class Programme:
                 LIVE[a][idx] = mv
                 cur = tr.q_hold
             Q[a][ts > self.makespan + 1e-9] = cur
+            # ...AND "MOVING" MUST MEAN MOVING.  In a CONDUCTED stage every arm
+            # carries a trajectory spanning the whole stage and WAITS inside it
+            # while another row flies, so having a trajectory proves nothing.
+            # An arm the viewer sees standing still is holding, and the banner
+            # has to say so, so the window is intersected with actual motion
+            # between the frames the viewer is shown.
+            if n > 1:
+                step = np.abs(np.diff(Q[a], axis=0)).max(axis=1)
+                stir = np.empty(n, bool)
+                stir[:-1] = step > MOVE_EPS
+                stir[-1] = stir[-2]
+                LIVE[a] &= stir
         return Q, DOWN, LIVE, self.stage_at(ts)
 
     def roles_at(self, k):
@@ -287,29 +311,31 @@ class Programme:
                 per_arm={a: tr for a, tr in sorted(s["tracks"].items())}))
         return rows
 
-    def idle(self):
+    def idle(self, dt=0.1):
         """{arm: (moving_s, idle_s, [longest idle window])} over the makespan.
 
-        "Idle" is the honest word for a held barrier: the arm is powered, at a
-        hover pose, and drawing nothing.
+        MEASURED FROM THE MOTION, not from who owns a trajectory.  In a
+        conducted stage all six arms own one that spans the whole stage and
+        spend most of it waiting their turn, so counting trajectory ownership
+        would report a fleet that is never idle and is mostly standing still.
         """
+        ts = np.arange(0.0, self.makespan + dt * 0.5, dt)
+        _, _, LIVE, _ = self.sample(ts)
         out = {}
         for a in self.arms:
-            spans = []
-            for s in self.stages:
-                tr = s["tracks"].get(a)
-                if tr is not None and (tr.has_traj or tr.clear_out > 0):
-                    spans.append((tr.t_start, tr.t_end))
-            spans.sort()
-            mv = sum(b - x for x, b in spans)
-            gaps, prev = [], 0.0
-            for x, b in spans:
-                if x - prev > 1e-9:
-                    gaps.append((prev, x))
-                prev = max(prev, b)
-            if self.makespan - prev > 1e-9:
-                gaps.append((prev, self.makespan))
-            longest = max(gaps, key=lambda g: g[1] - g[0], default=None)
+            mv = float(LIVE[a].sum()) * dt
+            still = ~LIVE[a]
+            longest, run0 = None, None
+            best = 0.0
+            for i, s in enumerate(still):
+                if s and run0 is None:
+                    run0 = i
+                elif not s and run0 is not None:
+                    if (i - run0) * dt > best:
+                        best, longest = (i - run0) * dt, (ts[run0], ts[i])
+                    run0 = None
+            if run0 is not None and (len(still) - run0) * dt > best:
+                longest = (ts[run0], self.makespan)
             out[a] = (mv, self.makespan - mv, longest)
         return out
 
@@ -1149,8 +1175,10 @@ def main(argv=None):
     print("  fleet clock (stage: [t0, t1) s  actives / residue):")
     for r in prog.table():
         rs = f"  residue {r['residues']}" if r["residues"] else ""
+        cd = ("  CONDUCTED (one merged clock; the arms take turns inside it)"
+              if prog.stages[r["stage"]]["conducted"] else "")
         print(f"    stage {r['label']}: [{r['t0']:7.2f}, {r['t1']:7.2f})  "
-              f"{r['duration']:6.2f} s  actives {r['actives']}{rs}")
+              f"{r['duration']:6.2f} s  actives {r['actives']}{rs}{cd}")
         for arm, tr in r["per_arm"].items():
             hold = float(np.abs(tr.q_hold - tr.q_start).max())
             print(f"        arm {arm:>3} {tr.role:<9}"
@@ -1160,6 +1188,7 @@ def main(argv=None):
                   + ("   (no trajectory: holds all stage)"
                      if not tr.has_traj else
                      f"   -> holds a pose {hold:.2f} rad from where it started")
+                  + (f" [{tr.hold_kind}]" if tr.hold_kind else "")
                   + ("   RESIDUE" if tr.residue else "")
                   + (f"   deferred {len(tr.deferred)}" if tr.deferred else ""))
     if prog.schema >= 2:
