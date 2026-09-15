@@ -86,17 +86,32 @@ def main(argv=None):
     # holder corner.  So the tip is row 9 and the arm is rows 0..8, measured
     # here rather than assumed: `frames.tip_pos` agrees with row 9 to 0.0 m.
     n_fk = 9
-    tips = {x: chains[x][:, n_fk] for x in movers}
     has_corner = {x: chains[x].shape[1] > n_fk + 1 for x in movers}
     down = {x: SEG[x][idx] >= 0 for x in movers}
 
-    ink = []
-    for k in range(len(idx)):
-        for x in movers:
-            if down[x][k]:
-                ink.append((tips[x][k, 0], tips[x][k, 1], x, k))
-    ink = np.array([(p[0], p[1], p[2], p[3]) for p in ink]) if ink \
-        else np.zeros((0, 4))
+    # THE INK IS SAMPLED AT FULL RATE, NOT AT THE GIF'S RATE.  The skeleton
+    # only has to be drawn once per GIF frame, but the LINE the pen laid is the
+    # whole point of the picture, and sampling it every 13th frame draws the
+    # word as a dotted line that a person then has to decide whether to
+    # believe.  `frames.tip_pos` is one matrix multiply per sample -- far
+    # cheaper than the full chain -- so every frame's tip is affordable.
+    from aris_sixarm.frames import tip_pos
+    ink_xy, ink_arm, ink_k = [], [], []
+    for x in movers:
+        Twb = FLEET[x].T_world_base(h_inv)
+        dn = np.flatnonzero(SEG[x] >= 0)
+        if not len(dn):
+            continue
+        P = np.stack([tip_pos(Q[x][i], pens[x]) for i in dn])
+        P = P @ Twb[:3, :3].T + Twb[:3, 3]
+        ink_xy.append(P[:, :2])
+        ink_arm.append(np.full(len(dn), x, float))
+        ink_k.append(dn.astype(float))
+    if ink_xy:
+        ink = np.column_stack([np.vstack(ink_xy), np.concatenate(ink_arm),
+                               np.concatenate(ink_k)])
+    else:
+        ink = np.zeros((0, 4))
 
     fig, ax = plt.subplots(figsize=(9.0, 4.2), dpi=130)
     ax.add_patch(plt.Rectangle((0, 0), SHEET[0], SHEET[1], fc="#fbfaf7",
@@ -123,7 +138,7 @@ def main(argv=None):
                         ms=3.0, alpha=0.85, zorder=4)[0] for x in movers}
     pens_ln = {x: ax.plot([], [], "-", color=ARM_COLORS.get(x, "#333"), lw=3.2,
                           alpha=0.95, zorder=5)[0] for x in movers}
-    laid = {x: ax.plot([], [], ".", color=ARM_COLORS.get(x, "#333"), ms=2.2,
+    laid = {x: ax.plot([], [], ".", color=ARM_COLORS.get(x, "#333"), ms=1.3,
                        zorder=3)[0] for x in movers}
     title = ax.set_title("", fontsize=9)
 
@@ -136,7 +151,7 @@ def main(argv=None):
             rows = ([n_fk - 1, n_fk + 1, n_fk] if has_corner[x]
                     else [n_fk - 1, n_fk])
             pens_ln[x].set_data(C[rows, 0], C[rows, 1])
-            m = (ink[:, 2] == x) & (ink[:, 3] <= k) if len(ink) else None
+            m = (ink[:, 2] == x) & (ink[:, 3] <= idx[k]) if len(ink) else None
             if m is not None:
                 laid[x].set_data(ink[m, 0], ink[m, 1])
         pen = ", ".join(f"{x} {'DOWN' if down[x][k] else 'up  '}"

@@ -192,19 +192,58 @@ day, is the button.
 
 ## 2. What the planner produced, and what each file is for
 
-All under `out/`. `<H>` is `h0970` or `h0850`.
+**THE PROGRAMME TO FLY IS `unknown_h0970_home`.** Everything below is under
+`out/`, all of it conducted and certified on 2026-09-15.
+
+### 2.1 The one that matters
+
+`unknown_h0970_home` — the word at the nominal height, **both arms returning
+to their parks at the end**. Measured:
+
+| | |
+|---|---|
+| coverage | **100.0000 %** — 2.5922 m traced, 2.5922 m drawn, 0 spans empty |
+| strokes | 13, none cut, none handed between arms |
+| arm 31 | 7 segments, 1.09 m, 12.4 s drawing + 23.1 s pen-up |
+| arm 71 | 6 segments, 1.50 m, 17.9 s drawing + 20.6 s pen-up |
+| makespan | **53.02 s** (14.5 s of it conducted pause) |
+| **min inter-arm** | **58.83 mm** (gate 50) — pair **31-71** at t = 34.18 s |
+| frame, incl. seam bars | 54.2 mm (gate 50), arm 71 at t = 41.44 s |
+| neighbour base column | 155.6 mm (gate 50) |
+| paper | chain 29.9 mm (gate 20); tip −0.5 mm (floor −10) |
+| self-collision | 41.3 mm (gate 20) |
+| joint margin | 0.1035 |
+| verdict | **PASS**, and independently re-checked by `recheck_timeline.py` |
+
+Both arms start **and** end at `layout.Q_PARK_PROPOSED`, verified to
+**0.00000 rad**. That is the property the whole day rests on — see §4.3.
+
+### 2.2 Every file
 
 | file | what it is |
 |---|---|
 | `unknown_strokes.json` / `.png` | the word on the paper, and the picture of it |
-| `unknown_<H>_schedule.npz` + `_program.json` | the **concurrent** certified programme |
-| `unknown_<H>_recheck.json` | the independent whole-timeline `scene_check` verdict |
-| `unknown_<H>_hover_schedule.npz` | the **hover pass** (§4.1) |
-| `unknown_<H>_alt.npz` | the **alternating** programme (§4.3) |
-| `unknown_<H>_timing.json` | the **timing-tolerance certificate** (§4.4) |
-| `pathways/unknown_<H>_arm{31,71}.csv` | the impedance-stack pathway CSV, with q1..q7 |
-| `bundles/unknown_<H>_arm{31,71}.npz` | the `fr3drivers` joint bundle, re-timed |
-| `unknown_<H>_retime.json` | peak accel before/after, and the fleet rate |
+| `unknown_h0970_home_schedule.npz` + `_program.json` | **the concurrent programme** |
+| `unknown_h0970_home_recheck.json` | the independent whole-timeline verdict |
+| `unknown_h0970_home_alt.npz` + `_alt_recheck.json` | **the ALTERNATING programme — the one to draw with** |
+| `unknown_h0970_home_timing.json` | the timing-tolerance certificate (§4.4) |
+| `unknown_h0970_home_timing_dense.json` | the positive-side sweep at 0.25 s steps |
+| `unknown_h0970_home_retime.json`, `_alt_retime.json` | peak accel before/after, fleet rate |
+| `pathways/unknown_h0970_home_arm{31,71}.csv` | the pathway CSV, **q1..q7 on every row** |
+| `pathways/unknown_h0970_home_alt_arm{31,71}.csv` | ditto, alternating |
+| `bundles/unknown_h0970_home[_alt]_arm{31,71}.npz` | the `fr3drivers` joint bundles |
+| `unknown_h0970_home_topdown.gif` | the plan view — **look at this first** |
+| `unknown_h0970_hover_*` | the hover pass (§4.1) |
+| `unknown_h0850_*` | the 0.850 branch, if the steel measures that |
+
+**Superseded, kept only for comparison:** `unknown_h0970_*` (without `_home`)
+is the same word conducted under the FREEZE idle policy. It certifies as a
+concurrent programme (61.77 s, 53.05 mm) but **its alternating variant does
+not** — see §4.3. Do not fly it.
+
+**A rehearsal is already running** at
+<http://frankastation.drl.csail.mit.edu:7008/static/> — the concurrent
+programme, looping, in meshcat.
 
 ---
 
@@ -369,22 +408,57 @@ force or the absence of a reflex; the collision profile in force.
 ### 4.3 Rung C — the word, ALTERNATING
 
 **This is the run that satisfies Pete's criterion, and it is the safe one.**
+The file is already built: `out/unknown_h0970_home_alt.npz`. It was made by
 
 ```
 ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/serialise_timeline.py \
-    out/unknown_h0970_schedule.npz --out out/unknown_h0970_alt.npz \
-    --order 31,71 --recheck --json out/unknown_h0970_alt_recheck.json
+    out/unknown_h0970_home_schedule.npz --out out/unknown_h0970_home_alt.npz \
+    --order 31,71 --recheck --json out/unknown_h0970_home_alt_recheck.json
 ```
 
-Two blocks. Arm 31 flies its whole track while arm 71 stands at the pose it was
-conducted to start from; then arm 71 flies its whole track while arm 31 stands
-at the pose it finished at. **The two arms are never both in motion.**
+Two blocks, **106.06 s** total. Arm 31 flies its whole track while arm 71
+stands at its park; then arm 71 flies its whole track while arm 31 stands at
+its park. **The two arms are never both in motion**, and the re-check says:
+
+```
+  min inter-arm 155.56 mm (gate 50) pair 31-71 at t = 87.44 s -> margin +105.56 mm
+  VERDICT PASS
+```
 
 The seam between the blocks has **no step in either arm** — 31 holds exactly
 the pose it ended on, 71 starts from exactly the pose it was held at — so there
 is no `Barrier.reposition` to supervise. That matters: `HARDWARE_LADDER` §2.4
 measured v18 stepping **0.0320 rad** at a barrier and calls it *uncertified
 motion into a stiff controller*. This file has none.
+
+> ### **WHY THE ARMS GO HOME, AND WHY THE OTHER FILE IS NOT SAFE**
+>
+> The first programme conducted for this word used the default FREEZE idle
+> policy. It certified as a concurrent programme at 53.05 mm — and its
+> alternating variant **FAILED at 8.79 mm**, a hard collision.
+>
+> The cause is worth understanding, because it is not obvious and it will
+> recur. Under `freeze`, an arm finishing its bag **retreats off the paper and
+> stops there** — measured, arm 31 ended **4.66 rad** from its park and arm 71
+> **4.75 rad**. Serialising then holds arm 31 at that stopped pose for the
+> whole of block 2, and that pose is squarely in arm 71's path. The arm was
+> never certified to *stand* there while its neighbour worked; it was only
+> certified to *pass through* while the neighbour was elsewhere.
+>
+> `--idle-policy home` makes each arm return to `Q_PARK_PROPOSED` at the end of
+> its bag. Both arms then start and end at their parks — verified to
+> **0.00000 rad** — and the parks are a set that was searched to be mutually
+> clear and re-searched against the seam bars on 2026-09-14. The held pose
+> becomes a certified park instead of wherever the pen happened to stop, and
+> the alternating clearance goes from **8.79 mm FAIL to 155.56 mm PASS**.
+>
+> It is also *faster*: 53.02 s against 61.77 s, because going home beats
+> holding a pose the next phase has to work around.
+>
+> **The rule this gives you: never serialise a programme whose arms do not end
+> at their parks.** `serialise_timeline.py` will tell you — it re-checks and
+> refuses to write a file that does not certify, which is exactly how this was
+> caught rather than discovered on the robot.
 
 **Why alternating is first.** The inter-arm certificate is a statement about
 two arms at the same instant on **one clock**, and there is no cross-process
@@ -401,37 +475,63 @@ makespan against the file.
 says, and no pair got closer than the re-check's certified minimum minus the
 calibration allowance.
 
-### 4.4 Rung D — the word, CONCURRENT — **only if the certificate allows**
+### 4.4 Rung D — the word, CONCURRENT — **read this before deciding**
 
-```
-ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/timing_tolerance.py \
-    out/unknown_h0970_schedule.npz --shift-arm 71 \
-    --json out/unknown_h0970_timing.json
-```
+Measured on `unknown_h0970_home`, arm 71's clock displaced against arm 31's:
 
-This re-checks the pair with arm 71's clock displaced by
-Δt ∈ {0, ±0.5, ±1, ±2, ±5, ±10 s} and reports `certified_window_s` — the
-largest |Δt| at which **every** tested shift of that magnitude or smaller still
-holds every gate.
+| Δt (arm 71) | min inter-arm | |
+|---|---|---|
+| −10 s | −119.17 mm | **FAIL** |
+| −5 s | −112.77 mm | **FAIL** |
+| −2 s | −60.43 mm | **FAIL** |
+| −1 s | −48.89 mm | **FAIL** |
+| −0.5 s | −24.56 mm | **FAIL** |
+| **0** | **58.83 mm** | PASS |
+| +0.5 s | 88.93 mm | PASS |
+| +1 s | 48.00 mm | **FAIL** (by 2 mm) |
+| +2 s | 106.21 mm | PASS |
+| +5 s | 100.50 mm | PASS |
+| +10 s | 155.56 mm | PASS |
 
-> **Read the number this way.** Two executors started by two hands are skewed
-> by however long it takes a person to press the second button — call it one to
-> three seconds, and more if one arm's `goto` to its start pose is slower than
-> the other's. **If `certified_window_s` is smaller than the skew you can
-> actually achieve, do not run rung D.** The alternating run already satisfies
-> the success criterion; the concurrent run is the bonus, and it is the one
-> that can put two arms in the same place at the same time.
+**`certified_window_s` = 0.** Symmetrically, nothing is certified: −0.5 s
+already fails, so no |Δt| above zero survives. **On that number alone, rung D
+is cancelled.**
+
+But the shape of the failure is the useful part, and it is strongly one-sided:
+
+> **ARM 71 MUST NEVER START EARLY.** Arm 31 is priority 1 and draws first; arm
+> 71's own schedule already contains **14.5 s of conducted pause** before it
+> moves. Start arm 71 early and it walks into arm 31 while arm 31 is still
+> drawing — **−119 mm at −10 s is not a near miss, it is a collision.** Start it
+> late and arm 31 has already gone home, and everything from +2 s outwards
+> clears by 100–155 mm.
 >
-> **If it is zero, rung D is cancelled.** That is a result, not a failure: it
-> is the measurement `ARCHITECTURE_V2` §5 Q3 asks for, and it says the fleet
-> clock has to be built before six arms can ever run this piece.
+> The one blemish on the late side is a **notch at +1.0 s that fails by 2 mm**.
+> `out/unknown_h0970_home_timing_dense.json` sweeps 0 → +10 s at 0.25 s steps
+> to say exactly how wide that notch is. **Read it before running rung D**, and
+> if the notch is not narrow and isolated, do not run rung D at all.
+
+**The decision rule for the day.** Rung D is permitted *only* if all of:
+1. the dense sweep shows a contiguous passing band, and you start arm 71
+   inside it (start arm 31 first, watch it finish its first stroke, then start
+   arm 71);
+2. somebody is on the e-stop watching the middle of the paper specifically;
+3. rung C has already run cleanly.
+
+Otherwise **rung C is the deliverable and rung D is skipped.** Pete's criterion
+is already met by rung C; the concurrent run buys a prettier demonstration and
+costs the only collision risk of the day.
+
+That zero is itself the measurement `ARCHITECTURE_V2` §5 Q3 asks for: it says
+the cross-process fleet clock has to be built before six arms can ever run a
+piece like this concurrently.
 
 **Log:** the realised inter-arm clearance against the certified one, and the
-skew actually achieved between the two starts (timestamp both).
+skew actually achieved between the two starts (timestamp both, to the second).
 
 **Passes when** both arms complete, the realised clearance is above the
 certified minimum minus the calibration allowance, and the measured skew stayed
-inside the certified window the whole run.
+inside the passing band the whole run.
 
 ---
 

@@ -42,8 +42,12 @@ def main(argv=None):
     ap.add_argument("program", nargs="?", default=None)
     ap.add_argument("--port", type=int, default=7008,
                     help="7000-7007 belong to other scenes on this machine")
-    ap.add_argument("--host", default="0.0.0.0",
-                    help="0.0.0.0 so the scene is reachable off the box")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="the ZMQ socket's interface.  Leave it: the tornado "
+                         "web app listens on every interface regardless, so "
+                         "the scene is already reachable off the box, and "
+                         "binding zmq to 0.0.0.0 gives a URL the client "
+                         "cannot connect back to")
     ap.add_argument("--rate", type=float, default=1.0)
     ap.add_argument("--arms", type=int, nargs="*", default=None)
     ap.add_argument("--loops", type=int, default=0,
@@ -61,16 +65,21 @@ def main(argv=None):
     from aris_sixarm import frames
     from aris_sixarm.execute import MeshcatDryRun, from_schedule, play
 
-    url = start_bridge(a.port, host=a.host)
+    # `start_bridge` hands back BOTH urls: the zmq one the Visualizer talks to
+    # and the web one a person opens.  Passing the pair straight to
+    # `MeshcatDryRun(url=...)` is a TypeError from deep inside pyzmq, which is
+    # how this was found.
+    zmq_url, web_url = start_bridge(a.port, host=a.host)
     prog = from_schedule(a.npz, a.program)
     print(f"rig {fleet_mod.ACTIVE_RIG!r}, tool "
           f"{'lateral' if frames.PEN_LAT else 'inline'}, "
           f"{len(fleet_mod.FLEET)} arms in the fleet")
     print("\n".join(prog.report()))
-    print(f"\nmeshcat bridge on {url}\n  -> http://frankastation.drl.csail.mit.edu:"
-          f"{a.port}/static/\n  -> http://localhost:{a.port}/static/")
+    print(f"\nmeshcat zmq {zmq_url}, web {web_url}"
+          f"\n  -> http://frankastation.drl.csail.mit.edu:{a.port}/static/"
+          f"\n  -> http://localhost:{a.port}/static/")
 
-    be = MeshcatDryRun(url=url)
+    be = MeshcatDryRun(url=zmq_url)
     # AUTO-ACKNOWLEDGE.  `play`'s default REFUSES a barrier, on purpose, so a
     # pen swap cannot be flown past without a human.  Nothing here flies; the
     # backend's every robot-facing call is a no-op, and a looping scene that

@@ -34,8 +34,8 @@ own checker on the result and refuses to claim anything it has not measured.
 THE COARSE CUT IS THE DELIBERATE ONE.  Finer interleaving — alternating per
 stroke, or per tour — would be shorter, and it would also multiply the number
 of places where a human has to decide that the other arm really has stopped.
-Two blocks is one decision.  `--blocks stroke` is there for when the makespan
-matters more than the decision count, and it is NOT the hardware-day default.
+Two blocks is one decision, and on a first hardware day the decision count is
+what matters.  Nothing here implements a finer cut, on purpose.
 
     ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/serialise_timeline.py \\
         out/unknown_h0970_schedule.npz --out out/unknown_h0970_alt.npz \\
@@ -73,21 +73,38 @@ def moving_mask(q, tol=1e-9):
 def serialise(z, order=None, tol=1e-9):
     """The npz payload -> the alternating one. -> dict of arrays.
 
-    `order` is the arm ids in the order they take the paper; the default is
-    ascending, which on installation day 1 puts arm 31 (the west arm, under the
-    start of the word) first, so the ink appears left to right.
+    `order` names the arms that TAKE THE PAPER, in turn.  It is not a
+    permutation of the timeline's arms and must not be: a conducted fleet npz
+    carries every arm in the rig, and on installation day 1 four of the six are
+    PARKED — present as obstacles, 2 steps long, 0.00 m of chain motion. Those
+    arms have no turn to take; they stand where the conductor parked them from
+    the first frame to the last, which is what they were already doing.
+
+    Left None, the movers are the arms that actually move, in ascending id —
+    which on day 1 puts arm 31 (the west arm, under the start of the word)
+    first, so the ink appears left to right the way a person reads it.
     """
     arms = [int(v) for v in z["arms"]]
-    order = arms if order is None else [int(a) for a in order]
-    if sorted(order) != sorted(arms):
-        raise SystemExit(f"--order {order} is not a permutation of the "
-                         f"timeline's arms {arms}")
     Q = {a: np.asarray(z[f"q_{a}"], float) for a in arms}
     SEG = {a: np.asarray(z[f"seg_{a}"]).astype(np.int64) for a in arms}
     M = len(Q[arms[0]])
     for a in arms:
         if len(Q[a]) != M or len(SEG[a]) != M:
             raise SystemExit(f"arm {a} is not on the same clock as arm {arms[0]}")
+
+    moves = [a for a in arms
+             if np.abs(np.diff(Q[a], axis=0)).max(initial=0.0) > tol]
+    order = moves if order is None else [int(a) for a in order]
+    unknown = sorted(set(order) - set(arms))
+    if unknown:
+        raise SystemExit(f"--order names arms {unknown} that are not in this "
+                         f"timeline ({arms})")
+    missed = sorted(set(moves) - set(order))
+    if missed:
+        raise SystemExit(f"--order leaves out arms {missed}, which MOVE in "
+                         f"this timeline; they would be frozen at their first "
+                         f"pose and their ink would never be drawn")
+    parked = [a for a in arms if a not in order]
 
     blocks = []
     for k, mover in enumerate(order):
@@ -100,7 +117,9 @@ def serialise(z, order=None, tol=1e-9):
                 # BEFORE ITS TURN an arm stands where it will START; AFTER its
                 # turn it stands where it FINISHED.  Both are conducted poses,
                 # and both make the seam between blocks a no-op for that arm.
-                done = order.index(a) < k
+                # A PARKED arm has no turn, and its first and last pose are the
+                # same pose, so this is its park either way.
+                done = a in order and order.index(a) < k
                 hold = Q[a][-1] if done else Q[a][0]
                 q_out[a] = np.tile(hold, (M, 1))
                 seg_out[a] = np.full(M, -1, np.int64)   # a still pen draws nothing
@@ -151,8 +170,10 @@ def main(argv=None):
     order = (None if not a.order
              else [int(x) for x in a.order.replace(",", " ").split()])
     out, blocks, M, N, fps = serialise(z, order)
+    parked = [int(x) for x in out["arms"] if int(x) not in blocks]
     print(f"{a.npz}: {len(out['arms'])} arms, {M} frames "
-          f"({(M - 1) / fps:.2f} s) concurrent")
+          f"({(M - 1) / fps:.2f} s) concurrent"
+          + (f"; arms {parked} are PARKED and take no turn" if parked else ""))
     print(f"  -> {len(blocks)} blocks in the order {blocks}, {N} frames "
           f"({(N - 1) / fps:.2f} s): only one arm moves at a time")
     for k, mover in enumerate(blocks):
