@@ -100,3 +100,91 @@ def test_ink_is_matched_PER_LINE_and_never_across_neighbours():
     gaps, total, inked = G.residual(lines, ink)
     assert [g[0] for g in gaps] == [1]
     assert inked == pytest.approx(1.0, abs=2 * G.DS)
+
+
+# ---------------------------------------------------------------------------
+# THE INVARIANT `staged.run` ASSERTS: EVERY STRETCH IS FLOWN OR IN THE GAP LIST
+# ---------------------------------------------------------------------------
+from aris_sixarm import staged, traces          # noqa: E402
+
+
+def _arm_stage(stage, arm, segs, flown):
+    """An `ArmStage` whose `programme` is `segs` and which draws `flown`."""
+    st = staged.ArmStage(int(stage), int(arm), np.zeros(7))
+    st.programme = [dict(stroke_id=int(li), seg=i, piece=int(k),
+                         length=float(traces.cumlen(p)[-1]),
+                         pts=np.asarray(p, float))
+                    for i, (li, k, p) in enumerate(segs)]
+    n = max(2, len(segs) + 1)
+    st.timeline = dict(t=0.05 * np.arange(n), q=np.zeros((n, 7)),
+                       seg=np.array([(i if i in flown else -1)
+                                     for i in range(n)], int),
+                       u=np.zeros(n), phases=[], duration=0.05 * (n - 1),
+                       draw_s=0.0, transit_s=0.0)
+    return st
+
+
+def _plan_with_uncovered(lines, uncovered):
+    """A `traces.Plan` in which the named lines have NO drawer at all."""
+    lp = []
+    for i, l in enumerate(lines):
+        cum = traces.cumlen(l)
+        atoms = [traces.Atom(0.0, float(cum[-1]), 0)]
+        assign = [traces.UNCOVERED if i in uncovered else 0]
+        lp.append(traces.LinePlan(i, np.asarray(l, float), cum, atoms, assign,
+                                  [], []))
+    return traces.Plan(None, lp)
+
+
+def test_a_line_no_stage_can_take_is_in_the_gap_list_with_a_reason():
+    """THE DELIBERATE HOLE MUST NOT VANISH.
+
+    Line 1 is offered to nobody -- the DP marks it `UNCOVERED` -- so no stage
+    ever lists it, no arm ever refuses it and no book-keeping anywhere would
+    mention it.  The account is over the INPUT PICTURE, so it is a gap with a
+    reason, and `flown + missing` is still the whole picture.
+    """
+    lines = [_line(0.0, 1.0, 0.0), _line(0.0, 1.0, 1.0)]
+    sr = staged.StageResult(0, (31,),
+                            {31: _arm_stage(0, 31, [(0, 0, lines[0])], {0})})
+    res = staged.StagedResult("toy", [sr], [])
+    acc = staged.coverage_account(lines, res, _plan_with_uncovered(lines, {1}))
+    assert acc["total_m"] == pytest.approx(2.0, abs=1e-6)
+    assert acc["flown_m"] == pytest.approx(1.0, abs=2 * staged.INK_DS)
+    assert acc["gaps_m"] == pytest.approx(1.0, abs=2 * staged.INK_DS)
+    assert [g["line"] for g in acc["gap_list"]] == [1]
+    assert acc["gap_list"][0]["reason"] == "no_drawer"
+    assert acc["unattributed_m"] == pytest.approx(0.0, abs=1e-9)
+    # the invariant `run` asserts
+    assert acc["flown_m"] + acc["gaps_m"] == pytest.approx(acc["total_m"],
+                                                           abs=1e-9)
+
+
+def test_a_listed_bucket_that_never_flew_is_a_gap_not_ink():
+    """`lf6b_s150` STAGE C, IN MINIATURE.
+
+    The arm's bucket is listed with a length and the arm has a trajectory --
+    `_merge_conducts` pads it -- and not one frame draws it.  `ink_m` counts
+    the metre; the account must not.
+    """
+    lines = [_line(0.0, 1.0, 0.0), _line(0.0, 1.0, 1.0)]
+    st = _arm_stage(0, 31, [(0, 0, lines[0]), (1, 0, lines[1])], {0})
+    sr = staged.StageResult(0, (31,), {31: st})
+    res = staged.StagedResult("toy", [sr], [])
+    acc = staged.coverage_account(lines, res, _plan_with_uncovered(lines, set()))
+    assert acc["gaps_m"] == pytest.approx(1.0, abs=2 * staged.INK_DS)
+    g = acc["gap_list"][0]
+    assert g["line"] == 1 and g["reason"] == "listed_not_flown"
+    assert g["listed_not_flown"][0]["arm"] == 31
+    assert acc["listed_not_flown_m"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_every_gap_carries_one_of_the_declared_reason_codes():
+    """No gap is ever silent, and no reason is ever invented."""
+    lines = [_line(0.0, 1.0, 0.0)]
+    sr = staged.StageResult(0, (31,), {31: _arm_stage(0, 31, [], set())})
+    res = staged.StagedResult("toy", [sr], [])
+    acc = staged.coverage_account(lines, res, None)
+    assert len(acc["gap_list"]) == 1
+    assert acc["gap_list"][0]["reason"] in staged.GAP_REASONS
+    assert acc["flown_m"] == pytest.approx(0.0, abs=1e-9)

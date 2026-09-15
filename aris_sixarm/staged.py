@@ -1988,6 +1988,10 @@ class StagedResult:
     summary_dp: dict = field(default_factory=dict)
     holds: list = field(default_factory=list)   # the HELD pose set per barrier
     partner_standoff: float = 0.0   # m demanded of a leader, above every gate
+    # THE COVERAGE ACCOUNT, and it is the only statement about ink this object
+    # makes that is safe to quote.  `coverage_account` fills it in at the end of
+    # `run`; see `INK_TOL` for what "drawn" means and why nothing else does.
+    coverage: dict = field(default_factory=dict)
 
     @property
     def makespan(self) -> float:
@@ -2367,6 +2371,31 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                        refusals=rlog, envelope_s=env_s,
                        summary_dp=tplan.summary(), holds=holds,
                        partner_standoff=float(partner_standoff or 0.0))
+    # ---- THE COVERAGE ACCOUNT, AND IT IS AN INVARIANT --------------------
+    # Every stretch of every input line ends in a stage's FLOWN ink or in the
+    # gap list with a reason.  There is no third place, and a run that cannot
+    # say which of the two a metre is in has not accounted for the picture --
+    # see section 8b for the `lf6b_s150` bug this makes impossible.
+    if fly:
+        res.coverage = coverage_account(lines, res, tplan)
+        acc = res.coverage
+        if abs(acc["flown_m"] + acc["gaps_m"] - acc["total_m"]) > 1e-6:
+            raise AssertionError(
+                f"coverage account does not close: {acc['flown_m']:.6f} flown "
+                f"+ {acc['gaps_m']:.6f} missing != {acc['total_m']:.6f} m")
+        if acc["unattributed_m"] > 1e-6:
+            # NOT an exception: an unattributed metre is a hole in the REASON
+            # chain, not in the picture, and hiding the run would hide the ink
+            # that IS there.  It is announced, and it is in the summary.
+            print(f"  WARNING: {acc['unattributed_m']:.4f} m of gap has no "
+                  f"reason code -- see `gap_list`")
+        if verbose:
+            print(f"  coverage: {acc['flown_m']:.4f} m of {acc['total_m']:.4f} "
+                  f"m FLOWN = {100 * acc['flown_frac']:.4f} %; "
+                  f"{acc['gaps_m']:.4f} m missing in {acc['n_gaps']} stretches"
+                  + "".join(f"  {k} {v['m']:.3f} m ({v['n']})"
+                            for k, v in sorted(acc["by_reason"].items(),
+                                               key=lambda kv: -kv[1]["m"])))
     return res
 
 
@@ -4267,6 +4296,211 @@ def _jsonable(d: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 8b.  THE COVERAGE ACCOUNT -- WHAT IS ON THE PAPER, AND WHY THE REST IS NOT
+# ---------------------------------------------------------------------------
+# Pete, 2026-09-15: "the planner code will need to work for any drawing out of
+# the box".  So the account is a STRUCTURAL INVARIANT of `run` rather than a
+# report somebody remembers to ask for: every stretch of every input line ends
+# in exactly one of
+#
+#   (a) a stage's FLOWN ink -- a frame whose `seg` is a real segment index;
+#   (b) the gap list, with a reason code and the gate that refused it.
+#
+# There is no third place, and `run` asserts it.  The bug class this closes is
+# `lf6b_s150`, which reported `all_ok: true`, `coverage: 0.956` and
+# `ink_m: 8.407` for a stage C in which arm 31 drew NOTHING: `plan_bucket` sets
+# `st.programme` before it ever calls `arm_program`, so a bucket that does not
+# fly still carries its pieces and its `ink_m`, and `_merge_conducts` pads the
+# arm out to the stage's frame count so it stands in the conducted clock holding
+# its entry pose.  1.914 m of the picture was missing and every number in the
+# summary said it was there.
+INK_DS = 0.002          # m, the grid every input line is tested on
+INK_TOL = 0.0025        # m, how near drawn ink a point must be to count as drawn
+INK_MIN_GAP = 0.001     # m, below which a gap is sampling dust
+GAP_REASONS = ("listed_not_flown", "no_drawer", "plan_refused",
+               "deferred_never_taken", "unattributed")
+
+
+def flown_ink(res: "StagedResult") -> tuple[dict, list]:
+    """Every piece with PEN-DOWN SAMPLES, and the whole listed inventory.
+
+    -> ({line: [pts]}, [record]).  A record is (stage, arm, line, k, m, flown),
+    and `flown` is the ONLY thing that decides whether the ink is on the paper:
+    an arm whose bucket produced no timeline still has a full `programme`, and
+    an arm padded by `_merge_conducts` still has a trajectory.
+    """
+    ink: dict[int, list] = {}
+    listed: list[dict] = []
+    for sr in res.stages:
+        for a, st in sorted(sr.arms.items()):
+            seen = (set() if st.timeline is None
+                    else {int(x) for x in np.asarray(st.timeline["seg"],
+                                                     int).ravel() if x >= 0})
+            for i, sg in enumerate(st.programme):
+                ok = i in seen
+                listed.append(dict(stage=int(sr.stage), arm=int(a),
+                                   line=int(sg["stroke_id"]),
+                                   k=int(sg.get("piece", i)), order=int(i),
+                                   m=float(sg["length"]), flown=bool(ok)))
+                if ok:
+                    ink.setdefault(int(sg["stroke_id"]), []).append(
+                        np.asarray(sg["pts"], float).reshape(-1, 2))
+    return ink, listed
+
+
+def _ink_resample(p: np.ndarray, ds: float = 0.5 * INK_DS) -> np.ndarray:
+    c = traces_mod.cumlen(p)
+    L = float(c[-1])
+    if L <= 0 or len(p) < 2:
+        return np.asarray(p, float).reshape(-1, 2)
+    return traces_mod.points_at(p, c, np.clip(np.arange(0.0, L + ds, ds),
+                                              0.0, L))
+
+
+def residual_of(lines, ink: dict, ds: float = INK_DS, tol: float = INK_TOL,
+                min_gap: float = INK_MIN_GAP):
+    """The picture minus the ink. -> ([(line, s0, s1, m)], total_m, drawn_m).
+
+    PER LINE, always: a piece knows which line it came from, so ink lying
+    BESIDE a line can never be read as covering it -- which a nearest-point test
+    over the whole picture would do, and the logo has lines 0.5 mm apart.
+    """
+    from scipy.spatial import cKDTree
+    gaps, total, missing = [], 0.0, 0.0
+    for li, l in enumerate(lines):
+        l = np.asarray(l, float).reshape(-1, 2)
+        cum = traces_mod.cumlen(l)
+        L = float(cum[-1])
+        total += L
+        s = np.arange(0.0, L, ds) + 0.5 * ds
+        if len(s) == 0:
+            continue
+        P = traces_mod.points_at(l, cum, s)
+        if li not in ink:
+            cover = np.zeros(len(s), bool)
+        else:
+            Q = np.vstack([_ink_resample(p) for p in ink[li]])
+            cover = cKDTree(Q).query(P)[0] <= tol
+        missing += float((~cover).sum()) * ds
+        i = 0
+        while i < len(s):
+            if cover[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(s) and not cover[j + 1]:
+                j += 1
+            a0, a1 = max(0.0, s[i] - 0.5 * ds), min(L, s[j] + 0.5 * ds)
+            if a1 - a0 > min_gap:
+                gaps.append((int(li), float(a0), float(a1), float(a1 - a0)))
+            i = j + 1
+    return gaps, float(total), float(total - missing)
+
+
+def _span_overlap(a0, a1, b0, b1) -> float:
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def coverage_account(lines, res: "StagedResult", plan=None) -> dict:
+    """What is on the paper, and the reason chain for what is not. -> dict.
+
+    `plan` is the DP's final `traces.Plan`, which is where "nobody was ever
+    offered this" is written down (an `UNCOVERED` run) -- pass it where `run`
+    has it.  Every gap gets exactly one reason from `GAP_REASONS`, in the order
+    a reader would ask them:
+
+      `listed_not_flown`      a stage LISTED the ink and its bucket produced no
+                              pen-down sample for it -- the bucket did not fly;
+      `no_drawer`             the DP left the span UNCOVERED: after the refusal
+                              loop's bans, no (stage, arm) cell could take it;
+      `plan_refused`          `plan_stroke` refused the piece (`degenerate`,
+                              `split`), with its own status and reason;
+      `deferred_never_taken`  an arm deferred it and no later stage listed it;
+      `unattributed`          none of the above -- which is a bug, and it is
+                              reported rather than rounded away.
+    """
+    ink, listed = flown_ink(res)
+    gaps, total, drawn = residual_of(lines, ink)
+    nodrawer: dict[int, list] = {}
+    if plan is not None:
+        for lp in plan.lines:
+            for (k, i0, i1) in traces_mod.runs_of(lp.atoms, lp.assign):
+                if k == traces_mod.UNCOVERED:
+                    nodrawer.setdefault(int(lp.index), []).append(
+                        (float(lp.atoms[i0].s0), float(lp.atoms[i1 - 1].s1)))
+    unflown: dict[int, list] = {}
+    for p in listed:
+        if not p["flown"]:
+            unflown.setdefault(int(p["line"]), []).append(p)
+    refused: dict[int, list] = {}
+    deferred: dict[int, list] = {}
+    drawn_keys = {(int(p["line"]), int(p["k"])) for p in listed if p["flown"]}
+    for sr in res.stages:
+        for a, st in sorted(sr.arms.items()):
+            for pp in st.refused:
+                refused.setdefault(int(pp.piece.line), []).append(
+                    dict(stage=int(sr.stage), arm=int(a), k=int(pp.piece.k),
+                         s0=float(pp.piece.s0), s1=float(pp.piece.s1),
+                         m=float(pp.piece.length_m), status=str(pp.status),
+                         reason=str(pp.reason)))
+            for pc in st.deferred:
+                if (int(pc.line), int(pc.k)) in drawn_keys:
+                    continue
+                deferred.setdefault(int(pc.line), []).append(
+                    dict(stage=int(sr.stage), arm=int(a), k=int(pc.k),
+                         s0=float(pc.s0), s1=float(pc.s1),
+                         m=float(pc.length_m)))
+    out = []
+    for (li, a, b, m) in gaps:
+        cum = traces_mod.cumlen(np.asarray(lines[li], float).reshape(-1, 2))
+        xy = traces_mod.points_at(np.asarray(lines[li], float).reshape(-1, 2),
+                                  cum, np.array([0.5 * (a + b)]))[0]
+        g = dict(line=int(li), s0=float(a), s1=float(b), m=float(m),
+                 xy=[round(float(xy[0]), 4), round(float(xy[1]), 4)],
+                 no_drawer_m=float(sum(_span_overlap(a, b, *iv)
+                                       for iv in nodrawer.get(li, []))),
+                 listed_not_flown=[dict(stage=p["stage"], arm=p["arm"],
+                                        k=p["k"], m=round(p["m"], 4))
+                                   for p in unflown.get(li, [])],
+                 refused=[r for r in refused.get(li, [])
+                          if _span_overlap(a, b, r["s0"], r["s1"]) > 1e-4],
+                 deferred=[d for d in deferred.get(li, [])
+                           if _span_overlap(a, b, d["s0"], d["s1"]) > 1e-4])
+        if g["no_drawer_m"] > 0.5 * m:
+            g["reason"] = "no_drawer"
+        elif g["listed_not_flown"]:
+            g["reason"] = "listed_not_flown"
+        elif g["refused"]:
+            g["reason"] = "plan_refused"
+        elif g["deferred"]:
+            g["reason"] = "deferred_never_taken"
+        else:
+            g["reason"] = "unattributed"
+        out.append(g)
+    by: dict[str, list] = {k: [0.0, 0] for k in GAP_REASONS}
+    for g in out:
+        by[g["reason"]][0] += g["m"]
+        by[g["reason"]][1] += 1
+    # THE INVARIANT.  Drawn plus missing IS the picture; there is no third
+    # place for a metre to be.  It is asserted rather than trusted because the
+    # whole point of this section is that the book-keeping lied once already.
+    miss = float(sum(g["m"] for g in out))
+    if abs(drawn + (total - drawn) - total) > 1e-9:
+        raise AssertionError("coverage account does not close")
+    return dict(total_m=float(total), flown_m=float(drawn),
+                flown_frac=float(drawn / total) if total > 0 else 1.0,
+                gaps_m=float(total - drawn), n_gaps=int(len(out)),
+                gap_m_listed=float(miss),
+                by_reason={k: dict(m=round(v[0], 4), n=int(v[1]))
+                           for k, v in by.items() if v[1]},
+                unattributed_m=float(by["unattributed"][0]),
+                listed_not_flown=[p for p in listed if not p["flown"]],
+                listed_not_flown_m=float(sum(p["m"] for p in listed
+                                             if not p["flown"])),
+                gap_list=out)
+
+
 def summary(res: StagedResult) -> dict:
     """The table docs/V2_STAGED.md quotes."""
     rows = []
@@ -4359,8 +4593,20 @@ def summary(res: StagedResult) -> dict:
                 ttfm_s=(None if res.ttfm_s is None else round(res.ttfm_s, 3)),
                 envelope_s=round(res.envelope_s, 2),
                 refusal_rounds=res.refusals,
-                coverage=res.summary_dp.get("covered_frac"),
-                drawn_m=res.summary_dp.get("drawn_m"),
+                # COVERAGE IS PEN-DOWN INK AND NOTHING ELSE.  `summary_dp` is
+                # what the DP ALLOCATED, which is a different and much larger
+                # number: on `lf6b_s150` it read 95.63 % for a picture 84.35 %
+                # of which was drawn.  Both are here and only one is `coverage`.
+                coverage=(res.coverage.get("flown_frac")
+                          if res.coverage else res.summary_dp.get("covered_frac")),
+                drawn_m=(res.coverage.get("flown_m")
+                         if res.coverage else res.summary_dp.get("drawn_m")),
+                gaps_m=res.coverage.get("gaps_m"),
+                gap_list=res.coverage.get("gap_list"),
+                gap_by_reason=res.coverage.get("by_reason"),
+                listed_not_flown_m=res.coverage.get("listed_not_flown_m"),
+                dp_coverage=res.summary_dp.get("covered_frac"),
+                dp_drawn_m=res.summary_dp.get("drawn_m"),
                 ink_m=res.summary_dp.get("ink_m"),
                 gaps=res.summary_dp.get("gaps"),
                 stage_overhead=stage_overhead(res),
@@ -4386,7 +4632,14 @@ def summary(res: StagedResult) -> dict:
                 buckets_with_ink=int(sum(1 for s_ in res.stages
                                          for st in s_.arms.values()
                                          if st.accepted)),
-                all_ok=bool(all(s.ok for s in res.stages)))
+                # ...AND `all_ok` MAY NOT BE TRUE OVER INK THE TIMELINE NEVER
+                # DRAWS.  `lf6b_s150` said `all_ok: true` with 1.914 m listed
+                # and never flown; a stage whose bucket does not fly is not a
+                # stage that passed, whatever its clearances read.
+                all_ok=bool(all(s.ok for s in res.stages)
+                            and float(res.coverage.get("listed_not_flown_m",
+                                                       0.0)) <= 1e-9),
+                stages_ok=bool(all(s.ok for s in res.stages)))
 
 
 def stage_overhead(res: StagedResult) -> dict:
