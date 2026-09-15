@@ -1346,3 +1346,75 @@ def test_the_leader_follower_pipeline_runs_end_to_end(rig):
     d = staged.summary(res)
     assert d["holds_ok"] is True
     assert set(d["roles"]["total"]) >= {"follower_fit_frac", "deferred_m"}
+
+
+def test_the_dead_band_stage_ALSO_starts_from_an_all_parked_fleet(rig,
+                                                                  monkeypatch):
+    """STAGE D IS CONDUCTED TOO, SO IT GETS THE GO-HOME (§31).
+
+    `CONDUCT_HOME_FIRST` shipped on stage C only, and stage D is the same call
+    -- `_conduct_groups` over the fleet's held poses -- so a band phase was
+    planned with the four arms it does not own standing at their stage-B/C
+    hovers, over the sheet and unmovable by a conductor that does not own them.
+    Measured on `bench/starburst` (2026-09-15): 2.831 m of dead-band ink listed
+    by arm 31 and not one pen-down sample.
+
+    THE DEAD BAND IS FORCED, not hoped for: the band stroke's conducted bucket
+    is moved into stage B's DEFERRAL, which is the one road to `stage D` --
+    `partition_deferred` sends a piece with no row to the band and `run` gives
+    the band its own stage.
+    """
+    lines = [LF_LEADER_STROKE, LF_FOLLOWER_STROKE, STROKE_IN_BAND]
+    real = staged._lf_stage
+
+    def hand_the_band_on(s, actives, roles, buckets, *a, **k):
+        out = real(s, actives, roles, buckets, *a, **k)
+        if int(s) == 1:                    # the last stage before the conductor
+            for key, ps in list(buckets.items()):
+                move = [p for p in ps if int(p.line) == 2]
+                if move:
+                    buckets[key] = [p for p in ps if int(p.line) != 2]
+                    out[3].setdefault(int(key[1]), []).extend(move)
+        return out
+
+    monkeypatch.setattr(staged, "_lf_stage", hand_the_band_on)
+    # WHAT THE FIX IS: stage D ASKS for the go-home, and plans from what it
+    # gets back.  The two are spied on separately because the ask is the
+    # regression -- a fleet that happens to be parked already (this toy's stage
+    # C brings every arm home) makes `_home_stage` a no-op, and the bug was
+    # never that the go-home failed, it was that nothing asked for it.
+    asked, planned_from = [], {}
+    real_home, real_conduct = staged._home_before, staged._conduct_groups
+
+    def spy_home(sd, out, fl, pens, held, parks, *a, **k):
+        asked.append(int(sd))
+        return real_home(sd, out, fl, pens, held, parks, *a, **k)
+
+    def spy_conduct(s, groups, buckets, deferred, fl, pens, held, *a, **k):
+        planned_from.setdefault(int(s), []).append(
+            {int(x): np.asarray(q, float).copy() for x, q in held.items()})
+        return real_conduct(s, groups, buckets, deferred, fl, pens, held,
+                            *a, **k)
+
+    monkeypatch.setattr(staged, "_home_before", spy_home)
+    monkeypatch.setattr(staged, "_conduct_groups", spy_conduct)
+    res = staged.run(lines, pattern=T.leader_follower_pattern(),
+                     coverage=toy_coverage(), route_jobs=2, leg_cache=False,
+                     refusal_rounds=0, verbose=False)
+    band = [sr for sr in res.stages
+            if sr.stage == 3 and not sr.conducted_check.get("home_first")]
+    assert len(band) == 1, "the dead-band ink never got its own stage"
+    assert band[0].conducted and band[0].deferred_in > 0.0
+    # THE ASK, which is the fix: the band stage is conducted, so it goes home
+    # first exactly as the row pass does.
+    assert asked == [2, 3], asked
+    # ...AND WHAT IT PLANNED FROM: an all-parked fleet.  Stage D's actives are
+    # the only arms that move in it, and they leave from the park.
+    entry = planned_from[3][-1]
+    for a, q in entry.items():
+        assert np.allclose(q, res.parks[a], atol=1e-6), a
+    for a, st in band[0].arms.items():
+        if st.timeline is not None and st.programme:
+            assert np.allclose(st.timeline["q"][0], res.parks[a], atol=1e-6), a
+    assert [h["before_stage"] for h in res.holds] == [0, 1, 2, 3]
+    staged.thaw()

@@ -3381,3 +3381,97 @@ maps (x, y, ink) → the cells whose arm is holding that ink in that phase. The
 pattern gains a phase axis, `plan_lines` gains the ink per line, and the barrier
 list gains a swap. Until then the honest statement is: **the staged pipeline
 plans single-ink pictures, and `duotone` is a measurement of geometry only.**
+
+## 31. The go-home is every conducted stage's, and `unattributed` had a name
+
+§30 left the account with a bucket that was not a reason — 2.063 m on `lf8`,
+1.594 m on `bench/starburst`, announced by `run` as a WARNING and explained by
+nothing — and it left `CONDUCT_HOME_FIRST` on stage C alone. The two turn out
+to be the same defect seen from its two ends: **a conducted group whose slot
+produces no arms at all**, which loses the ink (§31.1) and which no reason code
+could name (§31.2).
+
+### 31.1 Stage D is conducted too, so it goes home first
+
+`CONDUCT_HOME_FIRST` (§30's fix, `b6c15bb`) parks the fleet before the row pass
+so that every row group plans against parks rather than against four arms
+standing at their stage-B hovers over the middle of the sheet. Stage D — the
+dead-band ink — is **the same call**: `_conduct_groups` over the same held-pose
+entry set, one phase at a time. It did not get the go-home, and it shows:
+
+| `bench/starburst`, before | |
+|---|---|
+| dead band, partitioned out of stage C | **2.831 m (45.3 % of the final pass)** |
+| stage D, arm 31 | **7 pieces listed, 0 pen-down samples** |
+| coverage | 45.70 % |
+
+The fix is `staged._home_before`, which is the whole of the stage-C block
+lifted out of `run`'s phase loop and given a name. It appends the no-ink
+go-home stage, advances the held-pose set in place and returns the entry poses
+the caller must plan from; `run`'s stage-C branch, `run`'s stage-D phase loop
+and `run_conducted`'s band stage are now three calls to it, so **a conducted
+stage cannot be added without the go-home** rather than merely happening to
+have one. `tests/test_staged.py::test_the_dead_band_stage_ALSO_starts_from_an_
+all_parked_fleet` forces a dead-band deferral on the toy picture and spies on
+both the ask and what stage D plans from.
+
+The go-home is a no-op when the fleet is already parked — stage C's `PARK_HOME`
+brings home every arm whose bucket flew — so the stage D that pays for it is
+exactly the stage D whose partners did NOT fly, which is the case that lost the
+ink.
+
+### 31.2 `unattributed` is `bucket_never_planned`, and it is the [31, 71] slot
+
+The reason chain could see what a stage LISTED (`listed_not_flown`), what
+`plan_stroke` refused (`plan_refused`), what an arm handed on
+(`deferred_never_taken`) and what the DP never covered (`no_drawer`). It could
+not see a piece that **was never offered to `plan_bucket` at all**, because
+every one of those four lists is written BY `plan_bucket` or by the stage that
+called it. `plan_bucket` records every piece of a bucket it is handed — that is
+the §30.1 finding, `st.programme` before `arm_program` — so a piece in none of
+the three lists means its whole bucket was skipped.
+
+`res.pieces` is where such a piece still is, and it is now the last question
+the account asks. Measured, and it is the same cell on both pictures:
+
+| run | `unattributed` was | the cells it was never planned for |
+|---|---|---|
+| `lf8_s150` (CSAIL, tilt 15) | **2.0633 m, 7 stretches** | (stage 2, arm 31) 0.894 m + (stage 2, arm 71) 1.179 m |
+| `bench/starburst` | **1.5942 m, 9 stretches** | (stage 2, arm 31) 0.110 m + (stage 2, arm 71) 1.542 m |
+
+**BOTH ARE THE ROW GROUP [31, 71]**, whose slot produced no arms, so its two DP
+buckets were never planned and 2.063 m / 1.594 m of the picture existed in the
+DP and in no stage's book at all. That is the same group whose bucket §30.4
+chased through an order search and `CONDUCT_HOME_FIRST` finally flew on `lf9c`:
+the run that loses it wholesale loses it in two different ways at once, and
+only one of them had a reason code.
+
+`GAP_REASONS` gains `bucket_never_planned`, asked LAST — a `split_at_room` part
+is minted with a new `k`, so a split parent looks unplanned while its parts are
+themselves listed or deferred, and the earlier questions have already
+attributed the span. It is matched on `(line, k)` rather than on the cell,
+because a deferral changes the cell. `scripts/gap_account.py` gains the same
+reason (and `deferred_never_taken`, which it did not have), plus
+`--tilt-max-deg`: a tilt-15 programme read back with the DP re-derived at 0
+invents refusals the run never had.
+
+Re-run on `lf6b_s150`, the programme §30.2's table is quoted from, the account
+is **unchanged** — 1.8908 `listed_not_flown`, 0.7250 `no_drawer`, 0.0041
+`plan_refused` — which is what "asked last" is supposed to mean.
+
+### 31.3 What the fixes measure, end to end
+
+`scripts/bench_staged.sh` re-run with both fixes, same configuration
+(`--split-m 0.15 --partner-standoff 0.09 --row-compose serial --tilt-max-deg
+15`):
+
+| picture | flown | ink | missing, by reason | wall | all_ok |
+|---|---|---|---|---|---|
+| hatch | 83.1 % | 30.10 m | `no_drawer` 5.074 | 138 s | no |
+| scatter | **99.0 %** | 8.64 m | `plan_refused` 0.087 | **420 s** (was 2 261 s) | **yes** |
+
+`scatter` is the row that moves: it certified (`all_ok: true`, was false), its
+makespan came down to 156.7 s from 166.2 s, and its planning wall is 5.4×
+cheaper, because the row groups no longer plan against a fleet standing over
+the sheet. `hatch` is unchanged and its 5.074 m is `no_drawer` — the DP's own
+ceiling at this placement, which no amount of go-home touches.

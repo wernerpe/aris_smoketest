@@ -5928,3 +5928,54 @@ because a refused group is already planned twice and stage C's wall is 1 428 s.
 Whether it recovers arm 31's 1.914 m is the stage-C-only run
 `out/staged_csail_h097_lf7c_s150.*`, at a 3 600 s cap because group [31, 71]
 alone measured 1 321 s at one order.
+
+## 2026-09-15 — THE GO-HOME IS EVERY CONDUCTED STAGE'S, AND `unattributed` HAD A NAME
+
+Two loose ends of the coverage work, and they are the same defect from its two
+ends: **a conducted group whose slot produces no arms at all.**
+
+**STAGE D IS CONDUCTED TOO, SO IT GOES HOME FIRST.**  `CONDUCT_HOME_FIRST`
+shipped on the row pass alone.  Stage D — the dead-band ink — is the SAME call,
+`_conduct_groups` over the same held-pose entry set, and it was planned with
+the four arms it does not own standing at their stage-B/C hovers over the
+middle of the sheet.  Measured on `bench/starburst`: 2.831 m of dead-band ink
+(45.3 % of the final pass), **7 pieces listed by arm 31 and not one pen-down
+sample.**  `staged._home_before` is the stage-C block lifted out of `run` and
+given a name — it appends the no-ink go-home stage, advances the held poses in
+place and returns the entry set the caller plans from — and `run`'s stage-C
+branch, `run`'s stage-D phase loop and `run_conducted`'s band stage are now
+three calls to it.  A conducted stage can no longer be added WITHOUT the
+go-home.  It is a no-op when the fleet is already parked, so the stage D that
+pays for it is exactly the one whose partners did not fly.
+
+**`unattributed` IS `bucket_never_planned`.**  The chain could see what a stage
+listed, what `plan_stroke` refused, what an arm handed on and what the DP never
+covered — and all four of those lists are written BY `plan_bucket` or by the
+stage that called it.  A piece in NONE of them was never offered to
+`plan_bucket` at all: its whole bucket was skipped.  `res.pieces` is where such
+a piece still is, and it is now the account's last question.
+
+| run | `unattributed` was | never planned for |
+|---|---|---|
+| `lf8_s150` (CSAIL, tilt 15) | **2.0633 m, 7 stretches** | (2, 31) 0.894 m + (2, 71) 1.179 m |
+| `bench/starburst` | **1.5942 m, 9 stretches** | (2, 31) 0.110 m + (2, 71) 1.542 m |
+
+**BOTH ARE THE ROW GROUP [31, 71]** — the same group §30.4 chased with an order
+search and `CONDUCT_HOME_FIRST` finally flew on `lf9c`.  Asked LAST, and matched
+on `(line, k)` rather than on the cell: a `split_at_room` part is minted with a
+new `k`, so a split parent looks unplanned while its parts are themselves listed
+or deferred, and a deferral changes the cell.  Re-run on `lf6b_s150`, the
+programme §30.2's published table is quoted from, the account is UNCHANGED —
+1.8908 `listed_not_flown`, 0.7250 `no_drawer`, 0.0041 `plan_refused`.
+`scripts/gap_account.py` gains the same reason, `deferred_never_taken` (which it
+never had) and `--tilt-max-deg`: a tilt-15 programme read back with the DP
+re-derived at 0 invents refusals the run never had.
+
+**WHAT IT MEASURES.**  `bench_staged.sh` re-run with both fixes, same
+configuration: `scatter` **certifies** (`all_ok: true`, was false), 99.0 %
+flown, makespan 156.7 s (was 166.2 s) and a planning wall of 420 s against
+2 261 s — 5.4x — because the row groups no longer plan against a fleet standing
+over the sheet.  `hatch` is unchanged at 83.1 % and its 5.074 m is `no_drawer`,
+the DP's own ceiling at this placement, which no go-home touches.
+docs/V2_STAGED.md §31 is the write-up; `tests/test_staged.py` and
+`tests/test_gap_account.py` carry the two new tests.

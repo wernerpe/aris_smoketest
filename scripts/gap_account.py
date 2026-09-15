@@ -188,6 +188,12 @@ REASONS = {
     "no_drawer": "NO DRAWER LEFT -- the only (stage, arm) cell the pattern "
                  "offers it to was banned by the refusal loop",
     "plan_refused": "plan_stroke REFUSED -- a stub under its minimum length",
+    "deferred_never_taken": "DEFERRED AND NEVER RE-LISTED -- an arm handed it "
+                            "on and no later stage put it on a bucket",
+    "bucket_never_planned": "THE BUCKET WAS NEVER PLANNED -- the DP gave the "
+                            "span to a (stage, arm) cell that listed nothing, "
+                            "refused nothing and deferred nothing, so the ink "
+                            "is in the DP and in no stage's book at all",
     "unattributed": "not attributed",
 }
 
@@ -217,6 +223,7 @@ def account(lines, doc, plan, cap, cov, rounds, gaps, v19=None) -> list[dict]:
     # stage refused (`degenerate:too_short` on a 5 mm remainder) is in the
     # programme's own per-arm `refused` list and nowhere else.
     shipped: dict[int, list] = defaultdict(list)
+    handed_on: dict[int, list] = defaultdict(list)
     for one in doc.get("stages", []):
         for a, arm in (one.get("arms") or {}).items():
             for r in arm.get("refused") or []:
@@ -224,6 +231,27 @@ def account(lines, doc, plan, cap, cov, rounds, gaps, v19=None) -> list[dict]:
                     dict(stage=int(one["stage"]), arm=int(a), k=int(r["piece"]),
                          m=float(r["length_m"]), status=str(r["status"]),
                          reason=str(r["reason"])))
+            for r in arm.get("deferred") or []:
+                handed_on[int(r["line"])].append(
+                    dict(stage=int(one["stage"]), arm=int(a), k=int(r["piece"]),
+                         m=float(r["length_m"])))
+    # A DP PIECE NO STAGE EVER OPENED ITS BOOK ON -- see
+    # `staged.coverage_account`, which asks the same question of a live result.
+    # `plan_bucket` records every piece of a bucket it is handed, so a piece in
+    # none of the programme's three lists was never offered to it at all: its
+    # whole bucket was skipped, which is what a conducted group that produces
+    # no arms does.  Matched on (line, k) because a deferral changes the cell.
+    drew = {(int(p["line"]), int(p["k"])) for p in listed}
+    drew |= {(int(li), int(r["k"])) for li, v in shipped.items() for r in v}
+    drew |= {(int(li), int(r["k"])) for li, v in handed_on.items() for r in v}
+    unplanned: dict[int, list] = defaultdict(list)
+    for pc in S.pieces_of(plan):
+        if (int(pc.line), int(pc.k)) in drew:
+            continue
+        unplanned[int(pc.line)].append(
+            dict(stage=int(pc.stage), arm=int(pc.arm), line=int(pc.line),
+                 k=int(pc.k), s0=float(pc.s0), s1=float(pc.s1),
+                 m=float(pc.length_m)))
     out = []
     for (li, a, b, m) in gaps:
         cum = T.cumlen(lines[li])
@@ -250,6 +278,12 @@ def account(lines, doc, plan, cap, cov, rounds, gaps, v19=None) -> list[dict]:
                              if _overlap(a, b, q[0], q[1]) > 1e-4}])
         g["stage_refused"] = [r for r in shipped.get(li, [])
                               if r["m"] + 2 * TOL >= m]
+        g["handed_on"] = [r for r in handed_on.get(li, [])
+                          if (r["stage"], r["arm"]) in
+                          {(q[2], q[3]) for q in dp_at.get(li, [])
+                           if _overlap(a, b, q[0], q[1]) > 1e-4}]
+        g["never_planned"] = [u for u in unplanned.get(li, [])
+                              if _overlap(a, b, u["s0"], u["s1"]) > 1e-4]
         if g["not_flown"]:
             g["reason"] = "listed_not_flown"
         elif g["no_drawer_m"] > 0.5 * m:
@@ -257,6 +291,10 @@ def account(lines, doc, plan, cap, cov, rounds, gaps, v19=None) -> list[dict]:
         elif any(h["status"] == "degenerate" for h in g["refusals"]) \
                 or any(r["status"] == "degenerate" for r in g["stage_refused"]):
             g["reason"] = "plan_refused"
+        elif g["handed_on"]:
+            g["reason"] = "deferred_never_taken"
+        elif g["never_planned"]:
+            g["reason"] = "bucket_never_planned"
         else:
             g["reason"] = "unattributed"
         # ...AND WHO DREW IT IN v19, WHICH REACHED 100.0000 % ON THIS EXACT
@@ -283,7 +321,8 @@ def account(lines, doc, plan, cap, cov, rounds, gaps, v19=None) -> list[dict]:
 # 3.  THE PICTURE
 # ---------------------------------------------------------------------------
 COLOUR = {"listed_not_flown": "#d62728", "no_drawer": "#ff7f0e",
-          "plan_refused": "#9467bd", "unattributed": "#7f7f7f"}
+          "plan_refused": "#9467bd", "deferred_never_taken": "#2ca02c",
+          "bucket_never_planned": "#17becf", "unattributed": "#7f7f7f"}
 
 
 def picture(lines, doc, acc, path, total, inked, title=""):
@@ -374,6 +413,10 @@ def main(argv=None):
     ap.add_argument("--programme", required=True)
     ap.add_argument("--lines", required=True)
     ap.add_argument("--split-m", type=float, default=0.15)
+    ap.add_argument("--tilt-max-deg", type=float, default=0.0,
+                    help="the cone the PROGRAMME was planned at; the DP is "
+                         "re-derived with it, and a tilt-15 programme read at "
+                         "0 invents refusals the run never had")
     ap.add_argument("--atlas", default=S.ATLAS_DEFAULT)
     ap.add_argument("--png", default=None)
     ap.add_argument("--v19", default=None,
@@ -389,7 +432,8 @@ def main(argv=None):
     print(f"logo {total:.4f} m   flown {inked:.4f} m = "
           f"{100 * inked / total:.4f} %   missing {total - inked:.4f} m in "
           f"{len(gaps)} stretches")
-    plan, cap, cov, rounds = rederive_dp(lines, a.atlas, a.split_m)
+    plan, cap, cov, rounds = rederive_dp(lines, a.atlas, a.split_m,
+                                         tilt_max_deg=a.tilt_max_deg)
     v19 = (v19_cover(json.loads(Path(a.v19).read_text()), lines)
            if a.v19 else None)
     acc = account(lines, doc, plan, cap, cov, rounds, gaps, v19)

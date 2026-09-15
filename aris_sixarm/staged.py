@@ -2164,20 +2164,10 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                 # EVERY SLOT STARTS FROM AN ALL-PARKED FLEET EXCEPT ITS OWN ROW
                 # (see `CONDUCT_HOME_FIRST`).  The go-home is its own conducted
                 # stage with no ink in it, so it is certified like any other.
-                if CONDUCT_HOME_FIRST:
-                    sh = _home_stage(int(s), fl, pens, entry, parks, h_inv,
-                                     opts, leg_cache, leg_cache_root, dt, sub,
-                                     conduct_cap_s, verbose)
-                    if sh is not None:
-                        for a, st in sh.arms.items():
-                            held[int(a)] = np.asarray(st.q_end,
-                                                      float).reshape(7)
-                        entry = {int(a): np.asarray(q, float).reshape(7)
-                                 for a, q in held.items()}
-                        plan_s += sh.wall_s
-                        out.append(sh)
-                        if verbose:
-                            _report_stage(sh)
+                w, entry = _home_before(int(s), out, fl, pens, held, parks,
+                                        h_inv, opts, leg_cache, leg_cache_root,
+                                        dt, sub, conduct_cap_s, verbose)
+                plan_s += w
                 took = {int(a): list(v) for a, v in deferred.items() if v}
                 took_m = float(sum(p.length_m for v in took.values()
                                    for p in v))
@@ -2352,13 +2342,22 @@ def run(lines, pattern=None, coverage=None, specs=None, pens=None, parks=None,
                   + " then ".join(str(sorted(ph)) for ph in phases))
         for ph in phases:
             sd = max(sr.stage for sr in out) + 1
-            t1 = time.perf_counter()
             entry = {int(a): np.asarray(q, float).reshape(7)
                      for a, q in held.items()}
             holds.append(dict(before_stage=int(sd),
                               q={str(a): [float(x) for x in q]
                                  for a, q in sorted(entry.items())},
                               **hold_gap(entry, fl, pens, h_inv)))
+            # STAGE D IS CONDUCTED TOO, SO IT GETS THE GO-HOME AS WELL.  A band
+            # phase is `_conduct_groups` over the same held-pose entry set as
+            # the row pass, so a phase planned while the arms it does not own
+            # stand at their stage-B/C hovers loses whole buckets for exactly
+            # the reason `CONDUCT_HOME_FIRST` was written.
+            w, entry = _home_before(sd, out, fl, pens, held, parks, h_inv,
+                                    opts, leg_cache, leg_cache_root, dt, sub,
+                                    conduct_cap_s, verbose)
+            plan_s += w
+            t1 = time.perf_counter()
             take = {int(a): list(v) for a, v in deferred.items()
                     if int(a) in set(ph) and v}
             arms, chk, c_s = _conduct_groups(
@@ -3891,6 +3890,38 @@ def _home_stage(sd, fl, pens, held, parks, h_inv, opts, leg_cache,
                        conduct_s=float(c_s))
 
 
+def _home_before(sd, out, fl, pens, held, parks, h_inv, opts, leg_cache,
+                 leg_cache_root, dt, sub, cap_s, verbose):
+    """The go-home in front of a CONDUCTED stage. -> (wall_s, entry poses).
+
+    EVERY CONDUCTED STAGE, NOT ONLY THE ROW PASS.  Stage C and stage D are the
+    same call -- `_conduct_groups` over the fleet's held poses -- so a band
+    phase planned while the arms it does not own stand at their stage-B/C
+    hovers loses whole buckets for exactly the reason `CONDUCT_HOME_FIRST` was
+    written.  Measured on `starburst` (2026-09-15): 2.83 m of dead-band ink
+    listed and never flown, with stage C home-first and stage D without it.
+
+    Appends the no-ink go-home stage to `out`, advances `held` IN PLACE, and
+    returns the entry pose set the caller must plan its slot from.  `None` from
+    `_home_stage` -- the fleet is already parked -- costs nothing and adds no
+    stage.
+    """
+    entry = {int(a): np.asarray(q, float).reshape(7) for a, q in held.items()}
+    if not CONDUCT_HOME_FIRST:
+        return 0.0, entry
+    sh = _home_stage(int(sd), fl, pens, entry, parks, h_inv, opts, leg_cache,
+                     leg_cache_root, dt, sub, cap_s, verbose)
+    if sh is None:
+        return 0.0, entry
+    for a, st in sh.arms.items():
+        held[int(a)] = np.asarray(st.q_end, float).reshape(7)
+    out.append(sh)
+    if verbose:
+        _report_stage(sh)
+    return float(sh.wall_s), {int(a): np.asarray(q, float).reshape(7)
+                              for a, q in held.items()}
+
+
 def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
                     opts, leg_cache, leg_cache_root, dt, sub, jobs, cap_s,
                     verbose, mode="parallel"):
@@ -4412,7 +4443,7 @@ INK_DS = 0.002          # m, the grid every input line is tested on
 INK_TOL = 0.0025        # m, how near drawn ink a point must be to count as drawn
 INK_MIN_GAP = 0.001     # m, below which a gap is sampling dust
 GAP_REASONS = ("listed_not_flown", "no_drawer", "plan_refused",
-               "deferred_never_taken", "unattributed")
+               "deferred_never_taken", "bucket_never_planned", "unattributed")
 
 
 def flown_ink(res: "StagedResult") -> tuple[dict, list]:
@@ -4523,6 +4554,12 @@ def coverage_account(lines, res: "StagedResult", plan=None) -> dict:
       `plan_refused`          `plan_stroke` refused the piece (`degenerate`,
                               `split`), with its own status and reason;
       `deferred_never_taken`  an arm deferred it and no later stage listed it;
+      `bucket_never_planned`  the DP gave the span to a (stage, arm) cell and
+                              that cell's bucket was never planned at all: it
+                              listed nothing, refused nothing and deferred
+                              nothing, so the ink is in `res.pieces` and in no
+                              stage's book at all (a conducted group whose slot
+                              produces no arms does exactly this);
       `unattributed`          none of the above -- which is a bug, and it is
                               reported rather than rounded away.
     """
@@ -4557,6 +4594,31 @@ def coverage_account(lines, res: "StagedResult", plan=None) -> dict:
                     dict(stage=int(sr.stage), arm=int(a), k=int(pc.k),
                          s0=float(pc.s0), s1=float(pc.s1),
                          m=float(pc.length_m)))
+    # A DP PIECE NO STAGE EVER OPENED ITS BOOK ON.  `plan_bucket` records every
+    # piece of a bucket it is given -- accepted or refused -- and `_fly_or_defer`
+    # records what it hands on, so a piece that is in NONE of the three lists
+    # was never offered to `plan_bucket` at all: its whole bucket was skipped.
+    # Measured on `bench/starburst` (2026-09-15): the conducted stage's group
+    # [31, 71] produced no arms, so the DP's 8 pieces for (stage 2, arm 71) --
+    # 1.594 m -- are in `res.pieces` and in no stage's programme, refusal list
+    # or deferral list, and the account had no reason code for them.
+    #
+    # MATCHED ON (line, k), NOT ON THE CELL, because a deferral changes the
+    # cell: the same piece is listed by the stage that finally takes it.  A
+    # `split_at_room` part is minted with a NEW k and its parent's k then looks
+    # unplanned, which is why this question is asked LAST -- the parts are
+    # themselves listed or deferred, so the span is already attributed.
+    unplanned: dict[int, list] = {}
+    seen_k = {(int(p["line"]), int(p["k"])) for p in listed}
+    seen_k |= {(int(li), int(r["k"])) for li, v in refused.items() for r in v}
+    seen_k |= {(int(li), int(d["k"])) for li, v in deferred.items() for d in v}
+    for pc in (res.pieces or []):
+        if (int(pc.line), int(pc.k)) in seen_k:
+            continue
+        unplanned.setdefault(int(pc.line), []).append(
+            dict(stage=int(pc.stage), arm=int(pc.arm), line=int(pc.line),
+                 k=int(pc.k), s0=float(pc.s0), s1=float(pc.s1),
+                 m=float(pc.length_m)))
     out = []
     for (li, a, b, m) in gaps:
         cum = traces_mod.cumlen(np.asarray(lines[li], float).reshape(-1, 2))
@@ -4572,7 +4634,10 @@ def coverage_account(lines, res: "StagedResult", plan=None) -> dict:
                  refused=[r for r in refused.get(li, [])
                           if _span_overlap(a, b, r["s0"], r["s1"]) > 1e-4],
                  deferred=[d for d in deferred.get(li, [])
-                           if _span_overlap(a, b, d["s0"], d["s1"]) > 1e-4])
+                           if _span_overlap(a, b, d["s0"], d["s1"]) > 1e-4],
+                 never_planned=[u for u in unplanned.get(li, [])
+                                if _span_overlap(a, b, u["s0"],
+                                                 u["s1"]) > 1e-4])
         if g["no_drawer_m"] > 0.5 * m:
             g["reason"] = "no_drawer"
         elif g["listed_not_flown"]:
@@ -4581,6 +4646,8 @@ def coverage_account(lines, res: "StagedResult", plan=None) -> dict:
             g["reason"] = "plan_refused"
         elif g["deferred"]:
             g["reason"] = "deferred_never_taken"
+        elif g["never_planned"]:
+            g["reason"] = "bucket_never_planned"
         else:
             g["reason"] = "unattributed"
         out.append(g)
@@ -4989,17 +5056,10 @@ def run_conducted(doc: dict, stage: int = 2, band_stage: int | None = None,
                       q={str(a): [float(x) for x in q]
                          for a, q in sorted(entry.items())},
                       **hold_gap(entry, fl, pens, h_inv)))
-    if CONDUCT_HOME_FIRST:
-        sh = _home_stage(int(stage), fl, pens, entry, parks, h_inv, opts,
-                         leg_cache, leg_cache_root, dt, sub, conduct_cap_s,
-                         verbose)
-        if sh is not None:
-            for a, st in sh.arms.items():
-                entry[int(a)] = np.asarray(st.q_end, float).reshape(7)
-            plan_s += sh.wall_s
-            out.append(sh)
-            if verbose:
-                _report_stage(sh)
+    w, entry = _home_before(int(stage), out, fl, pens, entry, parks, h_inv,
+                            opts, leg_cache, leg_cache_root, dt, sub,
+                            conduct_cap_s, verbose)
+    plan_s += w
     t1 = time.perf_counter()
     arms, chk, c_s = _conduct_groups(
         stage, [ROW_ARMS[j] for j in sorted(ROW_ARMS)], buckets, {}, fl, pens,
@@ -5022,6 +5082,11 @@ def run_conducted(doc: dict, stage: int = 2, band_stage: int | None = None,
                           q={str(a): [float(x) for x in q]
                              for a, q in sorted(entry.items())},
                           **hold_gap(entry, fl, pens, h_inv)))
+        # ...AND THE BAND STAGE IS CONDUCTED, SO IT GOES HOME FIRST TOO.
+        w, entry = _home_before(int(band_stage), out, fl, pens, entry, parks,
+                                h_inv, opts, leg_cache, leg_cache_root, dt,
+                                sub, conduct_cap_s, verbose)
+        plan_s += w
         t1 = time.perf_counter()
         arms, chk, c_s = _conduct_groups(
             band_stage, [tuple(who)], {}, band, fl, pens, entry, parks, h_inv,

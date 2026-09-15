@@ -190,6 +190,75 @@ def test_every_gap_carries_one_of_the_declared_reason_codes():
     assert acc["flown_m"] == pytest.approx(0.0, abs=1e-9)
 
 
+def _dp_piece(stage, arm, line, k, pts):
+    cum = traces.cumlen(np.asarray(pts, float))
+    return staged.Piece(int(stage), int(arm), int(line), int(k),
+                        np.asarray(pts, float), float(cum[-1]),
+                        state=0, s0=0.0, s1=float(cum[-1]))
+
+
+def test_a_bucket_no_stage_ever_opened_is_named_and_not_unattributed():
+    """`bench/starburst`, IN MINIATURE -- and it is what `unattributed` WAS.
+
+    The DP gives line 1 to (stage 2, arm 71) and the conducted group that owns
+    arm 71 produces no arms at all, so the piece is listed by nobody, refused
+    by nobody and deferred by nobody: every book in the account is silent about
+    a metre that is plainly missing from the paper.  Measured on `starburst`
+    2026-09-15, that was 1.594 m of `unattributed` -- a hole in the REASON
+    chain, not in the picture -- and it is `bucket_never_planned`.
+    """
+    lines = [_line(0.0, 1.0, 0.0), _line(0.0, 1.0, 1.0)]
+    sr = staged.StageResult(0, (31,),
+                            {31: _arm_stage(0, 31, [(0, 0, lines[0])], {0})})
+    pcs = [_dp_piece(0, 31, 0, 0, lines[0]), _dp_piece(2, 71, 1, 0, lines[1])]
+    res = staged.StagedResult("toy", [sr], pcs)
+    acc = staged.coverage_account(lines, res, _plan_with_uncovered(lines, set()))
+    assert len(acc["gap_list"]) == 1
+    g = acc["gap_list"][0]
+    assert g["line"] == 1 and g["reason"] == "bucket_never_planned"
+    assert g["never_planned"][0]["stage"] == 2
+    assert g["never_planned"][0]["arm"] == 71
+    assert acc["unattributed_m"] == pytest.approx(0.0, abs=1e-9)
+    # ...and the piece the stage DID list is not accused of the same thing
+    assert not any(u["line"] == 0 for v in acc["gap_list"]
+                   for u in v["never_planned"])
+
+
+def test_every_missing_metre_of_a_toy_picture_has_a_NAMED_reason():
+    """THE ACCOUNT HAS NO UNEXPLAINED BUCKET.
+
+    One picture with all five failures on it at once -- a line nobody was
+    offered, a bucket listed and never flown, a stub `plan_stroke` refused, a
+    piece deferred and never re-listed, and a bucket no stage ever opened --
+    and every missing metre lands in a named reason.  `unattributed` is a BUG
+    and the assertion is that it is empty, not that it is small.
+    """
+    lines = [_line(0.0, 1.0, 0.0),      # 0  drawn
+             _line(0.0, 1.0, 1.0),      # 1  listed, never flown
+             _line(0.0, 1.0, 2.0),      # 2  no drawer at all
+             _line(0.0, 1.0, 3.0),      # 3  plan_stroke refused it
+             _line(0.0, 1.0, 4.0),      # 4  deferred and never re-listed
+             _line(0.0, 1.0, 5.0)]      # 5  bucket no stage ever opened
+    st = _arm_stage(0, 31, [(0, 0, lines[0]), (1, 0, lines[1])], {0})
+    st.planned = [staged.PiecePlan(_dp_piece(0, 31, 3, 0, lines[3]),
+                                   "degenerate", "too_short")]
+    st.deferred = [_dp_piece(0, 31, 4, 0, lines[4])]
+    sr = staged.StageResult(0, (31,), {31: st})
+    pcs = [_dp_piece(0, 31, i, 0, lines[i]) for i in (0, 1, 3, 4)]
+    pcs.append(_dp_piece(2, 71, 5, 0, lines[5]))
+    res = staged.StagedResult("toy", [sr], pcs)
+    acc = staged.coverage_account(lines, res, _plan_with_uncovered(lines, {2}))
+    assert acc["flown_m"] + acc["gaps_m"] == pytest.approx(acc["total_m"],
+                                                           abs=1e-9)
+    got = {g["line"]: g["reason"] for g in acc["gap_list"]}
+    assert got == {1: "listed_not_flown", 2: "no_drawer", 3: "plan_refused",
+                   4: "deferred_never_taken", 5: "bucket_never_planned"}
+    assert acc["unattributed_m"] == pytest.approx(0.0, abs=1e-9)
+    assert "unattributed" not in acc["by_reason"]
+    assert sum(v["m"] for v in acc["by_reason"].values()) == \
+        pytest.approx(acc["gaps_m"], abs=6 * staged.INK_DS)
+
+
 def test_all_ok_is_false_over_ink_the_timeline_never_draws_without_a_picture():
     """THE GUARD MAY NOT DEPEND ON HAVING THE LINES.
 
