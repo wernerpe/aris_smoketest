@@ -46,6 +46,31 @@ asks:** `hold_gap` proved the held set pairwise clear and nothing else, so
 `scene_check` makes — is asked of every held pose where the barrier is declared
 and gates its `ok`. A barrier may not hold a pose the judge would refuse.
 
+**MEASURED, AND `lf6b_s150` IS CERTIFIED END TO END** (docs/V2_STAGED.md §29.3–
+§29.5). Both configurations' final passes now certify:
+
+| | `lf6b_s150` (A, B, C, D) | `lf6_whole_c4` (stage C) |
+|---|---|---|
+| certified | **YES, every stage, every gate** | **YES**, +118.1 mm |
+| stage B | 135.4 s FAIL → **140.0 s PASS** | unchanged, PASS |
+| stage C | −238.5 mm → **+55.1 mm** | −76.6 mm → **+118.1 mm** |
+| stage D | FAIL (frozen) → **+251.7 mm PASS** | empty |
+| stage C motion | 171.1 → **146.8 s** (20.4 → 17.5 s/m) | 116.7 → **98.1 s** (17.4 → 14.7 s/m) |
+| makespan | 296.7 → **349.7 s** (v19: 209.9 s) | 328.5 → **309.9 s** |
+| ink FLOWN | 14.148 m → **14.148 m, unchanged** | 14.141 → **13.255 m** |
+
+**THE STAGE-B FIX COSTS 4.6 SECONDS AND NO INK.** One retreat fires in the whole
+programme — arm 31, stage B, rung (b), a hover over its PREVIOUS stroke end; the
+park rung was never needed. **THE STAGE-C FIX COSTS PLANNING WALL AND, ON THE
+WHOLE BAG ONLY, 0.885 m.** A refused group is planned twice into a cold leg-store
+namespace: stage C's wall went 93 → 1 428 s on the whole bag. And arm 97's
+0.885 m — the metre that read −161.3 mm against a standing arm 2 — does not fly
+at all once arm 2 is in its room. That is the honest answer, and there is one
+bit left unsearched: a two-arm group has exactly two orders, and where the
+busiest arm's bucket will not fly under its partner's HELD pose, the reverse
+order plans that partner first and lets it go HOME. `lf6b_s150` does not need it
+(its flown ink is identical to the uncertified run's); the whole bag does.
+
 **NO GATE MOVED.** `PAIR_MARGIN` 0.050, self 23, static 50, frame floor 63,
 `MARGIN_GATE` 0.15, the tool transform, the layout and the rig are untouched;
 both fixes are about WHAT IS ASKED OF WHICH POSE, not about what passes.

@@ -3065,8 +3065,9 @@ exists to leave behind.
 |---|---|---|---|
 | makespan | **209.9 s** | 290.6 s (uncertified) | **309.9 s** |
 | certified | yes | no | **YES** |
-| ink drawn | 16.8 m | 16.083 m (95.7 %) | **16.083 m (95.7 %)** |
-| A + B share of the ink | — | 58.3 % | **58.3 %** |
+| ink planned | 16.8 m | 16.057 m | 16.053 m |
+| ink **FLOWN** | 16.8 m | 14.141 m | **13.255 m** (see §29.5) |
+| A + B share of the flown ink | — | 66.2 % | **70.6 %** |
 | time to first motion | — | 0.174 s | 0.174 s |
 | planning wall (A+B sum / busiest arm-stage) | — | 2 286 / 805 s | 2 286 / 805 s |
 | planning wall (stage C, wall / busiest group) | — | 93 s / 65 s | **1 428 s / 698 s** |
@@ -3080,3 +3081,68 @@ the outside fleet, once again per arm under the in-group room — and each re-pl
 opens a leg-store namespace nothing has warmed, so every pen-up leg is routed
 from scratch. Stage C went from 93 s of wall to **1 428 s**. The motion it
 produces is 18.6 s shorter and it is the first stage C that ships.
+
+### 29.4 s150 end to end — CERTIFIED, and it costs 4.6 s and no ink
+
+`out/staged_csail_h097_lf6b_s150.*`, all four stages, both fixes, warm leg
+store, four route jobs, three conduct jobs, a 1 500 s cap per row conduct.
+
+| stage | actives (roles) | pieces | ink m | stage s | inter-arm mm | solo mm | self mm | frame mm | paper mm | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | lead 2,13,71 / foll 17,31,97 | 15 | 2.061 | 58.5 | +197.6 | +167.9 | — | — | — | **PASS** |
+| B | lead 17,31,97 / foll 2,13,71 | 25 | 5.519 | **140.0** | +180.6 | +134.2 | — | — | — | **PASS** |
+| C | 3 row conductors, serial | 34 | 8.407 | 146.8 | **+55.1** | — | +60.2 | +54.7 | +41.6/−4.4 | **PASS** |
+| D | conductor [71] | 1 | 0.077 | 4.4 | +251.7 | — | +114.6 | +70.4 | +41.4/−4.7 | **PASS** |
+
+| | v19 | `lf6_s150` (§28.6) | **`lf6b_s150`** |
+|---|---|---|---|
+| makespan | **209.9 s** | 296.7 s | **349.7 s** |
+| certified | yes | **no** (B, C and D all failed) | **YES — every stage, every gate** |
+| ink FLOWN | 16.8 m | 14.148 m | **14.148 m — unchanged** |
+| ink planned but not flown | — | 1.916 m (arm 31, stage C) | 1.916 m (arm 31, stage C) |
+| A + B share of the flown ink | — | 53.5 % | **53.5 %** |
+| barriers | — | — | 4, all clear, worst **+241.3 mm** |
+| time to first motion | — | 0.198 s | 0.342 s |
+| planning wall (sum / busiest arm-stage) | — | 3 203 / 799 s | 3 888 / 831 s |
+| row conducts (busiest group, wall) | — | — | **1 321 s** |
+| check | — | 40.8 s | 41.1 s |
+| stage-C cost per metre (motion) | — | 20.4 s/m | **17.5 s/m** |
+| fleet pen-up | — | 150.4 s | **150.5 s** (2.7 % flip, 44.6 % tall, 52.7 % honest) |
+
+**THE STAGE-B FIX COSTS 4.6 SECONDS AND NOTHING ELSE.** 135.4 → 140.0 s on the
+same 25 pieces and the same 5.519 m: arm 31's held hover kept 0.1064 rad, the
+verification refused it, rung (a) found nothing higher over that stroke end, and
+**rung (b) — a hover over the arm's PREVIOUS stroke end — took it**
+(`hold_kind = "hover_prev"`). One retreat in the whole programme; every other
+stage on both configurations ends on an ordinary `hover`. The park rung, the
+expensive one, was never needed.
+
+**AND NO METRE OF INK MOVED.** The 1.916 m arm 31 plans and cannot fly in stage
+C is the same 1.916 m it could not fly in §28.6 — it is a bucket `arm_program`
+refuses, not something either fix took away.
+
+### 29.5 The whole bag's stage C certifies by giving up 0.885 m, and why
+
+The honest accounting, flown ink only (a bucket whose `arm_program` refuses is
+PLANNED, not drawn, and the `ink_m` column above counts what was planned):
+
+| | `lf6_whole_c3` | **`lf6_whole_c4`** |
+|---|---|---|
+| stage C planned | 6.693 m | 6.689 m |
+| stage C **flown** | **4.777 m** | **3.891 m** |
+| arm 31 | 1.916 m planned, not flown | 1.914 m planned, not flown |
+| arm 97 | 0.885 m **flown, at −161.3 mm** | 0.885 m planned, **not flown** |
+
+**ARM 97's 0.885 m WAS NEVER DRAWABLE WHERE IT WAS DRAWN.** It is the metre that
+read −161.3 mm against a standing arm 2, and the fix is what discovered that:
+planned with arm 2 in the room as the pose it actually holds, arm 97's bucket
+does not fly at all. That is the honest answer and it is a loss.
+
+**IT IS ALSO AN ORDER THAT WAS NOT SEARCHED.** `_serialise_group` plans BUSIEST
+FIRST, so arm 97 (0.885 m) planned against arm 2 standing at its entry pose. The
+other order plans arm 2 first — arm 2 then goes HOME, and arm 97 flies its slot
+against arm 2 AT ITS PARK, which is a different and possibly much roomier
+question. One bit, two orders, and a group of two has only the two: **trying the
+reverse order when the busiest arm's bucket does not fly is the next thing this
+owes**, and it is named here rather than shipped unmeasured. `lf6b_s150` does
+not need it — its flown ink is identical to the uncertified run's.
