@@ -3146,3 +3146,47 @@ question. One bit, two orders, and a group of two has only the two: **trying the
 reverse order when the busiest arm's bucket does not fly is the next thing this
 owes**, and it is named here rather than shipped unmeasured. `lf6b_s150` does
 not need it — its flown ink is identical to the uncertified run's.
+
+### 29.6 The terms the 1 000-stroke model wants, measured on a certified run — and what is still owed
+
+A + B carry the majority of the flown ink on both configurations (53.6 % on
+`lf6b_s150`, 70.6 % on `lf6_whole_c4`), so §21's recalibration is the right ask.
+Its terms, measured over the twelve flown buckets of `lf6b_s150` — the first
+staged programme that certifies end to end:
+
+| term | §12 (zigzag) | §21 (v6) | **`lf6b_s150`, certified** |
+|---|---|---|---|
+| draw | 6.56 s/m | 13.81 s/m | **16.12 s/m** |
+| inter-piece pen-up leg | 5.15 s | 4.18 s | **2.68 s** |
+| park overhead per (stage, arm) | 9.74 s | 10.93 s | **38.55 s** |
+| accept rate | 81.9 % | 81.9 % | **96.2 %** |
+| stage-C cost per metre (motion) | — | 17.6 s/m | **17.5 s/m** (whole bag: **14.7**) |
+
+**TWO OF THOSE TERMS NO LONGER MEAN WHAT §12 MEANT BY THEM, AND THE MODEL MAY
+NOT BE ASSEMBLED FROM THEM UNTIL THEY DO.**
+
+* **draw 16.12 s/m** is not a faster or slower pen. It is the pen PACED: §28.1's
+  `room_pace_draw` buys the judge's playback residual out of the ink's own
+  clock, so a stroke drawn 50.5 mm from a frozen partner is flown 2× slower and
+  nothing about the geometry changed. A 1 000-line set has a different
+  proportion of strokes near a partner, so the term has to be split into
+  unpaced draw plus a paced fraction before it scales.
+* **park overhead 38.55 s per (stage, arm)** is dominated by stage C, where
+  `entry_s` is not a trip out of a park at all — it is an arm WAITING FOR ITS
+  SERIAL SLOT. Under `--row-compose serial` and the in-group serialisation that
+  wait grows with the other rows' motion, which is the opposite of a fixed cost
+  per (stage, arm), and §12's whole "the barrier amortises" argument is about a
+  fixed cost. Stage A and B alone read **4.58 s** per (stage, arm), which is the
+  comparable number and is less than half §12's 9.74.
+
+So the honest statement is: **the calibration is taken and the assembly is
+owed.** It needs the 1 000-line set's per-(stage, arm) piece and ink counts
+under `leader_follower` — a different stage structure from the eight-stage
+zigzag §12 and §21 were assembled on — and it needs the draw term split. That is
+one `traces` pass plus arithmetic, and it is the pick-up line:
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
+    --synthetic lines:1000 --pattern leader_follower --no-fly \
+    --json out/staged_1000_lf.json
+```
