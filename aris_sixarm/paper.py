@@ -108,6 +108,13 @@ CONTACT_FLOOR = -(TIP_TOL - TIP_SWEEP_PAD)   # -0.007 m, lift/lower tip floor
 # `rig_final.STATIC_PLAN_MARGIN` — the same 63 mm the stroke planner keeps, so
 # the ink and the pen-up over it are held to one number.
 FRAME_FLOOR = rig_final.STATIC_PLAN_MARGIN               # 0.063 m
+# THE FLOOR A FROZEN PARTNER'S ROOM IS HELD TO, and it is not a new
+# number: `STATIC_MARGIN` and `coordination.PAIR_MARGIN` are both
+# 50 mm, so the pair gate plus the checker's sweep residual is
+# `FRAME_FLOOR`.  `effective_static_floor` may clamp the routing floor
+# down to what a leg's own ENDPOINTS hold against the METAL; against a
+# partner it may not go below this.  See `effective_static_floor`.
+ROOM_FLOOR = FRAME_FLOOR
 SKIRT_STEP = 0.30          # m of paper per hop when a route SKIRTS an obstacle
 
 # ...AND A PAD IS NOT A BOUND.  `TIP_SWEEP_PAD` covers the residual the CHECKER
@@ -1508,6 +1515,31 @@ def effective_static_floor(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     Clamping to the endpoints keeps the gate meaningful where it can be met and
     inert where the geometry already lost — and `scene_check`, which does not
     clamp anything, still has the last word on whether such a pose may ship.
+
+    ...AND THE CLAMP IS ABOUT THE METAL, NOT ABOUT ANOTHER ARM.  Every word of
+    the argument above is about a certificate: the ATLAS certified this pose at
+    `STATIC_MARGIN` against the fixed frame, so refusing the lift out of it at
+    `STATIC_MARGIN + residual` refuses ink the arm demonstrably has.  **Nothing
+    certified anything against a FROZEN PARTNER'S ROOM.**  Clamping there does
+    not make an unmeetable gate inert, it makes a meetable one absent: a leg
+    whose two ENDPOINTS are clear of the partner is flown straight THROUGH the
+    partner's swept tube, because the floor the router held it to was the
+    endpoints' own number.
+
+    Measured on `bench/scatter` stage 1 (2026-09-15): arm 2 leaves its stage
+    entry pose at **+63.3 mm** against arm 97's realised room — 0.3 mm over
+    `FRAME_FLOOR` — dips to **-53.1 mm** 0.7 s later inside its `aside` block,
+    and is back over +190 mm by t = 3.4 s.  Both endpoints legal, the middle
+    through the other arm, every ink gate clear at +130 mm because both pens
+    are up.  `active_pair_gap` caught it and the router should not have
+    produced it.
+
+    So the clamp is taken on the STATIC ROOM ALONE (`frozen.room_only_clearance`)
+    and the result is then held up to `ROOM_FLOOR` whenever a partner is frozen:
+    the endpoint clamp may relax the routing floor TOWARD the pair gate, never
+    below it.  `ROOM_FLOOR` is `FRAME_FLOOR` and not a new number —
+    `STATIC_MARGIN` and `coordination.PAIR_MARGIN` are both 50 mm, so "the pair
+    gate plus the checker's sweep residual" IS 63 mm.  No gate constant moves.
     """
     if boxes is None:
         boxes = static_boxes(spec)
@@ -1518,9 +1550,29 @@ def effective_static_floor(spec, q0, q1, pen_ext=None, h_inv=H_INV_DEFAULT,
     # `floor` is passed through on purpose: this clamps everything at or above
     # it to `floor` anyway, so a value the short-circuit leaves at the capsule
     # model's number is a value this was going to discard.
-    return float(min(float(floor), float(chain_static(ends, spec, pen_ext,
-                                                      h_inv, boxes,
-                                                      float(floor)).min())))
+    f = float(min(float(floor), float(_static_only(ends, spec, pen_ext, h_inv,
+                                                   boxes,
+                                                   float(floor)).min())))
+    if frozen.active():
+        f = max(f, float(min(ROOM_FLOOR, float(floor))))
+    return f
+
+
+def _static_only(qs, spec, pen_ext=None, h_inv=H_INV_DEFAULT, boxes=None,
+                 floor=None):
+    """`chain_static` with the FROZEN PARTNERS left out. -> (M,)."""
+    boxes = static_boxes(spec) if boxes is None else boxes
+    qs = np.asarray(qs, float).reshape(-1, 7)
+    if not boxes or not len(qs):
+        return np.full(len(qs), np.inf)
+    Twb = spec.T_world_base(h_inv)
+    R, t = Twb[:3, :3], Twb[:3, 3]
+    T, p = fk_many(qs)
+    pw = p @ R.T + t
+    tool = [tp @ R.T + t for tp in tool_points_many(T, pen_ext)]
+    P10 = np.concatenate([pw] + [tp[:, None, :] for tp in tool], axis=1)
+    return frozen.room_only_clearance(P10, boxes,
+                                      sphere_centres(qs, spec, h_inv), floor)
 
 
 def path_frame_clearance(spec, qs, pen_ext=None, h_inv=H_INV_DEFAULT,

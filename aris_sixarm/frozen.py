@@ -494,6 +494,24 @@ def partner_clearance(P, C=None, floor=None):
     return np.minimum(out, so)
 
 
+def room_only_clearance(P, room, C=None, floor=None):
+    """`chain_clearance` WITHOUT the frozen partners. -> (N,).
+
+    The static set is fixed METAL whose geometry the atlas already certified
+    every drawing pose against, and `paper.effective_static_floor` clamps the
+    routing floor to it for exactly that reason.  A frozen partner is not that:
+    nothing certified this arm's poses against another arm's realised
+    trajectory, so the two have to be separable and this is the seam.
+    """
+    from . import envelope
+    boxes, cyls = envelope.split(room)
+    d = rig_final.chain_static_clearance(P, boxes, C=C, floor=floor)
+    if cyls:
+        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls, C=C,
+                                                       floor=floor))
+    return d
+
+
 def chain_clearance(P, room, C=None, floor=None):
     """The whole static room, measured. -> (N,).
 
@@ -509,12 +527,7 @@ def chain_clearance(P, room, C=None, floor=None):
     With everything off this IS `rig_final.chain_static_clearance` called with
     the identical arguments, so every shipped number is reproduced exactly.
     """
-    from . import envelope
-    boxes, cyls = envelope.split(room)
-    d = rig_final.chain_static_clearance(P, boxes, C=C, floor=floor)
-    if cyls:
-        d = np.minimum(d, envelope.chain_cyl_clearance(P, cyls, C=C,
-                                                       floor=floor))
+    d = room_only_clearance(P, room, C, floor)
     if not _CAPS:
         return d
     return np.minimum(d, partner_clearance(P, C, floor))

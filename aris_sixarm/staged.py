@@ -3189,7 +3189,7 @@ def _serialise_group(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
     lost_m, lost_n = _score(failed)
     tried = [dict(order=[int(a) for a in order], lost_m=lost_m,
                   lost_pieces=lost_n, failed=sorted(failed))]
-    if failed and len(order) > 1:
+    if failed and len(order) > 1 and POST_SLOT_SEARCH:
         # THE POST-SLOT ORDER.  Everything that flew keeps its rank and every
         # arm whose bucket did not fly goes to the BACK, busiest of them first:
         # last in the order is the slot in which every partner has finished and
@@ -3242,6 +3242,7 @@ def _serialise_group(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
         min_clearance=float(worst), in_group_priority=True,
         serial_order=[int(a) for a in order],
         orders_tried=tried, lost_m=float(lost_m), lost_pieces=int(lost_n),
+        post_slot_search=bool(POST_SLOT_SEARCH),
         slots=[dict(arm=int(sl["arm"]), frames=int(sl["frames"]),
                     min_clearance_m=float(sl.get("min_clearance_m", np.nan)),
                     ok=bool(sl.get("ok", True))) for sl in slots],
@@ -3796,6 +3797,14 @@ def _group_payload(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
 
 
 CONDUCT_BANDS = "auto"     # drop | keep | auto -- see `_conduct_groups`
+# THE POST-SLOT ORDER IS OFF BY DEFAULT, AND THE MEASUREMENT IS WHY.  §29.5
+# named the reverse order as the thing that owed arm 31 its 1.914 m; searched
+# on `lf7c_s150` it recovered NONE of it -- the bucket flies in neither order --
+# and group [2, 97], conducted in `lf6b`, was refused on the retry, serialised,
+# and then failed to fly arm 2's 0.609 m in either order as well.  2.520 m lost
+# against 1.914 m, for 24 s more motion and twice the wall.  So it stays
+# available and off: a search that is cheap only when it wins must be asked for.
+POST_SLOT_SEARCH = False
 
 
 def _conduct_groups(s, groups, buckets, deferred, fl, pens, held, parks, h_inv,
@@ -5047,6 +5056,15 @@ def main(argv=None):
                          "behaviour.  The leader loses the ink that needs to "
                          "reach in under its partner's shoulder and that ink "
                          "is deferred as usual (docs/V2_STAGED.md section 25)")
+    ap.add_argument("--post-slot-search", action="store_true",
+                    help="when a refused row group's arm cannot fly its bucket "
+                         "in the ink-first order, plan the whole group AGAIN "
+                         "with that arm moved to the back -- the slot in which "
+                         "every partner has finished and gone home "
+                         "(docs/V2_STAGED.md section 29.5).  OFF by default: "
+                         "measured on lf7c_s150 it recovered none of arm 31's "
+                         "1.914 m and lost a further 0.609 m elsewhere, for "
+                         "twice the stage-C wall")
     ap.add_argument("--conduct-jobs", type=int, default=3,
                     help="row conductors run at once (<= 3)")
     ap.add_argument("--conduct-cap-s", type=float, default=CONDUCT_CAP_S,
@@ -5077,6 +5095,7 @@ def main(argv=None):
     ap.add_argument("--programme", default=None)
     a = ap.parse_args(argv)
 
+    globals()["POST_SLOT_SEARCH"] = bool(a.post_slot_search)
     if a.stage_c_only:
         doc = json.loads(Path(a.stage_c_only).read_text())
         print(f"=== {Path(a.stage_c_only).name}: stage {a.stage_c_index} only, "

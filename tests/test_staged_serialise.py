@@ -382,6 +382,8 @@ def test_a_bucket_that_will_not_fly_is_given_the_post_slot_not_dropped(rig):
     shipped = parks
     real = staged.plan_bucket
     staged.plan_bucket = fake_plan
+    flag0 = staged.POST_SLOT_SEARCH
+    staged.POST_SLOT_SEARCH = True          # OFF by default; see the constant
     try:
         arms, rep = staged._serialise_group(
             2, (31, 71), {(2, 31): [_piece(31, 0.9)],
@@ -390,6 +392,7 @@ def test_a_bucket_that_will_not_fly_is_given_the_post_slot_not_dropped(rig):
             False, None, 0.05, 2, False, [2, 13, 17, 97], {}, {}, "drop", "x")
     finally:
         staged.plan_bucket = real
+        staged.POST_SLOT_SEARCH = flag0
 
     # the ink-first order is tried first and LOSES arm 31's bucket...
     assert rep["orders_tried"][0]["order"] == [71, 31]
@@ -431,3 +434,41 @@ def test_the_second_order_is_not_planned_when_the_first_one_loses_nothing(rig):
     assert calls == [71, 31]                    # one order, two plans
     assert len(rep["orders_tried"]) == 1
     assert rep["lost_m"] == pytest.approx(0.0)
+
+
+def test_the_post_slot_search_is_off_unless_it_is_asked_for(rig):
+    """MEASURED AND NOT SHIPPED.
+
+    On `lf7c_s150` the second order recovered none of arm 31's 1.914 m -- the
+    bucket flies in neither -- and group [2, 97], conducted in `lf6b`, was
+    refused on the band retry, serialised, and then lost arm 2's 0.609 m in
+    both orders too: 2.520 m against 1.914 m, for twice the stage-C wall.  So
+    the default plans ONE order and says what it lost.
+    """
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    calls = []
+
+    def fake_plan(stage, arm, pieces, specs=None, pens=None, parks=None,
+                  h_inv=None, opts=None, envelopes=None, partners=None, **kw):
+        calls.append(int(arm))
+        st = _held_stage(int(arm), parks[int(arm)], 6, pieces=len(pieces))
+        if int(arm) == 31:
+            st.planned, st.timeline = [], None      # never flies, either order
+        return st
+
+    assert staged.POST_SLOT_SEARCH is False         # the shipped default
+    real = staged.plan_bucket
+    staged.plan_bucket = fake_plan
+    try:
+        _, rep = staged._serialise_group(
+            2, (31, 71), {(2, 31): [_piece(31, 0.9)],
+                          (2, 71): [_piece(71, 2.0)]},
+            {}, rig, pens, dict(parks), parks, staged.H_INV_DEFAULT, None,
+            False, None, 0.05, 2, False, [2, 13, 17, 97], {}, {}, "drop", "x")
+    finally:
+        staged.plan_bucket = real
+    assert len(rep["orders_tried"]) == 1
+    assert rep["post_slot_search"] is False
+    assert rep["lost_m"] == pytest.approx(0.9)      # ...and it SAYS so
+    assert calls.count(71) == 1                     # one order, not two
