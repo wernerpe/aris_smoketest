@@ -3324,3 +3324,24 @@ ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
 
 The cap is 3 600 s rather than the 1 500 s of §29.4 because group [31, 71] alone
 measured 1 321 s of wall at ONE order, and two orders cannot fit under it.
+
+### 30.5 It is not the logo — the same thing happens on the bench corpus
+
+`scripts/bench_lines.py --sheet installed` regenerates docs/BENCH.md's five
+pinned drawings into the paper the fleet actually has, and the DP plus the
+refusal loop were re-derived on `duotone` (12.83 m, ten interleaved bands) at
+the two tilt cones, same atlas, same pattern, same `--split-m 0.15`:
+
+| | tilt 0° | **tilt 15°** |
+|---|---|---|
+| bans applied | **8** | **1** |
+| refusal kinds | `empty_fiber` ×4, `start_infeasible` ×2, `sheet_collapse` ×2, `too_short` ×4 | `empty_fiber` ×1, `too_short` ×1 |
+| DP coverage after the loop | **85.42 %** | **97.23 %** |
+| uncovered | **1.8704 m** | **0.3551 m** |
+
+**11.8 POINTS OF COVERAGE ON A PICTURE THAT IS NOT THE LOGO, FROM THE SAME
+FLAG.** The CSAIL run loses 4.4 points to this and `duotone` loses 14.6; the
+mechanism is identical and it is the vertical pen, not the reach. That is the
+strongest argument this section has for making the tilt cone the shipped
+default, and it is why the recommendation is not "patch the three CSAIL
+stretches".
