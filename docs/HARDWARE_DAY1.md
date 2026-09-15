@@ -73,6 +73,20 @@ the pen 120 mm into or above the paper.
 **Measure it, do not accept it.** The number wanted is the **underside of the
 mounting plate** above the **paper surface**, per arm, to ±3 mm.
 
+> **HEIGHT IS NOT A PREFERENCE HERE — IT DECIDES WHETHER THE DEMONSTRATION
+> EXISTS.** Measured on this word: at h = 0.970 arm 31 draws 1.09 m of it. At
+> **h = 0.940 — thirty millimetres lower — arm 31 draws NOTHING AT ALL**, and
+> the whole word falls to arm 71 (§4.1). An inverted arm that is closer to the
+> paper must fold harder for the same reach, and the paper-chain gate bites
+> first; arm 31 sits much closer to that limit than arm 71 does.
+>
+> So if the plate comes in low, the "two arms hand the word over" result
+> quietly becomes "one arm draws the word". **Survey before you plan, and if
+> the number is below 0.970, look at the per-arm allocation in the re-plan's
+> log before believing you still have a two-arm demonstration.** Lower `--h`
+> also means a cold leg cache: the 0.970 conduct took 700 s, the re-planned
+> ones take ~3700 s.
+
 ### 1.2 Survey the two bases
 
 `docs/BUILD_SHEET.md` §0 datum: origin at the marked paper corner, z = 0 at the
@@ -377,24 +391,45 @@ therefore a measured number and not a geometric hope, and **27.6 mm is the
 figure §4.1's pass criterion should be read against**: expect the ruler to say
 28 mm, not 30.
 
-> **TWO THINGS TO KNOW BEFORE RUNNING IT, both of them honest limitations.**
+> ### **STOP. THIS PROGRAMME NEVER MOVES ARM 31.**
 >
-> **It draws 74 % of the word, not all of it.** Thirty millimetres closer to
-> the paper is a materially tighter geometry: the depot-hover rescue that keeps
-> every span whole at 0.970 cannot find alternatives at 0.940, and arm 71 gives
-> back 90 mm of stroke 4 and 7 mm of stroke 5 before the allocator even starts.
-> That is **fine for what this rung is for** — proving tracking, the stack, and
-> the tip height — and it is **not** a rehearsal of the drawing programme's
-> exact motion, which it could never be anyway: a different height means
-> different IK means a different joint path. Do not read a clean hover pass as
-> a certificate for the drawing run.
+> Measured: arm 31 draws **0 segments, 0.00 m** — in the main pass and in every
+> one of the six residual passes. Its bundle comes out with peak joint speed
+> **0.000 rad/s** over all 4212 samples. The whole 74 % is arm 71 working
+> alone.
 >
-> **It has six phases and the drawing programme has one.** Six phases means
-> five barriers to acknowledge, on the day's very first powered run. If that is
-> too much ceremony for the first thing you do, run it `--solo 31` and then
-> `--solo 71`, which is two single-arm runs and no inter-arm question at all.
-> The frame gate is also at **50.9 mm against a 50 mm gate** — 0.9 mm — on arm
-> 31 at t = 0.00 s, i.e. at its park. Worth knowing before you power up.
+> So this file **cannot** prove arm 31's tracking, its tip height, or its
+> tool transform. Flying it and calling rung A passed would leave arm 31
+> completely untested going into the first pen-down. **Do not do that.**
+>
+> **Why it happens, and why it matters far beyond the hover.** Thirty
+> millimetres closer to the paper is a materially tighter geometry for an
+> INVERTED arm: it has to fold harder for the same reach, and the paper-chain
+> gate (elbow ≥ 20 mm off the paper) is what bites first. At h = 0.970 arm 31
+> draws 1.09 m of the word. At 0.940 it draws **nothing**. Thirty millimetres
+> is the whole difference.
+>
+> **That is a hardware risk, not a hover artefact.** It says arm 31 is sitting
+> much closer to its limit than arm 71 is, and that if the as-built plate is
+> even slightly lower than 0.970, arm 31 loses its share of the word and the
+> "two arms interact" demonstration quietly becomes one arm drawing. **The
+> survey number in §1.2 is therefore not bookkeeping — it decides whether the
+> day's headline result is possible at all.**
+>
+> **What to run instead:** `out/unknown_h0970_hover15_*`, planned at h = 0.955
+> for a **15 mm** hover, which is shallow enough to keep arm 31 in the
+> allocation. Use the 30 mm file only as arm 71's own dry run, or with
+> `--solo 71`.
+>
+> **One more thing about the 30 mm file.** It has six phases against the
+> drawing programme's one, so five barriers to acknowledge on the day's first
+> powered run, and its frame gate sits at **50.9 mm against a 50 mm gate** —
+> 0.9 mm — on arm 31 at t = 0.00 s, i.e. standing at its park.
+
+> **A clean hover pass is not a certificate for the drawing run** and could
+> never be: a different height is different IK is a different joint path. It
+> proves the stack, the tracking and the tip height, and nothing about the
+> drawing programme's own trajectory.
 
 ```
 # rehearse it in meshcat first, at quarter speed, one arm at a time
