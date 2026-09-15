@@ -341,11 +341,60 @@ e-stop.** Nothing below overrides it.
 
 **What it is, and why it is a different file.** The hover programme is the same
 word planned with the arms **30 mm closer to the paper** (h = 0.940 against the
-0.970 rig; h = 0.820 against 0.850). Flown on the rig as built, the pen tip
-therefore rides **30 mm above** the paper everywhere. This is not the drawing
-programme with a flag set — it is a separately conducted, separately certified
-programme, because a trajectory whose pen is somewhere else is a different
-trajectory and `scene_check` has to say so.
+0.970 rig). Flown on the rig as built, the pen tip therefore rides **30 mm
+above** the paper everywhere. This is not the drawing programme with a flag set
+— it is a separately conducted, separately certified programme, because a
+trajectory whose pen is somewhere else is a different trajectory and
+`scene_check` has to say so.
+
+`out/unknown_h0970_hover_schedule.npz`, conducted 2026-09-15. Measured:
+
+| | |
+|---|---|
+| **coverage** | **74.29 %** — 1.9479 m of 2.5922 m; 0.6665 m in 4 spans left empty |
+| makespan | 89.52 s |
+| min inter-arm | 119.0 mm (gate 50) |
+| frame, incl. seam | 50.9 mm (gate 50), arm 31 at t = 0.00 s |
+| paper | chain 24.8 mm (gate 20); tip −1.5 mm (floor −10) |
+| phases | **6** — four rescue groups plus two residual passes |
+| verdict | **PASS** |
+
+**And the construction is verified, not merely argued.** `recheck_timeline.py`
+takes no `--h`, so it grades this programme against the **shipped 0.970
+fleet** — which is precisely the "planned at 0.940, flown on the real rig"
+case. It reports:
+
+```
+  min inter-arm 119.02 mm (gate 50) pair 31-71 at t = 46.02 s -> margin +69.02 mm
+  paper chain 55.8 mm (gate 20) arm 71; tip 27.6 mm (floor 10) arm 71
+  VERDICT PASS
+```
+
+**`tip 27.6 mm`** is the pen's minimum height above the real paper over the
+whole programme. The conduct's own `scene_check`, run at 0.940, put the same
+tip at **−1.5 mm** — on the paper, in its own frame. The 30 mm offset is
+therefore a measured number and not a geometric hope, and **27.6 mm is the
+figure §4.1's pass criterion should be read against**: expect the ruler to say
+28 mm, not 30.
+
+> **TWO THINGS TO KNOW BEFORE RUNNING IT, both of them honest limitations.**
+>
+> **It draws 74 % of the word, not all of it.** Thirty millimetres closer to
+> the paper is a materially tighter geometry: the depot-hover rescue that keeps
+> every span whole at 0.970 cannot find alternatives at 0.940, and arm 71 gives
+> back 90 mm of stroke 4 and 7 mm of stroke 5 before the allocator even starts.
+> That is **fine for what this rung is for** — proving tracking, the stack, and
+> the tip height — and it is **not** a rehearsal of the drawing programme's
+> exact motion, which it could never be anyway: a different height means
+> different IK means a different joint path. Do not read a clean hover pass as
+> a certificate for the drawing run.
+>
+> **It has six phases and the drawing programme has one.** Six phases means
+> five barriers to acknowledge, on the day's very first powered run. If that is
+> too much ceremony for the first thing you do, run it `--solo 31` and then
+> `--solo 71`, which is two single-arm runs and no inter-arm question at all.
+> The frame gate is also at **50.9 mm against a 50 mm gate** — 0.9 mm — on arm
+> 31 at t = 0.00 s, i.e. at its park. Worth knowing before you power up.
 
 ```
 # rehearse it in meshcat first, at quarter speed, one arm at a time
@@ -363,7 +412,8 @@ quiet today, say so, because that would be new); and the **measured tip height
 above the paper** at three points along the word.
 
 **Passes when** both arms complete with no reflex, no tracking fault, no gate
-rejection, and the measured tip height is 30 ± 5 mm everywhere.
+rejection, and the measured tip height is **28 ± 5 mm** everywhere (the planner's
+own minimum over this programme is 27.6 mm, verified above — not 30).
 
 > **If the tip height is not 30 mm, STOP and do not draw.** The discrepancy is
 > the tool transform, the mounting height, or the paper plane, and you now have
@@ -716,7 +766,7 @@ powered attempt.
 2. Survey both bases → `asbuilt_layout.py --check`. Report deviations.
 3. Gripper width read-back, per pen. Collision profile, per arm. Write both down.
 4. Touchdowns on arm 31, or knowingly skip and accept §4.1 as the safety net.
-5. **Hover pass, per arm, then both.** Measure the tip height. **30 ± 5 mm or stop.**
+5. **Hover pass, per arm, then both.** Measure the tip height. **28 ± 5 mm or stop.**
 6. One stroke per arm on scrap, then on paper. 2 mm of plan.
 7. **The word, alternating** — `out/unknown_h0970_home_alt.npz`, 106 s,
    155.56 mm of clearance. **This is the deliverable.**
