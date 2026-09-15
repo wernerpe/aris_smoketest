@@ -3459,19 +3459,84 @@ Re-run on `lf6b_s150`, the programme §30.2's table is quoted from, the account
 is **unchanged** — 1.8908 `listed_not_flown`, 0.7250 `no_drawer`, 0.0041
 `plan_refused` — which is what "asked last" is supposed to mean.
 
-### 31.3 What the fixes measure, end to end
+### 31.3 `lf10` — the CSAIL logo at tilt 15 with every fix: **99.99 % and CERTIFIED**
+
+The measurement §30.3 owed. Same command as §29.4's `lf6b_s150` plus
+`--tilt-max-deg 15`, and with `CONDUCT_HOME_FIRST` on every conducted stage:
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
+    --lines out/csail_schedule_h097_v19_strokes.json --pattern leader_follower \
+    --split-m 0.15 --partner-standoff 0.09 --row-compose serial \
+    --tilt-max-deg 15 --route-jobs 3 --conduct-jobs 3 --conduct-cap-s 2400 \
+    --json out/staged_csail_h097_lf10_s150.json \
+    --programme out/staged_csail_h097_lf10_s150_program.json
+```
+
+| | `lf8` (tilt 15, before) | `lf9c` (tilt 0, home-first) | **`lf10`** |
+|---|---|---|---|
+| flown | 51.50 % | 95.6 % | **99.9881 %** |
+| drawn of 16.8047 m | 8.655 m | 16.06 m | **16.8027 m** |
+| missing | 8.150 m | 0.734 m | **0.0020 m**, one `plan_refused` stub |
+| `unattributed` | 2.063 m | — | **0.000 m** |
+| `all_ok` | **false** | true | **true** |
+| makespan A+B+C+D | — | 389.4 s | **402.7 s** |
+| TTFM | — | — | **0.187 s** |
+| planning wall (parallel) | — | — | 1 406 s (1 081 s) |
+
+| stage | pieces | ink | duration | |
+|---|---|---|---|---|
+| A | 17 | 2.8441 m | 63.3 s | active-pair **+79.4 mm** PASS |
+| B | 10 | 2.5534 m | 41.4 s | active-pair **+305.2 mm** PASS |
+| C go-home | 0 | — | 7.9 s | +217.7 mm PASS |
+| C | 44 | 10.8916 m | 266.8 s | whole-timeline **+71.8 mm** PASS |
+| D (dead band) | 2 | 0.5123 m | 23.3 s | whole-timeline **+134.2 mm** PASS |
+
+**THE WHOLE `no_drawer` CLASS IS GONE**: the DP reaches 100.00 % at tilt 15 with
+no bans at all, so §30.3's 0.725 m — the ink under arm 71's own base that v19
+drew by leaning the pen — is planned and flown. What is left is 2.0 mm of
+`degenerate: too_short` stub, which is a piece the geometry refuses and not a
+planner failure. Arm 31 flies **25 pieces** in stage C where `lf6b` flew none;
+stage D's 0.512 m of dead-band ink flies on the band retry (`CONDUCT_BANDS`
+auto: the relaxed room FAILED the frame gate, the re-conduct with the partners'
+bands kept PASSED).
+
+It costs **13.3 s of makespan over `lf9c`** for 0.74 m more ink, and the whole
+programme is +192.8 s over the 209.9 s reference — the price of the serialised
+[31, 71] slot, which is 1 151 s of the 1 406 s planning wall on its own.
+
+### 31.4 What the two fixes measure on the bench corpus
 
 `scripts/bench_staged.sh` re-run with both fixes, same configuration
 (`--split-m 0.15 --partner-standoff 0.09 --row-compose serial --tilt-max-deg
-15`):
+15`), all five pictures:
 
-| picture | flown | ink | missing, by reason | wall | all_ok |
-|---|---|---|---|---|---|
-| hatch | 83.1 % | 30.10 m | `no_drawer` 5.074 | 138 s | no |
-| scatter | **99.0 %** | 8.64 m | `plan_refused` 0.087 | **420 s** (was 2 261 s) | **yes** |
+| picture | flown, before | **flown, after** | missing, by reason | makespan | wall | `all_ok` |
+|---|---|---|---|---|---|---|
+| hatch | 83.14 % | 83.14 % | `no_drawer` 5.074 | 380.2 s | 138 s | no |
+| scatter | 98.96 % | 98.96 % | `plan_refused` 0.087 | **156.7 s** | **420 s** (was 2 261) | **YES** |
+| **starburst** | **45.70 %** | **96.65 %** | `no_drawer` 0.570, `plan_refused` 0.063 | 356.2 s | 1 766 s | no |
+| spiral | 84.40 % | 84.40 % | `no_drawer` 2.174 | 275.5 s | **629 s** (was 1 518) | no |
+| duotone | 97.35 % | 97.35 % | `no_drawer` 0.340 | 238.0 s | **499 s** (was 1 572) | no |
 
-`scatter` is the row that moves: it certified (`all_ok: true`, was false), its
-makespan came down to 156.7 s from 166.2 s, and its planning wall is 5.4×
-cheaper, because the row groups no longer plan against a fleet standing over
-the sheet. `hatch` is unchanged and its 5.074 m is `no_drawer` — the DP's own
-ceiling at this placement, which no amount of go-home touches.
+**`starburst` GAINS 51 POINTS**, and both fixes are in it. Its `[31, 71]` slot
+now flies — 6.966 m at +59.0 mm, arms 31(20) and 71(8), where before the slot
+produced no arms at all — which retires the 1.594 m of `bucket_never_planned`;
+and its stage D flies all **2.831 m** of dead-band ink on arm 31 (the relaxed
+room FAILED the frame gate, the re-conduct with the partners' bands kept PASSED
+at +126.4 mm), which retires the 2.831 m of `listed_not_flown`. **Every picture
+in the corpus now has `listed_not_flown` = 0.000 m and no `unattributed`
+bucket**, and every remaining metre on every picture is `no_drawer` or a
+`plan_refused` stub — the DP's own ceiling at that placement, which no go-home
+touches.
+
+The other four are unchanged in ink and 2.4x–5.4x cheaper to plan, for the same
+reason: a row group planning against a parked fleet is a much easier routing
+problem than one planning against four arms holding hovers over the sheet.
+
+**WHAT IS STILL OWED ON `starburst`**: `all_ok` is false on the HOLD gate, not
+on ink. The barrier pose set at the end of stage B measures **+141.4 mm**,
+under `MARGIN_GATE` = 150 mm, so the hold before stage C is refused and the
+go-home stage inherits it at t0 (`failed: frame, t0_holds`). Everything after
+it PASSES. That is a stage-B parking question — where the followers stop — and
+it is the next thing to measure on this picture.

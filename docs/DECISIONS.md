@@ -5971,11 +5971,42 @@ programme §30.2's published table is quoted from, the account is UNCHANGED —
 never had) and `--tilt-max-deg`: a tilt-15 programme read back with the DP
 re-derived at 0 invents refusals the run never had.
 
-**WHAT IT MEASURES.**  `bench_staged.sh` re-run with both fixes, same
-configuration: `scatter` **certifies** (`all_ok: true`, was false), 99.0 %
-flown, makespan 156.7 s (was 166.2 s) and a planning wall of 420 s against
-2 261 s — 5.4x — because the row groups no longer plan against a fleet standing
-over the sheet.  `hatch` is unchanged at 83.1 % and its 5.074 m is `no_drawer`,
-the DP's own ceiling at this placement, which no go-home touches.
+**WHAT IT MEASURES — `lf10`, THE CSAIL LOGO AT TILT 15 WITH EVERY FIX:
+99.9881 % FLOWN AND CERTIFIED.**  16.8027 m of 16.8047 m on the paper, `all_ok`
+true, `unattributed` 0.000 m, and the only gap left in the whole picture is a
+**2.0 mm** `degenerate: too_short` stub.  §30.3's tilt flag recovers the whole
+`no_drawer` class (DP 100.00 %, zero bans); arm 31 flies 25 pieces in stage C
+where `lf6b` flew none; stage D's 0.512 m of dead-band ink flies on the band
+retry.  Makespan A+B+C+D **402.7 s** (`lf9c` 389.4 s), TTFM 0.187 s, planning
+wall 1 406 s of which the serialised [31, 71] slot is 1 151 s.
+`out/staged_csail_h097_lf10_s150.*`.
+
+**AND ON THE BENCH CORPUS**, all five re-run with both fixes:
+
+| picture | before | **after** | what is left | wall |
+|---|---|---|---|---|
+| hatch | 83.14 % | 83.14 % | `no_drawer` 5.074 | 138 s |
+| scatter | 98.96 % | 98.96 %, **`all_ok` true** | `plan_refused` 0.087 | 420 s (was 2 261) |
+| **starburst** | **45.70 %** | **96.65 %** | `no_drawer` 0.570 | 1 766 s |
+| spiral | 84.40 % | 84.40 % | `no_drawer` 2.174 | 629 s (was 1 518) |
+| duotone | 97.35 % | 97.35 % | `no_drawer` 0.340 | 499 s (was 1 572) |
+
+`starburst` gains **51 points** and both fixes are in it: its [31, 71] slot now
+flies (6.966 m, +59.0 mm, arms 31(20) and 71(8)) which retires the 1.594 m of
+`bucket_never_planned`, and its stage D flies all 2.831 m which retires the
+2.831 m of `listed_not_flown`.  **Every picture in the corpus now has
+`listed_not_flown` = 0.000 m and no `unattributed` bucket**; every remaining
+metre anywhere is `no_drawer` or a `plan_refused` stub, which is the DP's own
+ceiling at that placement.  The four unchanged pictures are 2.4x-5.4x cheaper to
+plan, because a row group planning against a PARKED fleet is a far easier
+routing problem than one planning against four arms holding hovers over the
+sheet.
+
+STILL OWED: `starburst`'s `all_ok` is false on the HOLD gate, not on ink -- the
+barrier pose set at the end of stage B measures +141.4 mm against
+`MARGIN_GATE` = 150 mm, so the hold before stage C is refused and the go-home
+inherits it at t0.  Everything after it passes.  That is a stage-B parking
+question and it is the next measurement on that picture.
+
 docs/V2_STAGED.md §31 is the write-up; `tests/test_staged.py` and
 `tests/test_gap_account.py` carry the two new tests.
