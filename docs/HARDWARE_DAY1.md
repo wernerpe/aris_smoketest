@@ -638,6 +638,20 @@ stroke_idx,wp_idx,kind,x_m,y_m,z_m,qx,qy,qz,qw,intensity,q1..q7
 > measured plane and adds press along the pen axis. Say this out loud to
 > whoever runs it, because a CSV that looks like it commands a height does not.
 
+**Every claim above was read back off the shipped manifest**, not taken on
+trust — `out/pathways/unknown_h0970_home_arm31.manifest.json` says
+`format.frame = fr3_link0`, `quaternion.order = xyzw`,
+`quaternion.ee_frame = nominal pen tip (setEE)`, `joint_columns = true`,
+`transits.in_file = true` with 749 `travel` rows, `intensity.mode = constant`
+at 1.0, and `warnings: []`. Three more numbers from it worth having on the day:
+
+| | |
+|---|---|
+| `T_world_base` translation, arm 31 | (0.5967, **1.81532**, 0.970) — the surveyed base, and the height this file assumes |
+| `paper_z_base_m` | 0.970 — what a `draw` row's `z_m` will read |
+| `max_fk_deviation_from_plane_m` | **9.8 µm** — every row's FK agrees with the commanded plane to ten microns |
+| `speeds.draw_m_s_measured` | **0.0867 m/s**, against the 0.12 m/s asked for — the fleet clock is what it is, and the executor should not be told to expect 0.12 |
+
 ### 5.2 The joint bundle — for `fr3drivers` (D)
 
 ```
