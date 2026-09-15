@@ -5870,3 +5870,61 @@ parks, for this pattern exactly as for every other.
 
 docs/V2_WORKCELLS.md section 4b is the write-up; `out/workcell_envelopes.json`
 carries `reach` and `seam_pairings` as new keys.
+
+## 2026-09-15 — the gaps in the lines, measured — and 0.725 m of them is a TILT
+
+Pete, on the certified `lf6b_s150` animation: **"why are there so many gaps in
+the lines?"**  The certified canvas at h = 0.970 is hole-free and v19 drew this
+exact placement at **100.0000 %**, so every metre the staged programme does not
+draw is a PLANNER failure and not a reach one.  Measured, on the paper:
+
+| | |
+|---|---|
+| logo | 16.8047 m |
+| flown — PEN-DOWN SAMPLES, union per line | **14.1747 m = 84.35 %** |
+| missing | **2.6300 m in 13 stretches** |
+
+**THE PROGRAMME'S OWN BOOK-KEEPING COULD NOT ANSWER IT.**  `ink_m` sums the
+pieces a bucket ACCEPTED, and a bucket whose `arm_program` refuses still has
+them; `_merge_conducts` then pads the arm out to the stage's frame count.  Arm
+31 stands in `lf6b_s150` stage C with 8 pieces listed, 1.9161 m of `ink_m`,
+2 937 frames and **zero** frames whose `seg` is a segment index.  So the account
+is geometric — `scripts/gap_account.py`, `tests/test_gap_account.py`,
+docs/V2_STAGED.md §30, picture at `out/lf6b_gaps.png`.
+
+| metres | reason |
+|---|---|
+| **1.8908** | arm 31's stage-C bucket, planned and never flown |
+| **0.7250** | no drawer left: `plan_stroke` refused `split: empty_fiber`, the loop banned that span, and the pattern offered it to exactly ONE (stage, arm) cell |
+| **0.0041** | `degenerate: too_short` stubs |
+
+**THE 0.725 m IS ONE FLAG.**  All three `no_drawer` stretches were drawn by v19
+with arm 71 under a **10°–15° tilt cone**, and two of them are ink almost
+exactly under arm 71's own base (reach 0.071 m and 0.011 m).  The staged runs
+take `--tilt-max-deg 0` — the CLI default, and what `scripts/lf6_run.sh`
+passes — so the fiber over those points is empty and `plan_stroke` is right to
+refuse.  Re-deriving the DP and the refusal loop at `tilt_max_deg = 15` (15 s,
+same atlas, same pattern): **3 refusals → 0, 3 bans → 0, coverage 95.63 % →
+100.00 %, uncovered 0.7337 m → 0.000 m.**  No gate moves and `scene_check`
+judges the trajectory either way.  NOT SHIPPED HERE: it changes what every
+bucket is planned from, so it needs its own certified end-to-end run, and that
+is the recommendation for the next one.
+
+**THE SECOND HALF OF THAT REASON IS THE PATTERN.**  A stretch the
+leader/follower split at `--split-m 0.15` offers to ONE (stage, arm) cell has no
+alternative when that cell refuses.  v19's conductor had all six arms and no
+stage or region partition.  Every stretch that had two or three cells survived
+its ban at no cost.
+
+**THE 1.891 m IS §29.5's UNSEARCHED ORDER, AND IT IS NOW SEARCHED.**
+`_serialise_group` plans busiest-first, which makes the busiest arm plan against
+its row partner AT THE PARTNER'S ENTRY POSE and the second arm against that
+partner AT ITS PARK; a group of two has only those two questions and only one
+was asked.  A bucket that does not fly now goes to the BACK of the order — the
+slot in which every partner has finished and gone home — and whichever order
+flies more ink ships (`orders_tried`, `lost_m`, `lost_pieces` on the group's
+report).  The second order is planned only where the first loses a WHOLE bucket,
+because a refused group is already planned twice and stage C's wall is 1 428 s.
+Whether it recovers arm 31's 1.914 m is the stage-C-only run
+`out/staged_csail_h097_lf7c_s150.*`, at a 3 600 s cap because group [31, 71]
+alone measured 1 321 s at one order.

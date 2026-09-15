@@ -3206,3 +3206,121 @@ ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
 The files this box owns — `test_staged`, `test_staged_compose`, `test_staged_split`,
 `test_staged_standoff`, `test_paper`, `test_transit`, `test_penup`, `test_gates` —
 are **177 passed, 19 skipped** when run together.
+
+## 30. Coverage — what is on the paper, and why the rest is not
+
+Pete, 2026-09-15, watching the certified `lf6b_s150` animation: **"why are there
+so many gaps in the lines?"** The certified canvas at h = 0.970 is hole-free and
+v19 drew this exact placement at **100.0000 %**, so every metre the staged
+programme does not draw is a PLANNER failure and not a reach one. This section
+is the account, and it is measured rather than argued.
+
+### 30.1 The programme's own book-keeping cannot see the hole
+
+`StageResult.ink_m` sums the pieces a bucket ACCEPTED, and a bucket whose
+`arm_program` refuses still has them: `plan_bucket` sets `st.programme` before
+it ever calls `arm_program`, and `_merge_conducts` then pads the arm out to the
+stage's frame count so it stands in the conducted clock holding its entry pose.
+Measured on `out/staged_csail_h097_lf6b_s150_program.json`, arm 31, stage C:
+
+| | |
+|---|---|
+| pieces listed | **8** |
+| `ink_m` reported | **1.9161 m** |
+| frames in its trajectory | 2 937 |
+| frames whose `seg` is a segment index | **0** |
+| what is on the paper | **nothing** |
+
+**SO THE ACCOUNT IS GEOMETRIC.** Drawn means a frame whose `seg ≥ 0` — a
+PEN-DOWN SAMPLE — and the residual is the logo minus every drawn piece's own
+polyline, matched PER LINE at 2.5 mm on a 2 mm grid. `scripts/gap_account.py`
+is that measurement plus the reason chain; `tests/test_gap_account.py` pins both
+claims on a toy picture whose hole is known.
+
+### 30.2 The account, on `lf6b_s150`
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m scripts.gap_account \
+    --programme out/staged_csail_h097_lf6b_s150_program.json \
+    --lines out/csail_schedule_h097_v19_strokes.json \
+    --v19 out/csail_schedule_h097_v19_program.json \
+    --png out/lf6b_gaps.png --json out/lf6b_gaps.json
+```
+
+| | |
+|---|---|
+| logo | **16.8047 m** |
+| flown (pen-down samples, union per line) | **14.1747 m = 84.35 %** |
+| missing | **2.6300 m in 13 stretches** |
+
+| metres | stretches | reason |
+|---|---|---|
+| **1.8908** | 8 | **PLANNED AND NEVER FLOWN** — arm 31's stage-C bucket produced no timeline in either reading of the serialised group's room; the go-home `aside` gave it a timeline with no ink in it |
+| **0.7250** | 3 | **NO DRAWER LEFT** — `plan_stroke` refused with `split: empty_fiber`, the refusal loop banned that span, and the pattern offered the span to exactly ONE (stage, arm) cell |
+| **0.0041** | 2 | `degenerate: too_short` stubs (a 7.5 mm DP piece and a 5.0 mm `split_at_room` remainder) |
+
+The picture is `out/lf6b_gaps.png`: logo thin grey, flown ink black, the
+thirteen missing stretches numbered and coloured by reason, with the whole
+reason chain beside it.
+
+### 30.3 The 0.725 m is a TILT the staged pipeline does not take
+
+The three `no_drawer` stretches are the decisive ones, because each was offered
+to a single cell and lost it:
+
+| stretch | offered to | `plan_stroke` | v19 drew it with | reach from that base | v19 tilt cone |
+|---|---|---|---|---|---|
+| line 32, 0.032–0.336 (303.6 mm) | **(stage 1, arm 31) only** | `split: empty_fiber`, s\* = 0.088 | arm 71 | 0.576 m | **10.0°** |
+| line 7, 0.180–0.415 (235.3 mm) | **(stage 0, arm 71) only** | `split: empty_fiber`, s\* = 0.226 | arm 71 | **0.071 m** | **15.0°** |
+| line 1, 0.300–0.486 (186.1 mm) | **(stage 0, arm 71) only** | `split: empty_fiber`, s\* = 0.208 | arm 71 | **0.011 m** | **12.5°** |
+
+Two of the three are ink almost exactly UNDER arm 71's own base, and v19 drew
+them by leaning the pen. The staged runs take `--tilt-max-deg 0`, which is the
+CLI default and what `scripts/lf6_run.sh` passes, so the fiber over those points
+is empty and `plan_stroke` is right to refuse. Re-deriving the DP and the
+refusal loop with the tilt cone opened (`rederive_dp(..., tilt_max_deg=15.0)`,
+15 s, same atlas, same pattern):
+
+| | tilt 0° (shipped) | **tilt 15°** |
+|---|---|---|
+| `split: empty_fiber` refusals | **3** | **0** |
+| bans applied | 3 | **0** |
+| DP coverage after the loop | 95.63 % | **100.00 %** |
+| uncovered | **0.7337 m** | **0.000 m** |
+
+**ONE FLAG RECOVERS THE WHOLE 0.725 m**, and it costs no gate: the atlas is
+already read with `tilt_max_deg` and `scene_check` judges the trajectory either
+way. It is not shipped in this section because it changes what every bucket is
+planned from and therefore needs its own certified end-to-end run.
+
+...AND THE SECOND HALF OF THAT REASON IS THE PATTERN. A stretch offered to ONE
+(stage, arm) cell has no alternative when that cell refuses: the leader/follower
+region split at `--split-m 0.15` is what narrows the offer, and v19's conductor
+had all six arms with no stage or region partition at all. Where a stretch had
+two or three cells the loop's ban cost nothing.
+
+### 30.4 The 1.891 m is `_serialise_group`'s unsearched order
+
+§29.5 named it and it is now closed in code. Busiest-first makes the busiest arm
+plan against its row partner AT THE PARTNER'S ENTRY POSE, and the second arm
+against that partner AT ITS PARK — two different questions, and a group of two
+has only the two. So a bucket that does not fly now goes to the BACK of the
+order (the slot in which every partner has finished and gone home) and whichever
+order flies more ink ships; `orders_tried`, `lost_m` and `lost_pieces` ride on
+the group's report. The search is paid for only where the first order loses a
+WHOLE bucket, because a refused group is already planned twice and stage C's
+wall is 1 428 s (§29.3).
+
+Whether it recovers arm 31's 1.914 m is a measurement, not a claim, and it is
+the stage-C-only run in flight as this is written:
+
+```
+ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python -m aris_sixarm.staged \
+    --stage-c-only out/staged_csail_h097_lf6b_s150_program.json \
+    --stage-c-index 2 --row-compose serial --route-jobs 3 --conduct-jobs 3 \
+    --conduct-cap-s 3600 --json out/staged_csail_h097_lf7c_s150.json \
+    --programme out/staged_csail_h097_lf7c_s150_program.json
+```
+
+The cap is 3 600 s rather than the 1 500 s of §29.4 because group [31, 71] alone
+measured 1 321 s of wall at ONE order, and two orders cannot fit under it.
