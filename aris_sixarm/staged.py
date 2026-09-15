@@ -3040,80 +3040,151 @@ def _serialise_group(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
                                    float).reshape(7) for a in outside}
     base_env = {int(a): v for a, v in (rooms or {}).items() if int(a) in out_pose}
     keep = (str(bands) == "keep")
-    arms: dict[int, ArmStage] = {}
-    fin: dict[int, np.ndarray] = {}          # where an arm that has flown stands
-    fin_room: dict[int, tuple] = {}          # ...and the room it swept to get there
-    slots: list[dict] = []
-    for k, a in enumerate(order):
-        pcs = list(buckets.get((int(s), int(a)), [])) \
-            + list((deferred or {}).get(int(a), []))
-        # WHAT EVERY OTHER ARM IS DOING WHILE THIS ONE FLIES ITS SLOT: an arm
-        # outside the group holds `op`; an arm of this group that has already
-        # flown is home and holding; one that has not started is standing at its
-        # stage entry pose, which is the thing nobody was routing around.
-        poses = dict(out_pose)
-        env = dict(base_env)
-        for b in order:
-            if b == a:
-                continue
-            poses[b] = fin.get(b, held7[b])
-            if b in fin_room:
-                env[b] = fin_room[b]
-        partners = sorted(poses)
-        start = dict(poses)
-        start[int(a)] = held7[int(a)]
+    offered = {int(a): list(buckets.get((int(s), int(a)), []))
+               + list((deferred or {}).get(int(a), [])) for a in order}
 
-        def _plan(use_env):
-            return plan_bucket(s, a, pcs, fl, pens, start, h_inv, opts,
-                               leg_cache=leg_cache,
-                               leg_cache_root=leg_cache_root, fly=True,
-                               envelopes=(dict(use_env) or None),
-                               partners=partners,
-                               park_policy=writing.PARK_HOME,
-                               keep_bands=keep, verbose=False)
+    def _fly(seq):
+        """One whole priority order, planned end to end.
 
-        st = _plan(env)
-        if pcs and env and (st.timeline is None
-                            or len(st.accepted) < len(pcs)):
-            # THE PIECE THE ROOM COST IS OFFERED THE SLOT INSTEAD.  The room is
-            # a claim about arms that are no longer moving when this arm flies;
-            # dropping it for their finishing POSES is not a relaxation of the
-            # programme, it is the programme.
-            alt = _plan(base_env)
-            better = ((st.timeline is None and alt.timeline is not None)
-                      or (alt.timeline is not None
-                          and len(alt.accepted) > len(st.accepted)))
-            if better:
-                alt.note = (alt.note + "; " if alt.note else "") + \
-                    ("in-group priority: re-planned against the partners' "
-                     "finishing poses after the swept room refused "
-                     f"{len(pcs) - len(st.accepted)} piece(s)")
-                st = alt
-        st.role, st.conducted, st.residue = "conductor", False, True
-        st.priority = int(k)
-        # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME, and it gets there in
-        # the room it was just frozen into -- see `_conduct_stage`'s own aside.
-        q_home = parks7[int(a)]
-        if st.timeline is None and float(np.max(np.abs(held7[int(a)]
-                                                       - q_home))) > 1e-9:
-            try:
-                st.timeline = writing.arm_program(
-                    fl[a], [], h_inv=h_inv, pen_ext=pens.get(a),
-                    q_start=held7[int(a)], park=writing.PARK_HOME, aside=q_home)
-            except writing.PaperRefused as exc:
-                st.note = (st.note + "; " if st.note else "") + \
-                    f"go-home refused: {exc}"
-        arms[int(a)] = st
-        slots.append(dict(arm=int(a), poses=dict(poses),
-                          frames=_clock_frames(st.timeline, dt)))
-        fin[int(a)] = np.asarray(st.q_end, float).reshape(7)
-        if st.timeline is not None:
-            fin_room[int(a)] = trajectory_room(st, fl, pens, h_inv, dt)
+        -> (arms, slots, failed).  `failed` is {arm: (metres, pieces)} for every
+        arm whose BUCKET produced no timeline -- the thing a different order can
+        change, and the thing the go-home `aside` below would otherwise hide by
+        giving the arm a timeline with no ink in it.
+        """
+        arms: dict[int, ArmStage] = {}
+        failed: dict[int, tuple] = {}
+        fin: dict[int, np.ndarray] = {}      # where an arm that has flown stands
+        fin_room: dict[int, tuple] = {}      # ...and the room it swept to get there
+        slots: list[dict] = []
+        for k, a in enumerate(seq):
+            pcs = offered[int(a)]
+            # WHAT EVERY OTHER ARM IS DOING WHILE THIS ONE FLIES ITS SLOT: an
+            # arm outside the group holds `op`; an arm of this group that has
+            # already flown is home and holding; one that has not started is
+            # standing at its stage entry pose, which is the thing nobody was
+            # routing around.
+            poses = dict(out_pose)
+            env = dict(base_env)
+            for b in seq:
+                if b == a:
+                    continue
+                poses[b] = fin.get(b, held7[b])
+                if b in fin_room:
+                    env[b] = fin_room[b]
+            partners = sorted(poses)
+            start = dict(poses)
+            start[int(a)] = held7[int(a)]
+
+            def _plan(use_env):
+                return plan_bucket(s, a, pcs, fl, pens, start, h_inv, opts,
+                                   leg_cache=leg_cache,
+                                   leg_cache_root=leg_cache_root, fly=True,
+                                   envelopes=(dict(use_env) or None),
+                                   partners=partners,
+                                   park_policy=writing.PARK_HOME,
+                                   keep_bands=keep, verbose=False)
+
+            st = _plan(env)
+            if pcs and env and (st.timeline is None
+                                or len(st.accepted) < len(pcs)):
+                # THE PIECE THE ROOM COST IS OFFERED THE SLOT INSTEAD.  The room
+                # is a claim about arms that are no longer moving when this arm
+                # flies; dropping it for their finishing POSES is not a
+                # relaxation of the programme, it is the programme.
+                alt = _plan(base_env)
+                better = ((st.timeline is None and alt.timeline is not None)
+                          or (alt.timeline is not None
+                              and len(alt.accepted) > len(st.accepted)))
+                if better:
+                    alt.note = (alt.note + "; " if alt.note else "") + \
+                        ("in-group priority: re-planned against the partners' "
+                         "finishing poses after the swept room refused "
+                         f"{len(pcs) - len(st.accepted)} piece(s)")
+                    st = alt
+            st.role, st.conducted, st.residue = "conductor", False, True
+            st.priority = int(k)
+            # WHETHER THE BUCKET FLEW IS ASKED HERE AND NOWHERE ELSE, because
+            # the go-home `aside` below hands an arm that drew nothing a
+            # perfectly good timeline with no ink in it -- which is exactly what
+            # `lf6b_s150` shipped for arm 31, 8 pieces listed and 0 pen-down
+            # samples anywhere.
+            if pcs and st.timeline is None:
+                failed[int(a)] = (float(sum(p.length_m for p in pcs)),
+                                  int(len(pcs)))
+            # AN ARM WITH NOTHING TO DRAW STILL HAS TO GET HOME, and it gets
+            # there in the room it was just frozen into -- see `_conduct_stage`.
+            q_home = parks7[int(a)]
+            if st.timeline is None and float(np.max(np.abs(held7[int(a)]
+                                                           - q_home))) > 1e-9:
+                try:
+                    st.timeline = writing.arm_program(
+                        fl[a], [], h_inv=h_inv, pen_ext=pens.get(a),
+                        q_start=held7[int(a)], park=writing.PARK_HOME,
+                        aside=q_home)
+                except writing.PaperRefused as exc:
+                    st.note = (st.note + "; " if st.note else "") + \
+                        f"go-home refused: {exc}"
+            arms[int(a)] = st
+            slots.append(dict(arm=int(a), poses=dict(poses),
+                              frames=_clock_frames(st.timeline, dt)))
+            fin[int(a)] = np.asarray(st.q_end, float).reshape(7)
+            if st.timeline is not None:
+                fin_room[int(a)] = trajectory_room(st, fl, pens, h_inv, dt)
+            if verbose:
+                print(f"  stage {s} group {sorted(int(x) for x in who)} "
+                      f"priority {k}: arm {a} ({len(st.accepted)}/{len(pcs)} "
+                      f"pieces, {st.ink_m:.3f} m) against {sorted(partners)}"
+                      + (f", rooms {sorted(env)}" if env else ", poses only"))
+        return arms, slots, failed
+
+    # THE OTHER ORDER, AND IT IS THE ONE §29.5 NAMED.  Busiest-first makes the
+    # busiest arm plan against its row partner AT THE PARTNER'S ENTRY POSE --
+    # a hover over the ink the partner just drew, and the one pose nobody
+    # routed around -- while the second arm gets that partner AT ITS PARK,
+    # because `_merge_conducts` lays a refused group's slots end to end under
+    # `PARK_HOME`.  Those are two different questions and a group of two has
+    # only the two, so when the ink-first order LOSES a bucket the other order
+    # is tried and the one that flies more ink ships.  Measured on
+    # `lf6b_s150` stage C: arm 31's 8 pieces (1.914 m) were planned and not
+    # flown, and that is the metre-and-a-half hole in the picture.
+    #
+    # A BUCKET IS NEVER DROPPED FOR WANT OF A SLOT.  An arm that does not fly
+    # where it stands is offered the POST-SLOT -- last in the order, with every
+    # partner home at its park -- which is exactly what the reversed order is
+    # for a pair and what moving the loser to the back is for a larger group.
+    def _score(failed):
+        return (float(sum(v[0] for v in failed.values())),
+                int(sum(v[1] for v in failed.values())))
+
+    arms, slots, failed = _fly(order)
+    lost_m, lost_n = _score(failed)
+    tried = [dict(order=[int(a) for a in order], lost_m=lost_m,
+                  lost_pieces=lost_n, failed=sorted(failed))]
+    if failed and len(order) > 1:
+        # THE POST-SLOT ORDER.  Everything that flew keeps its rank and every
+        # arm whose bucket did not fly goes to the BACK, busiest of them first:
+        # last in the order is the slot in which every partner has finished and
+        # gone HOME, so the arm plans against parks rather than against the
+        # hovers its partners are standing on.  For a pair that is exactly the
+        # reversal §29.5 named and never searched.
+        alt = tuple([a for a in order if a not in failed]
+                    + [a for a in order if a in failed])
+        if tuple(alt) == tuple(order):
+            alt = tuple(reversed(order))
         if verbose:
-            print(f"  stage {s} group {sorted(int(x) for x in who)} priority "
-                  f"{k}: arm {a} ({len(st.accepted)}/{len(pcs)} pieces, "
-                  f"{st.ink_m:.3f} m) against {sorted(partners)}"
-                  + (f", rooms {sorted(env)}" if env else ", poses only"))
+            print(f"  stage {s} group {sorted(int(x) for x in who)}: "
+                  f"{lost_m:.3f} m in {lost_n} piece(s) did not fly in order "
+                  f"{list(order)}; trying the post-slot order {list(alt)}")
+        arms2, slots2, failed2 = _fly(alt)
+        lost2_m, lost2_n = _score(failed2)
+        tried.append(dict(order=[int(a) for a in alt], lost_m=lost2_m,
+                          lost_pieces=lost2_n, failed=sorted(failed2)))
+        if (lost2_m, lost2_n) < (lost_m, lost_n):
+            arms, slots, order = arms2, slots2, alt
+            lost_m, lost_n, failed = lost2_m, lost2_n, failed2
+            if verbose:
+                print(f"  stage {s} group {sorted(int(x) for x in who)}: the "
+                      f"post-slot order ships ({lost2_m:.3f} m lost)")
     thaw()              # the CHECK does not inherit the planner's own room
     worst, ok, holds = float("inf"), True, []
     for sl in slots:
@@ -3133,13 +3204,15 @@ def _serialise_group(s, who, buckets, deferred, fl, pens, held, parks, h_inv,
         q[int(sl["arm"])] = held7[int(sl["arm"])]
         holds.append(dict(before=int(sl["arm"]), **hold_gap(q, fl, pens, h_inv)))
     q_end = dict(out_pose)
-    q_end.update({int(a): fin[int(a)] for a in order})
+    q_end.update({int(a): np.asarray(arms[int(a)].q_end, float).reshape(7)
+                  for a in order})
     holds.append(dict(before=None, **hold_gap(q_end, fl, pens, h_inv)))
     hold_ok = all(bool(h["ok"]) for h in holds)
     return arms, dict(
         ok=bool(ok and hold_ok), serialised=True, reason=str(why),
         min_clearance=float(worst), in_group_priority=True,
         serial_order=[int(a) for a in order],
+        orders_tried=tried, lost_m=float(lost_m), lost_pieces=int(lost_n),
         slots=[dict(arm=int(sl["arm"]), frames=int(sl["frames"]),
                     min_clearance_m=float(sl.get("min_clearance_m", np.nan)),
                     ok=bool(sl.get("ok", True))) for sl in slots],

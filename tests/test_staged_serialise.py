@@ -339,3 +339,95 @@ def test_an_empty_bucket_still_reports_what_it_is_holding(rig):
                              pen_ext=spec.pen,
                              q_start=np.asarray(spec.q_seed, float))
     assert tl["hold_kind"] == "still"
+
+
+# ---------------------------------------------------------------------------
+# 2b.  THE POST-SLOT ORDER -- A BUCKET IS NEVER DROPPED FOR WANT OF A SLOT
+# ---------------------------------------------------------------------------
+def test_a_bucket_that_will_not_fly_is_given_the_post_slot_not_dropped(rig):
+    """§29.5's named next step, measured on `lf6b_s150` and closed here.
+
+    Busiest-first makes the busiest arm plan against its row partner AT THE
+    PARTNER'S ENTRY POSE and the second arm against that partner AT ITS PARK --
+    two different questions, and a group of two has only the two.  On
+    `lf6b_s150` stage C arm 31's 8 pieces (1.914 m) were PLANNED and never
+    flown: the bucket produced no timeline in either reading, the go-home
+    `aside` gave the arm a timeline with no ink in it, and the metre and a half
+    is the largest hole in the picture.  So when a bucket does not fly, the arm
+    goes to the BACK of the order -- the slot in which every partner has
+    finished and gone home -- and the order that flies more ink ships.
+    """
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    # THE ENTRY POSE AND THE PARK HAVE TO DIFFER or the two orders ask the same
+    # question: an arm that has flown is at its PARK (`PARK_HOME`) and one that
+    # has not started is at the pose the last stage left it holding.
+    held = dict(parks)
+    held[71] = np.asarray(parks[71], float) + 0.02
+    calls = []
+
+    def fake_plan(stage, arm, pieces, specs=None, pens=None, parks=None,
+                  h_inv=None, opts=None, envelopes=None, partners=None, **kw):
+        # arm 31 flies only while arm 71 is still standing at its ENTRY pose,
+        # i.e. only when arm 31 goes FIRST.  Planned after 71 has flown and
+        # gone home, its bucket refuses -- which is `lf6b_s150` stage C.
+        home71 = bool(np.allclose(np.asarray(parks[71], float),
+                                  np.asarray(shipped[71], float)))
+        calls.append(int(arm))
+        st = _held_stage(int(arm), shipped[int(arm)], 6, pieces=len(pieces))
+        if int(arm) == 31 and home71:
+            st.planned, st.timeline = [], None
+        return st
+
+    shipped = parks
+    real = staged.plan_bucket
+    staged.plan_bucket = fake_plan
+    try:
+        arms, rep = staged._serialise_group(
+            2, (31, 71), {(2, 31): [_piece(31, 0.9)],
+                          (2, 71): [_piece(71, 2.0)]},
+            {}, rig, pens, held, parks, staged.H_INV_DEFAULT, None,
+            False, None, 0.05, 2, False, [2, 13, 17, 97], {}, {}, "drop", "x")
+    finally:
+        staged.plan_bucket = real
+
+    # the ink-first order is tried first and LOSES arm 31's bucket...
+    assert rep["orders_tried"][0]["order"] == [71, 31]
+    assert rep["orders_tried"][0]["lost_m"] == pytest.approx(0.9)
+    # ...so the post-slot order is tried, loses nothing, and ships
+    assert rep["orders_tried"][1]["order"] == [31, 71]
+    assert rep["orders_tried"][1]["lost_m"] == pytest.approx(0.0)
+    assert rep["serial_order"] == [31, 71]
+    assert rep["lost_m"] == pytest.approx(0.0)
+    assert arms[31].timeline is not None and arms[31].accepted
+
+
+def test_the_second_order_is_not_planned_when_the_first_one_loses_nothing(rig):
+    """THE SEARCH IS PAID FOR ONLY WHERE IT BUYS SOMETHING.
+
+    A refused group is already planned twice -- once by `plan_bucket` against
+    the outside fleet and once per arm under the in-group room -- and stage C's
+    wall went from 93 s to 1 428 s for it (§29.3).  A second ORDER doubles that
+    again, so it is tried only where the first order lost a whole bucket.
+    """
+    parks = staged.shipped_parks(rig)
+    pens = {a: rig[a].pen for a in rig}
+    calls = []
+
+    def fake_plan(stage, arm, pieces, specs=None, pens=None, parks=None,
+                  h_inv=None, opts=None, **kw):
+        calls.append(int(arm))
+        return _held_stage(int(arm), parks[int(arm)], 6, pieces=len(pieces))
+
+    real = staged.plan_bucket
+    staged.plan_bucket = fake_plan
+    try:
+        _, rep = staged._serialise_group(
+            2, (31, 71), {(2, 31): [_piece(31, 0.2)], (2, 71): [_piece(71, 2.0)]},
+            {}, rig, pens, dict(parks), parks, staged.H_INV_DEFAULT, None,
+            False, None, 0.05, 2, False, [2, 13, 17, 97], {}, {}, "drop", "x")
+    finally:
+        staged.plan_bucket = real
+    assert calls == [71, 31]                    # one order, two plans
+    assert len(rep["orders_tried"]) == 1
+    assert rep["lost_m"] == pytest.approx(0.0)
