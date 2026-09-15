@@ -222,7 +222,10 @@ was put. Nothing else in the pipeline changed.
 ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/draw.py \
     out/unknown_strokes.json --out unknown_h0970 --arms 31,71 \
     --atlas out/atlas_proposed_h0970_lat0860 --tilt-max-deg 15 \
-    --min-len 0.02 --fps 48 --substeps 1 --subcheck 2 --program --no-anim
+    --min-len 0.02 --fps 48 --substeps 1 --subcheck 2 \
+    --skip-unconductable --freeze-refused-phase --depot-hover-selective \
+    --residual-passes 6 --residual-min-gain 0.0005 \
+    --program --no-anim
 ```
 
 **At 0.850, if that is what the steel measures:**
@@ -233,8 +236,41 @@ ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/replan_at_height.py \
     --parks out/park_search_h0850_lat0860.json -- \
     out/unknown_strokes.json --out unknown_h0850 --arms 31,71 \
     --tilt-max-deg 15 --min-len 0.02 --fps 48 --substeps 1 --subcheck 2 \
+    --skip-unconductable --freeze-refused-phase --depot-hover-selective \
+    --residual-passes 6 --residual-min-gain 0.0005 \
     --program --no-anim
 ```
+
+> **THE LAST FIVE FLAGS ARE NOT OPTIONAL AND THEY COST AN HOUR TO LEARN.**
+> They are v19's own job parameters, and a run without them does not finish.
+> Measured today, twice, on this word: the conductor refuses the phase with
+>
+> ```
+> sequencer cost model vs frozen timeline: worst disagreement 2.67e-02 s
+> !! could not be conducted as allocated: sequencer priced transits the
+>    timeline does not pay: arm 31: 0.0267 s
+> ```
+>
+> — a **deterministic 26.7 ms mispricing on one arm-31 transit**. The rescue
+> ladder then recurses (both arms → `{31}` and `{71}` → arm 31's tour cut in
+> two, twice), certifies two fragments at VERDICT PASS, and bottoms out on a
+> third that fails identically every time.
+>
+> **Neither of the two obvious levers touches it.** `--reseq-tries` cannot:
+> `cross_check` raises `SystemExit`, and the retry loop in
+> `csail_schedule.build_phase` catches only `idle.Unconductable`, so the
+> re-sequence never runs. `--no-verify` cannot either: it gates the
+> unsplit-alternative allocation in `run_allocation`, not this check. Nor is it
+> the balancer — a `--no-split` run fails at the same 26.7 ms on the same arm.
+> `--skip-unconductable` is what lets the rescue ladder ship the fragments that
+> DID certify, and `--residual-passes` is what re-allocates the hole the
+> skipped one leaves. `--depot-hover-selective` is worth its place on its own:
+> without it arm 31 gave back 64 mm of stroke 3 and arm 71 27 mm of stroke 6;
+> with it both are kept whole on a hover further round the fiber.
+>
+> **Read the coverage line in the log before trusting any output.** A run that
+> skipped a fragment draws less of the word than it was asked for, and
+> `--skip-unconductable` is precisely the flag that lets it do so quietly.
 
 Three things about these commands are deliberate and must not be "tidied":
 
@@ -469,6 +505,33 @@ the bundle format's own argument for why the collision certificate survives.
 > bundle flyable if the factor is absurd, and names the file
 > `..._NOT_FLYABLE.npz` so it cannot be picked up by accident.
 >
+> ### **THE ACCELERATION NUMBER DEPENDS ON THE RATE YOU MEASURE IT AT, and
+> that is the finding of 2026-09-15**
+>
+> Measured on v19's arms 31 and 71 through this script:
+>
+> | measured at | peak &#124;q̈&#124; | scaling needed | verdict |
+> |---|---|---|---|
+> | the conducted samples (48 Hz) | **37.70 / 36.82** rad/s² | **1.94×** slower | fixable |
+> | resampled to the driver's **1000 Hz** | **1422** rad/s² | **11.9×** slower | **NOT FLYABLE** |
+>
+> Both numbers are of the same trajectory. The second is larger because
+> halving the sample spacing doubles the finite-difference acceleration across
+> a corner, without limit — which is the impulse above, showing up as soon as
+> you look closely enough. So *"the programme needs to be 1.94× slower"* is
+> true only of the 48 Hz command stream; it is **not** a claim about what
+> libfranka's 1 kHz loop will see if it interpolates between those samples
+> itself.
+>
+> **What to do about it tomorrow.** Run `retime_bundle.py` **both ways** —
+> plain, and with `--hz 1000` — and put both numbers in the log. Then hand
+> `fr3_sender.py --dry-run` the bundle and let the driver's OWN gate rule; that
+> verdict is the one that counts, and it is free. If the 1 kHz figure is what
+> the gate tests, the honest answer for day 1 is that **stack D is not flyable
+> for this programme** and the drawing runs go through stack B, with the joint
+> columns used as the nullspace reference. That still tests the redundancy
+> resolution, which is the point.
+>
 > **One rate for the whole fleet.** The script reports a single `FLEET RATE` =
 > the slowest arm's. Re-timing one arm and not the other moves them against
 > each other at instants nobody certified — `execute.Governor`'s entire
@@ -489,11 +552,48 @@ powered attempt.
 | 1 | **mounting height h = 0.970** | `layout.LAYOUT_PROPOSED["h"]` | §1.1/§1.2 survey; and the hover pass reads 30 mm | re-plan: §3's 0.850 command, or `replan_at_height.py --h <measured>` with the atlas and parks for that height |
 | 2 | **the pen tip** `PEN_EXT_HOLDER = 0.0460262`, `PEN_LAT_HOLDER = 0.0860369` | `frames.py` | §1.4 touchdown; the hover pass's measured height | **re-plan everything.** The tip is inside `atlas.is_current`'s model signature, so a moved tip stales every sweep in `out/` |
 | 3 | **the paper plane is flat and at z = 0** | the datum | four-corner probe in §1.2; the executor's own plane fit | the impedance stack measures the plane itself and overrides `z_m`; the joint bundle does **not** — a tilted plane is a reason to prefer stack B today |
-| 4 | **the seam bars are where `SEAM_BARS_MM` says** — x = −0.1905..−0.1143 and 1.9177..1.9939 m, y = 1.8153 ± 0.0762, z = −0.027..1.624 | `mounts.py` | eyes and a tape | they are the ROOM, not an arm, and they sit on this pair's own row. The word (x 0.35..1.45) clears them by >0.5 m, but a *park* or a *transit* may not — the 2026-09-14 re-search moved arm 31's park for exactly this reason |
+| 4 | **the seam bars are where `SEAM_BARS_MM` says** — x = −0.1905..−0.1143 and 1.9177..1.9939 m, y = 1.8153 ± 0.0762, z = −0.027..1.624 | `mounts.py` | eyes and a tape | **see the box below — this is the assumption most likely to bite this particular pair** |
 | 5 | **the other four arms are absent but modelled as parked metal** | `--arms 31,71` | — | measured harmless here: nearest absent-arm box is 1.003 m away, identical certification over 150 sampled cells. **Leave it alone.** |
 | 6 | **CSV frame = `fr3_link0`, quaternion `qx,qy,qz,qw` scalar-last, no yaw fudge** | `export/pathway.py` | the exporter's own FK-vs-pose gate on every row; `test_export_pathway.py` reproduces the deployed generator's `(1,0,0,0)` for a floor arm pen-down | if the operator's executor disagrees, **do not patch the exporter** — compare against the deployed generator's own output for the same arm first |
 | 7 | **arm 71 has an IP** | `backends.INSTALLATION_IPS[71] is None` | preflight refuses | §1.6. This is a networking job, not a planning one, and it blocks stack D for arm 71 entirely |
 | 8 | **park poses certify at the running height** | `layout.Q_PARK_PROPOSED` (searched at 0.970) | `scene_check`'s frozen-pose gate in the re-check | the 0.940 grid applied at 0.850 lands **−126 mm inside another arm's ink**. Never carry a park set across a height — use that height's own `park_search_*.json` |
+
+> ### The seam bars bite THIS pair, and there is a measurement to prove it
+>
+> The two seam bars went into the certified static set on **2026-09-14**. The
+> shipped six-arm programme **v19 was conducted on 2026-09-10**, four days
+> earlier — so v19 never saw them, and re-checked against them it **FAILS**:
+>
+> ```
+> $ scripts/seam_impact.py ... out/seam_impact_v19_seam.log
+>   min frame clearance -59.4 mm (margin 50 mm), arm 31 at t=13.94 s
+>   FAIL: arms [31, 71]
+>   VERDICT FAIL
+> ```
+>
+> Reproduced independently today by `scripts/timing_tolerance.py` at Δt = 0,
+> which reports `frame_failed [31, 71]` while agreeing with v19's published
+> inter-arm number to the digit (50.32 mm, pair 13-31, t = 65.98 s).
+>
+> **The two arms the bars fail are 31 and 71 — the middle row, and tomorrow's
+> entire fleet.** That is not a coincidence: the bars stand on the middle row's
+> own line (y = 1815.32 mm), 114.3 mm outboard of the canvas edge at each end,
+> over the whole 1651 mm from tabletop to runway. They are the one piece of
+> steel that is *closest to these two arms and nobody else*.
+>
+> Everything planned today was conducted with `mounts.SEAM_POSTS_ON` true, so
+> the bars are inside the certificate rather than outside it. But it means:
+>
+> - **Do not fall back to any pre-2026-09-14 file.** v19 and everything beside
+>   it is stale for this pair specifically, and stale in the direction that
+>   hurts.
+> - **Look at the west and east ends of the table before powering up.** The bar
+>   geometry is `SEAM_SOURCE`-flagged **REPRESENTATIVE**, not measured: "a bar
+>   as wide as two of the corner struts". If the real steel is wider, deeper,
+>   or somewhere else, the gate that matters most to these two arms is wrong.
+>   Measure it and say so; it is a tape-measure job and it is worth ten minutes.
+> - `ARIS_SEAM_POSTS=0` reproduces the pre-seam numbers exactly. It is for
+>   regression comparison **only**. Never fly anything planned with it.
 
 ---
 
