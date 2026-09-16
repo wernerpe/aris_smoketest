@@ -272,6 +272,177 @@ def build_argv(params):
 
 
 # --------------------------------------------------------------------------
+# HARDWARE DAY 1 — the same front door, the other subcommand
+# --------------------------------------------------------------------------
+# `scripts/day1.py` is what a person types at the rig, and the GUI runs THAT,
+# argument for argument, for the same reason the planning half runs
+# `scripts/draw.py`: a run started from the browser and a run started from a
+# terminal must differ in nothing but who is watching.  The day-1 artefacts
+# land in `out/day1/` where the runbook says they do, NOT in the job
+# directory — the CSV is the file somebody streams to the controller and its
+# path is written down in docs/HARDWARE_DAY1.md.  Only the viewer bundle is
+# per-job.
+DAY1_DIR = ROOT / "out" / "day1"
+
+
+def build_day1_argv(params, out_dir=None):
+    """Job parameters -> `scripts/day1.py` argv.  -> list[str].
+
+    A whitelist, like `build_argv`: two subcommands, and a key the form
+    invents is an error rather than a silently different run.
+    """
+    p = dict(params)
+    kind = str(p.pop("day1", "") or "")
+    for k in ("rig", "tool", "note"):
+        p.pop(k, None)
+    out = str(out_dir or p.pop("out_dir", None) or DAY1_DIR)
+    p.pop("out_dir", None)
+    if kind == "line":
+        known = {"arm", "from", "to", "name", "hover"}
+        unknown = sorted(set(p) - known)
+        if unknown:
+            raise ValueError(f"unknown day1 line parameters: {unknown}")
+        arm = int(p.get("arm", 0))
+        if arm not in (31, 71):
+            raise ValueError(f"arm must be 31 or 71, got {arm!r}")
+        for k in ("from", "to"):
+            if not str(p.get(k, "")).strip():
+                raise ValueError(f"day1 line needs --{k} X,Y in metres")
+        argv = ["line", "--arm", str(arm),
+                "--from", str(p["from"]).strip(), "--to", str(p["to"]).strip(),
+                "--name", str(p.get("name") or "line").strip(),
+                "--out", out]
+        hover = float(p.get("hover") or 0.0)
+        if hover > 0:
+            argv += ["--hover", f"{hover:g}"]
+        return argv
+    if kind == "word":
+        known = {"variant", "arms"}
+        unknown = sorted(set(p) - known)
+        if unknown:
+            raise ValueError(f"unknown day1 word parameters: {unknown}")
+        variant = str(p.get("variant") or "alt")
+        if variant not in ("alt", "concurrent", "hover"):
+            raise ValueError(f"unknown word variant {variant!r}")
+        return ["word", "--variant", variant,
+                "--arms", str(p.get("arms") or "31,71"), "--out", out]
+    raise ValueError(f"day1 must be 'line' or 'word', got {kind!r}")
+
+
+def _day1_result(day1, params, out_dir):
+    """What the run wrote, as the panel needs it. -> dict.
+
+    The one-liner and the gate numbers are `day1.py`'s own formatters, so the
+    line in the browser and the line in a terminal are the same string built
+    the same way.
+    """
+    kind = str(params.get("day1"))
+    out_dir = Path(out_dir)
+    if kind == "line":
+        arm = int(params["arm"])
+        name = str(params.get("name") or "line")
+        # The summary file names itself LAST (`plan_line` writes the json and
+        # then adds its own path to the in-memory copy), so the path is this
+        # one and not `files["summary"]`, which the file on disk does not have.
+        sp = out_dir / f"{name}_{arm}.json"
+        s = json.loads(sp.read_text())
+        return dict(
+            cmd="line", ok=True, name=f"{name}_{arm}",
+            one_liner=day1._one_liner(name, arm, s["gates"],
+                                      s["duration_s"], True),
+            gates=s["gates"], duration_s=s["duration_s"],
+            csv=[s["files"]["csv"]], summary=str(sp),
+            npz=s["files"]["npz"], program=s["files"]["program"],
+            schedule=None)
+    variant = str(params.get("variant") or "alt")
+    v = day1.VARIANTS[variant]
+    rep = json.loads((out_dir / f"unknown_{variant}_recheck.json").read_text())
+    margin = float(rep.get("margin", day1.coordination.PAIR_MARGIN))
+    g = day1._gate_numbers(rep, margin)
+    arms = [a for a in str(params.get("arms") or "31,71").replace(",", " ").split()]
+    import numpy as np
+    dur = float(np.load(v["npz"], allow_pickle=False)["duration"])
+    return dict(
+        cmd="word", ok=bool(rep["ok"]), name=f"word/{variant}",
+        one_liner=day1._one_liner(f"word/{variant}", "+".join(arms), g, dur,
+                                  bool(rep["ok"])),
+        gates=g, duration_s=dur,
+        csv=[str(p) for p in sorted(out_dir.glob(f"unknown_{variant}_*.csv"))],
+        summary=str(out_dir / f"unknown_{variant}_recheck.json"),
+        npz=str(v["npz"]), program=str(v["program"]),
+        schedule=str(v["summary"]))
+
+
+def run_day1(job_dir, params, progress):
+    """The day-1 half of the worker. -> (ok, error, result|None)."""
+    import day1                                          # scripts/day1.py
+    out_dir = Path(params.get("out_dir") or DAY1_DIR)
+    args = build_day1_argv(params, out_dir)
+    progress.emit("job_start", "", params=params, argv=args,
+                  rig=os.environ.get("ARIS_RIG", "proposed"),
+                  tool=os.environ.get("ARIS_TOOL", "lateral"),
+                  pid=os.getpid(), job_dir=str(job_dir))
+    ok, err = True, None
+    try:
+        with progress.stage("day1", cmd=" ".join(args)):
+            day1.main(args)
+    except SystemExit as exc:
+        # `Refused` IS a SystemExit with a plain sentence.  A line that will
+        # not certify is a RESULT — the whole point of the front door — and it
+        # is reported as one, with the sentence, and never as a traceback.
+        code = exc.code
+        ok = code in (0, None)
+        err = None if ok else str(code)
+        if err:
+            # WHAT A TERMINAL WOULD HAVE SHOWN.  `scripts/day1.py` refuses by
+            # raising `Refused`, and it is `sys.exit` at the bottom of the file
+            # that prints the sentence — which nobody does when `main()` is
+            # called in-process.  Printing it here puts it through the same tee
+            # as the rest of the run, so the browser's log and a terminal's end
+            # with the same line.
+            print(err)
+    # The result is read back even after a refusal, because a word whose
+    # re-check FAILS still wrote its recheck json and the panel should show the
+    # gate that failed rather than only "REFUSED".  A refused LINE writes
+    # nothing at all, and then there is simply nothing to read.
+    read_err = None
+    try:
+        result = _day1_result(day1, params, out_dir)
+    except Exception as exc:
+        result, read_err = None, f"{type(exc).__name__}: {exc}"
+    if result is not None:
+        # AN `item`, NOT A NEW KIND.  `progress.KINDS` is a closed vocabulary
+        # (tests/test_progress.py pins that every declared kind is emitted by
+        # the module itself), and a run's verdict is exactly what an `item` is
+        # for: one unit of work finished, typed by `what`.
+        progress.item("day1", what="day1", **result)
+    elif err:
+        # A refused LINE writes nothing at all, so the refusal IS the verdict
+        # and the panel shows that rather than an empty box.
+        progress.item("day1", what="day1", cmd=str(params.get("day1")),
+                      ok=False, name="", one_liner=err, gates={},
+                      duration_s=0.0, csv=[])
+    if not ok:
+        return False, err, None
+    if result is None:
+        return False, (f"the run passed but its summary would not read: "
+                       f"{read_err}"), None
+    return bool(result["ok"]), (None if result["ok"] else result["one_liner"]), \
+        result
+
+
+def _day1_bundle(job_dir, result, progress):
+    """The viewer bundle for a day-1 run. -> error|None."""
+    from .day1_bundle import export
+    with progress.stage("export", npz=Path(result["npz"]).name):
+        b = export(result["npz"], result["program"],
+                   job_dir / "bundle.json", summary=result.get("schedule"))
+    progress.artifact("bundle", job_dir / "bundle.json")
+    progress.metric("bundle_frames", b.meta.n_frames)
+    return None
+
+
+# --------------------------------------------------------------------------
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     job_dir = Path(argv[0]).resolve()
@@ -283,8 +454,10 @@ def main(argv=None):
     # that is the shared `out/`, where two jobs planning the same picture would
     # overwrite each other's programme while both were running.  The job
     # directory is the job (see `jobs.py`), so the default belongs here and not
-    # in the form.
-    params.setdefault("outdir", str(job_dir))
+    # in the form.  A day-1 job takes no `--outdir`: its files belong in
+    # `out/day1/`, which is where the runbook says to look for them.
+    if not params.get("day1"):
+        params.setdefault("outdir", str(job_dir))
 
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -301,14 +474,18 @@ def main(argv=None):
 
     t0 = time.time()
     ok, err = True, None
+    day1_result = None
     try:
-        args = build_argv(params)
-        progress.emit("job_start", "", params=params, argv=args,
-                      rig=os.environ.get("ARIS_RIG", "final"),
-                      tool=os.environ.get("ARIS_TOOL", "inline"),
-                      pid=os.getpid(), job_dir=str(job_dir))
-        import draw                                       # scripts/draw.py
-        draw.main(args)
+        if params.get("day1"):
+            ok, err, day1_result = run_day1(job_dir, params, progress)
+        else:
+            args = build_argv(params)
+            progress.emit("job_start", "", params=params, argv=args,
+                          rig=os.environ.get("ARIS_RIG", "final"),
+                          tool=os.environ.get("ARIS_TOOL", "inline"),
+                          pid=os.getpid(), job_dir=str(job_dir))
+            import draw                                   # scripts/draw.py
+            draw.main(args)
     except SystemExit as exc:
         # `scripts/draw.py` and the conductor refuse with SystemExit and a
         # sentence that says why (coverage below the gate, scene_check's veto).
@@ -325,7 +502,9 @@ def main(argv=None):
         bundle_err = None
         if ok:
             try:
-                bundle_err = _export_bundle(job_dir, params, progress)
+                bundle_err = (_day1_bundle(job_dir, day1_result, progress)
+                              if day1_result is not None
+                              else _export_bundle(job_dir, params, progress))
             except BaseException as exc:
                 bundle_err = f"{type(exc).__name__}: {exc}"
                 progress.emit("log", "", level="error",

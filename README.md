@@ -1,5 +1,80 @@
 # aris_sixarm
 
+## Robot PC quick start
+
+Clone → venv → verify → draw. Every step and every failure mode it has actually
+hit: `docs/SITE_SETUP.md`. The hardware day itself: `docs/HARDWARE_DAY1.md`.
+
+```bash
+sudo apt install -y build-essential libeigen3-dev python3-venv
+git clone <URL> aris_sixarm && cd aris_sixarm
+python3 -m venv .venv && . .venv/bin/activate && pip install -U pip
+pip install -r requirements-site.txt && pip install -e '.[gui]'
+pip install ./ik_src                   # analytic-IK bindings, SITE_SETUP §1.3 —
+                                       # NOT in this repo: carry ik_src/ (or
+                                       # ik_wheel/*.whl) from a site bundle
+                                       # (scripts/make_site_bundle.sh)
+python -c "import aris_sixarm.ik as ik; print('batch:', ik._IK.has_batch)"  # True
+python -m pytest tests/test_gates.py tests/test_hardware_prep.py -q   # 20 passed
+python -m pytest tests/test_day1.py -q                               # 9 passed
+
+export ARIS_RIG=proposed ARIS_TOOL=lateral
+python scripts/day1.py word --variant alt          # re-check the word, copy CSVs
+python scripts/day1.py line --arm 71 --from 1.15,1.95 --to 1.30,1.95 --name probe
+python -m aris_sixarm.gui                          # http://localhost:8765
+```
+
+`out/` is gitignored and a clone has none of it: the 0.970 artefacts `day1.py`
+reads are **tracked** under `assets/site/h0970/` and resolve automatically when
+`out/` has no copy (`ARIS_ASSETS=DIR` overrides). CSVs and summaries land in
+`out/day1/`; the GUI writes its bundles under `out/gui_jobs/<job>/`.
+
+Three rig facts: **h = 0.970** m, inverted; **arm 31 refuses a line exactly on
+y = 1.815** (the seam — its go-home leg will not clear the paper there, so move
+the line); read a re-plan's coverage from the **schedule JSON**, never from the
+log's `COVERAGE` line (`--skip-unconductable` lets the two diverge — see
+`docs/HARDWARE_DAY1.md` §3).
+
+Don'ts: no `ARIS_RIG`/`ARIS_TOOL` in a pytest command — `tests/test_gates.py`
+pins the constants at the **default** rig, and it must be run in its own process
+(importing `scripts/day1.py` first sets the rig for the whole interpreter, which
+fails `test_pen_tip_offset` — a HEAD-standing interaction, not a new one). Do
+not edit the gate constants, `frames.py`, `layout.py`, `mounts.py` or
+`scene_check.py` to make something pass.
+
+Known issues at this commit: `tests/test_export_pathway.py` has 6 failures of 18
+(`test_inverted_arm_pen_points_plus_z_in_link0`,
+`test_shipped_schedule_exports_and_lands_inside_the_arms_reach`,
+`test_shipped_schedule_is_executable[31]`, `…[71]`,
+`test_shipped_schedule_stroke_bookkeeping`,
+`test_base_transform_is_h_inv_invariant_on_the_proposed_rig`) — all of them
+h = 0.940-era expectations in the test, not in the exporter, which `day1.py`
+uses on every run.
+
+### The GUI
+
+```bash
+python -m aris_sixarm.gui            # 127.0.0.1:8765, this machine only
+```
+
+The **Hardware day 1** panel is the first group in the left column. It runs
+`scripts/day1.py` — the same front door, the same arguments — as a job through
+the existing worker, streams its output into the log, and shows the one-line
+PASS/FAIL with the gate numbers. On PASS the programme loads into the 3D viewer
+and the pathway CSV paths appear with a copy button.
+
+* **line** — arm (31/71), from `x,y`, to `x,y`, a file stem, and a hover
+  checkbox (30 mm above the paper; planned with a longer pen and graded with
+  the real one). A line that will not certify is a red refusal and **no CSV**.
+* **word** — `alt` / `concurrent` / `hover`: re-runs the independent
+  whole-timeline check on the certified 2026-09-15 asset today and copies the
+  per-arm CSVs into `out/day1/`.
+
+`docs/VIEWER.md` is the viewer; the planner form below the day-1 group is
+unchanged.
+
+---
+
 Motion analysis & planning for the **Aris Kindt** installation. This repo
 consolidates the validated kinematic conventions, the fleet model, the
 reachability/controllability atlas, and the multi-arm stroke planner —

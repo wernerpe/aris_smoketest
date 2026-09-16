@@ -90,19 +90,53 @@ HOVER_DEFAULT = 0.030                     # m, the day plan's hover height
 OUT_DIR = ROOT / "out" / "day1"
 ARMS = (31, 71)
 
+# --- where yesterday's assets live on a machine with no out/ ----------------
+# `out/` is gitignored, so a fresh clone on the robot PC has none of it.  The
+# handful of 0.970 artefacts this file READS — three schedule npz, the per-arm
+# pathway CSVs it copies, the strokes file `--replan` needs and the atlas
+# `--replan` plans against — are TRACKED under `assets/site/h0970/`, laid out
+# with the same names they have under `out/`.  `out/` still wins when it is
+# there, so a workstation that has just re-planned sees its own new file and
+# not yesterday's copy; `ARIS_ASSETS=DIR` moves the fallback.
+ASSETS = Path(os.environ.get("ARIS_ASSETS")
+              or ROOT / "assets" / "site" / "h0970")
+
+
+def asset(rel):
+    """`out/<rel>` if it exists, else the tracked site copy. -> Path.
+
+    Returns the `out/` path when NEITHER exists, so a missing-file message
+    names the place the file is normally written rather than the fallback.
+    """
+    p = ROOT / "out" / rel
+    if p.exists():
+        return p
+    alt = ASSETS / rel
+    return alt if alt.exists() else p
+
+
 # --- yesterday's certified assets, and what each is for --------------------
+# `program`/`summary` are not read by `word` itself — they are the two files
+# `aris_sixarm.gui.day1_bundle` needs to turn the same asset into a viewer
+# bundle, and they belong next to the npz they describe.
 VARIANTS = {
     "alt": dict(
-        npz=ROOT / "out" / "unknown_h0970_home_alt.npz",
+        npz=asset("unknown_h0970_home_alt.npz"),
         csv_stem="unknown_h0970_home_alt",
+        program=asset("unknown_h0970_home_program.json"),
+        summary=asset("unknown_h0970_home_schedule.json"),
         what="the ALTERNATING word — the deliverable (rung C)"),
     "concurrent": dict(
-        npz=ROOT / "out" / "unknown_h0970_home_schedule.npz",
+        npz=asset("unknown_h0970_home_schedule.npz"),
         csv_stem="unknown_h0970_home",
+        program=asset("unknown_h0970_home_program.json"),
+        summary=asset("unknown_h0970_home_schedule.json"),
         what="the CONCURRENT word — livelier, and the only collision risk (rung D)"),
     "hover": dict(
-        npz=ROOT / "out" / "unknown_h0970_hover_schedule.npz",
+        npz=asset("unknown_h0970_hover_schedule.npz"),
         csv_stem="unknown_h0970_hover",
+        program=asset("unknown_h0970_hover_program.json"),
+        summary=asset("unknown_h0970_hover_schedule.json"),
         what="the 30 mm HOVER pass — never touches the paper (rung A)"),
 }
 
@@ -216,8 +250,36 @@ def _payload(qtraj, segtraj, pens, margin, min_clearance, name):
     return d
 
 
-def _program_json(arm, name, source, plan, pen_plan, pen_real, hover):
+def _plan_segment_json(plan, draw_s):
+    """The certified plan as ONE phase-segment record. -> dict.
+
+    The shape is `csail_allocate._phase_json`'s, which is the shape the pathway
+    exporter and `program_schema.export_bundle` both read, and every number in
+    it is the plan's own — nothing is invented here.  A one-line run has no
+    allocator to write it, in the same way it has no allocator to write
+    `_segment`'s programme entry.
+    """
+    return dict(
+        seg=0, stroke_id=0, s_range=[0.0, 1.0], direction=1, flipped=False,
+        length_m=float(plan["arc_len"]), color="black", kind="line",
+        min_sigma=float(plan["min_sigma"]),
+        min_margin=float(plan["min_margin"]),
+        tip_err_m=float(plan["tip_err"]),
+        max_lean_deg=float(plan.get("lean_deg", 0.0) or 0.0),
+        tilt_cone_deg=float(TILT_MAX_DEG),
+        draw_time_s=float(draw_s),
+        plan_ok=(plan["status"] == "ok"),
+        validated=bool((plan.get("validation") or {}).get("ok", False)),
+        home_before=False,
+        n_dense=int(plan.get("n_dense", 0)),
+        n_knots=int(plan.get("n_knots", 0)),
+        pts=[[float(x), float(y)] for x, y in np.asarray(plan["stroke"], float)])
+
+
+def _program_json(arm, name, source, plan, pen_plan, pen_real, hover,
+                  draw_s=0.0):
     """The label file the exporter reads.  Nothing load-bearing is in it."""
+    seg = _plan_segment_json(plan, draw_s)
     return dict(
         rig=os.environ["ARIS_RIG"], tool=os.environ["ARIS_TOOL"],
         h_inv=float(fleet.H_INV_DEFAULT),
@@ -229,9 +291,12 @@ def _program_json(arm, name, source, plan, pen_plan, pen_real, hover):
         plan_pen_ext_m=float(pen_plan), hover_m=float(hover),
         strokes=[dict(id=0, color="black", kind="line",
                       length=float(plan["arc_len"]))],
+        totals=dict(traced_m=float(plan["arc_len"]),
+                    drawn_m=float(plan["arc_len"]), dropped_m=0.0,
+                    coverage_pct=100.0, n_strokes=1, n_segments=1, wall_s=0.0),
         phases=[dict(name="single line", ink="black", draw_speed=DRAW_SPEED,
-                     arms={str(arm): [dict(stroke_id=0, kind="line")]})],
-        arms={str(arm): [dict(stroke_id=0, kind="line")]},
+                     arms={str(arm): [seg]}, dropped=[])],
+        arms={str(arm): [seg]},
         colors={str(arm): "black"})
 
 
@@ -433,9 +498,19 @@ def plan_line(arm, p0, p1, name="line", hover=0.0, out_dir=OUT_DIR,
     stem = f"{name}_{arm}"
     npz_path = out_dir / f"{stem}.npz"
     pj = _program_json(arm, f"day1 line, arm {arm}", "scripts/day1.py line",
-                       plan, pen_plan, pen_real, hover)
+                       plan, pen_plan, pen_real, hover,
+                       draw_s=float(prog["draw_s"]))
     pj_path = out_dir / f"{stem}_program.json"
     pj_path.write_text(json.dumps(pj, indent=1) + "\n")
+    # The TARGET polyline, under the name `program_schema._stroke_polylines`
+    # looks for.  It is the two points the line was asked for and nothing else;
+    # without it the 3D viewer can animate the arm but cannot draw the line it
+    # is drawing.
+    (out_dir / f"{stem}_strokes.json").write_text(json.dumps(dict(
+        strokes=[dict(id=0, color="black", kind="line",
+                      length=float(plan["arc_len"]),
+                      pts=[[float(p0[0]), float(p0[1])],
+                           [float(p1[0]), float(p1[1])]])]), indent=1) + "\n")
     np.savez_compressed(npz_path, **_payload(q, seg, pens, margin,
                                              float(rep["min_clearance"]), stem))
 
@@ -594,9 +669,19 @@ def replan(strokes, out_name, arms=ARMS, outdir=ROOT / "out", verbose=True):
     """Re-plan the word with yesterday's exact job params. -> (ok, lines)."""
     strokes = Path(strokes)
     if not strokes.exists():
-        raise Refused(f"no strokes file at {strokes}")
+        # `out/unknown_strokes.json` is the name the day plan uses; on a clone
+        # with no out/ the same file is the tracked one.  See `asset`.
+        cand = asset(strokes.name)
+        if not cand.exists():
+            raise Refused(f"no strokes file at {strokes}")
+        strokes = cand
+    flags = list(REPLAN_FLAGS)
+    # the ONE substitution: the atlas is a directory, and on a clone with no
+    # out/ it is the tracked copy.  Every other flag is verbatim.
+    flags[flags.index("--atlas") + 1] = str(
+        asset("atlas_proposed_h0970_lat0860"))
     cmd = [sys.executable, str(ROOT / "scripts" / "draw.py"), str(strokes),
-           "--out", out_name, "--outdir", str(outdir)] + REPLAN_FLAGS
+           "--out", out_name, "--outdir", str(outdir)] + flags
     env = dict(os.environ, ARIS_RIG="proposed", ARIS_TOOL="lateral")
     print("  " + " ".join(cmd))
     print("  (the 0.970 conduct took ~700 s; a cold cache takes ~3700 s)")
@@ -655,7 +740,7 @@ def cmd_word(a):
 
     copied, missing = [], []
     for arm in arms:
-        src = ROOT / "out" / "pathways" / f"{v['csv_stem']}_arm{arm}.csv"
+        src = asset(f"pathways/{v['csv_stem']}_arm{arm}.csv")
         man = src.parent / f"{src.stem}.manifest.json"
         if not src.exists():
             missing.append(str(src))

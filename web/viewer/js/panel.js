@@ -85,18 +85,153 @@ const OPTIONS = {
   policies: ["freeze", "home"],
 };
 
+// --------------------------------------------------------------------------
+// HARDWARE DAY 1
+//
+// TWO BUTTONS, AND THEY RUN `scripts/day1.py`.  Not a second front door: the
+// job the browser posts becomes the argument list a person would type
+// (`gui/worker.build_day1_argv`), the CSVs land in `out/day1/` where
+// docs/HARDWARE_DAY1.md says they are, and the PASS/FAIL line here is the same
+// string `day1.py` prints in a terminal, built by the same formatter.
+const DAY1_LINE = [
+  ["arm", "arm", "select"],
+  ["from", "from  x,y  (m, canvas datum)", "text"],
+  ["to", "to  x,y  (m)", "text"],
+  ["name", "file stem", "text"],
+  ["hover", "fly it 30 mm ABOVE the paper (no ink, no contact)", "check"],
+];
+
+export class Day1 {
+  constructor(onRun) {
+    this.onRun = onRun;
+    this.inputs = {};
+  }
+
+  build(cfg) {
+    const d = (cfg && cfg.day1) || {};
+    this.cfg = d;
+    const body = F("div", {class: "body"});
+    body.appendChild(F("div", {class: "muted", text: d.note || ""}));
+
+    for (const [key, label, kind] of DAY1_LINE) {
+      let input;
+      if (kind === "check") {
+        input = F("input", {type: "checkbox"});
+        input.checked = !!d[key];
+        const wrap = F("label", {class: "check"}, [input]);
+        wrap.appendChild(document.createTextNode(" " + label));
+        body.appendChild(wrap);
+      } else if (kind === "select") {
+        input = F("select");
+        for (const v of (d.arms || [31, 71])) {
+          const o = F("option", {value: v, text: String(v)});
+          if (Number(v) === Number(d[key])) o.selected = true;
+          input.appendChild(o);
+        }
+        body.appendChild(F("div", {class: "row one"},
+          [F("div", {}, [F("label", {text: label}), input])]));
+      } else {
+        input = F("input", {type: "text",
+                            value: d[key] == null ? "" : String(d[key])});
+        body.appendChild(F("div", {class: "row one"},
+          [F("div", {}, [F("label", {text: label}), input])]));
+      }
+      this.inputs[key] = {el: input, kind};
+    }
+
+    this.lineBtn = F("button", {class: "primary", text: "Plan + certify line",
+                                onclick: () => this.onRun(this.lineParams())});
+    body.appendChild(F("div", {class: "btnrow one"}, [this.lineBtn]));
+
+    this.variant = F("select");
+    for (const v of (d.variants || ["alt", "concurrent", "hover"])) {
+      const o = F("option", {value: v, text: v});
+      if (v === d.variant) o.selected = true;
+      this.variant.appendChild(o);
+    }
+    this.wordBtn = F("button", {text: "Re-check word",
+                                onclick: () => this.onRun(this.wordParams())});
+    body.appendChild(F("div", {class: "row"}, [
+      F("div", {}, [F("label", {text: "word variant"}), this.variant]),
+      F("div", {}, [F("label", {text: " "}), this.wordBtn])]));
+
+    this.out = F("div", {id: "day1out"});
+    body.appendChild(this.out);
+
+    const head = F("h3", {text: "Hardware day 1"});
+    const g = F("div", {class: "group"}, [head, body]);
+    head.addEventListener("click", () => g.classList.toggle("collapsed"));
+    return g;
+  }
+
+  _val(k) { return String(this.inputs[k].el.value).trim(); }
+
+  lineParams() {
+    const d = this.cfg || {};
+    const p = {day1: "line", rig: d.rig || "proposed", tool: d.tool || "lateral",
+               arm: Number(this._val("arm")), from: this._val("from"),
+               to: this._val("to"), name: this._val("name") || "line"};
+    if (this.inputs.hover.el.checked) p.hover = d.hover_m || 0.03;
+    return p;
+  }
+
+  wordParams() {
+    const d = this.cfg || {};
+    return {day1: "word", rig: d.rig || "proposed", tool: d.tool || "lateral",
+            variant: String(this.variant.value)};
+  }
+
+  setRunning(live) {
+    this.lineBtn.disabled = !!live;
+    this.wordBtn.disabled = !!live;
+  }
+
+  clear() { if (this.out) this.out.innerHTML = ""; }
+
+  // The verdict, as `day1.py` printed it, and the files it left behind.
+  show(r) {
+    if (!this.out) return;
+    this.out.innerHTML = "";
+    this.out.appendChild(F("div", {
+      class: "verdict " + (r.ok ? "ok" : "bad"), text: r.one_liner || ""}));
+    for (const path of (r.csv || [])) {
+      const row = F("div", {class: "filerow"});
+      row.appendChild(F("code", {text: path}));
+      const b = F("button", {text: "copy"});
+      b.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(path); }
+        catch (e) {                       // no clipboard on an http: origin
+          const t = F("textarea", {}); t.value = path;
+          document.body.appendChild(t); t.select();
+          try { document.execCommand("copy"); } catch (e2) {}
+          t.remove();
+        }
+        b.textContent = "copied"; setTimeout(() => b.textContent = "copy", 1200);
+      });
+      row.appendChild(b);
+      this.out.appendChild(row);
+    }
+    if (!(r.csv || []).length)
+      this.out.appendChild(F("div", {class: "muted", text: "no CSV written"}));
+  }
+}
+
 export class Panel {
   constructor(el, {onStart, onCancel, onSelect}) {
     this.el = el;
     this.cb = {onStart, onCancel, onSelect};
     this.inputs = {};
     this.selected = null;
+    // FIRST IN THE COLUMN, because on a hardware day it is the only thing
+    // anybody touches; the planner form below it is the other days' panel.
+    this.day1 = new Day1(onStart);
   }
 
   build(cfg) {
     this.cfg = cfg;
     const d = cfg.defaults || {};
     this.el.innerHTML = "";
+    this.el.appendChild(this.day1.build(cfg));
     const opts = Object.assign({}, OPTIONS, {
       rigs: cfg.rigs, tools: cfg.tools,
       atlases: [""].concat(cfg.atlases || []),
@@ -188,7 +323,11 @@ export class Panel {
   setRunning(live) {
     this.startBtn.disabled = !!live;
     this.cancelBtn.disabled = !live;
+    this.day1.setRunning(live);
   }
+
+  setDay1(result) { this.day1.show(result); }
+  clearDay1() { this.day1.clear(); }
 
   setJobs(jobs, selectedId) {
     this.jobList.innerHTML = "";
@@ -200,12 +339,18 @@ export class Panel {
       });
       el.innerHTML =
         `<span class="st ${j.status}">${j.status}</span>` +
-        `<b>${esc(j.params.out || j.params.source || j.id)}</b><br>` +
+        `<b>${esc(j.params.day1 ? _day1Label(j.params)
+                                : (j.params.out || j.params.source || j.id))}</b><br>` +
         `<span class="t">${when} · ${fmtS(j.elapsed_s)} · ` +
         `${esc(j.params.rig || "")}/${esc(j.params.tool || "")}</span>`;
       this.jobList.appendChild(el);
     }
   }
+}
+
+function _day1Label(p) {
+  return p.day1 === "line" ? `line ${p.name || ""}_${p.arm}`
+                           : `word ${p.variant || "alt"}`;
 }
 
 export function esc(s) {

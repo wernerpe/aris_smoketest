@@ -173,6 +173,7 @@ async function selectJob(id) {
   app.prog = null;
   location.hash = id;
   el("log").innerHTML = "";
+  app.panel.clearDay1();
   app.view.clearStrokes();
   app.view.setInk([]);
   app.panel.setJobs(app.jobs || [], id);
@@ -205,6 +206,8 @@ function onEvents(events) {
   let sawStrokes = false, newSpans = 0, jobEnded = false;
   for (const ev of events) {
     reduce(s, ev);
+    if (ev.kind === "item" && ev.payload.what === "day1")
+      app.panel.setDay1(ev.payload);
     if (ev.kind === "item" && ev.payload.what === "sheet_strokes") sawStrokes = true;
     if (ev.kind === "item" && ev.payload.what === "placed") newSpans++;
     if (ev.kind === "job_end") jobEnded = true;

@@ -115,7 +115,7 @@ def create_app(jobs_dir=None):
                     placements=sorted(
                         str(p.relative_to(ROOT))
                         for p in (ROOT / "out").glob("*placement*.json")),
-                    defaults=DEFAULT_PARAMS)
+                    defaults=DEFAULT_PARAMS, day1=DAY1_DEFAULTS)
 
     # ---- jobs ----------------------------------------------------------
     @app.get("/api/jobs")
@@ -262,6 +262,28 @@ DEFAULT_PARAMS = dict(
     substeps=2, subcheck=2, min_coverage=0.0, select_profile=False,
     skip_unconductable=True, trace_only=False, place_only=False,
     scales=[0.4, 1.0, 13], top=3, slack=0.01, jobs=6, margin=0.06)
+
+
+# HARDWARE DAY 1 — what the panel's form starts at.
+#
+# STRINGS AND NUMBERS ONLY, for the same reason `DEFAULT_PARAMS["atlas"]` is a
+# string: this module never imports the planner (see the module docstring), so
+# it cannot ask `layout` where arm 71's base is.  Nothing here is a second
+# definition of anything — `scripts/day1.py` plans, grades and REFUSES whatever
+# the form offers, so a stale default costs one refusal and not a wrong robot.
+# The starting line is one both arms certify (tests/test_day1.py GOOD[71]).
+DAY1_DEFAULTS = {
+    "arms": [31, 71],
+    "variants": ["alt", "concurrent", "hover"],
+    "arm": 71, "from": "1.15,1.95", "to": "1.30,1.95",
+    "name": "probe", "hover": False, "hover_m": 0.03,
+    "variant": "alt", "rig": "proposed", "tool": "lateral",
+    # arm 31 REFUSES a line exactly on the seam (y = 1.8153): the go-home leg
+    # does not clear the paper plane there.  Said in the form so it is read
+    # before the refusal rather than after it.
+    "note": "metres, canvas datum.  x across 1.8034, y along 3.63064.  "
+            "seam y = 1.8153 — arm 31 refuses a line exactly on it.",
+}
 
 
 def _sources():

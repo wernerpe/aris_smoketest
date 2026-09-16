@@ -173,6 +173,39 @@ def test_coverage_refusal_on_a_schedule_that_drew_nothing(tmp_path):
     assert ok2
 
 
+def test_the_site_assets_resolve_on_a_clone_with_no_out(tmp_path,
+                                                        monkeypatch):
+    """THE ROBOT PC HAS NO `out/`, AND `word` MUST STILL RUN THERE.
+
+    `out/` is gitignored, so a fresh clone carries none of the 0.970 artefacts
+    `word` re-checks and copies.  They are tracked under `assets/site/h0970/`
+    with the same names, and `day1.asset` prefers `out/` when it is there — so
+    a workstation that has just re-planned sees its own new file and the robot
+    PC sees the shipped one.
+    """
+    # every file `word` reads is in the tracked tree
+    site = ROOT / "assets" / "site" / "h0970"
+    assert (site / "unknown_h0970_home_alt.npz").is_file()
+    assert (site / "pathways" / "unknown_h0970_home_alt_arm31.csv").is_file()
+    assert (site / "pathways" / "unknown_h0970_home_alt_arm71.csv").is_file()
+    assert (site / "unknown_strokes.json").is_file()
+    assert (site / "atlas_proposed_h0970_lat0860"
+            / "atlas_arm31.npz").is_file()
+
+    # out/ wins when it is there...
+    out_copy = ROOT / "out" / "unknown_h0970_home_alt.npz"
+    if out_copy.exists():
+        assert day1.asset("unknown_h0970_home_alt.npz") == out_copy
+    # ...and the fallback is the tracked tree when it is not
+    monkeypatch.setattr(day1, "ASSETS", tmp_path)
+    (tmp_path / "nothing_is_in_out.json").write_text("{}")
+    assert day1.asset("nothing_is_in_out.json") == \
+        tmp_path / "nothing_is_in_out.json"
+    # a file in NEITHER place names the place it is normally written, so the
+    # refusal points at out/ and not at the fallback
+    assert day1.asset("no_such_file.json") == ROOT / "out" / "no_such_file.json"
+
+
 def test_help_is_readable_without_env_vars():
     """One `--help` a person can read in a minute, with no rig in the env."""
     import os

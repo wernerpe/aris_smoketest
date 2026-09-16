@@ -19,6 +19,7 @@ says nothing about which rig is active and does not touch the environment.
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -29,7 +30,8 @@ from fastapi.testclient import TestClient                    # noqa: E402
 
 from aris_sixarm.gui.jobs import JobManager                  # noqa: E402
 from aris_sixarm.gui.server import create_app                # noqa: E402
-from aris_sixarm.gui.worker import build_argv                # noqa: E402
+from aris_sixarm.gui.worker import (build_argv,              # noqa: E402
+                                    build_day1_argv)
 
 
 # --------------------------------------------------------------------------
@@ -96,6 +98,161 @@ def test_build_argv_maps_kinds():
 def test_build_argv_needs_a_source():
     with pytest.raises(ValueError):
         build_argv(dict(out="run"))
+
+
+# --------------------------------------------------------------------------
+# HARDWARE DAY 1 — the panel a person uses at the rig
+# --------------------------------------------------------------------------
+# NO ARIS_RIG / ARIS_TOOL HERE EITHER.  A day-1 job carries its rig and its
+# tool in its PARAMETERS, and `jobs._spawn` puts them in the environment of the
+# subprocess it starts — which is the only place they can be set, because they
+# are read at `import aris_sixarm` time.  A test that exported them would be
+# choosing the rig for the whole pytest process instead.
+def test_build_day1_argv_is_a_whitelist():
+    with pytest.raises(ValueError) as e:
+        build_day1_argv(dict(day1="line", arm=31, **{"from": "0.5,1.7"},
+                             to="0.65,1.7", tilt=3))
+    assert "tilt" in str(e.value)
+    with pytest.raises(ValueError):
+        build_day1_argv(dict(day1="dance"))
+    with pytest.raises(ValueError):                 # not an arm on this rig
+        build_day1_argv(dict(day1="line", arm=13, **{"from": "0.5,1.7"},
+                             to="0.65,1.7"))
+    with pytest.raises(ValueError):                 # no line without two ends
+        build_day1_argv(dict(day1="line", arm=31))
+    with pytest.raises(ValueError):
+        build_day1_argv(dict(day1="word", variant="backwards"))
+
+
+def test_build_day1_argv_is_the_command_a_person_would_type(tmp_path):
+    argv = build_day1_argv(dict(day1="line", arm=71, **{"from": "1.15,1.95"},
+                                to="1.30,1.95", name="probe",
+                                rig="proposed", tool="lateral"), tmp_path)
+    assert argv[0] == "line"
+    assert argv[argv.index("--arm") + 1] == "71"
+    assert argv[argv.index("--from") + 1] == "1.15,1.95"
+    assert argv[argv.index("--to") + 1] == "1.30,1.95"
+    assert argv[argv.index("--out") + 1] == str(tmp_path)
+    assert "--hover" not in argv                # the flag is opt-in, as in day1.py
+
+    hov = build_day1_argv(dict(day1="line", arm=31, **{"from": "0.5,1.7"},
+                               to="0.65,1.7", hover=0.03), tmp_path)
+    assert hov[hov.index("--hover") + 1] == "0.03"
+
+    w = build_day1_argv(dict(day1="word", variant="alt"), tmp_path)
+    assert w[:3] == ["word", "--variant", "alt"]
+    assert w[w.index("--arms") + 1] == "31,71"
+
+
+def test_the_config_carries_the_day1_form(client):
+    d = client.get("/api/config").json()["day1"]
+    assert d["arms"] == [31, 71]
+    assert d["variants"] == ["alt", "concurrent", "hover"]
+    for k in ("arm", "from", "to", "name", "variant", "rig", "tool"):
+        assert k in d, k
+    # the refusal a person will otherwise meet at the rig, said in the form
+    assert "1.8153" in d["note"]
+
+
+def test_a_day1_line_job_certifies_and_loads_into_the_viewer(client, tmp_path):
+    """The whole panel path: launch, PASS, a CSV, and a bundle that parses.
+
+    This is the acceptance test for the Day 1 panel — it runs the real
+    `scripts/day1.py line` in a real subprocess, at the real rig, and then
+    reads back the three things the browser needs: the one-line verdict, the
+    CSV path to copy, and the viewer bundle.  Nothing is mocked.
+    """
+    from aris_sixarm.program_schema import Bundle
+
+    out = tmp_path / "day1"
+    r = client.post("/api/jobs", json=dict(
+        day1="line", rig="proposed", tool="lateral", arm=71,
+        **{"from": "1.15,1.95"}, to="1.30,1.95", name="t",
+        out_dir=str(out)))
+    assert r.status_code == 200, r.text
+    done = _wait(client, r.json()["id"], timeout=600)
+    assert done["status"] == "done", done.get("error")
+
+    ev = client.get(f"/api/jobs/{r.json()['id']}/events").json()["events"]
+    verdicts = [e["payload"] for e in ev
+                if e["kind"] == "item" and e["payload"].get("what") == "day1"]
+    assert len(verdicts) == 1, "exactly one verdict per run"
+    v = verdicts[0]
+    assert v["ok"] is True
+    # THE SAME STRING A TERMINAL PRINTS, with the gate numbers in it.
+    assert v["one_liner"].startswith("PASS  t_71")
+    assert "inter-arm" in v["one_liner"] and "(gate 50)" in v["one_liner"]
+    assert v["gates"]["min_inter_arm_m"] > v["gates"]["pair_margin_m"]
+    assert v["csv"] and Path(v["csv"][0]).exists()
+    assert Path(v["csv"][0]).parent == out, "the CSV goes where --out says"
+
+    # ...and the bundle the 3D viewer loads on PASS
+    doc = client.get(f"/api/jobs/{r.json()['id']}/bundle")
+    assert doc.status_code == 200
+    b = Bundle.from_json(doc.text)
+    assert b.meta.schema_version == 1
+    assert b.meta.n_frames > 1 and len(b.arms) == 6
+    assert len(b.segments) == 1 and b.segments[0].arm == 71
+    assert b.strokes[0].pts is not None, "the target line must be in the bundle"
+    assert client.get(f"/api/jobs/{r.json()['id']}/bundle.bin"
+                      ).status_code == 200
+
+
+def test_a_day1_line_that_will_not_certify_fails_the_job_and_writes_no_csv(
+        client, tmp_path):
+    """A refusal is a RESULT: the job fails, and no CSV exists to be flown."""
+    out = tmp_path / "day1"
+    r = client.post("/api/jobs", json=dict(
+        day1="line", rig="proposed", tool="lateral", arm=31,
+        **{"from": "0.10,3.50"}, to="0.25,3.50", name="bad",
+        out_dir=str(out)))
+    done = _wait(client, r.json()["id"], timeout=600)
+    assert done["status"] == "failed"
+    assert not list(out.glob("*.csv")) if out.exists() else True
+    # the sentence a terminal would have printed, in the browser's log too
+    log = client.get(f"/api/jobs/{r.json()['id']}/log").text
+    assert "REFUSED" in log and "Traceback" not in log
+    # ...and as the panel's verdict, in red, rather than an empty box
+    ev = client.get(f"/api/jobs/{r.json()['id']}/events").json()["events"]
+    v = [e["payload"] for e in ev
+         if e["kind"] == "item" and e["payload"].get("what") == "day1"]
+    assert len(v) == 1 and v[0]["ok"] is False
+    assert "REFUSED" in v[0]["one_liner"] and not v[0]["csv"]
+
+
+def test_the_bundle_adapter_adds_only_what_the_exporter_needs(tmp_path):
+    """The day-1 npz shapes, normalised — and nothing invented.
+
+    `day1.py line` leaves out the animation arrays on purpose and
+    `serialise_timeline.py` drops them AND `n_frames`; the adapter adds them as
+    EMPTY arrays so `export_bundle` can read the file, and adds nothing else.
+    """
+    import numpy as np
+    from aris_sixarm.gui.day1_bundle import normalise
+
+    src = tmp_path / "s.npz"
+    q = np.zeros((5, 7), np.float32)
+    np.savez_compressed(
+        src, arms=np.array([31, 71]), drawing_arms=np.array([31]),
+        pen_ext=np.array([0.046, 0.046]), fps=np.float64(48.0),
+        dt=np.float64(1 / 48), stride=np.int64(1), n_phases=np.int64(1),
+        duration=np.float64(4 / 48), margin=np.float64(0.05),
+        min_clearance=np.float64(0.1), sheet=np.array([1.8034, 3.63064]),
+        q_31=q, q_71=q, seg_31=np.full(5, -1), seg_71=np.full(5, -1))
+    added = normalise(src, tmp_path / "n.npz")
+    assert "n_frames" in added
+    for k in ("ink_t", "ink_arm", "ink_off", "ink_xyz", "ink_hex",
+              "segpts_31", "segoff_31", "segpts_71", "segoff_71"):
+        assert k in added, k
+    # what was already there is NOT touched
+    assert "margin" not in added and "min_clearance" not in added
+    z = np.load(tmp_path / "n.npz", allow_pickle=False)
+    assert int(z["n_frames"]) == 5
+    assert z["ink_xyz"].shape == (0, 3) and z["ink_off"].tolist() == [0]
+    assert z["segpts_31"].shape == (0, 2)
+    # a single CSR offset is how the viewer is told there is no dense tip path
+    assert z["segoff_31"].tolist() == [0]
+    assert float(z["margin"]) == 0.05
 
 
 # --------------------------------------------------------------------------

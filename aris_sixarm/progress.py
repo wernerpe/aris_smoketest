@@ -46,6 +46,7 @@ from contextlib import contextmanager
 # the vocabulary — the viewer switches on these, so they are a schema
 # --------------------------------------------------------------------------
 STAGES = (
+    "day1",         # scripts/day1.py: one line, or the word re-checked on site
     "trace",        # picture -> pixel strokes -> strokes on the sheet
     "placement",    # the rotation x scale x translation search
     "allocation",   # probe, cover, repair, balance, split, merge, sequence

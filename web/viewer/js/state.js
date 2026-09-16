@@ -7,12 +7,13 @@
 // reproduces exactly what a live watcher saw, which is the property that makes
 // the JSONL on disk worth keeping.
 
-export const STAGES = ["trace", "placement", "allocation", "conduction",
-                       "scene_check"];
+export const STAGES = ["day1", "trace", "placement", "allocation",
+                       "conduction", "scene_check"];
 
 export const STAGE_LABEL = {
-  trace: "trace", placement: "placement", allocation: "allocation",
-  conduction: "conduction", scene_check: "scene check", export: "export",
+  day1: "day 1", trace: "trace", placement: "placement",
+  allocation: "allocation", conduction: "conduction",
+  scene_check: "scene check", export: "export",
 };
 
 // A stable colour per substage, so the "where the time goes" bar means the
