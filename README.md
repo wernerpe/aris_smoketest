@@ -7,7 +7,8 @@ hit: `docs/SITE_SETUP.md`. The hardware day itself: `docs/HARDWARE_DAY1.md`.
 
 ```bash
 sudo apt install -y build-essential libeigen3-dev python3-venv
-git clone <URL> aris_sixarm && cd aris_sixarm
+git clone -b aris2 git@github.com:wernerpe/aris_smoketest.git   # main is STALE
+cd aris_smoketest
 python3 -m venv .venv && . .venv/bin/activate && pip install -U pip
 pip install -r requirements-site.txt && pip install -e '.[gui]'
 pip install ./ik_src                   # analytic-IK bindings, SITE_SETUP §1.3 —
