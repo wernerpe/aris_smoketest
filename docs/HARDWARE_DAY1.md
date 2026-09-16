@@ -446,10 +446,22 @@ figure §4.1's pass criterion should be read against**: expect the ruler to say
 > survey number in §1.2 is therefore not bookkeeping — it decides whether the
 > day's headline result is possible at all.**
 >
-> **What to run instead:** `out/unknown_h0970_hover15_*`, planned at h = 0.955
-> for a **15 mm** hover, which is shallow enough to keep arm 31 in the
-> allocation. Use the 30 mm file only as arm 71's own dry run, or with
-> `--solo 71`.
+> **A 15 mm hover was attempted and DOES NOT EXIST.** `unknown_h0970_hover15`
+> at h = 0.955 was conducted and ended `no phase could be conducted` — 15
+> refusals, arm 71's transit mispricing running 14–31 s. **There is no npz.**
+>
+> Two caveats on that attempt, stated because they make the result weaker
+> evidence than it looks: it was run against the **0.970 atlas and the 0.970
+> park set** (no sweep exists at 0.955, and a park search is ~90 minutes), so
+> it planned against a reachability map for a height it was not at. A proper
+> 15 mm hover needs `height_sweep.py sweep --h 0.955` (~1 min) **and** a park
+> search at that height (~90 min) before it is worth believing. **Not
+> attempted today; budget for it if a two-arm hover pass matters.**
+>
+> **So today's only hover file is the 30 mm one, and it is arm 71 alone.** Run
+> it as arm 71's dry run (`--solo 71`). **Arm 31 has no hover pass**, which
+> means its first powered motion is either a supervised jog or the drawing
+> programme itself — decide which, deliberately, before the day starts.
 >
 > **One more thing about the 30 mm file.** It has six phases against the
 > drawing programme's one, so five barriers to acknowledge on the day's first
