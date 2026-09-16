@@ -802,7 +802,8 @@ class Sheet:
                                     connectionstyle=f"arc3,rad={rad}"))
 
     # -- title block ----------------------------------------------------
-    def title_block(self, h, sheet_no, title, extra=""):
+    def title_block(self, h, sheet_no, title, extra="", of=4, datum=None,
+                    datum_sub=None):
         x0, y0, w, hh = 0.42, 0.30, self.W - 0.84, 0.92
         ax = self.textbox(x0, y0, w, hh)
         ax.add_patch(Rectangle((0, 0), 1, 1, fc="white", ec=INK, lw=1.2))
@@ -824,7 +825,7 @@ class Sheet:
                 fontsize=6.0, color="#6a7280", fontweight="bold")
         ax.text(0.010, 0.46, title, ha="left", va="center", fontsize=11.4,
                 color=INK, fontweight="bold")
-        ax.text(0.010, 0.14, f"sheet {sheet_no} of 2  ·  A3  ·  all "
+        ax.text(0.010, 0.14, f"sheet {sheet_no} of {of}  ·  A3  ·  all "
                              f"dimensions mm  ·  scales as noted",
                 ha="left", va="center", fontsize=6.0, color=NOTEC)
         cell(1, "DESIGN MOUNT PLANE  h", f"{h:.1f} mm", c=GRN, fs=10.0)
@@ -835,9 +836,9 @@ class Sheet:
         ax.text(cols[2] + 0.010, 0.13,
                 f"= ({GRID_U} - h) + {POST_OVER},  24 off",
                 ha="left", va="center", fontsize=5.6, color=NOTEC)
-        cell(3, "DATUM", "z = 0  paper top", fs=8.2)
+        cell(3, "DATUM", datum or "z = 0  paper top", fs=8.2)
         ax.text(cols[3] + 0.010, 0.13,
-                f"floor {FLOOR_Z}  ·  runway underside {GRID_U}",
+                datum_sub or f"floor {FLOOR_Z}  ·  runway underside {GRID_U}",
                 ha="left", va="center", fontsize=5.6, color=NOTEC)
         cell(4, "DATE", TODAY, bold=False, fs=8.2)
         ax.text(cols[4] + 0.010, 0.13, "scripts/draw_8020.py  ·  read-only "
@@ -1755,7 +1756,1000 @@ def sheet_side(h, out_dir):
 
 
 # ===========================================================================
-# 7.  DRIVER
+# 7.  THE CENTRE DATUM — SHEETS 3 AND 4, FOR A TAPE AT THE RIG
+# ===========================================================================
+# Pete Werner, standing at the rig with a tape, 2026-09-16: *"an updated top
+# down drawing that has the measurements between the hanging struts and from
+# the center of rotation of the arms to the outside of the hanging struts ...
+# reference the measurements from the center because then it is unambiguous
+# ... a top down one with all the measurements that is exact."*
+#
+# Sheets 1 and 2 dimension everything from the canvas reference CORNER.  That
+# is the right datum for setting a frame out on an empty floor and the wrong
+# one for CHECKING A RIG THAT IS ALREADY STANDING: the corner is buried under
+# the steel, every number is a long add-up, and nothing on the sheet says
+# which side of anything you are on.  Sheets 3 and 4 carry THE SAME MODEL
+# NUMBERS re-datumed onto the TABLE CENTRE, and print every one of them as a
+# SIGNED offset from one of two lines:
+#
+#     X = x_canvas - CENTRE_X    across the short side, + toward x = CANVAS_W
+#     Y = y_canvas - CENTRE_Y    along the long side,   + toward y = CANVAS_L
+#
+# CENTRE_Y is THE SEAM LINE, and it is four things at once — the canvas's own
+# mid-length, the middle arm row, the plane the two half-cages butt on, and
+# the line the two seam bars straddle.  `system_model` makes all four the same
+# number (SEAM_Y == 0.5*(FR_Y0+FR_Y1) == ROW_Y[1] == CANVAS_L/2) and
+# `tests/test_draw_8020.py` pins that they stay the same number.
+#
+# NOT ONE NUMBER ON EITHER SHEET IS TYPED HERE.  Everything printed comes out
+# of `centre_dims()` / `side_levels()` / `tape_checks()`, which are arithmetic
+# on `system_model` constants, and the test re-derives each one independently.
+# The single exception is the TAPE column of `hand_vs_model()`, which is typed
+# because it is a measurement somebody made with a tape.
+CENTRE_X = round(CW / 2.0, 2)                    # 901.70
+CENTRE_Y = SEAM_Y                                # 1815.32
+
+# Pete's tape, 2026-09-16: the table is 416.6 cm end to end.  That is the TWO
+# BUTTED HALF-FRAMES — 2 x HALF_CAGE_L = 4165.60, the same arithmetic section
+# 3b of `system_model` uses to find the seam — and it is NOT this model's own
+# table footprint, which is ASSUMED to be the cage's inner span.  Both are
+# drawn; `canvas_on_table()` reports the difference.
+TABLE_L_TAPE = round(2 * HALF_CAGE_L, 2)         # 4165.60
+
+CENTRE_BANNER = (
+    "  CENTRE-DATUM SET — sheets 3 and 4 dimension the SAME model from the "
+    "TABLE CENTRE, signed.  They do not supersede sheets 1 and 2; those are "
+    "set-out from the canvas corner, these are for a tape at the built rig.")
+
+# bigger ink than sheets 1 and 2: these get read off a phone at the rig
+FS_C_DIM, FS_C_ORD, FS_C_NOTE, FS_C_HEAD = 7.4, 6.2, 7.0, 10.4
+
+
+def off_x(x):
+    """Canvas x (mm) -> SIGNED offset from the long centre line."""
+    return round(float(x) - CENTRE_X, 2)
+
+
+def off_y(y):
+    """Canvas y (mm) -> SIGNED offset from the seam line."""
+    return round(float(y) - CENTRE_Y, 2)
+
+
+def sg(v, nd=2):
+    """A signed offset, the way both centre sheets print one."""
+    return f"{float(v):+.{nd}f}"
+
+
+def model_table():
+    """The model's own table body -> Body."""
+    for b in SM.ground_bodies():
+        if b.name == "table":
+            return b
+    raise KeyError("table")                               # pragma: no cover
+
+
+def canvas_on_table():
+    """How the canvas sits on the table, per `system_model` -> dict.
+
+    The sheet has to say this out loud: a dimension "from the table centre"
+    is only the same line as "from the canvas centre" if the canvas is
+    centred on the table, and that is a MODEL CLAIM, not a measurement.  The
+    model's `table` body carries its height from the drawing and its FOOTPRINT
+    as an assumption (the cage's inner span), so this function reports the
+    eccentricity both ways and the tape length separately.
+    """
+    t = model_table()
+    x0, x1 = off_x(t.lo[0]), off_x(t.hi[0])
+    y0, y1 = off_y(t.lo[1]), off_y(t.hi[1])
+    ex, ey = round(0.5 * (x0 + x1), 2), round(0.5 * (y0 + y1), 2)
+    return dict(
+        x0=x0, x1=x1, y0=y0, y1=y1,
+        w=round(x1 - x0, 2), l=round(y1 - y0, 2),
+        ecc_x=ex, ecc_y=ey,
+        centred=bool(abs(ex) < 0.005 and abs(ey) < 0.005),
+        over_x=round(x1 - off_x(CW), 2),
+        over_y=round(y1 - off_y(CL), 2),
+        tape_y=round(TABLE_L_TAPE / 2.0, 2),
+        tape_l=TABLE_L_TAPE,
+        tape_over_y=round(TABLE_L_TAPE / 2.0 - off_y(CL), 2),
+        tape_vs_model=round(TABLE_L_TAPE - (y1 - y0), 2),
+        provenance=t.provenance)
+
+
+def canvas_on_table_lines():
+    """The sheet's own paragraph about it -> [(colour, bold, text)]."""
+    t = canvas_on_table()
+    out = []
+    if t["centred"]:
+        out.append((GRN, True,
+                    f"THE MODEL CENTRES THE CANVAS ON THE TABLE, both ways. "
+                    f"The table body's centre is ({sg(t['ecc_x'])}, "
+                    f"{sg(t['ecc_y'])}) from the canvas centre — the same two "
+                    f"lines — and the table overhangs the canvas by "
+                    f"{t['over_x']} mm on all four sides."))
+    else:
+        out.append((WARN, True,
+                    f"THE MODEL DOES NOT CENTRE THE CANVAS ON THE TABLE. The "
+                    f"table body's centre is ({sg(t['ecc_x'])}, "
+                    f"{sg(t['ecc_y'])}) from the canvas centre, so the TABLE "
+                    f"CENTRE and the CANVAS CENTRE ARE DIFFERENT LINES and "
+                    f"every dimension on this sheet is from the CANVAS one. "
+                    f"Both tables are drawn."))
+    out.append((INK, False,
+                f"Model table {t['w']} x {t['l']}, X {sg(t['x0'], 1)} .. "
+                f"{sg(t['x1'], 1)}, Y {sg(t['y0'], 1)} .. {sg(t['y1'], 1)}. "
+                f"Its HEIGHT is the drawing's; its FOOTPRINT is "
+                f"{t['provenance']} — the cage's own inner span, because the "
+                f"original's 2.08 m table cannot carry this canvas."))
+    out.append((WARN, True,
+                f"AND THE TAPE DISAGREES ABOUT THE LENGTH: 416.6 cm measured "
+                f"= {t['tape_l']} = two butted half-frames, against the "
+                f"model's assumed {t['l']} — {t['tape_vs_model']:+.2f} mm. "
+                f"THE TABLE ENDS ON THIS SHEET ARE THE TAPE'S, Y = "
+                f"{sg(t['tape_y'], 1)}, drawn dashed; the model's assumed "
+                f"footprint is drawn solid inside them."))
+    return out
+
+
+def centre_dims():
+    """Every dimension sheets 3 and 4 print in plan -> {key: mm}, signed.
+
+    Arithmetic on `system_model` only.  `tests/test_draw_8020.py` re-derives
+    every entry from the package independently, so the sheet cannot carry a
+    hand-typed plan dimension.
+    """
+    t = canvas_on_table()
+    lo_l, hi_l = post_xs(COL_X[0])                 # left column post centres
+    lo_r, hi_r = post_xs(COL_X[1])
+    fl = (lo_l - P / 2, lo_l + P / 2, hi_l - P / 2, hi_l + P / 2)
+    fr = (lo_r - P / 2, lo_r + P / 2, hi_r - P / 2, hi_r + P / 2)
+    return dict(
+        # --- the two datum lines, in canvas coordinates ------------------
+        centre_x=CENTRE_X, centre_y=CENTRE_Y,
+        # --- canvas ------------------------------------------------------
+        canvas_edge=off_x(CW), canvas_end=off_y(CL),
+        canvas_w=round(CW, 2), canvas_l=round(CL, 2),
+        # --- table -------------------------------------------------------
+        table_edge=t["x1"], table_end=t["y1"], table_w=t["w"], table_l=t["l"],
+        table_end_tape=t["tape_y"], table_len_tape=t["tape_l"],
+        table_over=t["over_x"], table_over_end=t["over_y"],
+        # --- cage perimeter ----------------------------------------------
+        rail_out=off_x(FR_X1), rail_in=off_x(IN_X1),
+        rail_out_end=off_y(FR_Y1), rail_in_end=off_y(FR_Y1 - P),
+        frame_w=round(SM.FR_W, 2), frame_l=round(SM.FR_L, 2),
+        rail_len_x=round(SM.RAIL_LEN_X, 2), rail_len_y=round(SM.RAIL_LEN_Y, 2),
+        profile=round(P, 2),
+        # --- seam bars ----------------------------------------------------
+        seam_bar_face=off_y(SEAM_Y + P), seam_bar_dy=round(2 * P, 2),
+        # --- runways -------------------------------------------------------
+        runway_mid_face=off_y(ROW_Y[1] + P),
+        runway_row_face_in=off_y(ROW_Y[2] - P),
+        runway_row_face_out=off_y(ROW_Y[2] + P),
+        runway_w=round(2 * P, 2), runway_x=off_x(IN_X1),
+        runway_len=round(SM.RAIL_LEN_X, 2),
+        # --- arm axes -------------------------------------------------------
+        axis_x=off_x(COL_X[1]), axis_pitch_x=round(COL_SP, 2),
+        axis_y=off_y(ROW_Y[2]), axis_pitch_y=round(ROW_SP, 2),
+        base_circle_d=round(BOOM_D, 2),
+        # --- plate and drop posts ------------------------------------------
+        plate_off=round(PLATE_OFF, 2),
+        plate_cx_l=off_x(plate_cx(COL_X[0])),
+        plate_cx_r=off_x(plate_cx(COL_X[1])),
+        plate_w=round(PLATE[0], 2), plate_d=round(PLATE[1], 2),
+        plate_f_l=[off_x(plate_cx(COL_X[0]) + k * PLATE[0] / 2)
+                   for k in (-1, 1)],
+        plate_f_r=[off_x(plate_cx(COL_X[1]) + k * PLATE[0] / 2)
+                   for k in (-1, 1)],
+        post_pitch=round(POST_PITCH_X, 2),
+        post_c_l=[off_x(lo_l), off_x(hi_l)],
+        post_c_r=[off_x(lo_r), off_x(hi_r)],
+        post_f_l=[off_x(v) for v in fl],
+        post_f_r=[off_x(v) for v in fr],
+        # --- the five numbers Pete asked for --------------------------------
+        pair_gap=round((hi_l - P / 2) - (lo_l + P / 2), 2),
+        pair_outer_w=round(fl[3] - fl[0], 2),
+        axis_face_short=round(min(abs(fl[0] - COL_X[0]),
+                                  abs(fl[3] - COL_X[0])), 2),
+        axis_face_long=round(max(abs(fl[0] - COL_X[0]),
+                                 abs(fl[3] - COL_X[0])), 2),
+        inner_pair_gap=round((fr[0] - fl[3]), 2),
+    )
+
+
+# ---------------------------------------------------------------------------
+# WHAT A TAPE SAID, 2026-09-16 — the only hand-typed numbers on either sheet
+# ---------------------------------------------------------------------------
+HAND_TAPE_DATE = "2026-09-16"
+_HAND = (
+    ("clear gap, the two INNER posts of a row", 214.0, "inner_pair_gap"),
+    ("outer width of ONE post pair", 396.0, "pair_outer_w"),
+    ("J1 axis -> outside face, SHORT side", 156.0, "axis_face_short"),
+    ("J1 axis -> outside face, LONG side", 240.0, "axis_face_long"),
+    ("table length, end to end", 4166.0, "table_len_tape"),
+)
+HAND_FLAG = (
+    "ONE ROW IS A REAL DISAGREEMENT AND IT IS THE PLATE OFFSET. Three of the "
+    "five readings are within 2.5 mm of the model, which is a tape on 3-in "
+    "extrusion. The two axis-to-face readings are not: they put the J1 axis "
+    "42 mm off the centre of its own post pair where the model puts it "
+    "25.15 mm off — and that 25.15 is the ONE number on the whole mount that "
+    "was never measured (open item 1, PLATE OFFSET DIRECTION). RE-MEASURE IT "
+    "with a straight edge laid across the base flange and the two post "
+    "faces, not by eye off the plate edge.")
+
+
+def hand_vs_model():
+    """Pete's tape against the model -> [(what, tape, model, delta)].
+
+    The derived row — the axis offset inside the pair — is half the difference
+    of the two axis-to-face readings above it, computed here rather than typed,
+    so it moves if either reading is corrected.
+    """
+    d = centre_dims()
+    tape = {k: t for _w, t, k in _HAND}
+    rows = [[w, t, d[k], round(t - d[k], 2)] for w, t, k in _HAND]
+    off = round((tape["axis_face_long"] - tape["axis_face_short"]) / 2.0, 2)
+    rows.insert(4, ["=> J1 axis offset inside the pair  (derived)", off,
+                    d["plate_off"], round(off - d["plate_off"], 2)])
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# SHEET 4's HEIGHTS — the same z ladder, printed from BOTH datums
+# ---------------------------------------------------------------------------
+_LEVELS = (
+    ("grid_top", "TOP OF STEEL", "TOP OF STEEL", True),
+    ("grid_underside", "RUNWAY UNDERSIDE  (posts hang from here)",
+     "RUNWAY UNDERSIDE", True),
+    ("gusset_bottom", "gusset bottom", "gusset bottom", False),
+    ("clamp_top", "clamp top", "clamp top", False),
+    ("plate_top", "plate top", "plate top", False),
+    ("mount_plane", "PLATE UNDERSIDE  =  mount plane h", "PLATE UNDERSIDE",
+     True),
+    ("post_bottom", "drop-post bottom", "post bottom", False),
+    ("paper_top", "PAPER TOP  —  the sheet-1/2 datum, 0", "PAPER TOP", True),
+    ("table_top", "table top", "table top", False),
+    ("leg_bottom", "corner-leg and seam-bar foot", "leg / bar foot", False),
+    ("floor", "FLOOR  —  the tape datum", "FLOOR", True),
+)
+
+
+# LABEL JOGS, mm — LAYOUT ONLY, never a dimension.  Four of the eleven levels
+# are 2 to 35 mm apart (paper top and table top are 2.00), so on a 1 : 26
+# elevation their labels print on top of each other.  Each label is jogged off
+# its own tick and joined back to it by a short leader, exactly the way sheet
+# 2's level ladder does it.  Moving a number here moves where it is PRINTED
+# and nothing else; the tick stays on the level.
+_JOG = {"clamp_top": 60.0, "plate_top": 80.0, "post_bottom": -75.0,
+        "paper_top": 90.0, "table_top": 20.0, "leg_bottom": -55.0}
+
+
+def side_levels(h):
+    """Each height -> [(key, label, short, above_paper, above_floor, bold)]."""
+    z = zl(h)
+    return [(k, lbl, sh, round(float(z[k]), 2),
+             round(float(z[k]) - FLOOR_Z, 2), b)
+            for k, lbl, sh, b in _LEVELS]
+
+
+def tape_checks(h):
+    """The checks Pete can make with a tape and nothing else -> [(what, mm)].
+    """
+    z = zl(h)
+    return [
+        ("FLOOR  ->  PLATE UNDERSIDE", round(z["mount_plane"] - z["floor"], 2),
+         "stand the tape on the floor under an arm and read the steel the "
+         "arm bolts to.  The single most useful check on the rig."),
+        ("TABLE TOP  ->  PLATE UNDERSIDE",
+         round(z["mount_plane"] - z["table_top"], 2),
+         "same reading from the table instead of the floor, for when the "
+         "paper is down and the floor is not reachable."),
+        ("FLOOR  ->  TABLE TOP", round(z["table_top"] - z["floor"], 2),
+         "the table's own height — the drawing's 63,5 cm.  If this is not "
+         "what your tape says, EVERY paper-referenced number on sheets 1 "
+         "and 2 moves by the difference."),
+        ("FLOOR  ->  TOP OF STEEL", round(z["grid_top"] - z["floor"], 2),
+         "the whole cage, and it is the original drawing's own 233,7 cm."),
+    ]
+
+
+def side_cuts(h):
+    """The three cut lengths sheet 4 carries -> [(item, what, mm, note)]."""
+    return [
+        ("D", "drop post", round(post_length(h), 2),
+         f"({GRID_U} - h) + {POST_OVER},  24 off"),
+        ("E", "corner leg", round(LEG_LEN, 2),
+         f"leg foot {LEG_BOTTOM} to rail underside {GRID_U},  4 off"),
+        ("I", "seam support bar", round(seam_post_length(), 2),
+         f"the same cut as a corner leg,  {len(seam_posts())} off"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# ORDINATE DIMENSIONING — the idiom the whole centre datum rests on
+# ---------------------------------------------------------------------------
+def ord_x(s, ax, y0, ticks, stem=160.0, gap=26.0, fs=FS_C_ORD, c=DIMC):
+    """Ordinate dimensions off the X = 0 centre line, read along the bottom.
+
+    ORDINATE, NOT CHAIN, and that is the whole point of these sheets: a chain
+    of eight post faces overlaps itself at any plan scale that fits on A3, and
+    a chain answers "how far from the last one" when the man with the tape is
+    asking "how far from the middle".  Every tick carries its own SIGNED
+    offset from the one line.  `ticks` is [(x, text, tier)]; tiers stagger the
+    labels so that faces 76.2 mm apart do not collide.
+    """
+    xs = [t[0] for t in ticks]
+    ax.add_line(Line2D([min(xs) - 60, max(xs) + 60], [y0, y0], color=c,
+                       lw=THIN, zorder=8.6))
+    for x, txt, tier in ticks:
+        ye = y0 - stem * (1 + tier)
+        ax.add_line(Line2D([x, x], [y0 + 34, ye], color=c, lw=0.45,
+                           zorder=8.6))
+        ax.add_patch(Circle((x, y0), 9, fc=c, ec="none", zorder=8.7))
+        ax.text(x, ye - gap, txt, ha="center", va="top", rotation=90,
+                fontsize=fs, color=c, zorder=9, bbox=TBOX)
+
+
+def ord_y(s, ax, x0, ticks, stem=150.0, gap=30.0, fs=FS_C_ORD, c=DIMC):
+    """Ordinate dimensions off the Y = 0 seam line, read up the right edge."""
+    ys = [t[0] for t in ticks]
+    ax.add_line(Line2D([x0, x0], [min(ys) - 60, max(ys) + 60], color=c,
+                       lw=THIN, zorder=8.6))
+    for y, txt, tier in ticks:
+        xe = x0 + stem * (1 + tier)
+        ax.add_line(Line2D([x0 - 34, xe], [y, y], color=c, lw=0.45,
+                           zorder=8.6))
+        ax.add_patch(Circle((x0, y), 9, fc=c, ec="none", zorder=8.7))
+        ax.text(xe + gap, y, txt, ha="left", va="center", fontsize=fs,
+                color=c, zorder=9, bbox=TBOX)
+
+
+def centre_lines(ax, xlim, ylim):
+    """The two datum lines, and the mark where they cross."""
+    for a, b in (([xlim[0], xlim[1]], [0, 0]), ([0, 0], [ylim[0], ylim[1]])):
+        ax.add_line(Line2D(a, b, color=ORIGC, lw=1.0,
+                           ls=(0, (14, 4, 2.0, 4)), zorder=7.8))
+    ax.add_patch(Circle((0, 0), 62, fc="white", ec=ORIGC, lw=1.5, zorder=10))
+    for a, b in (((-96, 96), (0, 0)), ((0, 0), (-96, 96))):
+        ax.add_line(Line2D(a, b, color=ORIGC, lw=1.5, zorder=10.4))
+    ax.add_patch(Circle((0, 0), 22, fc=ORIGC, ec="none", zorder=10.5))
+
+
+# ---------------------------------------------------------------------------
+# SHEET 3 — THE PLAN, SIGNED OFF THE CENTRE
+# ---------------------------------------------------------------------------
+def sheet_centre_plan(h, out_dir):
+    """out/drawings/centre/plan_centre_datum.pdf / .png — A3 landscape."""
+    s = Sheet()
+    fig = s.fig
+    d = centre_dims()
+    t = canvas_on_table()
+
+    def X(v):
+        return float(v) - CENTRE_X
+
+    def Y(v):
+        return float(v) - CENTRE_Y
+
+    DEN = 22.0
+    XL, YL = (-1700.0, 2050.0), (-2900.0, 2400.0)
+    ax = s.panel(0.42, 1.58, XL, YL, DEN,
+                 "A   PLAN — SIGNED FROM THE TABLE CENTRE",
+                 f"viewed from below  ·  scale 1 : {DEN:.0f}")
+
+    # --- the table, both of them ----------------------------------------
+    ax.add_patch(Rectangle((t["x0"], -t["tape_y"]), t["w"], t["tape_l"],
+                           fc="#f0e6da", ec="#8a6f56", lw=1.0,
+                           ls=(0, (6, 3)), zorder=1.6))
+    member(ax, t["x0"], t["y0"], t["x1"], t["y1"], fc="#e3d5c4", ec="#8a6f56",
+           lw=0.9, z=1.8, alpha=0.9)
+    ax.text(0, 1680,
+            f"THE TABLE IS DRAWN TWICE\nMODEL footprint {t['w']} x {t['l']} "
+            f"({t['provenance']})  —  solid\nTAPE ends Y "
+            f"{sg(-t['tape_y'], 1)} / {sg(t['tape_y'], 1)}  "
+            f"({t['tape_l']}, two butted half-frames)  —  dashed",
+            ha="center", va="center", fontsize=FS_C_NOTE - 1.0,
+            color="#7a5c42", fontweight="bold", zorder=2.4, linespacing=1.5,
+            bbox=TBOX)
+
+    # --- the canvas -------------------------------------------------------
+    ax.add_patch(Rectangle((-d["canvas_edge"], -d["canvas_end"]),
+                           d["canvas_w"], d["canvas_l"], fc="#fbf8f2", ec=INK,
+                           lw=HEAVY, zorder=2))
+    ax.text(-540, 480, f"CANVAS\n{d['canvas_w']} x {d['canvas_l']}",
+            ha="center", va="center", fontsize=FS_C_NOTE + 2.2,
+            color="#d8d0c0", fontweight="bold", zorder=2.2, linespacing=1.4)
+
+    # --- the cage --------------------------------------------------------
+    for r in ((X(FR_X0), Y(FR_Y0), X(IN_X0), Y(FR_Y1)),
+              (X(IN_X1), Y(FR_Y0), X(FR_X1), Y(FR_Y1)),
+              (X(IN_X0), Y(FR_Y0), X(IN_X1), Y(FR_Y0 + P)),
+              (X(IN_X0), Y(FR_Y1 - P), X(IN_X1), Y(FR_Y1))):
+        member(ax, *r, fc=STEEL2, z=5)
+    for cx_, cy_ in ((X(FR_X0), Y(FR_Y0)), (X(FR_X1 - P), Y(FR_Y0)),
+                     (X(FR_X0), Y(FR_Y1 - P)), (X(FR_X1 - P), Y(FR_Y1 - P))):
+        member(ax, cx_, cy_, cx_ + P, cy_ + P, fc="#3b424c", ec=INK, lw=0.8,
+               z=5.4)
+    for b in seam_posts():
+        member(ax, X(b.lo[0]), Y(b.lo[1]), X(b.hi[0]), Y(b.hi[1]), fc=SEAM_FC,
+               ec=SEAMC, lw=0.9, z=5.6, hatch="\\\\\\\\")
+    for ry in ROW_Y:
+        member(ax, X(IN_X0), Y(ry - P), X(IN_X1), Y(ry + P), fc=STEEL, z=5)
+        ax.add_line(Line2D([X(IN_X0), X(IN_X1)], [Y(ry), Y(ry)],
+                           color="#4d5561", lw=0.45, zorder=5.6))
+
+    # --- the six mounts ---------------------------------------------------
+    for aid, (xa, ya) in ARMS.items():
+        for px in post_xs(xa):
+            for py in (ya - P, ya):
+                member(ax, X(px - P / 2), Y(py), X(px + P / 2), Y(py + P),
+                       fc=POSTC, ec=INK, lw=0.7, z=6.5)
+        cxp = plate_cx(xa)
+        member(ax, X(cxp - PLATE[0] / 2), Y(ya - PLATE[1] / 2),
+               X(cxp + PLATE[0] / 2), Y(ya + PLATE[1] / 2), fc=PLATEC, ec=INK,
+               lw=0.9, z=6.8)
+        # the J1 axis: crosshair + the modelled base circle
+        ax.add_patch(Circle((X(xa), Y(ya)), d["base_circle_d"] / 2, fc="none",
+                            ec=ORIGC, lw=0.8, ls=(0, (4, 2)), zorder=7.6))
+        cmark(ax, X(xa), Y(ya), 190, c=ORIGC, lw=0.7, z=7.7)
+        ax.add_patch(Circle((X(xa), Y(ya)), 20, fc=INK, ec="none", zorder=8))
+        ax.text(X(xa) + (-215 if X(xa) < 0 else 215), Y(ya) + 132, f"{aid}",
+                ha="center", va="bottom", fontsize=FS_C_NOTE + 2.6,
+                fontweight="bold", color=INK, zorder=8.5)
+
+    centre_lines(ax, XL, YL)
+    ax.text(-860, -290, f"(0, 0)  TABLE CENTRE\ncanvas x {CENTRE_X} · "
+                        f"y {CENTRE_Y}\nthe seam line crossing the long "
+                        f"centre line",
+            ha="left", va="top", fontsize=FS_C_NOTE - 0.4, color=ORIGC,
+            fontweight="bold", zorder=10.6, linespacing=1.4, bbox=TBOX)
+    ax.annotate("", xy=(690, -170), xytext=(120, -170),
+                arrowprops=dict(arrowstyle="-|>", color=ORIGC, lw=1.0))
+    ax.text(730, -170, "+X", ha="left", va="center", fontsize=FS_C_DIM,
+            color=ORIGC, fontweight="bold")
+    ax.annotate("", xy=(-170, 690), xytext=(-170, 120),
+                arrowprops=dict(arrowstyle="-|>", color=ORIGC, lw=1.0))
+    ax.text(-170, 730, "+Y", ha="center", va="bottom", fontsize=FS_C_DIM,
+            color=ORIGC, fontweight="bold")
+
+    # --- x ordinate: every face, signed off the centre line --------------
+    fl, fr = d["post_f_l"], d["post_f_r"]
+    xticks = []
+    for i, v in enumerate(fl + fr):
+        xticks.append((v, sg(v), i % 2))
+    for v in (-d["axis_x"], d["axis_x"]):
+        xticks.append((v, f"{sg(v)} AXIS", 1))
+    for v in (-d["rail_out"], d["rail_out"]):
+        xticks.append((v, f"{sg(v)} frame", 0))
+    for v in (-d["canvas_edge"], d["canvas_edge"]):
+        xticks.append((v, f"{sg(v)} canvas", 0))
+    for v in (-d["table_edge"], d["table_edge"]):
+        xticks.append((v, f"{sg(v)} rail/table", 1))
+    ord_x(s, ax, -2170.0, xticks, stem=150.0)
+    ax.text(-1690, -2330, "ORDINATE\nevery X from the\ncentre line, signed",
+            ha="left", va="top", fontsize=FS_C_NOTE - 0.2, color=DIMC,
+            fontweight="bold", linespacing=1.4)
+
+    # --- y ordinate -------------------------------------------------------
+    yticks = [(0.0, "0.00   SEAM · CENTRE", 0)]
+    for v in (-d["seam_bar_face"], d["seam_bar_face"]):
+        yticks.append((v, f"{sg(v)}  seam bar", 0))
+    for v in (-d["runway_row_face_in"], d["runway_row_face_in"],
+              -d["runway_row_face_out"], d["runway_row_face_out"]):
+        yticks.append((v, sg(v), 0))
+    for v in (-d["axis_y"], d["axis_y"]):
+        yticks.append((v, f"{sg(v)}  ARM ROW", 1))
+    for v in (-d["canvas_end"], d["canvas_end"]):
+        yticks.append((v, f"{sg(v)}  canvas", 0))
+    for v in (-d["table_end"], d["table_end"]):
+        yticks.append((v, f"{sg(v)}  rail · table", 0))
+    for v in (-d["rail_out_end"], d["rail_out_end"]):
+        yticks.append((v, f"{sg(v)}  frame", 1))
+    for v in (-d["table_end_tape"], d["table_end_tape"]):
+        yticks.append((v, f"{sg(v)}  TABLE (tape)", 0))
+    ord_y(s, ax, 1160.0, yticks, stem=140.0)
+
+    # --- the overall chains ----------------------------------------------
+    s.dim_h(ax, -d["canvas_edge"], d["canvas_edge"], 2140,
+            f"{d['canvas_w']}   CANVAS", ext_y=(d["canvas_end"],
+                                                d["canvas_end"]),
+            over=20, fs=FS_C_DIM, txt_off=22)
+    s.dim_h(ax, -d["rail_out"], d["rail_out"], 2320,
+            f"{d['frame_w']}   FRAME OUTSIDE", ext_y=(d["rail_out_end"],
+                                                      d["rail_out_end"]),
+            over=20, fs=FS_C_DIM, txt_off=22)
+    s.dim_h(ax, -d["runway_x"], d["runway_x"], 1400,
+            f"{d['runway_len']}   RUNWAY / END RAIL, x extent", over=0,
+            fs=FS_C_DIM, txt_off=22)
+    s.dim_h(ax, -d["axis_x"], d["axis_x"], -820,
+            f"{d['axis_pitch_x']}   J1 AXIS PITCH", over=0, fs=FS_C_DIM,
+            txt_off=-24)
+    s.dim_v(ax, -d["canvas_end"], d["canvas_end"], -1250,
+            f"{d['canvas_l']}   CANVAS", over=0, fs=FS_C_DIM, txt_off=-58)
+    s.dim_v(ax, -d["table_end"], d["table_end"], -1430,
+            f"{d['table_l']}   TABLE, model", over=0, fs=FS_C_DIM,
+            txt_off=-58)
+    s.dim_v(ax, -d["table_end_tape"], d["table_end_tape"], -1610,
+            f"{d['table_len_tape']}   TABLE, TAPE 416.6 cm", over=0,
+            fs=FS_C_DIM, txt_off=-58)
+    s.dim_v(ax, 0, d["axis_y"], 640, f"{d['axis_pitch_y']}   ROW PITCH",
+            over=0, fs=FS_C_DIM, txt_off=30)
+
+    # --- the two members a tape has to find first ------------------------
+    s.leader(ax, (X(FR_X0) + P / 2, 0), (-560, -620),
+             f"SEAM BAR  item I — FIND THIS AND YOU HAVE FOUND Y = 0\n"
+             f"{d['profile']} (X) x {d['seam_bar_dy']} (Y), centred on the "
+             f"seam, one per side,\nstanding on the corner-leg line: "
+             f"X {sg(d['table_edge'], 1)} .. {sg(d['rail_out'], 1)}, "
+             f"Y {sg(-d['seam_bar_face'], 1)} .. "
+             f"{sg(d['seam_bar_face'], 1)}.",
+             ha="left", c=SEAMC, rad=0.12, fs=FS_C_NOTE - 0.4)
+    s.leader(ax, (X(FR_X0) + P / 2, Y(FR_Y0) + P / 2), (-560, -1520),
+             f"CORNER LEG  item E — {d['profile']} square, 4 off\n"
+             f"X {sg(d['table_edge'], 1)} .. {sg(d['rail_out'], 1)},  "
+             f"Y {sg(d['rail_in_end'], 1)} .. {sg(d['rail_out_end'], 1)} "
+             f"(both signs).",
+             ha="left", c=NOTEC, rad=-0.12, fs=FS_C_NOTE - 0.4)
+
+    # ---------------- panel B: the zoom Pete asked for -------------------
+    DEN_B = 4.6
+    XB, YB = (-600.0, 30.0), (-320.0, 240.0)
+    axb = s.panel(7.32, 5.85, XB, YB, DEN_B,
+                  "B   DETAIL — ONE HANGING-STRUT PAIR",
+                  f"arm 31  ·  scale 1 : {DEN_B:.1f}")
+    member(axb, XB[0], -P, XB[1], P, fc=STEEL, z=4)
+    axb.add_line(Line2D([XB[0], XB[1]], [0, 0], color="#4d5561", lw=0.5,
+                        zorder=4.4))
+    for px in d["post_c_l"]:
+        for py in (-P, 0):
+            member(axb, px - P / 2, py, px + P / 2, py + P, fc=POSTC, ec=INK,
+                   lw=1.0, z=6)
+    member(axb, d["plate_cx_l"] - d["plate_w"] / 2, -d["plate_d"] / 2,
+           d["plate_cx_l"] + d["plate_w"] / 2, d["plate_d"] / 2, fc=PLATEC,
+           ec=INK, lw=1.1, z=6.6)
+    axl = -d["axis_x"]
+    axb.add_patch(Circle((axl, 0), d["base_circle_d"] / 2, fc="none", ec=ORIGC,
+                         lw=0.9, ls=(0, (4, 2)), zorder=7))
+    cmark(axb, axl, 0, 130, c=ORIGC, lw=0.8, z=7.4)
+    axb.add_patch(Circle((axl, 0), 8, fc=INK, ec="none", zorder=8))
+    axb.add_line(Line2D([0, 0], [YB[0], YB[1]], color=ORIGC, lw=1.1,
+                        ls=(0, (14, 4, 2.0, 4)), zorder=7.8))
+    axb.text(XB[0] + 10, YB[1] - 10, "X = 0  is the CENTRE LINE", ha="left",
+             va="top", fontsize=FS_C_NOTE - 0.4, color=ORIGC,
+             fontweight="bold")
+
+    s.dim_h(axb, d["post_f_l"][0], d["post_f_l"][3], 172,
+            f"{d['pair_outer_w']}   OUTER WIDTH OF THE PAIR",
+            ext_y=(P, P), over=8, fs=FS_C_DIM, txt_off=14)
+    s.dim_h(axb, d["post_f_l"][1], d["post_f_l"][2], 110,
+            f"{d['pair_gap']}   CLEAR BETWEEN THE TWO STRUTS", ext_y=(P, P),
+            over=6, fs=FS_C_DIM, txt_off=12)
+    s.dim_h(axb, d["post_f_l"][0], axl, -150,
+            f"{d['axis_face_short']}\naxis -> outside face", ext_y=(-P, 0),
+            over=6, fs=FS_C_DIM, txt_off=-16)
+    s.dim_h(axb, axl, d["post_f_l"][3], -150,
+            f"{d['axis_face_long']}\naxis -> outside face", ext_y=(0, -P),
+            over=6, fs=FS_C_DIM, txt_off=-16)
+    for xv, cc in ((axl, ORIGC), (d["plate_cx_l"], "#7a6a52")):
+        axb.add_line(Line2D([xv, xv], [-d["plate_d"] / 2 - 10, -232],
+                            color=cc, lw=0.5, ls=(0, (3, 2)), zorder=8.4))
+    s.dim_h(axb, axl, d["plate_cx_l"], -224,
+            f"{abs(d['plate_off'])}  plate/axis offset", over=6, txt_off=-16,
+            outside=True, out_len=96, fs=FS_C_DIM)
+    axb.annotate("", xy=(XB[1] - 6, 236), xytext=(d["post_f_l"][3], 236),
+                 arrowprops=s.arrow)
+    axb.add_line(Line2D([d["post_f_l"][3]] * 2, [P, 236], color=DIMC, lw=0.4,
+                        ls=(0, (3, 2)), zorder=8.5))
+    axb.text(XB[1] - 10, 224, f"{d['inner_pair_gap']}  clear to the NEXT "
+                              f"pair's face at X = {sg(d['post_f_r'][0])}",
+             ha="right", va="top", fontsize=FS_C_DIM, color=DIMC,
+             linespacing=1.3, bbox=TBOX, zorder=9)
+    ord_x(s, axb, -252.0,
+          [(v, sg(v), 0) for v in d["post_f_l"]]
+          + [(axl, f"{sg(axl)} axis", 0),
+             (d["plate_cx_l"], f"{sg(d['plate_cx_l'])} plate", 0)],
+          stem=14.0, gap=8.0, fs=FS_C_ORD)
+
+    # ---------------- panel C: tape vs model -----------------------------
+    axc = s.textbox(7.32, 1.58, 5.39, 3.95)
+    axc.add_patch(Rectangle((0, 0), 1, 1, fc="#fdf6f2", ec=WARN, lw=0.9))
+    axc.text(0.020, 0.962, f"C   MEASURED BY HAND {HAND_TAPE_DATE}  vs  THE "
+                           f"MODEL", ha="left", va="top", fontsize=FS_C_HEAD,
+             fontweight="bold", color=INK)
+    C_TAPE, C_MODEL, C_DELTA = 0.690, 0.840, 0.980
+    for lbl, cx_ in (("what a tape read", 0.020), ("tape", C_TAPE),
+                     ("model", C_MODEL), ("tape - model", C_DELTA)):
+        axc.text(cx_, 0.905, lbl, ha="left" if cx_ < 0.1 else "right",
+                 va="top", fontsize=6.0, color="#6a7280", fontweight="bold")
+    axc.add_line(Line2D([0.020, 0.980], [0.884, 0.884], color="#c3cad3",
+                        lw=0.6))
+    yy = 0.862
+    for what, tp, md, dl in hand_vs_model():
+        bad = abs(dl) > 5.0
+        col = WARN if bad else INK
+        axc.text(0.020, yy, what, ha="left", va="top", fontsize=7.0,
+                 color=col, fontweight="bold" if bad else "normal")
+        axc.text(C_TAPE, yy, f"{tp:.0f}", ha="right", va="top", fontsize=7.4,
+                 color=col, fontweight="bold")
+        axc.text(C_MODEL, yy, f"{md:g}", ha="right", va="top", fontsize=7.4,
+                 color=col)
+        axc.text(C_DELTA, yy, f"{dl:+.2f}", ha="right", va="top", fontsize=7.4,
+                 color=WARN if bad else GRN,
+                 fontweight="bold" if bad else "normal")
+        yy -= 0.064
+    axc.add_line(Line2D([0.020, 0.980], [yy + 0.018, yy + 0.018],
+                        color="#c3cad3", lw=0.6))
+    _flow(axc, [(WARN, True, HAND_FLAG)], 0.020, yy - 0.014, width=92,
+          fs=6.6, dy=0.0300)
+
+    # ---------------- panel D: the face schedule -------------------------
+    axd = s.textbox(12.88, 1.58, 3.22, 3.95)
+    axd.add_patch(Rectangle((0, 0), 1, 1, fc="#f7f8fa", ec="#c3cad3", lw=0.7))
+    axd.text(0.040, 0.962, "D   STRUT FACE SCHEDULE", ha="left", va="top",
+             fontsize=FS_C_HEAD, fontweight="bold", color=INK)
+    axd.text(0.040, 0.912, "every face of all four struts in a row, as a "
+                           "SIGNED X off the centre line", ha="left",
+             va="top", fontsize=6.0, color=NOTEC)
+    axd.add_line(Line2D([0.040, 0.960], [0.876, 0.876], color="#c3cad3",
+                        lw=0.6))
+    rows = []
+    for tag, faces, ctrs, pf, pc, axv in (
+            ("LEFT column  13 / 31 / 2", d["post_f_l"], d["post_c_l"],
+             d["plate_f_l"], d["plate_cx_l"], -d["axis_x"]),
+            ("RIGHT column  17 / 71 / 97", d["post_f_r"], d["post_c_r"],
+             d["plate_f_r"], d["plate_cx_r"], d["axis_x"])):
+        rows.append((True, tag, ""))
+        rows.append((False, "J1 axis", sg(axv)))
+        rows.append((False, "strut 1  faces",
+                     f"{sg(faces[0])}   {sg(faces[1])}"))
+        rows.append((False, "strut 1  centre", sg(ctrs[0])))
+        rows.append((False, "strut 2  faces",
+                     f"{sg(faces[2])}   {sg(faces[3])}"))
+        rows.append((False, "strut 2  centre", sg(ctrs[1])))
+        rows.append((False, "plate  edges", f"{sg(pf[0])}   {sg(pf[1])}"))
+        rows.append((False, "plate  centre", sg(pc)))
+    yy = 0.858
+    for head, a, b in rows:
+        axd.text(0.040, yy, a, ha="left", va="top",
+                 fontsize=6.8 if head else 6.4,
+                 color=INK if head else NOTEC,
+                 fontweight="bold" if head else "normal")
+        if b:
+            axd.text(0.960, yy, b, ha="right", va="top", fontsize=6.4,
+                     color=DIMC, fontweight="bold")
+        yy -= 0.044 if head else 0.038
+    axd.add_line(Line2D([0.040, 0.960], [yy + 0.012, yy + 0.012],
+                        color="#c3cad3", lw=0.6))
+    _flow(axd, [
+        (INK, True, "THE TWO COLUMNS ARE NOT MIRRORED."),
+        (INK, False, f"Every plate on the rig is offset {abs(d['plate_off'])} "
+                     f"mm in +X from its own J1 axis (uniform clocking, "
+                     f"BUILD_SHEET section 3), so the SHORT "
+                     f"{d['axis_face_short']} face is on the -X side of BOTH "
+                     f"columns: toward the centre on the right column and "
+                     f"away from it on the left. Read the schedule, not the "
+                     f"symmetry."),
+    ], 0.040, yy - 0.008, width=54, fs=6.3, dy=0.0268)
+
+    # ---------------- panel E: the datum, stated -------------------------
+    axe = s.textbox(12.88, 5.85, 3.22, 4.79)
+    axe.add_patch(Rectangle((0, 0), 1, 1, fc="#eef4f7", ec=ORIGC, lw=0.9))
+    axe.text(0.040, 0.975, "E   THE DATUM, AND THE TABLE", ha="left",
+             va="top", fontsize=FS_C_HEAD, fontweight="bold", color=INK)
+    lines = [
+        (ORIGC, True, "(0, 0) IS THE TABLE CENTRE: the SEAM LINE crossing "
+                      "the LONG CENTRE LINE."),
+        (INK, False, f"In sheet-1/2 canvas coordinates that is x = "
+                     f"{CENTRE_X}, y = {CENTRE_Y}. Every number on this sheet "
+                     f"is that point subtracted, and every number carries its "
+                     f"sign: +X toward the x = {CW:.1f} long edge, +Y toward "
+                     f"the y = {CL:.2f} end."),
+        (ORIGC, True, "THE SEAM LINE IS FOUR LINES AT ONCE."),
+        (INK, False, f"system_model makes SEAM_Y ({CENTRE_Y}) the canvas "
+                     f"mid-length, the MIDDLE ARM ROW, the half-cage butt "
+                     f"plane, and the line the seam bars straddle. Find the "
+                     f"seam bars and you have found Y = 0 without a tape."),
+        (None, False, ""),
+    ] + canvas_on_table_lines() + [
+        (None, False, ""),
+        (ORIGC, True, "HOW TO USE IT AT THE RIG."),
+        (INK, False, "Snap one line down the middle of the paper and one "
+                     "across at the seam bars. Hook the tape on the crossing "
+                     "and read outward; the sign says which way you went. "
+                     "Panel A's ordinate ticks are all off those two lines "
+                     "and nothing else."),
+        (None, False, ""),
+        (WARN, True, "NOTHING HERE IS A SURVEY."),
+        (WARN, False, "It is the model re-datumed — the same steel sheets 1 "
+                      "and 2 draw from the canvas corner. Where a tape and "
+                      "the model disagree, panel C says so and the model is "
+                      "not edited to match."),
+    ]
+    _flow(axe, lines, 0.040, 0.930, width=54, fs=6.3, dy=0.0229)
+
+    s.title_block(h, 3, "PLAN — CENTRE DATUM, SIGNED", extra=CENTRE_BANNER,
+                  datum="(0,0)  table centre",
+                  datum_sub=f"seam y {CENTRE_Y}  x  centre line x {CENTRE_X}")
+    _save(fig, out_dir, "plan_centre_datum")
+
+
+# ---------------------------------------------------------------------------
+# SHEET 4 — SIDE REFERENCE HEIGHTS, FROM THE PAPER AND FROM THE FLOOR
+# ---------------------------------------------------------------------------
+def _elev_frame(ax, axis, z, h, xlo, xhi):
+    """Floor / table / paper / cage, projected on (`axis`, z).  axis 0 = x."""
+    t = canvas_on_table()
+    ground(ax, xlo, xhi, FLOOR_Z, depth=150)
+    if axis == 1:
+        ax.add_patch(Rectangle((-t["tape_y"], FLOOR_Z), t["tape_l"],
+                               TABLE_TOP_Z - FLOOR_Z, fc="none", ec="#8a6f56",
+                               lw=0.9, ls=(0, (6, 3)), zorder=3.1))
+        member(ax, t["y0"], FLOOR_Z, t["y1"], TABLE_TOP_Z, fc="#8a6f56",
+               ec=INK, lw=0.6, z=3.2, alpha=0.75)
+        member(ax, -CL / 2, TABLE_TOP_Z, CL / 2, 0.0, fc="#fbf8f2", ec=INK,
+               lw=1.0, z=3.6)
+        ends = ((FR_Y0 - CENTRE_Y, FR_Y0 + P - CENTRE_Y),
+                (FR_Y1 - P - CENTRE_Y, FR_Y1 - CENTRE_Y))
+        for a, b in ends:
+            member(ax, a, GRID_U, b, GRID_T, fc=STEEL2, ec=INK, lw=0.7, z=5.2)
+            member(ax, a, LEG_BOTTOM, b, GRID_U, fc="#3b424c", ec=INK, lw=0.7,
+                   z=5.0)
+        for ry in ROW_Y:
+            member(ax, ry - P - CENTRE_Y, GRID_U, ry + P - CENTRE_Y, GRID_T,
+                   fc=STEEL, ec=INK, lw=0.7, z=5.4)
+        for b in seam_posts():
+            member(ax, b.lo[1] - CENTRE_Y, b.lo[2], b.hi[1] - CENTRE_Y,
+                   b.hi[2], fc=SEAM_FC, ec=SEAMC, lw=0.7, z=5.1,
+                   hatch="\\\\\\\\", alpha=0.75)
+        for ry in ROW_Y:
+            r0 = ry - CENTRE_Y
+            for py in (r0 - P, r0):
+                member(ax, py, z["post_bottom"], py + P, GRID_U, fc=POSTC,
+                       ec=INK, lw=0.7, z=6)
+            member(ax, r0 - CLAMP[1] / 2, z["plate_top"], r0 + CLAMP[1] / 2,
+                   z["clamp_top"], fc="#c3cad3", ec=INK, lw=0.6, z=6.2)
+            member(ax, r0 - PLATE[1] / 2, h, r0 + PLATE[1] / 2, z["plate_top"],
+                   fc=PLATEC, ec=INK, lw=0.9, z=6.5)
+            for px in (r0 - P - GUSSET[1] / 2, r0 + P + GUSSET[1] / 2):
+                ax.add_patch(Rectangle((px - GUSSET[1] / 2,
+                                        z["gusset_bottom"]), GUSSET[1],
+                                       GRID_T - z["gusset_bottom"], fc="none",
+                                       ec="#8d949c", lw=0.5, ls=(0, (4, 2)),
+                                       zorder=5.6))
+        return
+    # --- axis 0: the section across, taken AT the seam -------------------
+    member(ax, t["x0"], FLOOR_Z, t["x1"], TABLE_TOP_Z, fc="#8a6f56", ec=INK,
+           lw=0.6, z=3.2, alpha=0.75)
+    member(ax, -CW / 2, TABLE_TOP_Z, CW / 2, 0.0, fc="#fbf8f2", ec=INK, lw=1.0,
+           z=3.6)
+    for a in (FR_X0 - CENTRE_X, IN_X1 - CENTRE_X):
+        member(ax, a, GRID_U, a + P, GRID_T, fc=STEEL2, ec=INK, lw=0.7, z=5.2)
+        member(ax, a, LEG_BOTTOM, a + P, GRID_U, fc="#3b424c", ec=INK, lw=0.7,
+               z=5.0)
+    for b in seam_posts():
+        member(ax, b.lo[0] - CENTRE_X, b.lo[2], b.hi[0] - CENTRE_X, b.hi[2],
+               fc=SEAM_FC, ec=SEAMC, lw=0.7, z=5.3, hatch="\\\\\\\\",
+               alpha=0.8)
+    member(ax, IN_X0 - CENTRE_X, GRID_U, IN_X1 - CENTRE_X, GRID_T, fc=STEEL,
+           ec=INK, lw=0.8, z=4.6)
+    for xa in COL_X:
+        for px in post_xs(xa):
+            member(ax, px - P / 2 - CENTRE_X, z["post_bottom"],
+                   px + P / 2 - CENTRE_X, GRID_U, fc=POSTC, ec=INK, lw=0.85,
+                   z=6)
+        cxp = plate_cx(xa) - CENTRE_X
+        member(ax, cxp - CLAMP[0] / 2, z["plate_top"], cxp + CLAMP[0] / 2,
+               z["clamp_top"], fc="#c3cad3", ec=INK, lw=0.8, z=6.2)
+        member(ax, cxp - PLATE[0] / 2, h, cxp + PLATE[0] / 2, z["plate_top"],
+               fc=PLATEC, ec=INK, lw=1.1, z=6.5)
+        member(ax, xa - 75 - CENTRE_X, h - 150, xa + 75 - CENTRE_X, h,
+               fc="#eae6df", ec=INK, lw=0.8, z=6.4)
+        cmark(ax, xa - CENTRE_X, h, 260, c=ORIGC, lw=0.7, z=7.2)
+
+
+def sheet_side_heights(h, out_dir):
+    """out/drawings/centre/side_reference_heights.pdf / .png — A3 landscape."""
+    s = Sheet()
+    fig = s.fig
+    z = zl(h)
+    lv = side_levels(h)
+
+    # ---------------- panel A: along the long side ------------------------
+    DEN = 26.0
+    ax = s.panel(0.42, 6.20, (-2700.0, 3450.0), (-900.0, 2280.0), DEN,
+                 "A   ELEVATION ALONG THE LONG SIDE  (looking +X)",
+                 f"the whole rig end to end  ·  scale 1 : {DEN:.0f}")
+    _elev_frame(ax, 1, z, h, -2680, 2100)
+    # the room ceiling nobody has measured — the same flag sheet 2 carries
+    ax.add_line(Line2D([-2680, 2100], [2150, 2150], color=WARN, lw=1.0,
+                       ls=(0, (7, 4)), zorder=3))
+    for i in range(34):
+        xq = -2680 + 4780 * i / 33.0
+        ax.add_line(Line2D([xq, xq - 70], [2150, 2222], color=WARN, lw=0.4,
+                           alpha=0.55, zorder=2.8))
+    ax.text(-290, 2168, "ROOM CEILING — SURVEY REQUIRED.  The cage is "
+                        "self-supporting; no room ceiling has ever been "
+                        "measured, and none is drawn.",
+            ha="center", va="bottom", fontsize=FS_C_NOTE - 0.6, color=WARN,
+            fontweight="bold")
+    for aid in (13, 31, 2):
+        for A, B, r in park_capsules(aid, h):
+            capsule(ax, (A[1] - CENTRE_Y, A[2]), (B[1] - CENTRE_Y, B[2]), r,
+                    fc=ARMC, ec="#9aa2ad", lw=0.35, zorder=3.4, alpha=0.5)
+    ax.add_line(Line2D([-2620, 2100], [h, h], color=GRN, lw=1.0,
+                       ls=(0, (7, 3)), zorder=8))
+    ax.add_line(Line2D([0, 0], [-900, 2050], color=ORIGC, lw=1.0,
+                       ls=(0, (14, 4, 2.0, 4)), zorder=7.8))
+    ax.text(34, 2030, "Y = 0   SEAM", ha="left", va="top",
+            fontsize=FS_C_NOTE - 0.4, color=ORIGC, fontweight="bold")
+    s.dim_v(ax, 0.0, h, -2280, f"{h:.1f}\nPAPER -> PLATE UNDERSIDE",
+            ext_x=(0, 0), over=0, txt_off=-60, fs=FS_C_DIM)
+    s.dim_v(ax, FLOOR_Z, 0.0, -2540, f"{PAPER_ABOVE_FLOOR}\nFLOOR -> PAPER",
+            ext_x=(0, 0), over=0, txt_off=-60, fs=FS_C_DIM)
+
+    # THE LADDER, AND IT IS THE POINT OF THE SHEET.  Every level twice: mm
+    # above the paper (what the repo measures) and mm above the floor (what a
+    # tape reads).  `_JOG` only moves the LABEL off its own tick — four of
+    # these levels are 2 to 35 mm apart and would print on top of each other.
+    LX = 2160.0
+    ax.add_line(Line2D([LX, LX], [FLOOR_Z - 40, GRID_T + 40], color=DIMC,
+                       lw=0.5, zorder=8))
+    ax.text(LX + 200, GRID_T + 140, "mm above\nPAPER", ha="right", va="bottom",
+            fontsize=5.8, color="#6a7280", fontweight="bold", linespacing=1.3)
+    ax.text(LX + 580, GRID_T + 140, "mm above\nFLOOR", ha="right", va="bottom",
+            fontsize=5.8, color="#6a7280", fontweight="bold", linespacing=1.3)
+    for k, _lbl, short, pa, fo, bold in lv:
+        dy = _JOG.get(k, 0.0)
+        s.ext(ax, 2050, pa, LX, pa)
+        ax.add_line(Line2D([LX - 26, LX + 26], [pa, pa], color=DIMC, lw=0.9,
+                           zorder=8.5))
+        if dy:
+            ax.add_line(Line2D([LX + 26, LX + 76], [pa, pa + dy], color=DIMC,
+                               lw=0.5, zorder=8.5))
+        ax.text(LX + 200, pa + dy, f"{pa:+.2f}", ha="right", va="center",
+                fontsize=7.0 if bold else 6.3, color=DIMC,
+                fontweight="bold" if bold else "normal", zorder=9, bbox=TBOX)
+        ax.text(LX + 580, pa + dy, f"{fo:.2f}", ha="right", va="center",
+                fontsize=7.0 if bold else 6.3, color=GRN,
+                fontweight="bold" if bold else "normal", zorder=9, bbox=TBOX)
+        ax.text(LX + 640, pa + dy, short, ha="left", va="center",
+                fontsize=6.4 if bold else 5.9, color=INK if bold else NOTEC,
+                fontweight="bold" if bold else "normal", zorder=9)
+
+    # ---------------- panel B: across, at the seam ------------------------
+    DEN_B = 26.0
+    axb = s.panel(10.20, 6.20, (-1800.0, 1800.0), (-900.0, 2280.0), DEN_B,
+                  "B   ELEVATION ACROSS, AT THE SEAM  (looking +Y)",
+                  f"scale 1 : {DEN_B:.0f}")
+    _elev_frame(axb, 0, z, h, -1780, 1780)
+    for aid in (31, 71):
+        for A, B, r in park_capsules(aid, h):
+            capsule(axb, (A[0] - CENTRE_X, A[2]), (B[0] - CENTRE_X, B[2]), r,
+                    fc=ARMC, ec="#9aa2ad", lw=0.35, zorder=3.4, alpha=0.5)
+    axb.add_line(Line2D([-1720, 1720], [h, h], color=GRN, lw=1.0,
+                        ls=(0, (7, 3)), zorder=8))
+    axb.add_line(Line2D([0, 0], [-900, 2000], color=ORIGC, lw=1.0,
+                        ls=(0, (14, 4, 2.0, 4)), zorder=7.8))
+    axb.text(34, -860, "X = 0", ha="left", va="bottom",
+             fontsize=FS_C_NOTE - 0.4, color=ORIGC, fontweight="bold")
+    s.dim_v(axb, TABLE_TOP_Z, h, -1330,
+            f"{h - TABLE_TOP_Z:.1f}\nTABLE TOP -> PLATE UNDERSIDE",
+            ext_x=(0, 0), over=0, txt_off=-60, fs=FS_C_DIM)
+    s.dim_v(axb, z["post_bottom"], GRID_U, 1320,
+            f"{z['post_length']:.1f}\nDROP POST  item D",
+            ext_x=(post_xs(COL_X[1])[1] - CENTRE_X, IN_X1 - CENTRE_X), over=0,
+            txt_off=62, fs=FS_C_DIM)
+    s.dim_v(axb, LEG_BOTTOM, GRID_U, 1640, f"{LEG_LEN}\nLEG / SEAM BAR",
+            ext_x=(FR_X1 - CENTRE_X, FR_X1 - CENTRE_X), over=0, txt_off=62,
+            fs=FS_C_DIM)
+    axb.text(0, 2010, f"SEAM BARS, hatched — they stand in the corner legs' "
+                      f"own x bands\n{SEAM_FLAG}",
+             ha="center", va="top", fontsize=FS_C_NOTE - 0.6, color=SEAMC,
+             fontweight="bold", linespacing=1.4, zorder=9, bbox=TBOX)
+
+    # ---------------- panel C: the two datums ----------------------------
+    axc = s.textbox(14.02, 1.58, 2.08, 4.42)
+    axc.add_patch(Rectangle((0, 0), 1, 1, fc="#eef4f7", ec=ORIGC, lw=0.9))
+    axc.text(0.060, 0.972, "C   TWO DATUMS", ha="left", va="top",
+             fontsize=FS_C_HEAD - 0.6, fontweight="bold", color=INK)
+    _flow(axc, [
+        (ORIGC, True, "PAPER TOP = 0"),
+        (INK, False, "what sheets 1 and 2 and every module in the repo "
+                     "measure from."),
+        (None, False, ""),
+        (ORIGC, True, f"FLOOR = 0, i.e. + {PAPER_ABOVE_FLOOR}"),
+        (INK, False, "what a tape standing on the floor reads. The right-hand "
+                     "column of panel D is the same ladder with the floor as "
+                     "zero."),
+        (None, False, ""),
+        (WARN, True, "THE FLOOR COLUMN IS NOT A SURVEY."),
+        (WARN, False, f"It is the paper column plus {PAPER_ABOVE_FLOOR}, and "
+                      f"that {PAPER_ABOVE_FLOOR} is the drawing's table "
+                      f"height, not a measured one. Check it first (panel E) "
+                      f"— if it is not {abs(TABLE_TOP_Z - FLOOR_Z):.0f} "
+                      f"the whole column shifts."),
+    ], 0.060, 0.918, width=36, fs=6.4, dy=0.0278)
+
+    # ---------------- panel D: the ladder, both ways ---------------------
+    axd = s.textbox(0.42, 1.58, 7.30, 4.42)
+    axd.add_patch(Rectangle((0, 0), 1, 1, fc="#f7f8fa", ec="#c3cad3", lw=0.7))
+    axd.text(0.018, 0.968, "D   REFERENCE HEIGHTS — FROM THE PAPER AND FROM "
+                           "THE FLOOR", ha="left", va="top",
+             fontsize=FS_C_HEAD, fontweight="bold", color=INK)
+    axd.text(0.700, 0.912, "above PAPER", ha="right", va="top",
+             fontsize=6.2, color="#6a7280", fontweight="bold")
+    axd.text(0.930, 0.912, "above FLOOR", ha="right", va="top",
+             fontsize=6.2, color="#6a7280", fontweight="bold")
+    axd.add_line(Line2D([0.018, 0.982], [0.890, 0.890], color="#c3cad3",
+                        lw=0.6))
+    yy = 0.866
+    for _k, lbl, _short, pa, fo, bold in lv:
+        axd.text(0.018, yy, lbl, ha="left", va="top",
+                 fontsize=7.4 if bold else 6.8, color=INK if bold else NOTEC,
+                 fontweight="bold" if bold else "normal")
+        axd.text(0.700, yy, f"{pa:+.2f}", ha="right", va="top",
+                 fontsize=7.8 if bold else 7.0, color=DIMC,
+                 fontweight="bold" if bold else "normal")
+        axd.text(0.930, yy, f"{fo:.2f}", ha="right", va="top",
+                 fontsize=7.8 if bold else 7.0, color=GRN,
+                 fontweight="bold" if bold else "normal")
+        yy -= 0.0570
+    axd.add_line(Line2D([0.018, 0.982], [yy + 0.016, yy + 0.016],
+                        color="#c3cad3", lw=0.6))
+    axd.text(0.018, yy - 0.010, "CUT LENGTHS ON THIS LADDER", ha="left",
+             va="top", fontsize=7.2, fontweight="bold", color=INK)
+    yy -= 0.060
+    for it, what, ln, note in side_cuts(h):
+        axd.text(0.018, yy, f"{it}   {what}", ha="left", va="top",
+                 fontsize=7.0, color=INK)
+        axd.text(0.320, yy, f"{ln:.1f}", ha="right", va="top", fontsize=7.4,
+                 color=DIMC, fontweight="bold")
+        axd.text(0.352, yy, note, ha="left", va="top", fontsize=6.4,
+                 color=NOTEC)
+        yy -= 0.0520
+
+    # ---------------- panel E: the tape checks ---------------------------
+    axe = s.textbox(7.92, 1.58, 5.90, 4.42)
+    axe.add_patch(Rectangle((0, 0), 1, 1, fc="#eef7f1", ec=GRN, lw=0.9))
+    axe.text(0.017, 0.965, "E   CHECKS YOU CAN MAKE WITH A TAPE AND NOTHING "
+                           "ELSE", ha="left", va="top", fontsize=FS_C_HEAD,
+             fontweight="bold", color=INK)
+    yy = 0.890
+    for what, mm, why in tape_checks(h):
+        axe.text(0.017, yy, what, ha="left", va="top", fontsize=8.0,
+                 fontweight="bold", color=INK)
+        axe.text(0.983, yy, f"{mm:.2f}", ha="right", va="top", fontsize=11.0,
+                 fontweight="bold", color=GRN)
+        yy -= 0.054
+        yy = _flow(axe, [(NOTEC, False, why)], 0.034, yy, width=74, fs=6.5,
+                   dy=0.0272)
+        yy -= 0.014
+    axe.add_line(Line2D([0.017, 0.983], [yy + 0.010, yy + 0.010],
+                        color="#c3cad3", lw=0.6))
+    _flow(axe, [
+        (WARN, True, "TOLERANCE, AND WHAT TO DO WITH A DISAGREEMENT."),
+        (INK, False, "Build to +/-10 mm per arm and keep the six mount planes "
+                     "mutually coplanar within +/-3 mm (BUILD_SHEET section "
+                     "1). If a tape reading and this sheet disagree by more "
+                     "than that, RECORD THE AS-BUILT NUMBER — do not "
+                     "re-centre "
+                     "the other five arms to it, and do not edit the model to "
+                     "match a single reading."),
+        (WARN, True, "NOTHING ON THIS SHEET IS A SURVEY."),
+        (WARN, False, "Every height descends from the original drawing's "
+                      "233,7 cm, read as FLOOR to top of a self-supporting "
+                      "cage. The room has never been measured."),
+    ], 0.017, yy - 0.006, width=76, fs=6.5, dy=0.0262)
+
+    s.title_block(h, 4, "SIDE REFERENCE HEIGHTS", extra=CENTRE_BANNER,
+                  datum="paper top 0  ·  floor " f"{PAPER_ABOVE_FLOOR}",
+                  datum_sub=f"table top {TABLE_TOP_Z}  ·  top of steel "
+                            f"{GRID_T}")
+    _save(fig, out_dir, "side_reference_heights")
+
+
+# ===========================================================================
+# 8.  DRIVER
 # ===========================================================================
 def _save(fig, out_dir, stem):
     os.makedirs(out_dir, exist_ok=True)
@@ -1798,6 +2792,17 @@ def main(argv=None):
     sheet_side(h, a.out)
     p = write_cut_list(os.path.join(a.out, "8020_cut_list.md"), h)
     print(f"  wrote {p}")
+    # sheets 3 and 4 — the SAME model, re-datumed onto the table centre, for
+    # a tape at the built rig.  Their own directory because they are a
+    # different DATUM, not a different rig: nobody should ever be holding one
+    # of each without noticing which is which.
+    cdir = os.path.join(a.out, "centre")
+    ct = canvas_on_table()
+    print(f"  centre datum (0,0) = canvas ({CENTRE_X}, {CENTRE_Y})  ·  "
+          f"canvas {'IS' if ct['centred'] else 'IS NOT'} centred on the "
+          f"model table (eccentricity {ct['ecc_x']:+.2f}, {ct['ecc_y']:+.2f})")
+    sheet_centre_plan(h, cdir)
+    sheet_side_heights(h, cdir)
     return 0
 
 

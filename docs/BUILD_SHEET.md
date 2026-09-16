@@ -54,6 +54,40 @@ The whole z ladder at this height:
 Cage height floor to top of steel: **2336.5 mm** — which is the original
 drawing's own 233,7 cm, read the way it was written.
 
+### 0b. The centre-datum sheets — for a tape at the BUILT rig
+
+The corner datum above is for setting a frame out on an empty floor. Once the
+rig is standing, the corner is under the steel and every number is a long
+add-up, so `scripts/draw_8020.py` also issues **sheets 3 and 4** —
+`out/drawings/centre/plan_centre_datum.*` and
+`out/drawings/centre/side_reference_heights.*` (Pete Werner at the rig,
+2026-09-16: *"reference the measurements from the center because then it is
+unambiguous"*). Same model, same mount plane, nothing superseded; only the
+datum moves.
+
+- **(0,0) is the TABLE CENTRE** — the seam line (canvas y = 1815.32) crossing
+  the long centre line (canvas x = 901.7). Every plan dimension is a **signed**
+  offset from those two lines, ordinate-style, and the two are the same point
+  four ways over: canvas mid-length, middle arm row, half-cage butt plane, and
+  the line the two seam bars straddle. **Find the seam bars and you have found
+  Y = 0.**
+- **The canvas is centred on the table**, per `system_model`'s own `table`
+  body: 114.3 mm (4.5 in) of table all round. That body's height is the
+  drawing's; its footprint is ASSUMED, and Pete's tape makes the table
+  **4165.6 mm** long (416.6 cm = two butted half-frames) against the assumed
+  3859.24. The sheet draws both — tape ends dashed at Y ±2082.80, the assumed
+  footprint solid inside them.
+- Sheet 4 prints the whole z ladder **twice**, above the paper and above the
+  floor, plus the two checks that need nothing but a tape: floor → plate
+  underside **1606.68**, table top → plate underside **972.0**.
+- **One hand measurement disagrees and it is open item 1.** 2026-09-16 tape:
+  inner gap 214 (model 216.2), pair outer width 396 (393.8), axis → outside
+  face 156 / 240 (171.75 / 222.05), table length 4166 (4165.6). The two
+  axis-to-face readings put the J1 axis **≈42 mm** off the centre of its own
+  post pair where the model puts it **25.15**. Re-measure with a straight edge
+  across the base flange and the two post faces; nothing in the repo has been
+  changed to match a single reading.
+
 ## 1. Mounting height — the one number that matters most
 
 **The surface each robot bolts against (the underside of its mounting plate)
