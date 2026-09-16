@@ -31,17 +31,53 @@ from .frames import FR3_MIN, FR3_MAX, PEN_EXT, TCP_D, fk_many, joint_margin
 
 POSE_TOL = 1e-6      # m / dimensionless: real solutions land within ~2e-12
 
-_IK_PATH = os.environ.get(
-    "ARIS_FRANKA_IK_PATH",
-    "/home/franka/aris_project/franka_analytical_ik/franka_analytical_ik")
-sys.path.insert(0, _IK_PATH)
+# --------------------------------------------------------------------------
+# Locating the C++ extension.  ORDER MATTERS, and it is the installed package
+# FIRST.  The solver is vendored at a pinned commit in this repository
+# (`third_party/franka_analytical_ik`, see its VENDOR.md) and
+# `pip install ./third_party/franka_analytical_ik` is part of the documented
+# install, so on every machine set up from a clone the first branch wins and
+# nothing else is consulted.
+#
+# The two directory fallbacks exist for BUILD TREES only: a checkout of
+# wernerpe/franka_analytical_ik with a bazel-built .so beside its sources.
+# `ARIS_FRANKA_IK_PATH` points at one on purpose; the workstation path after it
+# is this project's own historical one and is the LAST resort.  Neither exists
+# on a robot PC, which is the point — until 2026-09-16 the workstation path was
+# tried first and therefore *hid* a missing install on the machine that had a
+# build tree, which is exactly the machine where the mistake is invisible.
+_WORKSTATION_IK_PATH = "/home/franka/aris_project/franka_analytical_ik/franka_analytical_ik"
+
+_IK = None
+_IK_SOURCE = None
 try:
-    # local build tree (system python3.12: _franka_ik.cpython-312-*.so)
-    import _franka_ik as _IK  # noqa: E402
-except ImportError:
-    # installed wheel (e.g. the pydrake venv on python3.10, where the cp312
-    # extension above is invisible). Same C++ solver, same raw entry points.
+    # installed package (`pip install ./third_party/franka_analytical_ik`, or
+    # any wheel of the same upstream). Same C++ solver, same raw entry points.
     from franka_analytical_ik import _franka_ik as _IK  # noqa: E402
+    _IK_SOURCE = "installed package"
+except ImportError:
+    for _cand, _why in ((os.environ.get("ARIS_FRANKA_IK_PATH"), "ARIS_FRANKA_IK_PATH"),
+                        (_WORKSTATION_IK_PATH, "workstation build tree")):
+        if not _cand or not os.path.isdir(_cand):
+            continue
+        sys.path.insert(0, _cand)
+        try:
+            # build tree (system python3.12: _franka_ik.cpython-312-*.so)
+            import _franka_ik as _IK  # noqa: E402
+            _IK_SOURCE = f"{_why}: {_cand}"
+            break
+        except ImportError:
+            sys.path.remove(_cand)
+    if _IK is None:
+        raise ImportError(
+            "the analytic IK extension (franka_analytical_ik._franka_ik) is not "
+            "importable. Install the vendored solver:\n"
+            "    pip install ./third_party/franka_analytical_ik\n"
+            "(needs pybind11 and libeigen3-dev; see third_party/franka_analytical_ik/"
+            "VENDOR.md and docs/SITE_SETUP.md section 1.3). Set ARIS_FRANKA_IK_PATH "
+            "to a build-tree directory only if you are pointing at one on purpose.")
+
+_IK_PATH = _IK_SOURCE   # back-compat: what the extension was loaded from
 
 Q7_GRID = np.linspace(FR3_MIN[6] + 0.05, FR3_MAX[6] - 0.05, 16)
 

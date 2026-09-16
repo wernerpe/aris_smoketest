@@ -9,6 +9,30 @@ so. Where something failed it is in section 5 with the failure text.
 This document is the fixed sequence. It is not a tour of the planner; that is
 `README.md`. It assumes nothing is installed and nobody has this repository.
 
+**Revised 2026-09-16 — the IK bindings are now vendored (§1.3) and a clone
+installs with nothing to download.** A bundle is no longer needed to *install*;
+it is still how you carry the `out/` artefacts (§1.5) to a machine without
+network. The install is three pip lines (§1.4).
+
+That revision was re-verified end to end, not assumed. A fresh
+`git clone -b aris2` into a throwaway venv on python 3.12.3, with
+`ARIS_FRANKA_IK_PATH=/nonexistent` **and the workstation build tree made
+invisible to that interpreter** — so neither fallback in §1.3 could fire:
+
+| | |
+|---|---|
+| `pip install -r requirements-site.txt` | 11 s |
+| `pip install ./third_party/franka_analytical_ik` | **7 s**, `batch: True`, loaded from the venv's `site-packages` |
+| `pip install -e .` | ok |
+| `pytest tests/test_gates.py tests/test_hardware_prep.py -q` | **20 passed** |
+| `day1.py line --arm 71 --from 1.15,1.95 --to 1.30,1.95` | **PASS**, inter-arm 253.4 mm, σ ≥ 0.235, tip 1.2e-12 m |
+| `day1.py word --variant alt` | **VERDICT PASS**, inter-arm 155.6 mm at t = 87.4 s |
+
+The negative control was run too: with the vendored package *uninstalled* and
+the workstation tree still invisible, the import fails with the new
+`ImportError` in §5.2 rather than silently succeeding. That is the failure mode
+the old import order hid, and it is now the one a robot PC would actually see.
+
 **Make the bundle on the workstation, carry the bundle, follow this file.**
 
 ```bash
@@ -29,11 +53,11 @@ scripts/make_site_bundle.sh          # -> out/site_bundle_<date>.tar.gz, ~43 MB
 | network | needed **once**, for `pip install` | see §1.6 for the offline path |
 | apt packages | `build-essential`, `libeigen3-dev`, `python3-venv` | — |
 
-**The python version matters in exactly one place**: the prebuilt IK wheel in
-`ik_wheel/` is tagged `cp312` and is valid only for python 3.12 on a glibc at
-least as new as the build machine's. **If the site machine is not python 3.12,
-ignore `ik_wheel/` and build from `ik_src/`** (§1.3) — that path works on any
-version and takes five seconds.
+**The python version no longer matters much.** The IK bindings are vendored
+as *source* (§1.3) and compile for whatever python runs pip, in about five
+seconds, on any version. The only python-3.12-specific artefact left is the
+prebuilt `ik_wheel/*.whl` in bundles built before 2026-09-16, which nothing
+needs any more — ignore it.
 
 **Nothing here is a robot.** `aris_sixarm` contains no rclpy, no libfranka, no
 LCM and no socket. It ends at a file. A machine running this cannot move an
@@ -76,21 +100,18 @@ exactly as it is. If the site python is not 3.12 and a pin refuses to build,
 drop the pins and `pip install -e './repo[dev]'` — nothing in the pin set is
 load-bearing for correctness, it is reproducibility only.
 
-### 1.3 The analytic IK bindings — the one hard dependency
+### 1.3 The analytic IK bindings — the one dependency that is not on PyPI
 
-This is the part that is not on PyPI and the part most likely to go wrong, so
-read the whole subsection before typing.
-
-The planner calls a C++ pybind11 extension from
-**`github.com/wernerpe/franka_analytical_ik`**, pinned at commit
-**`0d38d9667b7c1d45acd65e698911e76437405533`** — the commit that added the
-*batch* entry points (`solve_batch`, `fk_batch`, `tip_jacobian_batch`). Older
-commits are **correct but much slower**: `aris_sixarm/ik.py` detects the batch
-functions at call time and falls back to a python loop without them.
+Since 2026-09-16 this is **vendored in the repository** and there is nothing to
+fetch, carry or build by hand:
 
 ```bash
-pip install ./ik_src
+pip install ./repo/third_party/franka_analytical_ik      # from the bundle
+pip install ./third_party/franka_analytical_ik           # from a clone
 ```
+
+It compiles in about five seconds. `libeigen3-dev` (§1.1) and `pybind11`
+(in `requirements-site.txt`, §1.2) must already be there.
 
 **Verify it imported, and that the batch path is live:**
 
@@ -100,6 +121,15 @@ python -c "import aris_sixarm.ik as ik; print(ik._IK.__file__); print('batch:', 
 
 Expect a path inside your venv's `site-packages/franka_analytical_ik/` and
 `batch: True`.
+
+**What it is.** A C++ pybind11 extension from
+**`github.com/wernerpe/franka_analytical_ik`** (Pete's own repo, Apache-2.0),
+pinned at commit **`0d38d9667b7c1d45acd65e698911e76437405533`** — the commit
+that added the *batch* entry points (`solve_batch`, `fk_batch`,
+`tip_jacobian_batch`). Older commits are **correct but much slower**:
+`aris_sixarm/ik.py` detects the batch functions at call time and falls back to
+a python loop without them. Full provenance, including what was left behind
+and why: `third_party/franka_analytical_ik/VENDOR.md`.
 
 <details>
 <summary><b>Why this does not use the upstream bazel build</b> (read if the above fails)</summary>
@@ -111,10 +141,9 @@ its wheel target hardcodes **`python_tag = "cp310"`** (root `BUILD`) and
 toolchain fetch needs network and builds a large cache (102 GB on the
 workstation that has one).
 
-`ik_src/setup.py` in the bundle is a setuptools + pybind11 shim over the
-**identical two source files** (`franka_analytic_ik_bindings.cpp`,
-`franka_ik_He.hpp`). It builds for whatever python runs pip, in about five
-seconds, with no bazel.
+The vendored `setup.py` is a setuptools + pybind11 shim over the **identical
+two source files** (`franka_analytic_ik_bindings.cpp`, `franka_ik_He.hpp`). It
+builds for whatever python runs pip, in about five seconds, with no bazel.
 
 It was checked, not assumed: the shim-built extension exports the **same six
 entry points** as the bazel-built `.so` the workstation has been planning with,
@@ -122,23 +151,37 @@ and over **300 random poses × 4 branches × 7 joints** the two agree with
 **max absolute difference 0.0** and identical NaN masks. It is the same solver.
 </details>
 
-**The prebuilt wheel**, if the site machine is python 3.12:
+**The older bundle layout.** Bundles built before 2026-09-16 carry the same
+sources as `ik_src/` at the bundle root, plus a prebuilt `ik_wheel/*.whl` valid
+only for python 3.12 on a glibc at least as new as the build machine's. Both
+still work (`pip install ./ik_src`, `pip install ik_wheel/*.whl`); neither is
+needed any more.
 
-```bash
-pip install ik_wheel/*.whl      # equivalent, no compiler needed
-```
+**The env-var escape hatch, and how the import order changed.**
+`aris_sixarm/ik.py` now tries the **installed package first**, and only if that
+fails looks for a *build-tree directory* — `ARIS_FRANKA_IK_PATH` if it is set
+and exists, then the old hardcoded workstation path
+`/home/franka/aris_project/franka_analytical_ik/franka_analytical_ik`. If none
+of the three resolves it raises an `ImportError` naming the pip command above.
 
-**The env-var escape hatch.** `aris_sixarm/ik.py` first tries a *directory*
-named by `ARIS_FRANKA_IK_PATH`, defaulting to the hardcoded workstation path
-`/home/franka/aris_project/franka_analytical_ik/franka_analytical_ik`, and only
-then falls back to the installed package. On a site machine that default does
-not exist, so the installed package is used and **no env var is needed**. Set
+This order is the fix for a real trap. Until 2026-09-16 the workstation path
+was tried **first**, so on the one machine that has a build tree — the
+workstation everything is developed on — a completely missing install imported
+happily, and the failure only appeared on the robot PC. Set
 `ARIS_FRANKA_IK_PATH` only if you are pointing at a build tree on purpose.
 
 ### 1.4 The repo
 
 ```bash
 pip install -e ./repo
+```
+
+So the whole install, from a clone, is three pip lines:
+
+```bash
+pip install -r requirements-site.txt
+pip install ./third_party/franka_analytical_ik
+pip install -e .              # or -e '.[gui]' for the browser GUI
 ```
 
 ### 1.5 The `out/` artefacts
@@ -156,8 +199,9 @@ What is in there and why, in §3c.
 `pip download -r repo/requirements-site.txt -d wheels/` on any networked
 Ubuntu 24.04 / python 3.12 machine, carry `wheels/`, then
 `pip install --no-index --find-links wheels/ -r repo/requirements-site.txt`.
-The IK step is already offline: `ik_src` compiles locally and `ik_wheel` is a
-file. **This was not run** — it is the standard pip flow, stated for planning.
+The IK step is already offline: `third_party/franka_analytical_ik` is in the
+checkout and compiles locally. **This was not run** — it is the standard pip
+flow, stated for planning.
 
 ---
 
@@ -509,15 +553,26 @@ File ".../aris_sixarm/ik.py", line 44, in <module>
 ModuleNotFoundError: No module named 'franka_analytical_ik'
 ```
 
-The IK step (§1.3) did not happen, or happened in a different venv. `ik.py`
-tries `ARIS_FRANKA_IK_PATH` (default: a **hardcoded workstation path** that does
-not exist on site) and then the installed package; this is the second failing.
-`pip install ./ik_src` and re-check with the one-liner in §1.3.
+The IK step (§1.3) did not happen, or happened in a different venv.
 
-**On the workstation this error hides itself**: the hardcoded default path
-*does* exist there, so an import that would fail on site succeeds locally. That
-is precisely why the verification for this document was done in a throwaway
-venv against `git archive`, and not in the repo's own `.venv`.
+```bash
+pip install ./third_party/franka_analytical_ik
+```
+
+and re-check with the one-liner in §1.3.
+
+Since 2026-09-16 the message is longer than the traceback above — `ik.py`
+raises its own `ImportError` naming that pip command, after trying the
+installed package, `ARIS_FRANKA_IK_PATH`, and the old workstation path in that
+order.
+
+**This error used to hide itself on the workstation**: the hardcoded
+workstation path was tried *first* and *does* exist there, so an import that
+would fail on site succeeded locally — which is how a "clone acceptance test"
+passed on 2026-09-15 for entirely the wrong reason. The order is now installed
+package first (§1.3), and the solver is vendored, so both halves of that trap
+are closed. Verification for this document is still done in a throwaway venv
+against a fresh clone, never in the repo's own `.venv`.
 
 ### 5.3 `requirements-site.txt` missing from the bundle
 
@@ -535,15 +590,17 @@ then re-run `scripts/make_site_bundle.sh`.
 
 ### 5.4 The wheel installs but will not import
 
-`ik_wheel/*.whl` is tagged `cp312` and built against this workstation's glibc.
-A different python minor version will refuse it at install time; an older glibc
-will fail at import. **Build from `ik_src/` instead** — five seconds, any
-version. `ik_wheel/README` records the exact python and glibc it was built on.
+Only reachable if you used `ik_wheel/*.whl` from a bundle built before
+2026-09-16. It is tagged `cp312` and built against this workstation's glibc: a
+different python minor version will refuse it at install time, an older glibc
+will fail at import. **Build from `third_party/franka_analytical_ik` instead**
+(§1.3) — five seconds, any version.
 
 ### 5.5 `fatal error: Eigen/Dense: No such file or directory`
 
 `libeigen3-dev` is missing (§1.1), or Eigen is not at `/usr/include/eigen3`.
-Install it, or `EIGEN_INCLUDE=/path/to/eigen pip install ./ik_src`.
+Install it, or
+`EIGEN_INCLUDE=/path/to/eigen pip install ./third_party/franka_analytical_ik`.
 
 ### 5.6 `unrecognized arguments: --timeout`
 
@@ -610,8 +667,8 @@ These block nothing in §1–§2 and everything in §3e.
 
 1. **What is the site machine?** OS, python version, and whether it has
    network. If it is not Ubuntu 24.04 / python 3.12, the pinned
-   `requirements-site.txt` and the prebuilt wheel both become advisory and the
-   `ik_src` path becomes the only one (which is fine).
+   `requirements-site.txt` becomes advisory — and the IK bindings do not care
+   either way now that they are vendored as source (§1.3).
 2. **Which control stack is the target tomorrow** — the Cartesian impedance
    executor on the operator box (wants the **pathway CSV**, which is not in the
    bundle), or `fr3drivers` (wants the **joint bundle npz**, which is in the

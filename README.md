@@ -10,11 +10,11 @@ sudo apt install -y build-essential libeigen3-dev python3-venv
 git clone -b aris2 git@github.com:wernerpe/aris_smoketest.git   # main is STALE
 cd aris_smoketest
 python3 -m venv .venv && . .venv/bin/activate && pip install -U pip
-pip install -r requirements-site.txt && pip install -e '.[gui]'
-pip install ./ik_src                   # analytic-IK bindings, SITE_SETUP §1.3 —
-                                       # NOT in this repo: carry ik_src/ (or
-                                       # ik_wheel/*.whl) from a site bundle
-                                       # (scripts/make_site_bundle.sh)
+pip install -r requirements-site.txt
+pip install ./third_party/franka_analytical_ik   # analytic-IK bindings, VENDORED
+                                                 # at a pinned commit, ~5 s to
+                                                 # compile — SITE_SETUP §1.3
+pip install -e '.[gui]'
 python -c "import aris_sixarm.ik as ik; print('batch:', ik._IK.has_batch)"  # True
 python -m pytest tests/test_gates.py tests/test_hardware_prep.py -q   # 20 passed
 python -m pytest tests/test_day1.py -q                               # 9 passed
@@ -24,6 +24,13 @@ python scripts/day1.py word --variant alt          # re-check the word, copy CSV
 python scripts/day1.py line --arm 71 --from 1.15,1.95 --to 1.30,1.95 --name probe
 python -m aris_sixarm.gui                          # http://localhost:8765
 ```
+
+**Nothing above needs downloading separately.** The analytic-IK C++ bindings —
+the one dependency that is not on PyPI, and until 2026-09-16 the one thing a
+clone could not install — are vendored at pinned commit `0d38d96` under
+`third_party/franka_analytical_ik/` (see its `VENDOR.md`). They need
+`build-essential` + `libeigen3-dev` and compile in about five seconds. No site
+bundle, no bazel, no network beyond `pip`.
 
 `out/` is gitignored and a clone has none of it: the 0.970 artefacts `day1.py`
 reads are **tracked** under `assets/site/h0970/` and resolve automatically when
@@ -307,7 +314,9 @@ docs/
   (`scripts/lateral_eval.py`) — re-run pending.
 - **IK**: raw `_franka_ik.solve_ik(T16_column_major, q7, seed)` where T16 is the
   **hand-TCP** pose. The `.so` hardcodes Panda limits → FR3 limits re-filtered in python.
-  Build lives in `../franka_analytical_ik` (env `ARIS_FRANKA_IK_PATH` to relocate).
+  Vendored at pinned commit `0d38d96` in `third_party/franka_analytical_ik/`
+  (`VENDOR.md`); `ik.py` imports the **installed** package first and only then
+  falls back to a build tree (`ARIS_FRANKA_IK_PATH`, then this workstation's).
 - **Strict-GO gates** (field-validated): joint margin ≥ 0.30 rad AND σ_min(pen-tip
   position Jacobian) ≥ 0.14. σ_min is the binding constraint — libfranka zeroes the
   external-wrench estimate near singularities, so low σ_min = force-blind. Torque
