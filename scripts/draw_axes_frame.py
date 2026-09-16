@@ -51,9 +51,9 @@ def main(out_dir="out/drawings"):
     dim(-700, 0, -700, 1210.2, "1210.2", off=(-120, 0))
     dim(-700, -1210.2, -700, 0, "1210.2", off=(-120, 0))
     dim(-TABLE_W / 2, -2250, TABLE_W / 2, -2250, f"table {TABLE_W:.0f}", off=(0, -70))
-    dim(1250, -TABLE_L / 2, 1250, TABLE_L / 2, f"table {TABLE_L:.1f}", off=(130, 0))
+    dim(1400, -TABLE_L / 2, 1400, TABLE_L / 2, f"table {TABLE_L:.1f}", off=(0, 250))
     dim(-CANVAS_W / 2, -1950, CANVAS_W / 2, -1950, f"canvas {CANVAS_W}", off=(0, -70))
-    dim(1050, -CANVAS_L / 2, 1050, CANVAS_L / 2, f"canvas {CANVAS_L}", off=(130, 0))
+    dim(1000, -CANVAS_L / 2, 1000, CANVAS_L / 2, f"canvas {CANVAS_L}", off=(0, -250))
     ax.text(0, TABLE_L / 2 + 120, "origin (0,0) = table centre: seam line x long centre line. "
             "x across, y along. mm.", ha="center", fontsize=13)
     ax.set_xlim(-1500, 1500)
