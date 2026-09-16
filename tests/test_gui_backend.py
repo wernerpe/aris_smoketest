@@ -587,3 +587,37 @@ def test_a_stale_scene_entry_is_rebuilt_not_served(tmp_path, monkeypatch):
     out.with_suffix(".stamp").write_text("deadbeef")
     srv._ensure_scene("proposed", "lateral")
     assert len(calls) == 2, "a stale stamp must be rebuilt"
+
+
+# --------------------------------------------------------------------------
+# the tool model reaches the browser
+# --------------------------------------------------------------------------
+def test_the_served_scene_carries_the_holder_and_its_legend(client):
+    """/api/scene must ship the tool, and /api/scene.bin its meshes.
+
+    THE SCENE IS BUILT BY A SUBPROCESS and cached behind `scene_stamp`, which
+    hashes `aris_sixarm/**.py` and NOT `assets/`.  So this is also the test
+    that says the cache was invalidated: a `SCENE_CACHE_V` left at the old
+    value serves a pre-holder scene from disk and this fails.
+    """
+    doc = client.get("/api/scene?rig=proposed&tool=lateral").json()
+    t = doc["tool_model"]
+    assert t is not None and t["frame"] == "panda_hand"
+    assert t["tip_urdf_err_m"] < 1e-9
+    assert "23" in t["note"] and "graphite" in t["note"]
+    assert "touchdown" in t["note"], "the legend must say it is not measured"
+    blob = client.get("/api/scene.bin?rig=proposed&tool=lateral").content
+    for m in t["meshes"].values():
+        for ref in (m["verts"], m["faces"]):
+            assert ref["offset"] + ref["length"] <= len(blob), ref
+            assert ref["length"] > 0
+
+
+def test_the_viewer_labels_the_tool_layer_and_shows_the_legend(client):
+    """The toggle and the legend line exist in the shipped page and module."""
+    assert 'id="toolnote"' in client.get("/").text
+    app_js = client.get("/js/app.js").text
+    assert 'pens: "tool model"' in app_js
+    assert 'toolnote' in app_js
+    scene_js = client.get("/js/scene3d.js").text
+    assert "tool_model" in scene_js and "tip_r" in scene_js

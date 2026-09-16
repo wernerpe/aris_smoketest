@@ -267,3 +267,104 @@ def test_scene_radii_index_into_the_chain_it_describes(tmp_path):
         assert len(row) in (3, 5)
         assert 0 <= row[0] < width and 0 <= row[1] < width
         assert row[2] > 0
+
+
+# --------------------------------------------------------------------------
+# the tool model: the holder the viewer draws on every hand
+# --------------------------------------------------------------------------
+# THE ONE THING THAT HAS TO BE TRUE.  The viewer poses the holder as
+# `T_world_base @ F[9] @ T_part` with `T_part` straight out of the scene, and
+# it puts the tip ball at `pt(Ttcp, pen_lat, 0, pen_ext)` — the expression
+# `Scene3D.tipOf` evaluates.  These rebuild both compositions in numpy and
+# check them against `frames.tip_pos`, which is what the planner plans with.
+# If they ever disagree the picture is showing a pen that is not the one being
+# driven into the paper, which is the failure mode worth a test.
+def _viewer_hand_pose(doc, arm, q):
+    """What the viewer computes for one hand: base @ link_frames[9]."""
+    base = np.asarray(
+        [a for a in doc["arms"] if a["arm"] == arm][0]["T_world_base"],
+        float).reshape(4, 4)
+    return base @ frames.link_frames_many(np.asarray([q], float))[0, 9]
+
+
+def _tool_qs():
+    rng = np.random.default_rng(11)
+    lo, hi = frames.FR3_MIN, frames.FR3_MAX
+    return np.vstack([np.zeros(7), 0.5 * (lo + hi),
+                      lo + (hi - lo) * rng.random((6, 7))])
+
+
+@pytest.mark.skipif(not frames.PEN_LAT,
+                    reason="the inline pen has no holder model")
+def test_the_scene_carries_the_modelled_pen_holder(tmp_path):
+    doc = export_scene(tmp_path / "scene.json")
+    t = doc["tool_model"]
+    assert t is not None, "the lateral tool must ship its holder model"
+    assert t["frame"] == "panda_hand"
+    assert t["source"].endswith("installation_fatfingers.urdf")
+    # the printed housing, its cap and the two blades, as meshes
+    assert {"penholder22_housing_hand", "penholder22_cap_hand",
+            "fatfinger_leftfinger"} <= set(t["meshes"])
+    kinds = [p["kind"] for p in t["parts"]]
+    assert kinds.count("mesh") == 4      # housing, cap, and a blade per finger
+    assert "cylinder" in kinds           # spring, sleeve, clutch, graphite
+    for p in t["parts"]:
+        assert len(p["T"]) == 16
+        assert p["T"][12:] == [0.0, 0.0, 0.0, 1.0], "not a rigid 4x4"
+    # every mesh a part names is actually in the bundle
+    for p in t["parts"]:
+        if p["kind"] == "mesh":
+            assert p["mesh"] in t["meshes"]
+    # the numbers on the legend are the numbers in `frames`
+    assert t["lean_deg"] == pytest.approx(np.rad2deg(frames.PEN_LEAN_HOLDER))
+    assert t["graphite_m"] == pytest.approx(frames.PEN_GRAPHITE_HOLDER)
+    assert "23" in t["note"] and "149" in t["note"] and "86" in t["note"]
+
+
+@pytest.mark.skipif(not frames.PEN_LAT,
+                    reason="the inline pen has no holder model")
+def test_the_tip_marker_lands_on_the_planners_tip(tmp_path):
+    """The ball in the picture IS `frames.tip_pos`, at any pose, for any arm."""
+    doc = export_scene(tmp_path / "scene.json")
+    t = doc["tool_model"]
+    # the model's own weld and the planner's offsets are the same point
+    assert t["tip_urdf_err_m"] < 1e-9, \
+        (f"the URDF welds the tip {1000 * t['tip_urdf_err_m']:.3f} mm off "
+         f"frames.PEN_LAT/PEN_EXT — regenerate assets/system_model/")
+    worst = 0.0
+    for a in doc["arms"]:
+        # the hand-frame point the viewer's per-arm expression evaluates to
+        tip_hand = np.array([a["pen_lat_m"], 0.0,
+                             frames.D_HAND_TCP + a["pen_ext_m"], 1.0])
+        np.testing.assert_allclose(tip_hand[:3], t["tip_hand"], atol=1e-12)
+        for q in _tool_qs():
+            want = (np.asarray(a["T_world_base"], float).reshape(4, 4)
+                    @ np.append(frames.tip_pos(q, pen_ext=a["pen_ext_m"],
+                                               pen_lat=a["pen_lat_m"]), 1.0))
+            got = _viewer_hand_pose(doc, a["arm"], q) @ tip_hand
+            worst = max(worst, float(np.abs(got - want).max()))
+    assert worst < 1e-9, f"the tip marker is {1000 * worst:.4f} mm off"
+
+
+@pytest.mark.skipif(not frames.PEN_LAT,
+                    reason="the inline pen has no holder model")
+def test_the_graphite_runs_from_the_cap_to_the_tip(tmp_path):
+    """The lead is 20 mm of stick at 23 deg, and its far end IS the tip."""
+    doc = export_scene(tmp_path / "scene.json")
+    t = doc["tool_model"]
+    lead = [p for p in t["parts"] if p["name"] == "pen_lead"]
+    assert len(lead) == 1, [p["name"] for p in t["parts"]]
+    lead = lead[0]
+    assert lead["kind"] == "cylinder"
+    assert lead["len"] == pytest.approx(frames.PEN_GRAPHITE_HOLDER, abs=1e-6)
+    T = np.asarray(lead["T"], float).reshape(4, 4)
+    # a URDF cylinder is centred on its own z; the distal face is +len/2
+    far = T @ np.array([0.0, 0.0, lead["len"] / 2, 1.0])
+    np.testing.assert_allclose(far[:3], t["tip_hand"], atol=1e-6)
+    # AND THE STICK LEANS OFF THE HAND'S z BY THE BORE ANGLE.  Not to machine
+    # precision: `PEN_LEAN_HOLDER` is the round 23.0 deg the photo was read to,
+    # while the URDF's rpy is the assembly's own arctan through the stack.  The
+    # two agree to 7e-5 deg, which is the check — a housing mounted end-for-end
+    # or a lead off the wrong frame misses by tens of degrees, not by 1e-4.
+    lean = np.degrees(np.arccos(float(T[2, 2])))
+    assert lean == pytest.approx(t["lean_deg"], abs=1e-3)

@@ -65,7 +65,11 @@ POLL_S = 0.15          # how often a websocket looks for new events
 # `SCENE_CACHE_V` is bumped by hand when the SHAPE of the exported scene
 # changes (`program_schema.export_scene`), which the file stamps cannot see
 # if the change is to a schema this module does not import.
-SCENE_CACHE_V = 1
+# v2 (2026-09-16): the scene carries `tool_model` — the pen holder read out of
+# `assets/system_model/installation_fatfingers.urdf`.  The stamp hashes only
+# `aris_sixarm/**.py`, so a change to that URDF or to the holder meshes is
+# invisible to it; bump this by hand when the model itself moves.
+SCENE_CACHE_V = 2
 
 
 def scene_stamp(rig, tool):

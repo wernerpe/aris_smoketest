@@ -22,6 +22,10 @@ import * as fk from "./fk.js";
 const LAYERS = ["arms", "pens", "paper", "cage", "mounts", "strokes", "ink",
                 "bases", "chains"];
 
+// +90 deg about x: a URDF cylinder stands on its own z, a three.js one on its
+// y, and both are centred on their own origin.  Row major, as everything here.
+const RX90 = new Float64Array([1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]);
+
 export class Scene3D {
   constructor(el) {
     this.el = el;
@@ -83,6 +87,14 @@ export class Scene3D {
 
   setLayer(name, on) {
     if (this.groups[name]) this.groups[name].visible = !!on;
+    // Turning the tool model off puts the STOCK fingers back: the hand is
+    // then the manufacturer's, which is the honest picture of "no tool", and
+    // the two are never both drawn.
+    if (name === "pens" && this.tool) {
+      for (const A of this.arms.values()) {
+        for (const m of A.stock) m.visible = !on;
+      }
+    }
   }
 
   // ---- the static installation ---------------------------------------
@@ -90,6 +102,7 @@ export class Scene3D {
     this.doc = doc;
     this.penExt = doc.pen_ext_m;
     this.penLat = doc.pen_lat_m;
+    this.tool = doc.tool_model || null;
     for (const k of ["arms", "pens", "cage", "mounts", "paper", "bases",
                      "chains"]) {
       this.groups[k].clear();
@@ -105,6 +118,44 @@ export class Scene3D {
       g.setIndex(new THREE.BufferAttribute(new Uint32Array(f), 1));
       g.computeVertexNormals();
       geo[name] = g;
+    }
+
+    // --- the tool, built once and shared by all six hands --------------
+    // THE HOLDER IS THE THING ON THE ARM, not the planner's two numbers.
+    // `scene.tool_model` is `assets/system_model/installation_fatfingers.urdf`
+    // read out in the HAND frame (see `program_schema._tool_model`): the Fat
+    // Franka Finger blades, the printed housing and cap, the spring, sleeve,
+    // clutch and graphite inside the bore, and the 20 mm of lead standing out
+    // of the cap at the 23 deg the photo fixed.  Nothing here is derived —
+    // each part is one URDF <visual> with its own origin already composed
+    // down to the hand.
+    this.toolParts = [];
+    if (this.tool) {
+      for (const p of this.tool.parts) {
+        let g;
+        if (p.kind === "mesh") {
+          const m = this.tool.meshes[p.mesh];
+          if (!m) continue;
+          const v = viewOf(buf, m.verts), f = viewOf(buf, m.faces);
+          g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.BufferAttribute(v, 3));
+          g.setIndex(new THREE.BufferAttribute(new Uint32Array(f), 1));
+          g.computeVertexNormals();
+        } else if (p.kind === "cylinder") {
+          g = new THREE.CylinderGeometry(p.r, p.r, p.len, 20);
+        } else if (p.kind === "sphere") {
+          g = new THREE.SphereGeometry(p.r, 18, 12);
+        } else {
+          continue;
+        }
+        // A URDF CYLINDER STANDS ON ITS OWN z AND THREE.JS'S ON ITS y, and
+        // both are centred — so a primitive's part matrix carries an extra
+        // +90 deg about x.  Meshes are already vertex data in the link frame
+        // and get the matrix unchanged.
+        const rel = p.kind === "cylinder"
+          ? fk.mul(Float64Array.from(p.T), RX90) : Float64Array.from(p.T);
+        this.toolParts.push({geo: g, color: p.color, rel, name: p.name});
+      }
     }
 
     // --- the static bodies --------------------------------------------
@@ -146,6 +197,7 @@ export class Scene3D {
         parts.push({mesh: m, idx});
       }
       // the fingers ride on the hand frame with a fixed offset
+      const stock = [];
       for (const [name, T] of Object.entries(doc.finger_T || {})) {
         if (!geo[name]) continue;
         const mat = new THREE.MeshStandardMaterial({color: 0x33363c,
@@ -154,6 +206,10 @@ export class Scene3D {
         m.matrixAutoUpdate = false;
         g.add(m);
         parts.push({mesh: m, idx: 9, rel: Float64Array.from(T)});
+        // The fat blades REPLACE these (docs/SYSTEM_MODEL.md 7d) — they bolt
+        // to the carriages in the stock finger's place — so with the tool
+        // model showing the stock pair is hidden rather than drawn inside it.
+        if ((this.tool ? this.tool.hides : []).includes(name)) stock.push(m);
       }
       this.groups.arms.add(g);
 
@@ -171,8 +227,39 @@ export class Scene3D {
                                    10), brMat);
       pen.matrixAutoUpdate = false;
       bracket.matrixAutoUpdate = false;
-      bracket.visible = Math.abs(a.pen_lat_m) > 1e-6;
+      // WITH A REAL MODEL THE SKETCH IS NOISE.  The two cylinders stay for the
+      // inline pen and for any checkout without `assets/system_model/`, where
+      // they are the only picture of the tool there is.
+      pen.visible = !this.tool;
+      bracket.visible = !this.tool && Math.abs(a.pen_lat_m) > 1e-6;
       pg.add(pen); pg.add(bracket);
+
+      const tparts = [];
+      let tip = null;
+      for (const p of this.toolParts) {
+        const m = new THREE.Mesh(p.geo, new THREE.MeshStandardMaterial(
+          {color: new THREE.Color(p.color).getHex(),
+           roughness: 0.45, metalness: 0.12}));
+        m.matrixAutoUpdate = false;
+        m.name = p.name;
+        pg.add(m);
+        tparts.push({mesh: m, rel: p.rel});
+      }
+      if (this.tool) {
+        // THE TIP BALL IS PLACED FROM THIS ARM'S OWN (pen_lat, pen_ext) —
+        // the same expression `tipOf` evaluates and the planner plans with —
+        // so it cannot sit anywhere but on the planned tip.  The model's own
+        // weld agrees with it to `tool.tip_urdf_err_m`, asserted in the tests.
+        tip = new THREE.Mesh(
+          new THREE.SphereGeometry(this.tool.tip_r, 20, 14),
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color(this.tool.tip_color).getHex(),
+            emissive: new THREE.Color(this.tool.tip_color).getHex(),
+            emissiveIntensity: 0.45, roughness: 0.5}));
+        tip.matrixAutoUpdate = false;
+        tip.name = "pen_tip";
+        pg.add(tip);
+      }
       this.groups.pens.add(pg);
 
       // a marker at the base, in the arm's own colour, so the timeline's
@@ -191,12 +278,13 @@ export class Scene3D {
       this.groups.chains.add(chain);
 
       this.arms.set(a.arm, {
-        group: g, parts, pen, bracket, chain,
+        group: g, parts, pen, bracket, chain, tparts, tip, stock,
         base: Float64Array.from(a.T_world_base),
         penExt: a.pen_ext_m, penLat: a.pen_lat_m, color: a.color_hex,
         q: Float64Array.from(a.q_seed)});
       this.setJoints(a.arm, a.q_seed);
     }
+    this.setLayer("pens", this.groups.pens.visible);
 
     const s = doc.sheet_m;
     this.controls.target.set(s[0] / 2, s[1] / 2, 0.25);
@@ -223,13 +311,24 @@ export class Scene3D {
     }
     // the tool: a cylinder from the TCP down the pen axis, and for the
     // lateral holder a bracket from the TCP out along hand x
+    const Thand = fk.mul(A.base, F[9]);
     const Ft = fk.identity(); Ft[11] = fk.D_HAND_TCP;
-    const Ttcp = fk.mul(fk.mul(A.base, F[9]), Ft);
-    setMatrix(A.pen, cylinderBetween(
-      pt(Ttcp, A.penLat, 0, 0), pt(Ttcp, A.penLat, 0, A.penExt + 0.03)));
+    const Ttcp = fk.mul(Thand, Ft);
+    if (A.pen.visible) {
+      setMatrix(A.pen, cylinderBetween(
+        pt(Ttcp, A.penLat, 0, 0), pt(Ttcp, A.penLat, 0, A.penExt + 0.03)));
+    }
     if (A.bracket.visible) {
       setMatrix(A.bracket, cylinderBetween(pt(Ttcp, 0, 0, 0),
                                            pt(Ttcp, A.penLat, 0, 0)));
+    }
+    // the modelled tool: every part is a fixed pose in the HAND frame
+    for (const p of A.tparts) setMatrix(p.mesh, fk.mul(Thand, p.rel));
+    if (A.tip) {
+      const t = pt(Ttcp, A.penLat, 0, A.penExt);
+      const M = fk.identity();
+      M[3] = t[0]; M[7] = t[1]; M[11] = t[2];
+      setMatrix(A.tip, M);
     }
     if (this.groups.chains.visible) this._updateChain(A, F, Ttcp);
   }
@@ -254,6 +353,16 @@ export class Scene3D {
     pos[k++] = tip[0]; pos[k++] = tip[1]; pos[k++] = tip[2];
     A.chain.geometry.setDrawRange(0, k / 3);
     A.chain.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // The hand's world pose, row major.  A close-up of the tool has to be aimed
+  // in the HAND's frame — "down the jaw axis at the barrel" is a sentence
+  // about hand y and hand x, and in world coordinates it is six numbers that
+  // are different for every arm and every pose.
+  handPose(armId) {
+    const A = this.arms.get(armId);
+    if (!A) return null;
+    return fk.mul(A.base, fk.linkFrames(A.q, fk.TCP_D)[9]);
   }
 
   tipOf(armId) {

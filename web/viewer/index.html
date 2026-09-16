@@ -113,6 +113,13 @@ button:disabled { opacity: .4; cursor: default; }
   position: absolute; top: 8px; left: 10px; font-size: 11px; color: var(--dim);
   pointer-events: none; text-shadow: 0 1px 3px #000;
 }
+/* what the tool in the picture IS — a modelled number is not a measured one,
+   and this line says which it is */
+#toolnote {
+  position: absolute; bottom: 6px; left: 10px; font-size: 11px;
+  color: var(--dim); pointer-events: none; max-width: 72%;
+  background: #0f1114cc; padding: 2px 7px; border-radius: 3px;
+}
 #viewtools {
   position: absolute; top: 6px; right: 8px; display: flex; gap: 4px;
   flex-wrap: wrap; justify-content: flex-end; max-width: 60%;
@@ -225,6 +232,7 @@ table.k td.n { text-align: right; font-variant-numeric: tabular-nums; }
   <div id="stage">
     <div id="view">
       <div id="viewhud"></div>
+      <div id="toolnote"></div>
       <div id="viewtools"></div>
       <div id="banner"></div>
     </div>

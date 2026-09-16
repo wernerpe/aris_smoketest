@@ -40,12 +40,15 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
 import numpy as np
 
 SCHEMA_VERSION = 1
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class SchemaError(ValueError):
@@ -654,6 +657,218 @@ def _timings(prog, summ):
 
 
 # --------------------------------------------------------------------------
+# the tool: the pen holder as it is actually built
+# --------------------------------------------------------------------------
+# THE VIEWER USED TO DRAW THE TOOL AS TWO CYLINDERS — a bar out along hand x
+# and a pencil down hand z — which is the PLANNER's tool (a lateral offset and
+# an axial depth) and not the thing bolted to the gripper.  It is the right
+# picture of the two numbers the planner uses and a useless one for standing
+# next to the real arm and asking "is that what is on it?".
+#
+# THE MODEL IS NOT RE-DERIVED HERE.  Every transform below is read out of
+# `assets/system_model/installation_fatfingers.urdf`, which
+# `scripts/gen_system_model.py` writes from `rig_final.PENHOLDER22` /
+# `penholder22_lead` / `FATFINGER` — the Pete-confirmed 2026-09-13 assembly,
+# docs/SYSTEM_MODEL.md 7a-7e.  Re-deriving it in a third place is how the two
+# pictures drift; parsing it means the viewer is wrong exactly when the URDF is.
+#
+# EVERYTHING COMES BACK IN THE HAND FRAME.  The URDF hangs the holder off
+# `panda_hand` and the graphite and the tip off a `tcp` frame 0.1034 m up its
+# z; both chains are composed down to one hand-frame 4x4 per visual, so the
+# viewer's only job is `T_world_hand @ T_part` and there is no second place
+# for `D_HAND_TCP` to be applied or forgotten.
+#
+# THE TIP MARKER IS THE EXCEPTION, deliberately.  The URDF welds it at
+# (PEN_LAT_HOLDER, 0, PEN_EXT_HOLDER) off the TCP, but the viewer places it
+# from the ARM's own `pen_lat_m`/`pen_ext_m` — literally the expression
+# `Scene3D.tipOf` evaluates — so the ball is on the planner's tip by
+# construction rather than by two constants happening to agree.  That they DO
+# agree is asserted, both here (`tip_urdf_err_m`) and in the tests.
+_TOOL_URDF = "assets/system_model/installation_fatfingers.urdf"
+_TOOL_FACE_TARGET = 4000
+# The fat blades REPLACE the stock fingers — they bolt to the carriages in the
+# stock finger's place (docs/SYSTEM_MODEL.md 7d), so the viewer hides these two
+# while the tool model is showing rather than drawing both.
+_TOOL_HIDES = ["panda_leftfinger", "panda_rightfinger"]
+
+
+def _urdf_T(origin_el):
+    """A URDF <origin> -> 4x4.  Missing element or attribute = identity."""
+    xyz = [0.0, 0.0, 0.0]
+    rpy = [0.0, 0.0, 0.0]
+    if origin_el is not None:
+        xyz = [float(v) for v in origin_el.get("xyz", "0 0 0").split()]
+        rpy = [float(v) for v in origin_el.get("rpy", "0 0 0").split()]
+    r, p, y = rpy
+    cr, sr, cp, sp, cy, sy = (np.cos(r), np.sin(r), np.cos(p), np.sin(p),
+                              np.cos(y), np.sin(y))
+    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+    T = np.eye(4)
+    T[:3, :3] = Rz @ Ry @ Rx
+    T[:3, 3] = xyz
+    return T
+
+
+def _urdf_color(vis_el, default="#5a5f68"):
+    c = vis_el.find("material/color")
+    if c is None:
+        return default
+    rgba = [float(v) for v in c.get("rgba", "0.5 0.5 0.5 1").split()]
+    return "#%02x%02x%02x" % tuple(
+        int(round(255 * min(max(v, 0.0), 1.0))) for v in rgba[:3])
+
+
+def _tool_mesh(path, buf, meshes, cache):
+    """Load one holder .obj into the scene's buffer. -> the mesh's key."""
+    import trimesh
+    key = path.stem
+    if key in cache:
+        return cache[key]
+    m = trimesh.load(path, force="mesh")
+    # weld first: these are unions of primitives written with per-face
+    # normals, and decimating an unwelded surface tears it at every seam
+    m.merge_vertices(merge_tex=True, merge_norm=True)
+    n0 = len(m.faces)
+    if n0 > _TOOL_FACE_TARGET:
+        try:
+            s = m.simplify_quadric_decimation(face_count=_TOOL_FACE_TARGET)
+            # A DECIMATION THAT BARELY DECIMATES IS ONLY A LOSS.  The housing
+            # is a union of cylinders the simplifier will not take below
+            # ~7000 faces; it still rounds a millimetre off the barrel's nose
+            # getting there, and a millimetre is the size of the thing being
+            # compared against the hardware.  Keep the original unless the
+            # decimation actually pays.
+            if len(s.faces) <= 0.6 * n0:
+                m = s
+        except Exception:
+            pass
+    meshes[key] = {
+        "verts": _asdict(buf.add(np.asarray(m.vertices, float), "f4")),
+        "faces": _asdict(buf.add(np.asarray(m.faces, int), "i4"))}
+    cache[key] = key
+    return key
+
+
+def _tool_model(buf):
+    """The holder, the blades, the graphite and the tip. -> dict or None.
+
+    None when there is no model to draw: the inline pen (`PEN_LAT == 0`) is
+    not this holder, and a checkout without `assets/system_model/` has nothing
+    to read.  The viewer falls back to the two-cylinder sketch in both cases.
+    """
+    from . import frames as frames_mod
+
+    if not float(frames_mod.PEN_LAT):
+        return None                # the legacy inline pen: no holder exists
+    urdf = ROOT / _TOOL_URDF
+    if not urdf.exists():
+        return None
+    try:
+        root = ET.parse(urdf).getroot()
+    except ET.ParseError:
+        return None
+
+    links = {el.get("name"): el for el in root.iter("link")}
+    joints = {}
+    for j in root.iter("joint"):
+        ch, pa = j.find("child"), j.find("parent")
+        if ch is None or pa is None:
+            continue
+        joints[ch.get("link")] = (pa.get("link"), _urdf_T(j.find("origin")))
+
+    pref = None
+    for name in sorted(links):
+        m = re.fullmatch(r"(arm\d+_)pen_holder", name)
+        if m:
+            pref = m.group(1)
+            break
+    if pref is None:
+        return None
+    hand = pref + "panda_hand"
+
+    def to_hand(link):
+        """`link`'s fixed pose in the hand frame, or None if it is not below."""
+        T, cur = np.eye(4), link
+        for _ in range(8):
+            if cur == hand:
+                return T
+            if cur not in joints:
+                return None
+            par, Tj = joints[cur]
+            T = Tj @ T
+            cur = par
+        return None
+
+    meshes, cache, parts = {}, {}, []
+    # THE ORDER IS THE ORDER THEY ARE BOLTED ON: the blades that carry the
+    # holder, the holder itself, then the graphite that comes out of it.
+    for short in ("panda_leftfinger", "panda_rightfinger", "pen_holder",
+                  "pen_lead"):
+        link = links.get(pref + short)
+        if link is None:
+            continue
+        T_link = to_hand(pref + short)
+        if T_link is None:
+            continue
+        for vis in link.findall("visual"):
+            T = T_link @ _urdf_T(vis.find("origin"))
+            mesh_el = vis.find("geometry/mesh")
+            cyl_el = vis.find("geometry/cylinder")
+            sph_el = vis.find("geometry/sphere")
+            mat = vis.find("material")
+            name = (mat.get("name", short) if mat is not None else short)
+            name = re.sub(r"^arm\d+_", "", name)
+            name = re.sub(r"_mat$", "", name) or short
+            part = dict(name=name, color=_urdf_color(vis),
+                        T=[float(x) for x in T.reshape(-1)])
+            if mesh_el is not None:
+                p = (urdf.parent / mesh_el.get("filename")).resolve()
+                if not p.exists():
+                    continue
+                part.update(kind="mesh",
+                            mesh=_tool_mesh(p, buf, meshes, cache))
+            elif cyl_el is not None:
+                part.update(kind="cylinder", r=float(cyl_el.get("radius")),
+                            len=float(cyl_el.get("length")))
+            elif sph_el is not None:
+                part.update(kind="sphere", r=float(sph_el.get("radius")))
+            else:
+                continue
+            parts.append(part)
+    if not parts:
+        return None
+
+    # THE TIP, from `frames`, and the URDF's own weld as a witness.  The
+    # viewer draws the ball at the ARM's (pen_lat, pen_ext); this is the same
+    # point written in the hand frame, and the gap between it and the model's
+    # is the number that says whether the picture and the planner agree.
+    lat, ext = float(frames_mod.PEN_LAT), float(frames_mod.ext_of())
+    tip_hand = np.array([lat, 0.0, frames_mod.D_HAND_TCP + ext])
+    T_urdf_tip = to_hand(pref + "pen_tip")
+    tip_err = (float(np.linalg.norm(T_urdf_tip[:3, 3] - tip_hand))
+               if T_urdf_tip is not None else float("nan"))
+    tip_r = 0.004
+    sph = links.get(pref + "pen_tip")
+    if sph is not None and sph.find("visual/geometry/sphere") is not None:
+        tip_r = float(sph.find("visual/geometry/sphere").get("radius"))
+
+    lean = float(np.rad2deg(frames_mod.PEN_LEAN_HOLDER))
+    graph = float(frames_mod.PEN_GRAPHITE_HOLDER)
+    note = (f"tool model: {lean:.0f}° bore, tip {1000 * lat:.0f} mm "
+            f"lateral / {1000 * (frames_mod.D_HAND_TCP + ext):.0f} mm below "
+            f"the hand-TCP, {1000 * graph:.0f} mm graphite — the "
+            f"2026-09-13 holder from the photo, not a touchdown")
+    return dict(
+        source=_TOOL_URDF, arm_prefix=pref, frame="panda_hand",
+        lean_deg=lean, graphite_m=graph,
+        tip_hand=[float(x) for x in tip_hand], tip_r=tip_r,
+        tip_color="#e51a1a", tip_urdf_err_m=tip_err,
+        hides=list(_TOOL_HIDES), note=note, meshes=meshes, parts=parts)
+
+
+# --------------------------------------------------------------------------
 # the scene: what the viewer draws once and never again
 # --------------------------------------------------------------------------
 def export_scene(out_path, h_inv=None):
@@ -770,6 +985,7 @@ def export_scene(out_path, h_inv=None):
         arms=arms, bodies=bodies, meshes=meshes, radii=radii,
         self_margin_m=float(scene_check.SELF_MARGIN),
         link_index=link_index, finger_T=finger_T,
+        tool_model=_tool_model(buf),
         fk_check=dict(fk_check, T=_asdict(fk_check["T"])))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(doc))

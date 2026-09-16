@@ -80,6 +80,14 @@ async function loadScene(rig, tool) {
     el("viewhud").innerHTML =
       `${doc.arms.length} arms · paper ${doc.sheet_m[0].toFixed(3)} × `
       + `${doc.sheet_m[1].toFixed(3)} m · ${doc.bodies.length} static bodies`;
+    // WHAT THE TOOL IN THE PICTURE IS, in one line, because the difference
+    // between "the model says 149 mm" and "the pen was measured at 149 mm" is
+    // the difference between a drawing and a gate result.
+    el("toolnote").textContent = doc.tool_model
+      ? doc.tool_model.note
+      : `tool: the planner's offsets only — ${(1000 * doc.pen_lat_m).toFixed(0)}`
+        + ` mm lateral, ${(1000 * doc.pen_ext_m).toFixed(0)} mm axial;`
+        + ` no holder model for this tool`;
 
     // THE FK GOLDEN CHECK.  `fk.js` is a second implementation of
     // `frames.link_frames_many`; the scene carries six joint vectors and the
@@ -110,9 +118,12 @@ function colorOf(arm) { return app.colors.get(Number(arm)) || "#8a8f99"; }
 function buildLayerToggles() {
   const t = el("viewtools");
   t.innerHTML = "";
-  const names = {arms: "arms", pens: "pens", paper: "paper", cage: "cage",
-                 mounts: "mounts", strokes: "strokes", ink: "ink",
-                 bases: "bases", chains: "capsule chain"};
+  // "pens" IS THE TOOL LAYER.  It used to hold the two-cylinder sketch of the
+  // planner's (pen_lat, pen_ext); it now holds the modelled holder, and the
+  // label says which so the button and the picture agree.
+  const names = {arms: "arms", pens: "tool model", paper: "paper",
+                 cage: "cage", mounts: "mounts", strokes: "strokes",
+                 ink: "ink", bases: "bases", chains: "capsule chain"};
   for (const [k, label] of Object.entries(names)) {
     const b = F("button", {text: label,
                            class: app.layers[k] ? "on" : ""});
@@ -377,5 +388,12 @@ function onWitness(a, b, frame) {
     + `(margin ${(1000 * p.margin).toFixed(0)} mm) — capsules `
     + `[${w.i[0]},${w.i[1]}] and [${w.j[0]},${w.j[1]}]`;
 }
+
+// THE ONE HANDLE ON THE PAGE.  Everything above is module-scoped, which is
+// right — but it also means a console, a headless Chrome over CDP or a
+// screenshot script has no way to aim the camera at a hand or step to a
+// pen-down frame, and "open it and drag until it looks right" is not a thing a
+// test can do.  Read-mostly: this is a debugging handle, not an API.
+window.aris = app;
 
 boot();

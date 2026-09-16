@@ -277,6 +277,54 @@ Being a second implementation, it is guarded: the scene carries six joint
 vectors and the link poses PYTHON computed for them, the viewer re-derives them
 and refuses to draw (red banner) if the two differ by more than a micrometre.
 
+### The tool model (2026-09-16)
+
+The viewer used to draw the tool as **two cylinders** — a bar out along hand
+x by `PEN_LAT` and a pencil down hand z by `PEN_EXT`. That is a faithful
+picture of the two numbers the planner uses and a useless one for standing
+next to the real arm and asking "is that what is bolted on?". It now draws the
+**modelled holder**, on every hand:
+
+* the two **Fat Franka Finger** blades (`meshes/fatfinger/fatfinger_leftfinger.obj`,
+  one per finger, the right one mirrored as the URDF mirrors it),
+* the printed **housing** and **cap**
+  (`meshes/penholder/penholder22_{housing,cap}_hand.obj`),
+* the **spring, sleeve, clutch** and the graphite buried in the bore, plus the
+  72.5 mm of stick standing out of the tail — the URDF's own cylinders,
+* the **20 mm of graphite** out of the cap at the 23° bore lean, and
+* a small red **tip ball**.
+
+`program_schema._tool_model()` reads every one of those out of
+`assets/system_model/installation_fatfingers.urdf` (written by
+`scripts/gen_system_model.py` from `rig_final.PENHOLDER22` /
+`penholder22_lead` / `FATFINGER` — docs/SYSTEM_MODEL.md §7a–§7e) and composes
+each `<visual>` down to **one hand-frame 4×4**, so the viewer's whole job is
+`T_world_base @ F[9] @ T_part`. Nothing is re-derived: the picture is wrong
+exactly when the URDF is.
+
+**The tip ball is the exception, deliberately.** The URDF welds it at
+`(PEN_LAT_HOLDER, 0, PEN_EXT_HOLDER)` off the TCP, but the viewer places it
+from the *arm's own* `pen_lat_m`/`pen_ext_m` — literally the expression
+`Scene3D.tipOf` evaluates — so it is on the planned tip by construction rather
+than by two constants happening to agree. That they do agree is carried in the
+scene as `tool_model.tip_urdf_err_m` and asserted at 1e-9 m by
+`test_the_tip_marker_lands_on_the_planners_tip`, which rebuilds the viewer's
+composition in numpy against `frames.tip_pos` for eight poses × six arms.
+
+The **`tool model`** toggle (the old `pens` layer, relabelled; default **on**)
+switches the whole thing. With it off the two-cylinder sketch comes back and
+so do the **stock fingers** — the blades *replace* those on the real gripper
+(§7d), so the two pairs are never drawn at once. The line under the HUD is the
+legend, and it says what kind of number these are:
+
+> tool model: 23° bore, tip 86 mm lateral / 149 mm below the hand-TCP, 20 mm
+> graphite — the 2026-09-13 holder from the photo, not a touchdown
+
+`ARIS_TOOL=inline` has no holder (there is no such assembly), so
+`tool_model` is `null` and the sketch is all there is. `SCENE_CACHE_V` in
+`gui/server.py` must be bumped by hand when the model moves: the scene stamp
+hashes `aris_sixarm/**.py` and cannot see `assets/`.
+
 Static bodies come from `system_model.bodies()` for the `proposed` rig — the
 surveyed cage, table, paper, drop posts, gussets, clamps and plates — and from
 each `ArmSpec.static_obstacles()` for every other rig, because the system model
@@ -291,7 +339,7 @@ put steel where there is none.
 | 2 | 3D viewport (six arms, paper, table, cage, mounts), per-arm lane timeline, scrubber, play/pause/speed | **done** |
 | 3 | clearance inspector: per-pair sparklines, click a dip to jump the scrubber and draw the witness line with the mm value | **done** |
 | 4 | ink overlay (target vs drawn vs residual) and per-segment inspector (arm, s-range, σ_min, margin, tip error, lean/cone, draw time) | **mostly** — all three layers are drawn (grey target, the plan's own tip path in the arm's colour, magenta residual) and clicking a segment jumps the scrubber to it; what is missing is colouring the residual by CAUSE |
-| 5 | layer toggles for every geometry family; A/B ghost diff of two programmes; workspace-map paint mode | **partly** — layer toggles (arms, pens, paper, cage, mounts, strokes, ink, bases, capsule chain) are there; A/B diff and the workspace paint mode are not |
+| 5 | layer toggles for every geometry family; A/B ghost diff of two programmes; workspace-map paint mode | **partly** — layer toggles (arms, tool model, paper, cage, mounts, strokes, ink, bases, capsule chain) are there, and the tool layer is the modelled holder rather than a two-cylinder sketch; A/B diff and the workspace paint mode are not |
 
 ### What is next
 
