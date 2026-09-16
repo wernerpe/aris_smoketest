@@ -621,3 +621,84 @@ def test_the_viewer_labels_the_tool_layer_and_shows_the_legend(client):
     assert 'toolnote' in app_js
     scene_js = client.get("/js/scene3d.js").text
     assert "tool_model" in scene_js and "tip_r" in scene_js
+
+
+# --------------------------------------------------------------------------
+# THE DRAKE MESHCAT BUTTON
+#
+# `POST /api/meshcat` starts `scripts/meshcat_drake.py` on port 7009 and hands
+# the browser back the port.  These tests do NOT let it start: the port is a
+# singleton and a real scene is usually up on it during a hardware day, so the
+# spawn is intercepted and the ARGUMENT LIST is what gets graded.  The script
+# itself has its own suite (`tests/test_meshcat_drake.py`).
+class _FakePopen:
+    calls = []
+
+    def __init__(self, argv, **kw):
+        _FakePopen.calls.append((argv, kw))
+        self.pid = 4242
+
+    def poll(self):
+        return 0                      # already exited: never killed, never waited
+
+
+@pytest.fixture
+def no_spawn(monkeypatch):
+    from aris_sixarm.gui import server as S
+    _FakePopen.calls = []
+    monkeypatch.setattr(S.subprocess, "Popen", _FakePopen)
+    return _FakePopen
+
+
+def test_meshcat_launches_the_drake_viewer_for_one_npz(client, no_spawn):
+    r = client.post("/api/meshcat", json=dict(
+        npz="out/unknown_h0970_home_alt.npz",
+        program="out/unknown_h0970_home_program.json",
+        rig="proposed", tool="lateral", only_arms="31,71"))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["port"] == 7009, "one scene, one port; see server.MESHCAT_PORT"
+    assert d["npz"] == "out/unknown_h0970_home_alt.npz"
+    assert str(d["port"]) in d["url"]
+
+    argv, kw = no_spawn.calls[-1]
+    assert argv[2].endswith("scripts/meshcat_drake.py")
+    assert "--loop" in argv
+    assert argv[argv.index("--port") + 1] == "7009"
+    assert argv[argv.index("--only-arms") + 1] == "31,71"
+    assert argv[argv.index("--npz") + 1].endswith(
+        "out/unknown_h0970_home_alt.npz")
+    # the rig is an IMPORT-TIME decision in the child, so it travels as env
+    assert kw["env"]["ARIS_RIG"] == "proposed"
+    assert kw["env"]["ARIS_TOOL"] == "lateral"
+    # its own session, so replacing it kills whatever it spawned
+    assert kw["start_new_session"] is True
+
+
+def test_meshcat_refuses_a_path_outside_the_repo(client, no_spawn):
+    for body, code in [
+            ({}, 400),                                     # no npz at all
+            ({"npz": "/etc/passwd"}, 400),                 # outside the repo
+            ({"npz": "out/day1/../../../etc/hosts"}, 400),  # ...and by ..
+            ({"npz": "README.md"}, 400),                   # not an npz
+            ({"npz": "out/no_such_thing.npz"}, 404),       # not there
+            ({"npz": "out/unknown_h0970_home_alt.npz",
+              "rig": "nonesuch"}, 400)]:
+        r = client.post("/api/meshcat", json=body)
+        assert r.status_code == code, (body, r.status_code, r.text)
+    assert not no_spawn.calls, "nothing may be launched on a refusal"
+
+
+def test_meshcat_status_reports_the_port_before_anything_runs(client):
+    d = client.get("/api/meshcat").json()
+    assert d["port"] == 7009 and d["live"] is False and d["pid"] is None
+
+
+def test_the_day1_panel_has_the_drake_meshcat_button(client):
+    """The button, its api call, and the npz the verdict must now carry."""
+    panel = client.get("/js/panel.js").text
+    assert "Open in Drake Meshcat" in panel
+    assert "meshcatParams()" in panel
+    assert "this.last = r" in panel, "show() must keep the verdict's npz"
+    assert "openMeshcat" in client.get("/js/api.js").text
+    assert "onMeshcat: api.openMeshcat" in client.get("/js/app.js").text

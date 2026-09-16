@@ -331,6 +331,73 @@ each `ArmSpec.static_obstacles()` for every other rig, because the system model
 is built from `layout.FLEET_PROPOSED` and drawing it under `final6_opt` would
 put steel where there is none.
 
+## The Drake meshcat view (2026-09-16)
+
+**The three.js viewport is a schematic, and it always was.** `scene3d.js`
+builds the fleet out of primitives — one `BoxGeometry`, three
+`CylinderGeometry`, three `SphereGeometry` and some line buffers — and there is
+not one mesh file anywhere under `web/`. That is the right trade for the thing
+it is for: a timeline you scrub, strokes coloured by arm, a clearance witness
+line you can click. It is the wrong thing to look at when the question is
+"does the machine look right", which is what it was being asked on
+2026-09-16 ("i think the models are all strange").
+
+So there is a second window, and it shows the same numbers through the model
+everything else is graded against:
+
+    ARIS_RIG=proposed ARIS_TOOL=lateral .venv/bin/python scripts/meshcat_drake.py \
+        --npz out/unknown_h0970_home_alt.npz \
+        --program out/unknown_h0970_home_program.json \
+        --only-arms 31,71 --loop
+
+    #   http://frankastation.drl.csail.mit.edu:7009/
+
+`scripts/meshcat_drake.py` parses `assets/system_model/installation_fatfingers.urdf`
+into a pydrake `MultibodyPlant` and serves it through Drake's own
+`MeshcatVisualizer` — the same pathway `~/git/franka_manipulation_station` and
+`~/git/cc_experiment` use, which is why the arms look like arms. Everything
+the URDF has is on the screen: the 80/20 cage, the table and its paper, the
+seam bars, six inverted FR3s, the Fat Franka Finger blades, the penholder22
+housing and cap, the graphite and the welded tip.
+
+**The meshes.** The six arms wear `assets/system_model/meshes/fr3/*.gltf` with
+their PBR textures. Those are not new and nothing was downloaded for them:
+all nine geometry `.bin` files are **byte-identical** (sha256) to
+`~/git/franka_manipulation_station/assets/franka_description/meshes/visual/`,
+and `gen_system_model.py` has been writing them into `<visual>` all along —
+the decimated `meshes/collision/*.obj` set it also vendors is for the gates.
+`assets/system_model/meshes/HQ_FR3_SOURCES.json` records every hash and the
+path it came from; `--write-provenance` regenerates it and `--check-meshes`
+fails if a regenerated scene ever puts collision hulls in a `<visual>`. The
+script carries a substitution map that would repair such a scene at parse
+time; on today's model it is a no-op, and `tests/test_meshcat_drake.py` pins
+that it stays one.
+
+**What it draws.** `--npz` plays a conducted programme on one clock at
+`--rate` real time and `--loop` repeats it. The ink is a poly-line per
+stroke, grown a frame at a time from the plant's own `arm<id>_pen_tip` body —
+not from a second kinematic chain, which is the point: the tip on the screen
+is the tip the URDF welds, and `tests/test_meshcat_drake.py` pins it against
+`frames.tip_pos` to **3.2e-8 m** over ten certified poses. The drawn points
+sit within 0.5 mm of the paper plane (world z = 0 IS the paper's top face
+here), which the same suite measures.
+
+| flag | what it does |
+|---|---|
+| `--static` | pose and hold — the programme's first frame, or `Q_PARK_PROPOSED` with no `--npz` |
+| `--only-arms 31,71` | hide the four unmounted arms. **Visual only**: `visible = false` on their meshcat paths, the plant untouched |
+| `--rate`, `--loop` | playback speed; repeat forever |
+| `--record` | publish a scrubbable meshcat animation instead of playing live — the ink ends up drawn in full, since meshcat animates transforms and not objects |
+| `--no-camera` | leave meshcat's default camera alone (the default framing stays under the cage's 1.62 m beams, which an eye at beam height looks straight along) |
+
+**One port, 7009, and it is a singleton.** 7000–7008 belong to other people's
+scenes on this machine and 8765 is this server. The **Open in Drake Meshcat**
+button on the Day 1 panel posts to `POST /api/meshcat`, which kills whatever
+the GUI last started there and launches a fresh one for that job's npz — so
+asking twice replaces the scene rather than failing to bind. The npz is
+resolved and refused if it leaves the repo. The three.js viewer beside it is
+unchanged and still loads itself from the bundle.
+
 ## Milestone status
 
 | # | milestone | state |

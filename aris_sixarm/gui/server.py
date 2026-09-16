@@ -20,6 +20,8 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +41,18 @@ RIGS = ("proposed", "final6_opt", "final6", "final", "sixarm")
 TOOLS = ("lateral", "inline")
 
 POLL_S = 0.15          # how often a websocket looks for new events
+
+# THE DRAKE MESHCAT SCENE LIVES ON ONE PORT AND ONLY ONE.
+#
+# `scripts/meshcat_drake.py` is the high-quality view of a programme — the real
+# FR3 glTFs in Drake's own meshcat, as against `web/viewer/js/scene3d.js`,
+# which draws the fleet out of three.js primitives.  The GUI does not manage a
+# pool of them: 7000-7008 belong to other people's scenes on this machine and
+# 8765 is this server, so there is exactly one slot, 7009, and asking for a
+# second programme REPLACES what is in it.  That is also what a person means by
+# the button — they want to look at THIS run.
+MESHCAT_PORT = 7009
+MESHCAT_SCRIPT = ROOT / "scripts" / "meshcat_drake.py"
 
 # ---------------------------------------------------------------------------
 # THE SCENE CACHE HAS TO EXPIRE, AND IT DID NOT (2026-09-10)
@@ -91,6 +105,7 @@ def create_app(jobs_dir=None):
     app = FastAPI(title="Aris stroke planner")
     mgr = JobManager(jobs_dir) if jobs_dir else JobManager()
     app.state.jobs = mgr
+    app.state.meshcat_proc = None
 
     # ---- the viewer ----------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -192,6 +207,64 @@ def create_app(jobs_dir=None):
         path = _ensure_scene(rig, tool).with_suffix(".bin")
         return FileResponse(path, media_type="application/octet-stream")
 
+    # ---- the Drake meshcat view ----------------------------------------
+    @app.post("/api/meshcat")
+    def open_meshcat(body: dict):
+        """(Re)launch `meshcat_drake.py` on 7009 for one programme.
+
+        NOT A JOB.  `JobManager` owns things that run to completion and leave
+        artifacts; this is a viewer that runs until it is replaced, and giving
+        it a job id would put a permanently-"running" row in the job list.  It
+        gets the same detached-process-group treatment so that replacing it
+        kills the whole tree.
+        """
+        npz = _under_root(body.get("npz"), ".npz")
+        program = (_under_root(body.get("program"), ".json")
+                   if body.get("program") else None)
+        rig = str(body.get("rig") or "proposed")
+        tool = str(body.get("tool") or "lateral")
+        if rig not in RIGS or tool not in TOOLS:
+            raise HTTPException(400, f"unknown rig/tool {rig!r}/{tool!r}")
+        if not MESHCAT_SCRIPT.exists():
+            raise HTTPException(500, f"{MESHCAT_SCRIPT} is missing")
+        arms = str(body.get("only_arms") or "")
+        argv = [sys.executable, "-u", str(MESHCAT_SCRIPT),
+                "--npz", str(npz), "--port", str(MESHCAT_PORT), "--loop"]
+        if program is not None:
+            argv += ["--program", str(program)]
+        if arms:
+            argv += ["--only-arms", arms]
+        replaced = _kill_meshcat(app.state)
+        env = dict(os.environ)
+        env["ARIS_RIG"] = rig
+        env["ARIS_TOOL"] = tool
+        env["PYTHONUNBUFFERED"] = "1"
+        env.setdefault("MPLBACKEND", "Agg")
+        log_path = ROOT / "out" / f"meshcat_drake_{MESHCAT_PORT}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log = open(log_path, "wb", buffering=0)
+        try:
+            proc = subprocess.Popen(
+                argv, cwd=str(ROOT), env=env, stdout=log,
+                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                start_new_session=True)
+        finally:
+            log.close()
+        app.state.meshcat_proc = proc
+        return dict(port=MESHCAT_PORT, pid=proc.pid, replaced=replaced,
+                    url=f"http://{socket.getfqdn()}:{MESHCAT_PORT}/",
+                    npz=str(npz.relative_to(ROOT)),
+                    log=str(log_path.relative_to(ROOT)),
+                    only_arms=arms, rig=rig, tool=tool)
+
+    @app.get("/api/meshcat")
+    def meshcat_status():
+        proc = getattr(app.state, "meshcat_proc", None)
+        live = proc is not None and proc.poll() is None
+        return dict(port=MESHCAT_PORT, live=live,
+                    pid=(proc.pid if live else None),
+                    url=f"http://{socket.getfqdn()}:{MESHCAT_PORT}/")
+
     # ---- the live stream -------------------------------------------------
     @app.websocket("/api/jobs/{job_id}/stream")
     async def stream(ws: WebSocket, job_id: str):
@@ -240,9 +313,53 @@ def create_app(jobs_dir=None):
 
     @app.on_event("shutdown")
     def _shutdown():
+        _kill_meshcat(app.state)
         mgr.shutdown()
 
     return app
+
+
+def _under_root(name, suffix):
+    """A caller-supplied path -> an absolute path inside the repo, or 400.
+
+    The browser hands back a path the SERVER told it about, but that is not a
+    reason to trust it: the string makes a round trip through a page anyone on
+    the lab network can open.  Resolve it and refuse anything that leaves the
+    repo or is not the expected kind of file.
+    """
+    if not name:
+        raise HTTPException(400, "no npz given")
+    p = Path(str(name))
+    p = (p if p.is_absolute() else ROOT / p).resolve()
+    if not p.is_relative_to(ROOT):
+        raise HTTPException(400, f"{name} is outside the repo")
+    if p.suffix != suffix:
+        raise HTTPException(400, f"{name} is not a {suffix} file")
+    if not p.exists():
+        raise HTTPException(404, f"{name} does not exist")
+    return p
+
+
+def _kill_meshcat(state):
+    """Kill the scene currently on 7009, if this server started it.
+
+    -> True if there was one.  The process group, not the process: the script
+    is started with `start_new_session=True` exactly so that this reaches
+    whatever it spawned.
+    """
+    proc = getattr(state, "meshcat_proc", None)
+    state.meshcat_proc = None
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    return True
 
 
 # --------------------------------------------------------------------------

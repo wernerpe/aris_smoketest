@@ -29,7 +29,8 @@ const app = {
 async function boot() {
   app.view = new Scene3D(el("view"));
   app.panel = new Panel(el("side"), {
-    onStart: startJob, onCancel: cancelJob, onSelect: selectJob});
+    onStart: startJob, onCancel: cancelJob, onSelect: selectJob,
+    onMeshcat: api.openMeshcat});
   app.strip = new Strip(el("stages"), el("counters"), el("loads"));
   app.strip.armColor = colorOf;
   app.panels = new Panels({

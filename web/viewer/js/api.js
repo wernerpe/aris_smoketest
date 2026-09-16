@@ -22,6 +22,12 @@ export const api = {
   events:      (id, off) => j(`/api/jobs/${id}/events?offset=${off || 0}`),
   bundle:      (id)      => j(`/api/jobs/${id}/bundle`),
   scene:       (rig, tool) => j(`/api/scene?rig=${rig}&tool=${tool}`),
+  // The Drake meshcat view of a programme: one scene, one port, replaced
+  // rather than pooled.  See `gui/server.py` MESHCAT_PORT.
+  openMeshcat: (body)    => j("/api/meshcat", {
+                              method: "POST",
+                              headers: {"Content-Type": "application/json"},
+                              body: JSON.stringify(body)}),
 };
 
 export async function fetchBin(url) {

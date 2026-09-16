@@ -1,0 +1,141 @@
+{
+  "what": "the high-quality FR3 visual meshes scripts/meshcat_drake.py shows, and the substitution map it applies to get them",
+  "source_project": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual",
+  "source_note": "copied off this machine; nothing was downloaded.  The geometry .bin files are byte-identical to the station project's; the .gltf headers differ only in pointing at the vendored .png textures with the .ktx2 entries dropped, so a Drake without a KTX2 reader still textures them.",
+  "substitution": {
+    "low_poly": {
+      "link0": "meshes/collision/link0.obj",
+      "link1": "meshes/collision/link1.obj",
+      "link2": "meshes/collision/link2.obj",
+      "link3": "meshes/collision/link3.obj",
+      "link4": "meshes/collision/link4.obj",
+      "link5": "meshes/collision/link5.obj",
+      "link6": "meshes/collision/link6.obj",
+      "link7": "meshes/collision/link7.obj",
+      "hand": "meshes/collision/hand.obj"
+    },
+    "high_quality": {
+      "link0": "meshes/fr3/link0.gltf",
+      "link1": "meshes/fr3/link1.gltf",
+      "link2": "meshes/fr3/link2.gltf",
+      "link3": "meshes/fr3/link3.gltf",
+      "link4": "meshes/fr3/link4.gltf",
+      "link5": "meshes/fr3/link5.gltf",
+      "link6": "meshes/fr3/link6.gltf",
+      "link7": "meshes/fr3/link7.gltf",
+      "hand": "meshes/fr3/hand.gltf"
+    },
+    "note": "applied to <visual> only, at parse time.  A no-op on assets/system_model/installation_fatfingers.urdf, which already carries the high-quality set \u2014 the check is the point."
+  },
+  "urdf": "assets/system_model/installation_fatfingers.urdf",
+  "files": [
+    {
+      "link": "link0",
+      "file": "assets/system_model/meshes/fr3/link0.gltf",
+      "urdf_ref": "meshes/fr3/link0.gltf",
+      "bytes": 2451,
+      "sha256": "5f981b0d47c1e442d668a492ec11808a7cd0e653b439a616fcdcc504b7e1049e",
+      "geometry": "assets/system_model/meshes/fr3/link0.bin",
+      "geometry_sha256": "9a331758bb063d1d287e24ad5b5b786b2b6461ce7fe0c6f112b75111f8584b60",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link0.bin",
+      "upstream_sha256": "9a331758bb063d1d287e24ad5b5b786b2b6461ce7fe0c6f112b75111f8584b60",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link1",
+      "file": "assets/system_model/meshes/fr3/link1.gltf",
+      "urdf_ref": "meshes/fr3/link1.gltf",
+      "bytes": 2358,
+      "sha256": "7a3c916de407b74666edcc556562eaa261d4f2cbd2cbe3b01a325681e2f94e5f",
+      "geometry": "assets/system_model/meshes/fr3/link1.bin",
+      "geometry_sha256": "213c672d14c68676226b49ef20ab70c98862d437754b3c63680ca67d91c65719",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link1.bin",
+      "upstream_sha256": "213c672d14c68676226b49ef20ab70c98862d437754b3c63680ca67d91c65719",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link2",
+      "file": "assets/system_model/meshes/fr3/link2.gltf",
+      "urdf_ref": "meshes/fr3/link2.gltf",
+      "bytes": 2359,
+      "sha256": "a0c4c9e9daedc535e184c17610db832a6fa4a916409868c33abf80fa8eee42b4",
+      "geometry": "assets/system_model/meshes/fr3/link2.bin",
+      "geometry_sha256": "005672817f29a118e77656995d1d0f5ce4f77c0f03645f198b88498553f94d38",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link2.bin",
+      "upstream_sha256": "005672817f29a118e77656995d1d0f5ce4f77c0f03645f198b88498553f94d38",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link3",
+      "file": "assets/system_model/meshes/fr3/link3.gltf",
+      "urdf_ref": "meshes/fr3/link3.gltf",
+      "bytes": 2365,
+      "sha256": "cbc285b3ba1ab00b3e10c937be0c7e9aa460eea588ef0c49f7c71230105faa8c",
+      "geometry": "assets/system_model/meshes/fr3/link3.bin",
+      "geometry_sha256": "383296cae44b7ee280ab50ec9c8f77087cf76aa39a2f299b21a0cd5a81d7a7f7",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link3.bin",
+      "upstream_sha256": "383296cae44b7ee280ab50ec9c8f77087cf76aa39a2f299b21a0cd5a81d7a7f7",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link4",
+      "file": "assets/system_model/meshes/fr3/link4.gltf",
+      "urdf_ref": "meshes/fr3/link4.gltf",
+      "bytes": 2364,
+      "sha256": "fb3833588531ddac38d7f4169d2aea74d2c6b85b5ee508b57eb0dd31563f6366",
+      "geometry": "assets/system_model/meshes/fr3/link4.bin",
+      "geometry_sha256": "e31bdb4e96066dcfd5bdd25193646a3903f119c750d59c95b6bfa42371a12d3c",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link4.bin",
+      "upstream_sha256": "e31bdb4e96066dcfd5bdd25193646a3903f119c750d59c95b6bfa42371a12d3c",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link5",
+      "file": "assets/system_model/meshes/fr3/link5.gltf",
+      "urdf_ref": "meshes/fr3/link5.gltf",
+      "bytes": 2362,
+      "sha256": "08e0c3aa5005b26f6fa8a575537b5bb065e7eedda8e9ee6d8d0b271845ba32cc",
+      "geometry": "assets/system_model/meshes/fr3/link5.bin",
+      "geometry_sha256": "184e732692ef8b8cce5aa8a1a9d50694840fee65e173a95bb2d40cb312f4ba83",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link5.bin",
+      "upstream_sha256": "184e732692ef8b8cce5aa8a1a9d50694840fee65e173a95bb2d40cb312f4ba83",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link6",
+      "file": "assets/system_model/meshes/fr3/link6.gltf",
+      "urdf_ref": "meshes/fr3/link6.gltf",
+      "bytes": 2363,
+      "sha256": "e8c428add0046dcc6fa2e3b5996ed37ef9736f74a5f41d2a8cba59ad01a319d0",
+      "geometry": "assets/system_model/meshes/fr3/link6.bin",
+      "geometry_sha256": "3933a0c84157e6055d8246cb54ba5d4abeb967cbc27ebbe0394ec15bf66fb2f7",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link6.bin",
+      "upstream_sha256": "3933a0c84157e6055d8246cb54ba5d4abeb967cbc27ebbe0394ec15bf66fb2f7",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "link7",
+      "file": "assets/system_model/meshes/fr3/link7.gltf",
+      "urdf_ref": "meshes/fr3/link7.gltf",
+      "bytes": 2365,
+      "sha256": "09ae883214fa79dba121e7ac21bfe86d3a2d37238201fe6dd5d8c174baf44239",
+      "geometry": "assets/system_model/meshes/fr3/link7.bin",
+      "geometry_sha256": "c66930e04417be6ce87e8996c2b3046ba72f4dea8d1671a75fca4ddf4f6927cc",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/link7.bin",
+      "upstream_sha256": "c66930e04417be6ce87e8996c2b3046ba72f4dea8d1671a75fca4ddf4f6927cc",
+      "geometry_byte_identical": true
+    },
+    {
+      "link": "hand",
+      "file": "assets/system_model/meshes/fr3/hand.gltf",
+      "urdf_ref": "meshes/fr3/hand.gltf",
+      "bytes": 2343,
+      "sha256": "ade9f569a07a2732b3bf8b692393e7ad9f5924d0ae8ecdae2eed17b05fcf3932",
+      "geometry": "assets/system_model/meshes/fr3/hand.bin",
+      "geometry_sha256": "cd9a2ec452be9dfafeed1fe979e75d4a147a328c55b48b56d750b1b6a7d0e19b",
+      "upstream": "/home/franka/git/franka_manipulation_station/assets/franka_description/meshes/visual/hand.bin",
+      "upstream_sha256": "cd9a2ec452be9dfafeed1fe979e75d4a147a328c55b48b56d750b1b6a7d0e19b",
+      "geometry_byte_identical": true
+    }
+  ]
+}

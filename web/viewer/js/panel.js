@@ -102,9 +102,11 @@ const DAY1_LINE = [
 ];
 
 export class Day1 {
-  constructor(onRun) {
+  constructor(onRun, onMeshcat) {
     this.onRun = onRun;
+    this.onMeshcat = onMeshcat;
     this.inputs = {};
+    this.last = null;
   }
 
   build(cfg) {
@@ -155,6 +157,20 @@ export class Day1 {
       F("div", {}, [F("label", {text: "word variant"}), this.variant]),
       F("div", {}, [F("label", {text: " "}), this.wordBtn])]));
 
+    // THE HIGH-QUALITY VIEW, AND IT IS A SECOND WINDOW.  The three.js viewer
+    // to the right is built from primitives — boxes and cylinders, no mesh
+    // files anywhere in `web/` — which is fine for reading a timeline and
+    // wrong for judging a machine.  This hands the same npz to
+    // `scripts/meshcat_drake.py`, which plays it through the system-model URDF
+    // in Drake's meshcat with the real FR3 glTFs.  Nothing here changes the
+    // viewer beside it.
+    this.meshcatBtn = F("button", {text: "Open in Drake Meshcat",
+                                   onclick: () => this._meshcat()});
+    this.meshcatBtn.disabled = true;
+    this.meshcatLink = F("a", {class: "muted", target: "_blank", text: ""});
+    body.appendChild(F("div", {class: "btnrow one"}, [this.meshcatBtn]));
+    body.appendChild(this.meshcatLink);
+
     this.out = F("div", {id: "day1out"});
     body.appendChild(this.out);
 
@@ -184,13 +200,60 @@ export class Day1 {
   setRunning(live) {
     this.lineBtn.disabled = !!live;
     this.wordBtn.disabled = !!live;
+    if (this.meshcatBtn)
+      this.meshcatBtn.disabled = !!live || !this.meshcatParams();
   }
 
-  clear() { if (this.out) this.out.innerHTML = ""; }
+  // THE PORT COMES FROM THE SERVER, THE HOST FROM THE BROWSER.  The box calls
+  // itself `frankastation` and the lab calls it
+  // `frankastation.drl.csail.mit.edu`; whichever name got the person to this
+  // page is the one that will reach the scene, so reuse it rather than trust
+  // the server's idea of its own FQDN.
+  async _meshcat() {
+    const p = this.meshcatParams();
+    if (!p || !this.onMeshcat) return;
+    const b = this.meshcatBtn;
+    const was = b.textContent;
+    b.disabled = true;
+    b.textContent = "starting...";
+    try {
+      const r = await this.onMeshcat(p);
+      const url = `${location.protocol}//${location.hostname}:${r.port}/`;
+      this.meshcatLink.href = url;
+      this.meshcatLink.textContent = url;
+      window.open(url, "_blank");
+    } catch (e) {
+      this.meshcatLink.textContent = `could not start it: ${e.message}`;
+    } finally {
+      b.textContent = was;
+      b.disabled = !this.meshcatParams();
+    }
+  }
+
+  clear() {
+    this.last = null;
+    if (this.meshcatBtn) this.meshcatBtn.disabled = true;
+    if (this.out) this.out.innerHTML = "";
+  }
+
+  // WHERE THE MESHCAT BUTTON GETS ITS npz.  The day-1 verdict payload carries
+  // `npz` and `program` (worker._day1_result), and until now `show` read only
+  // the verdict line and the CSV list and dropped the rest.  Keeping the whole
+  // record is what lets the button below name a file the server can open.
+  // The three.js viewer is untouched and still loads itself from the bundle.
+  meshcatParams() {
+    const r = this.last, d = this.cfg || {};
+    if (!r || !r.npz) return null;
+    return {npz: r.npz, program: r.program || null,
+            rig: d.rig || "proposed", tool: d.tool || "lateral",
+            only_arms: (d.arms || [31, 71]).join(",")};
+  }
 
   // The verdict, as `day1.py` printed it, and the files it left behind.
   show(r) {
     if (!this.out) return;
+    this.last = r;
+    if (this.meshcatBtn) this.meshcatBtn.disabled = !this.meshcatParams();
     this.out.innerHTML = "";
     this.out.appendChild(F("div", {
       class: "verdict " + (r.ok ? "ok" : "bad"), text: r.one_liner || ""}));
@@ -217,14 +280,14 @@ export class Day1 {
 }
 
 export class Panel {
-  constructor(el, {onStart, onCancel, onSelect}) {
+  constructor(el, {onStart, onCancel, onSelect, onMeshcat}) {
     this.el = el;
-    this.cb = {onStart, onCancel, onSelect};
+    this.cb = {onStart, onCancel, onSelect, onMeshcat};
     this.inputs = {};
     this.selected = null;
     // FIRST IN THE COLUMN, because on a hardware day it is the only thing
     // anybody touches; the planner form below it is the other days' panel.
-    this.day1 = new Day1(onStart);
+    this.day1 = new Day1(onStart, onMeshcat);
   }
 
   build(cfg) {
