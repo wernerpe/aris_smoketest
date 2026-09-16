@@ -18,6 +18,8 @@ TABLE_W, TABLE_L = 2188.0, 4165.6
 CANVAS_W, CANVAS_L = 1803.4, 3630.6
 AX_X = (-305.0, 305.0)
 AX_Y = (-1210.2, 0.0, 1210.2)
+STRUT_X, STRUT_Y = 76.2, 152.4          # one hanging strut from above: 3 x 6 in
+STRUT_FAR, STRUT_NEAR = 240.0, 156.0     # Pete's tape 2026-09-16: outside face -> axis
 ARMS = {(-305.0, -1210.2): 13, (305.0, -1210.2): 17,
         (-305.0, 0.0): 31, (305.0, 0.0): 71,
         (-305.0, 1210.2): 2, (305.0, 1210.2): 97}
@@ -32,8 +34,16 @@ def main(out_dir="out/drawings"):
                            fill=False, lw=2.5, ec="black"))
     ax.add_patch(Rectangle((-CANVAS_W / 2, -CANVAS_L / 2), CANVAS_W, CANVAS_L,
                            fill=False, lw=1.2, ec="gray", ls="--"))
-    ax.axhline(0, color="gray", lw=0.8, ls=":")
     ax.axvline(0, color="gray", lw=0.8, ls=":")
+    # runway / strut centrelines: one per row, horizontal, dashed
+    for y in AX_Y:
+        ax.plot([-TABLE_W / 2, TABLE_W / 2], [y, y], color="black", lw=1.0, ls="--")
+    # hanging struts seen from above: 76.2 (x) x 152.4 (y) each = 3 x 6 in,
+    # placed from Pete's tape: outside face -> axis 240 on one side, 156 on the other
+    for (x, y), arm in ARMS.items():
+        for x0 in (x - STRUT_FAR, x + STRUT_NEAR - STRUT_X):
+            ax.add_patch(Rectangle((x0, y - STRUT_Y / 2), STRUT_X, STRUT_Y,
+                                   fill=True, fc="#d9d9d9", ec="black", lw=1.2))
     for (x, y), arm in ARMS.items():
         ax.plot([x - 90, x + 90], [y, y], color="crimson", lw=2)
         ax.plot([x, x], [y - 90, y + 90], color="crimson", lw=2)
@@ -48,6 +58,14 @@ def main(out_dir="out/drawings"):
                 fontsize=14, color="navy", ha="center", va="center",
                 bbox=dict(fc="white", ec="none", pad=1))
     dim(-305, 1700, 305, 1700, "610.0", off=(0, 60))
+    # one strut pair dimensioned (top-left arm): far / near / outer width
+    xa, ya = -305.0, 1210.2
+    dim(xa - STRUT_FAR, ya - 200, xa, ya - 200, f"{STRUT_FAR:.0f}", off=(0, -60))
+    dim(xa, ya - 200, xa + STRUT_NEAR, ya - 200, f"{STRUT_NEAR:.0f}", off=(0, -60))
+    dim(xa - STRUT_FAR, ya - 330, xa + STRUT_NEAR, ya - 330,
+        f"{STRUT_FAR + STRUT_NEAR:.0f} outside to outside", off=(0, -60))
+    ax.text(xa - STRUT_FAR, ya + 120, f"strut {STRUT_X} x {STRUT_Y} (3 x 6 in)",
+            fontsize=12, color="black")
     dim(-700, 0, -700, 1210.2, "1210.2", off=(-120, 0))
     dim(-700, -1210.2, -700, 0, "1210.2", off=(-120, 0))
     dim(-TABLE_W / 2, -2250, TABLE_W / 2, -2250, f"table {TABLE_W:.0f}", off=(0, -70))
