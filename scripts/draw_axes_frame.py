@@ -64,7 +64,7 @@ def main(out_dir="out/drawings"):
     dim(xa, ya - 200, xa + STRUT_NEAR, ya - 200, f"{STRUT_NEAR:.0f}", off=(0, -60))
     dim(xa - STRUT_FAR, ya - 330, xa + STRUT_NEAR, ya - 330,
         f"{STRUT_FAR + STRUT_NEAR:.0f} outside to outside", off=(0, -60))
-    ax.text(xa - STRUT_FAR, ya + 120, f"strut {STRUT_X} x {STRUT_Y} (3 x 6 in)",
+    ax.text(xa - STRUT_FAR, ya - 470, f"each strut {STRUT_X} x {STRUT_Y} (3 x 6 in)",
             fontsize=12, color="black")
     dim(-700, 0, -700, 1210.2, "1210.2", off=(-120, 0))
     dim(-700, -1210.2, -700, 0, "1210.2", off=(-120, 0))
