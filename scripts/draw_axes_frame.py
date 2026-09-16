@@ -64,6 +64,12 @@ def main(out_dir="out/drawings"):
     dim(xa, ya - 200, xa + STRUT_NEAR, ya - 200, f"{STRUT_NEAR:.0f}", off=(0, -60))
     dim(xa - STRUT_FAR, ya - 330, xa + STRUT_NEAR, ya - 330,
         f"{STRUT_FAR + STRUT_NEAR:.0f} outside to outside", off=(0, -60))
+    # centre line -> nearest strut face, both sides (middle row)
+    left_face = AX_X[0] + STRUT_NEAR          # left arm's inner strut, its inner face
+    right_face = AX_X[1] - STRUT_FAR          # right arm's inner strut, its inner face
+    dim(left_face, 330, 0, 330, f"{-left_face:.0f}", off=(0, 60))
+    dim(0, 330, right_face, 330, f"{right_face:.0f}", off=(0, 60))
+    dim(left_face, -330, right_face, -330, f"{right_face - left_face:.0f} between the pairs", off=(0, -60))
     ax.text(xa - STRUT_FAR, ya - 470, f"each strut {STRUT_X} x {STRUT_Y} (3 x 6 in)",
             fontsize=12, color="black")
     dim(-700, 0, -700, 1210.2, "1210.2", off=(-120, 0))
