@@ -242,7 +242,12 @@ def create_app(jobs_dir=None):
         env.setdefault("MPLBACKEND", "Agg")
         log_path = ROOT / "out" / f"meshcat_drake_{MESHCAT_PORT}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log = open(log_path, "wb", buffering=0)
+        # APPEND, like `jobs._spawn`.  Truncating destroys the log of a scene
+        # somebody started from a terminal and is still watching — which is
+        # exactly what `tests/test_gui_backend.py` did to the live 7009 scene
+        # the first time it ran, because the spawn is faked in that test and
+        # this `open` is not.
+        log = open(log_path, "ab", buffering=0)
         try:
             proc = subprocess.Popen(
                 argv, cwd=str(ROOT), env=env, stdout=log,
