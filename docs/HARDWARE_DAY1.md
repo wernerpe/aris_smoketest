@@ -281,7 +281,37 @@ ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/draw.py \
     --program --no-anim
 ```
 
-**At 0.850, if that is what the steel measures:**
+> ## **AT h = 0.850 THIS WORD CANNOT BE DRAWN. Conducted and measured, 2026-09-15.**
+>
+> The command below was run in full. It produced
+> `out/unknown_h0850_schedule.npz`, and that file is **13.5 s long and draws
+> 1.23 % of the word**: arm 31 moves 0.0329 rad and has 12 drawing frames out
+> of 650; **arm 71 does not move at all** (0.0000 rad). `skipped_phases` is
+> `['single pass']` and `skipped_m` is **2.15 m of the 2.59 m**.
+>
+> **Do not be fooled by the log's headline.** It says
+> `COVERAGE 84.2074 %` — that is the ALLOCATOR's number, what the planner
+> believes it could cover. The CONDUCTED coverage, in the summary json, is
+> **`coverage: 0.0123`**. `--skip-unconductable` is exactly the flag that lets
+> that gap open quietly: every phase the conductor refused was skipped and the
+> run still reported success. **Always read `coverage` out of
+> `out/<name>_schedule.json`, never the COVERAGE line in the log.**
+>
+> **Why it fails.** The conductor's own cross-check rejects phase after phase
+> with `sequencer priced transits the timeline does not pay` at **18.8 s,
+> 33.6 s, 35.0 s, 36.3 s** of disagreement. At 0.970 the same check trips at
+> **0.0267 s** — three orders of magnitude smaller. These are not accounting
+> noise; they say the realised pen-up transits need long detours the sequencer
+> never priced, because an inverted arm 120 mm closer to the paper has to fold
+> so far that the straightforward hover-to-hover crossing no longer exists.
+>
+> **So if the steel measures 0.850, the honest answer to Pete is: this word, at
+> this size, in this place, is not drawable — the day's options are to trim the
+> verticals to 0.970, or to re-cut the word smaller and re-plan.** Re-cutting is
+> one second (`scripts/text_strokes.py --height ... --x0 ... --x1 ...`); the
+> re-plan after it is ~an hour of cold cache. Decide early.
+
+**At 0.850, if that is what the steel measures — but read the box above first:**
 
 ```
 ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/replan_at_height.py \
