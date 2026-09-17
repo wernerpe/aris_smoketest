@@ -617,7 +617,7 @@ from the start.
 `unknown_hover_<arm>.{npz,csv,json}` for a float. The CSV is the impedance
 pathway file of §5.1 with **q1..q7 on every row — the planner's own redundancy
 resolution for that waypoint**, which is the half of Pete's criterion the
-drawing itself does not test.
+drawing itself does not test, **plus a `t_s` column** (below).
 
 **Refusal rule, and it is stronger than `line`'s.** A stroke the certified
 planner will not certify stops the whole run and **nothing is written** — a
@@ -626,14 +626,48 @@ certified subset instead and says so in the PASS line and in the json. An
 unflyable pen-up leg, a failed scene check, or a joint reference that exceeds
 the FR3's velocity limits are all likewise refusals with no CSV.
 
-**The joint-speed gate.** Every other gate in this file is about where the arm
-is; this one is about how fast the joint reference moves, which is what a stiff
-controller turns into torque. The PASS line reports the peak per-joint speed as
-a fraction of `frames.QD_MAX` (2.62 2.62 2.62 2.62 5.26 4.18 5.26 rad/s), both
-between CSV rows and at 1 kHz linear interpolation of the waypoints, and the
-json carries all seven numbers plus the peak accelerations. **All four runs
-read 30.0 % of the limit** — `writing.QD_FRAC` is 0.30 and the pacer hits it.
-Anything near 100 % is a bug upstream, not a tight day.
+**The CSV carries a clock — `t_s`, and it is the LAST column.** The exporter's
+v1 file has no time in it at all (`stroke_idx, wp_idx, kind`, the pose,
+`intensity`, `q1..q7`). `day1.py` appends `t_s`: seconds from the start of that
+arm's programme, **on the same clock as the schedule npz** (timeline frame *k*
+is *k/fps*, fps = 48), which is the planner's own pacing. It is appended last
+**so a positional reader of the first eighteen columns is unaffected**, and
+`aris_sixarm/export/pathway.py` is **not** edited for it — the times are
+reconstructed in `day1.py` by re-running the exporter's own `_emit_frames`, and
+the reconstruction is checked before anything is written.
+
+> **The cross-check that makes `t_s` trustworthy.** The manifest's per-stroke
+> `t_start_s` is computed by the exporter through a completely different route
+> (`strokes_of`, off the timeline). The first `draw` row of every stroke in the
+> CSV lands on it to **3 × 10⁻⁷ s**, measured, and `tests/test_day1.py` pins
+> that. A row count the reconstruction cannot account for is a refusal with no
+> CSV, not a guessed column.
+
+The file starts at the first certified approach frame and ends at the last
+retract frame, so `t_s` runs **1.79 → 61.23 s inside a 63.5 s programme** (arm
+31 hover) rather than 0 → duration. That is the same clock, not a rebased one:
+the park-to-hover lead-in is in the npz and is deliberately not in the CSV.
+Row spacing is **not** uniform — the exporter collapses a run of identical
+poses to one row, so a hold shows up as one row and a 0.208 s gap.
+
+**The joint-speed gate, and it is computed from `t_s`.** Every other gate in
+this file is about where the arm is; this one is about how fast the joint
+reference moves, which is what a stiff controller turns into torque. The PASS
+line reports the peak per-joint speed as a fraction of `frames.QD_MAX`
+(2.62 2.62 2.62 2.62 5.26 4.18 5.26 rad/s) **at the elapsed time between the
+rows' own timestamps**, and again at 1 kHz linear interpolation of those same
+rows; the json and the manifest carry all seven numbers plus the peak
+accelerations. Charging a collapsed hold the nominal frame period instead would
+invent a speed nothing moves at. **All four runs read 30.0 % of the limit** —
+`writing.QD_FRAC` is 0.30 and the pacer hits it. Anything near 100 % is a bug
+upstream, not a tight day. An over-limit reference is a refusal with no CSV.
+
+> **THE VELOCITY CERTIFICATE HOLDS AT `t_s` AND NO OTHER TIMING.**
+> `rtff_pathway_exec` paces by **Cartesian arc length** and can traverse the
+> same path faster or slower than the planner did. Run it quicker than `t_s`
+> says and every speed above scales with it. That sentence is in the summary
+> json (`joint_speed.validity`), in the manifest (`t_s.note`) and on the PASS
+> line (`joint speed OK **at t_s**`), because the file outlives the run.
 
 **Log:** the tip height at three points for each hover pass (**28 ± 5 mm or
 stop**); the drawn word against the planned one; whether the pen-up legs
@@ -922,6 +956,15 @@ powered attempt.
 
 ### 5.3 Getting a CSV onto the arms — file in, one command out
 
+> **REWRITTEN 2026-09-17 against the deployed branches.** The first version of
+> this section was read off the 2026-09-09 briefing and was wrong in three ways
+> that matter: the CSV goes to **`/tmp/impedance_pathway_arm<N>.csv`**, not
+> into `pathway_persist`; the supervisor needs **five `RTFF_*` variables** in
+> front of it; and **there is no runner for these arms** — the supervisor takes
+> the CSV as `$1` and that is the whole interface. Everything machine-specific
+> now lives in **`config/site.json`** (`day1.py site` shows it, `--set` edits
+> it); no address is hard-coded in any script.
+
 `scripts/day1.py send` is the whole interface between this repository and the
 running control stack. It **copies one file and prints one command**; it never
 moves an arm from this machine.
@@ -933,48 +976,84 @@ scripts/day1.py send --arm 31 --file out/day1/unknown_31.csv
 
 It refuses anything that is not a pathway CSV with this repo's columns, then:
 
-1. `ssh <operator> 'mkdir -p ~/RTff/pathway_persist/day1_arm<N>'`
-2. `scp <file> <operator>:~/RTff/pathway_persist/day1_arm<N>/`
-3. prints the **stack-health check** to run first, and then the one draw
-   command, which is the supervisor's own signature from
-   `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md` §8:
+1. `scp <file> <operator>:/tmp/impedance_pathway_arm<N>.csv`
+2. prints the park pose and **how far row 0 is from it**, the **stack-health
+   check**, the one draw command, and the log to tail:
 
 ```
-ARM_ID=31 bash ~/RTff/draw_rtff_supervised.sh \
-    ~/RTff/pathway_persist/day1_arm31/unknown_31.csv 1.0 2.5 5 fresh
+ssh diemut@192.168.50.2 'RTFF_CONTACT_DESCEND=0 RTFF_FORCE_SIGN=1 \
+    RTFF_TRAVEL_SPEED=0.02 RTFF_MODE=observe RTFF_DEPART_LIFT=0 ARM_ID=31 \
+    bash ~/RTff/draw_rtff_supervised.sh /tmp/impedance_pathway_arm31.csv \
+    1.0 2.5 5 fresh'
+ssh diemut@192.168.50.2 'tail -f /tmp/rtff_draw_arm31.log'
 ```
 
+Each `RTFF_*` is off by default and each default is wrong for this file:
+`CONTACT_DESCEND=0` flies the planned z instead of feeling for the paper,
+`MODE=observe` keeps depth open-loop for the first passes, `TRAVEL_SPEED=0.02`
+is 20 mm/s, and `DEPART_LIFT=0` is because the certified programme already ends
+at the park.
+
+> **THE PLAN IS A POSITION, NOT A ROBOT.** `--arm 31` names the **left-middle
+> position** and `--arm 71` the right-middle; the CSV's poses are in that
+> position's base frame. **Which arm ids are bolted into them is not known**
+> (2026-09-17: "may be 97 and 71, position unknown"), so `send --as-arm <id>`
+> dispatches a slot's file to whatever arm is actually there — `ARM_ID`, the
+> DDS domain and the `/tmp` file name all follow the physical id, and the
+> printed line says `slot 31 -> arm 97 (base frame of the left-middle
+> position)`. Identify the arm first and record it with
+> `day1.py site --set slot31.arm=97 --set slot31.mounted=true`.
+
+> **WHAT THE EXECUTOR ACTUALLY READS.** The tip pose of each row, and nothing
+> else: it paces by **Cartesian arc length**, holds each row's orientation
+> without slerping, and latches its own nullspace. **It ignores `q1..q7` and
+> `t_s`.** Those columns are the record of what the planner chose and the basis
+> of the velocity certificate; on the deployed stack they are a check, not a
+> command — so today's runs test the tool, the plane and the pose path, and
+> *not* the planner's redundancy resolution. Say so if asked.
+
+> **AND ROW 0 IS NOT THE PARK.** The executor's first move is an uncertified
+> straight ramp from the arm's measured configuration to row 0. The certified
+> programme starts and ends at the park, but the exporter begins the CSV at the
+> first frame whose tip is 50 mm clear of the paper — **measured, about 0.6 m
+> and 4 rad from the park** on the day-1 word files. `send` prints the park
+> pose and that gap every time. `day1.py park --arm N` prints the pose alone;
+> `--from-q <measured joints>` plans and certifies a collision-free joint path
+> from where the arm actually is to the park (a CHECK — the deployed executor
+> cannot execute a joint path; `go_start_pos.py` under position control is how
+> you actually get there).
 The supervisor is what runs the ladder gate, drives MoveIt to the start,
 switches `fr3_arm_controller` → `cartesian_impedance_controller`, and calls
 `rtff_pathway_exec.py --csv <file>`. The arm is chosen by the **`ARM_ID`
 environment variable — the DDS domain, not a flag and not an IP.**
 
-**Host, user and paths live in ONE block at the top of `scripts/day1.py`**
-(`OPERATOR`), overridable by `--host` and by `$ARIS_OPERATOR`. `--folder`
-changes the subfolder. **`--live` is the only way `send` ever runs the draw
-command over ssh**, and the default is to print it so a person types it on the
-operator box with their hand near the e-stop.
+**Host, user, remote path, arm ids, IPs, measured paper-z and the `RTFF_*`
+environment all live in `config/site.json`** — one tracked file, printed at the
+top of every run, shown by `day1.py site` and edited by
+`day1.py site --set KEY=VALUE`. `--host` and `--remote` override it per run.
+**`--live` is the only way `send` ever runs the draw command over ssh**, and the
+default is to print it so a person types it on the operator box with their hand
+near the e-stop.
 
-> **Three things the briefing is emphatic about and `send` prints every time.**
-> (a) The stack must be HEALTHY first — hardware active, three controllers,
-> `robot_mode 2`; **never heal on a user stop (mode 5) or guiding (mode 3)**.
-> (b) `fresh`, not `resume`: the keeper decides fresh-vs-resume from a progress
-> file, and a new CSV dropped next to an old checkpoint is picked up as a
-> resume of the old one. (c) **The ladder gate is SKIPPED for inverted arms,
-> and 31 and 71 are inverted** — nothing downstream will measure the paper
-> plane for them, so the `z_m` baked into the CSV is the plane they will draw
-> at. That is exactly why §4.2b's hover pass and a ruler come first.
+> **Three things `send` prints every time.** (a) The stack must be HEALTHY
+> first — hardware active, three controllers, `robot_mode 2`; **never heal on a
+> user stop (mode 5) or guiding (mode 3)**. (b) `fresh`, not `resume`: the
+> runner decides fresh-vs-resume from a progress file, and a new CSV dropped
+> next to an old checkpoint is picked up as a resume of the old one. (c) **The
+> ladder gate is SKIPPED for inverted arms, and both middle positions are
+> inverted** — nothing downstream will measure the paper plane for them, and
+> `RTFF_CONTACT_DESCEND=0` means nothing will feel for it either, so the `z_m`
+> baked into the CSV is the plane they will draw at. That is exactly why
+> §4.2b's hover pass and a ruler come first, and why `--paper-z` exists.
 
-> **What the briefing does NOT say, and `send` therefore does not invent.** It
-> names `run_forever_arm13.sh` / `run_forever_arm17.sh` and one
-> `dispatch_arm17_*.sh`, and it names **no runner, no dispatch script and no
-> `pathway_persist` folder for arms 31 or 71** — only their control-box IPs
-> (192.168.50.12 / .14), their DDS domains and that they are inverted. So
-> `send` targets the supervisor directly, which is the one entry point with a
-> documented signature, and leaves the keeper loop alone. If a
-> `run_forever_arm31.sh` exists by then, **hold it first**
-> (`bash ~/RTff/aris_hold.sh hold 31`) or the keeper will start its own pass on
-> top of this one. There is also a **retired** box at 192.168.50.4 whose
+> **There is NO runner for these arms.** The deployed tree has
+> `run_forever_arm13.sh` / `run_forever_arm17.sh` and a `dispatch_arm17_*.sh`,
+> and **no runner, no dispatch script and no `pathway_persist` folder for the
+> middle positions**. `send` therefore targets the supervisor directly, which
+> takes the CSV as `$1`, and leaves any keeper loop alone. If a
+> `run_forever_arm<N>.sh` exists by then, **hold it first**
+> (`bash ~/RTff/aris_hold.sh hold <N>`) or the keeper will start its own pass
+> on top of this one. There is also a **retired** box at 192.168.50.4 whose
 > `~/RTff` is a stale copy; never point `--host` at it.
 
 ---

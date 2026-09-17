@@ -91,8 +91,8 @@ for _p in (str(ROOT), str(ROOT / "scripts")):
         sys.path.insert(0, _p)
 
 from aris_sixarm import (allocate, coordination, fleet, frames,  # noqa: E402
-                         layout, mounts, pwl, scene_check, sequence,
-                         stroke_api, writing)
+                         layout, mounts, paper, pwl, scene_check, selfcoll,
+                         sequence, stroke_api, transit, writing)
 from aris_sixarm.export import pathway                          # noqa: E402
 
 import recheck_timeline as rt                                   # noqa: E402
@@ -112,33 +112,83 @@ HOVER_DEFAULT = 0.030                     # m, the day plan's hover height
 OUT_DIR = ROOT / "out" / "day1"
 ARMS = (31, 71)
 
-# --- THE ONLY PLACE THIS FILE KNOWS ABOUT ANOTHER MACHINE ------------------
-# `send` delivers a pathway CSV to the box that runs the arms and prints the
-# one command that draws it.  Everything machine-specific is here, it is all
-# strings, and every one of them is overridable from the command line or the
-# environment — so a clone on the robot PC edits this block and nothing else.
-#
-# The values are `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md`
-# §1/§8: the OPERATOR is the Dell Precision 7960 on the direct NIC, the CSV
-# lands under `~/RTff/pathway_persist/<folder>/`, and the supervisor
-# `~/RTff/draw_rtff_supervised.sh <csv> <fmin> <fmax> <levels> <fresh|resume>`
-# is what turns it into motion (it runs the ladder gate, switches to impedance,
-# and calls `rtff_pathway_exec.py --csv ...`).  The arm is chosen by the
-# `ARM_ID` environment variable — it is the DDS domain, not a flag and not an
-# IP.  CHECK THE ADDRESS BEFORE THE FIRST SEND; the briefing also names a
-# RETIRED box at 192.168.50.4 whose `~/RTff` is a stale copy, and this file
-# must never point there.
-OPERATOR = dict(
-    host=os.environ.get("ARIS_OPERATOR", "diemut@192.168.50.2"),
-    store="~/RTff/pathway_persist",          # where the CSV lands
-    supervisor="~/RTff/draw_rtff_supervised.sh",
-    stack_check="~/RTff/aris_hold.sh",       # `aris_hold.sh stack <N>`
-    force=("1.0", "2.5", "5"),               # <fmin> <fmax> <levels>, the
-    #   executor's own defaults (--force-min/--force-max/--force-levels)
-    mode="fresh",                            # NOT `resume`: the runner decides
-    #   fresh vs resume from a progress file, and a new CSV dropped next to an
-    #   old checkpoint is picked up as a resume of the old one
-)
+# --- EVERYTHING SITE-SPECIFIC IS IN ONE TRACKED FILE --------------------
+# `config/site.json`, and nothing in this script hard-codes an address, an arm
+# id, a remote path or a dispatch flag.  It is printed at the top of every run,
+# `day1.py site` shows it, `day1.py site --set slot31.arm=97` edits it, and the
+# GUI reads and writes the same file — so reconfiguring the rig is editing one
+# JSON file and not hunting through Python.
+SITE_PATH = ROOT / "config" / "site.json"
+_SITE = {}
+
+
+def site(path=None, reload=False):
+    """The site configuration. -> dict.
+
+    `--site FILE` (or `$ARIS_SITE`) moves it; the default is
+    `config/site.json`, which is tracked, so a fresh clone on the robot PC has
+    today's facts in it and edits them in place.
+    """
+    global _SITE
+    if _SITE and not path and not reload:
+        return _SITE
+    p = Path(path or os.environ.get("ARIS_SITE") or SITE_PATH)
+    if not p.exists():
+        raise Refused(f"no site configuration at {p}.  It is tracked in this "
+                      f"repository; pass --site FILE if it lives elsewhere.")
+    try:
+        _SITE = json.loads(p.read_text())
+    except Exception as exc:
+        raise Refused(f"{p} is not readable JSON: {exc}")
+    _SITE["_path"] = str(p)
+    return _SITE
+
+
+def slot_cfg(slot):
+    """One slot's block, by the PLAN's slot id. -> dict."""
+    sl = (site().get("slots") or {}).get(str(int(slot)))
+    if sl is None:
+        raise Refused(f"slot {slot} is not in {site()['_path']} "
+                      f"(has {sorted((site().get('slots') or {}))})")
+    return sl
+
+
+def site_lines():
+    """The site configuration, as the lines every run prints. -> list[str]."""
+    st = site()
+    out = [f"SITE ({st['_path']}) — edit this file, not the script:",
+           f"  operator          {st['operator']['host']}"]
+    for k in sorted(st.get("slots") or {}, key=int):
+        sl = st["slots"][k]
+        m = sl.get("mounted")
+        out.append(
+            f"  slot {k:<3} ({sl.get('position', '?'):<12}) -> arm "
+            f"{sl.get('arm')}  ip {sl.get('ip')}  domain {sl.get('domain')}  "
+            f"paper_z {1000 * float(sl.get('paper_z') or 0.0):+.1f} mm  "
+            f"mounted {'UNCONFIRMED' if m is None else ('yes' if m else 'NO')}")
+    out.append("  dispatch env      "
+               + " ".join(f"{k}={v}" for k, v in
+                          (st.get("rtff_env") or {}).items()))
+    if st.get("notes"):
+        out += _wrap(st["notes"], "  ! ")
+    out.append("")
+    return out
+
+
+# WHAT THE DEPLOYED EXECUTOR ACTUALLY READS, AND IT IS NOT EVERYTHING WE WRITE.
+# Measured on the deployed branch in the 2026-09-17 session.  This sentence is
+# printed on the PASS line and written into the summary json and the manifest,
+# because the most expensive mistake available here is to believe the CSV's
+# joint columns are a joint reference the robot will follow.
+EXECUTOR_NOTE = (
+    "THE DEPLOYED IMPEDANCE EXECUTOR IGNORES q1..q7 AND t_s.  It follows the "
+    "TIP POSE of each row, paces by Cartesian arc length at RTFF_TRAVEL_SPEED "
+    "(0.02 m/s), holds the row's orientation without slerping between rows, "
+    "and latches its own nullspace — so the joints are NOT followed by the "
+    "deployed executor and the redundancy is resolved by the controller, not "
+    "by this file.  The joint columns and t_s are carried for a joint-capable "
+    "executor, for the velocity certificate, and as the record of what the "
+    "planner chose; on the deployed stack they are a CHECK, not a command.")
 
 # --- where yesterday's assets live on a machine with no out/ ----------------
 # `out/` is gitignored, so a fresh clone on the robot PC has none of it.  The
@@ -212,10 +262,11 @@ COVERAGE_GATE = 0.99
 # ===========================================================================
 def assumptions(arms=ARMS):
     """Every number this run stands on, printed first. -> list[str]."""
+    out = site_lines()
     fl = layout.FLEET_PROPOSED
     h = float(layout.LAYOUT_PROPOSED["h"])
     lat, ext = float(frames.PEN_LAT_HOLDER), float(frames.PEN_EXT_HOLDER)
-    out = [
+    out += [
         "ASSUMPTIONS (every one of these is a thing that can be wrong):",
         f"  mounting height   h = {h:.3f} m, inverted, plate underside above "
         f"the paper surface",
@@ -410,17 +461,34 @@ def _gate_numbers(rep, margin):
         ok=bool(rep["ok"]))
 
 
-def _rates(Q, dt):
-    """Peak |dq/dt| and |d2q/dt2| per joint. -> (7,), (7,)."""
+def _rates(Q, t):
+    """Peak |dq/dt| and |d2q/dt2| per joint over samples at times `t`.
+
+    -> (7,), (7,).  `t` need not be uniform — between CSV rows it is not: the
+    exporter collapses a run of IDENTICAL poses to one row, so a barrier hold
+    is one row and a real elapsed gap.  Charging that gap the nominal frame
+    period (which is what a uniform reading does) would invent a speed nothing
+    moves at.
+    """
     Q = np.asarray(Q, float).reshape(-1, 7)
+    t = np.asarray(t, float).reshape(-1)
     if len(Q) < 2:
         return np.zeros(7), np.zeros(7)
-    v = np.diff(Q, axis=0) / float(dt)
-    a = (np.diff(v, axis=0) / float(dt)) if len(v) > 1 else np.zeros((1, 7))
+    dt = np.diff(t)
+    ok = dt > 0
+    v = np.zeros((len(dt), 7))
+    v[ok] = np.diff(Q, axis=0)[ok] / dt[ok][:, None]
+    if len(v) > 1:
+        dtm = 0.5 * (dt[:-1] + dt[1:])
+        okm = dtm > 0
+        a = np.zeros((len(v) - 1, 7))
+        a[okm] = np.diff(v, axis=0)[okm] / dtm[okm][:, None]
+    else:
+        a = np.zeros((1, 7))
     return np.abs(v).max(axis=0), np.abs(a).max(axis=0)
 
 
-def speed_audit(prog, q_rows, fps=FPS, khz_dt=0.001):
+def speed_audit(t_s, q_rows, khz_dt=0.001):
     """Is the joint reference inside the FR3's velocity limits? -> dict.
 
     THE CSV IS A JOINT REFERENCE AND SOMEBODY IS GOING TO STREAM IT.  Every
@@ -431,35 +499,44 @@ def speed_audit(prog, q_rows, fps=FPS, khz_dt=0.001):
     about a third of the limit and anything near 1.0 is a bug upstream, not a
     tight day.
 
-    TWO READINGS, because they answer different questions:
-      `at_csv_rows`   consecutive CSV rows one frame period apart.  This is
-                      what a controller that consumes the file row by row at
-                      the planning rate sees.  The synthesized lift ramps at
-                      the ends of a stroke carry no time of their own and are
-                      charged the same period, which OVER-states their speed —
-                      conservative on purpose.
-      `at_1khz`       the programme's own waypoints linearly interpolated onto
-                      a 1 ms grid, which is the stream rate of the deployed
-                      stack.  Linear interpolation makes the velocity
-                      piecewise-constant, so the peak speed matches the
-                      waypoint intervals and the ACCELERATION is the step
-                      between two of them divided by a millisecond — an
-                      impulse, reported for information and not gated.
+    BOTH READINGS ARE TAKEN FROM THE FILE'S OWN `t_s` COLUMN, not from the
+    programme it came out of, because the file is the thing being certified:
+      `at_csv_rows`   consecutive rows, at the elapsed time between their own
+                      timestamps.  This is a controller that consumes the file
+                      row by row at the pacing it carries.
+      `at_1khz`       those same rows linearly interpolated onto a 1 ms grid,
+                      which is the stream rate of the deployed stack.  Linear
+                      interpolation makes the velocity piecewise-constant, so
+                      the peak speed matches the row intervals and the
+                      ACCELERATION is the step between two of them over a
+                      millisecond — an impulse, reported for information and
+                      not gated.
+
+    THE CERTIFICATE HOLDS AT THIS TIMING AND NO OTHER.  `rtff_pathway_exec`
+    paces by Cartesian arc length and can traverse the same path faster or
+    slower than the planner did; run it quicker and every number here scales
+    with it.  That sentence is in the json and in the manifest as well as here,
+    because the file outlives this process.
     """
     lim = np.asarray(frames.QD_MAX, float).reshape(7)
-    t = np.asarray(prog["t"], float)
-    Q = np.asarray(prog["q"], float).reshape(-1, 7)
-    grid = np.arange(0.0, float(t[-1]) + khz_dt, khz_dt) if len(t) > 1 \
-        else np.zeros(1)
-    Qi = np.column_stack([np.interp(grid, t, Q[:, j]) for j in range(7)])
+    t = np.asarray(t_s, float).reshape(-1)
+    Q = np.asarray(q_rows, float).reshape(-1, 7)
+    n_bad = int((np.diff(t) <= 0).sum()) if len(t) > 1 else 0
+    if len(t) > 1:
+        grid = np.arange(float(t[0]), float(t[-1]) + khz_dt, khz_dt)
+        Qi = np.column_stack([np.interp(grid, t, Q[:, j]) for j in range(7)])
+    else:
+        grid, Qi = t, Q
     out = {}
-    for key, (QQ, dt) in dict(
-            at_csv_rows=(np.asarray(q_rows, float).reshape(-1, 7), 1.0 / fps),
-            at_1khz=(Qi, khz_dt)).items():
-        v, a = _rates(QQ, dt)
+    for key, (QQ, tt) in dict(at_csv_rows=(Q, t), at_1khz=(Qi, grid)).items():
+        v, a = _rates(QQ, tt)
         frac = v / lim
+        dts = np.diff(np.asarray(tt, float)) if len(tt) > 1 else np.zeros(1)
         out[key] = dict(
-            dt_s=float(dt), n_samples=int(len(QQ)),
+            n_samples=int(len(QQ)),
+            dt_min_s=float(dts.min()), dt_max_s=float(dts.max()),
+            dt_median_s=float(np.median(dts)),
+            span_s=float(tt[-1] - tt[0]) if len(tt) > 1 else 0.0,
             peak_qd_rad_s=[float(x) for x in v],
             frac_of_limit=[float(x) for x in frac],
             worst_joint=int(np.argmax(frac)) + 1,
@@ -468,18 +545,103 @@ def speed_audit(prog, q_rows, fps=FPS, khz_dt=0.001):
             ok=bool((frac <= 1.0).all()))
     out.update(qd_max_rad_s=[float(x) for x in lim],
                qd_frac_target=float(writing.QD_FRAC),
-               ok=bool(out["at_csv_rows"]["ok"] and out["at_1khz"]["ok"]),
+               source="the CSV's own t_s column",
+               n_nonmonotonic_t=n_bad,
+               ok=bool(out["at_csv_rows"]["ok"] and out["at_1khz"]["ok"]
+                       and n_bad == 0),
                note="q1..q7 on every CSV row are THE PLANNER'S OWN redundancy "
                     "resolution for that waypoint — the configuration the "
                     "certified plan chose, carried alongside the Cartesian "
-                    "pose, not re-solved by the controller.")
+                    "pose, not re-solved by the controller.",
+               validity="THIS CERTIFICATE HOLDS AT THE FILE'S OWN t_s TIMING "
+                        "AND NO OTHER.  The executor paces by Cartesian arc "
+                        "length and may re-pace the path; run it faster than "
+                        "t_s says and every speed here scales with it.")
     return out
 
 
+#: the largest joint step the exporter may legitimately put between two rows.
+#: DERIVED, not chosen, and it is `tests/test_export_pathway.py`'s own
+#: constant: the conductor bounds its sub-step at `writing.MAX_DQ_FRAME` and
+#: the npz keeps every `stride`-th one.  Anything above it is a branch change.
+ROW_DQ_BOUND = 2 * writing.MAX_DQ_FRAME
+
+
+def _row_step_audit(rows, h_inv, spec, tool, hover=0.0):
+    """Is every pen-up run Cartesian-followable, and is the hover where it
+    should be?  -> dict.
+
+    TWO QUESTIONS THE DEPLOYED EXECUTOR MAKES INTO ONE.  It walks consecutive
+    non-draw rows as a Cartesian path at its own travel speed and latches its
+    own nullspace (ARIS2_CONTRACTS §1), so (a) a joint step between two travel
+    rows that no continuous IK branch could produce is a path it cannot follow,
+    and (b) the height it flies those rows at is whatever the rows say, since
+    with `RTFF_CONTACT_DESCEND=0` nothing measures the paper.
+
+    THE HOVER SIGN, FOR AN INVERTED ARM.  `fr3_link0`'s +z points DOWN in the
+    world on these two, so "above the paper" is a SMALLER base z: a 30 mm hover
+    is `z_paper - 0.030`, not plus.  The check is stated as
+    `z_paper - z_row`, which must come out POSITIVE and equal to the hover.
+    """
+    Q = np.asarray([[float(v) for v in r[11:18]] for r in rows], float)
+    kind = [r[2] for r in rows]
+    z = np.asarray([float(r[5]) for r in rows], float)
+    z_paper, _ = pathway.paper_z_base(pathway.base_transform(spec, h_inv))
+    draw = np.array([k == pathway.KIND_DRAW for k in kind])
+    trav = np.array([k != pathway.KIND_DRAW for k in kind])
+    if len(Q) < 2:
+        return dict(n_rows=len(Q), max_dq_rad=0.0, max_travel_dq_rad=0.0,
+                    bound_rad=float(ROW_DQ_BOUND), reconfigures=False)
+    dq = np.abs(np.diff(Q, axis=0)).max(axis=1)
+    pair = trav[:-1] & trav[1:]
+    tmax = float(dq[pair].max()) if pair.any() else 0.0
+    above = z_paper - z
+    out = dict(
+        n_rows=int(len(Q)), n_draw=int(draw.sum()), n_travel=int(trav.sum()),
+        max_dq_rad=float(dq.max()), max_travel_dq_rad=tmax,
+        bound_rad=float(ROW_DQ_BOUND),
+        n_over_bound=int((dq > ROW_DQ_BOUND).sum()),
+        reconfigures=bool(dq.max() > ROW_DQ_BOUND),
+        note="the executor walks consecutive non-draw rows as a CARTESIAN "
+             "path and latches its own nullspace, so a joint step no "
+             "continuous IK branch could produce is a path it cannot follow "
+             "(ARIS2_CONTRACTS §1)",
+        paper_z_base_m=float(z_paper),
+        tip_above_paper_base_m=dict(
+            draw_min=float(above[draw].min()) if draw.any() else None,
+            draw_max=float(above[draw].max()) if draw.any() else None,
+            travel_max=float(above[trav].max()) if trav.any() else None),
+        hover_sign_note="`z_paper - z_row` is the height ABOVE the paper: "
+                        "fr3_link0's +z points DOWN on an inverted arm, so a "
+                        "30 mm hover is z_paper - 0.030 in the base frame")
+    if hover > 0 and draw.any():
+        lo, hi = float(above[draw].min()), float(above[draw].max())
+        out["hover_check"] = dict(
+            asked_m=float(hover), row_min_m=lo, row_max_m=hi,
+            ok=bool(abs(lo - hover) < 0.002 and abs(hi - hover) < 0.002))
+    return out
+
+
+def _rows_line(r):
+    """The row-step verdict, as one line. -> str."""
+    h = r.get("hover_check")
+    return (f"  rows        {'OK  ' if not r['reconfigures'] else 'RECONFIG'} "
+            f"max dq/row {r['max_dq_rad']:.4f} rad (bound "
+            f"{r['bound_rad']:.4f}), across pen-up pairs "
+            f"{r['max_travel_dq_rad']:.4f}"
+            + (f"  hover rows {1000 * h['row_min_m']:.1f}.."
+               f"{1000 * h['row_max_m']:.1f} mm above paper "
+               f"({'OK' if h['ok'] else 'WRONG'})" if h else ""))
+
+
 def _speed_line(sa):
-    """The joint-speed verdict, as one line. -> str."""
+    """The joint-speed verdict, as one line. -> str.
+
+    It says "at t_s" because that is the whole qualification: the executor
+    paces by Cartesian arc length and may traverse the same path faster.
+    """
     c, k = sa["at_csv_rows"], sa["at_1khz"]
-    return (f"  joint speed {'OK ' if sa['ok'] else 'OVER'}  "
+    return (f"  joint speed {'OK ' if sa['ok'] else 'OVER'} at t_s  "
             f"rows {100 * c['worst_frac']:5.1f} % of limit (worst j"
             f"{c['worst_joint']})  1 kHz {100 * k['worst_frac']:5.1f} % (worst j"
             f"{k['worst_joint']})  peak qdd {max(k['peak_qdd_rad_s2']):.0f} "
@@ -499,24 +661,92 @@ def _one_liner(name, arm, g, dur, certified):
             f"joint {g['min_joint_margin_rad']:.4f}  {dur:.2f} s")
 
 
-def _write_csv(pw, out_dir, stem):
+# --- the t_s column -------------------------------------------------------
+# THE EXPORTER'S CSV CARRIES NO CLOCK.  `CSV_COLUMNS` is stroke_idx, wp_idx,
+# kind, the pose, intensity and q1..q7 — where the arm is and how it is folded,
+# and nothing about when.  Pete asked for the planner's own pacing in the file,
+# so `t_s` is APPENDED AS THE LAST COLUMN: a reader that indexes by position
+# sees exactly the file it saw before, and one that reads the header gains a
+# clock.  `aris_sixarm/export/pathway.py` is NOT edited for this — the times
+# are reconstructed here from the exporter's own functions, and the
+# reconstruction is checked against the row count before anything is written.
+CSV_COLUMNS_T = list(pathway.CSV_COLUMNS) + ["t_s"]
+T_S_NOTE = (
+    "t_s is seconds from the start of the arm's programme on the SAME CLOCK as "
+    "the schedule npz (frame k of the timeline is k/fps), i.e. the planner's "
+    "own pacing. It is the LAST column, appended after the v1 contract's "
+    "columns, so a positional reader of the first 18 is unaffected. Rows the "
+    "exporter SYNTHESIZES (the lift_start / lift_end ramps it solves when the "
+    "timeline gives no lift of its own) are not in that clock and are "
+    "extrapolated at the nominal frame period; `n_synth_rows` says how many "
+    "there are, and it is 0 for a programme that parks at both ends. THE "
+    "EXECUTOR MAY RE-PACE THE PATH: rtff_pathway_exec paces by Cartesian arc "
+    "length, so t_s is what the planner intended and not a promise about the "
+    "wall clock — the joint-velocity certificate in the summary json holds at "
+    "THIS timing and scales with any other.")
+
+
+def _row_times(prog, z, arm, spec, tool, h_inv, n_rows, decimate_m=0.0):
+    """Seconds from the start of the programme, per CSV row. -> (N,) or None.
+
+    `build_arm_pathway` emits, in this order: the synthesized approach ramp,
+    one row per frame `_emit_frames` kept, and the synthesized retract ramp.
+    Calling `_emit_frames` again with the same arguments reproduces that list
+    exactly — it is a deterministic function of the frames — so the k-th
+    middle row is timeline frame `frame_idx[k]` and its time is `k/fps`.
+
+    -> (times, n_synthesized_rows), or None if the reconstruction does not
+    account for every row — the only way this can be wrong, and therefore
+    checked rather than trusted: the caller refuses to write a file it cannot
+    timestamp.
+    """
+    pen_lat, pen_ext = pathway.tool_offsets(tool)
+    z_paper, tilt_deg = pathway.paper_z_base(
+        pathway.base_transform(spec, h_inv))
+    Q, SEG, _ = pathway._arm_frames(prog, z, arm)
+    frame_idx, _drw, ends, _notes = pathway._emit_frames(
+        Q, SEG, pen_ext, pen_lat, z_paper, pathway.LIFT_M,
+        window=int(round(pathway.END_WINDOW_S * prog.fps)),
+        decimate_m=decimate_m)
+    pre, post = len(ends["pre"]), len(ends["post"])
+    if pre + len(frame_idx) + post != int(n_rows):
+        return None
+    if not len(frame_idx):
+        return np.zeros(0), 0
+    dt = 1.0 / float(prog.fps)
+    mid = np.asarray(frame_idx, float) * dt
+    t_pre = mid[0] - dt * np.arange(pre, 0, -1.0)
+    t_post = mid[-1] + dt * np.arange(1.0, post + 1)
+    return np.concatenate([t_pre, mid, t_post]), pre + post
+
+
+def _write_csv(pw, out_dir, stem, times=None, t_note=None):
     """`export.pathway.write_pathway` with this day's file names.
 
     The rows and the manifest are the exporter's own — `build_arm_pathway` has
     already run the contract's FK gate over the formatted text — and the only
-    thing that differs is `<stem>_<arm>.csv` against the exporter's
-    `<name>_arm<arm>.csv`, which is what the day asks for.
+    things that differ are `<stem>_<arm>.csv` against the exporter's
+    `<name>_arm<arm>.csv`, which is what the day asks for, and the appended
+    `t_s` column (see `T_S_NOTE`).  The manifest is deep-copied before the
+    extra keys go in, so the exporter's own record is not mutated.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / f"{stem}_{pw.arm_id}.csv"
     man_path = out_dir / f"{stem}_{pw.arm_id}.manifest.json"
+    cols = list(pathway.CSV_COLUMNS) if times is None else list(CSV_COLUMNS_T)
+    rows = (list(pw.rows) if times is None
+            else [list(r) + [f"{float(t):.6f}"]
+                  for r, t in zip(pw.rows, times)])
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(pathway.CSV_COLUMNS)
-        w.writerows(pw.rows)
-    man = dict(pw.manifest)
+        w.writerow(cols)
+        w.writerows(rows)
+    man = json.loads(json.dumps(pw.manifest, default=str))
     man["csv"] = csv_path.name
+    if times is not None:
+        man.setdefault("format", {})["columns"] = cols
+        man["t_s"] = dict(t_note or {})
     man_path.write_text(json.dumps(man, indent=1, default=str) + "\n")
     return csv_path, man_path
 
@@ -669,7 +899,27 @@ def plan_line(arm, p0, p1, name="line", hover=0.0, out_dir=OUT_DIR,
         z_mode=("fk" if hover > 0 else "plane"),
         h_inv=float(pj["h_inv"]), program_json=pj,
         source_paths=dict(schedule=str(npz_path), program=str(pj_path)))
-    csv_path, man_path = _write_csv(pw, out_dir, name)
+    # the planner's own pacing, as the file's last column — see `_row_times`
+    got = _row_times(fp, z, arm, spec, os.environ["ARIS_TOOL"],
+                     float(pj["h_inv"]), len(pw.rows))
+    if got is None:
+        for p in (npz_path, pj_path, out_dir / f"{stem}_strokes.json"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        raise Refused(f"the {len(pw.rows)} CSV rows could not be matched to "
+                      f"the timeline's frames, so the t_s column would be a "
+                      f"guess.  Nothing written.")
+    t_s, n_synth = got
+    sa = speed_audit(t_s, [[float(v) for v in row[11:18]] for row in pw.rows])
+    csv_path, man_path = _write_csv(
+        pw, out_dir, name, times=t_s,
+        t_note=dict(note=T_S_NOTE, fps=float(FPS), n_rows=int(len(t_s)),
+                    n_synth_rows=int(n_synth), t_first_s=float(t_s[0]),
+                    t_last_s=float(t_s[-1]), programme_duration_s=dur,
+                    joint_speed=sa))
+    summary["joint_speed"] = sa
     summary["files"] = dict(npz=str(npz_path), csv=str(csv_path),
                             manifest=str(man_path), program=str(pj_path))
     summary["csv"] = dict(n_rows=pw.stats["n_rows"],
@@ -678,7 +928,11 @@ def plan_line(arm, p0, p1, name="line", hover=0.0, out_dir=OUT_DIR,
                           draw_length_m=pw.stats["draw_length_m"],
                           paper_z_base_m=pw.stats["paper_z_base_m"],
                           max_row_dq_rad=pw.stats["max_row_dq_rad"],
-                          joint_columns=True)
+                          joint_columns=True,
+                          columns=CSV_COLUMNS_T,
+                          t_s=dict(first_s=float(t_s[0]),
+                                   last_s=float(t_s[-1]),
+                                   n_synth_rows=int(n_synth), note=T_S_NOTE))
     (out_dir / f"{stem}.json").write_text(
         json.dumps(summary, indent=1, default=str) + "\n")
     summary["files"]["summary"] = str(out_dir / f"{stem}.json")
@@ -912,7 +1166,7 @@ def _plan_programme(spec, unordered, h_inv, pen_ext, opts, verbose=True,
 
 def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
               word=WORD, name=None, hover=0.0, out_dir=OUT_DIR, write=True,
-              verbose=True, allow_partial=False):
+              verbose=True, allow_partial=False, paper_z=0.0):
     """Plan, certify and (if it certifies) write the SOLO word.  -> dict.
 
     Everything `plan_line` does, thirteen times, with `sequence` choosing the
@@ -930,7 +1184,12 @@ def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
                       f"(has {sorted(fl)})")
     spec = fl[arm]
     pen_real = float(frames.ext_of(None))
-    pen_plan = pen_real + float(hover)
+    # THE HOVER AND THE PAPER CORRECTION ARE THE SAME LEVER, and it is the pen.
+    # A pen `d` LONGER in the plan puts the real tip `d` ABOVE the modelled
+    # paper plane (measured: --hover 0.030 reads +27 to +29 mm).  So a paper
+    # surface that really sits `paper_z` ABOVE where the model puts it is
+    # corrected by exactly the same `paper_z` of extra planned pen.
+    pen_plan = pen_real + float(hover) + float(paper_z)
     polys, info, x0, x1, y = _word_geometry(spec, width, height, dy, word)
     if verbose:
         print(f"  {word!r}: {len(polys)} single-stroke Hershey polylines, "
@@ -1073,6 +1332,8 @@ def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
     # THE HOVER'S WHOLE POINT, AS A NUMBER.  The plan used a 30 mm longer pen;
     # the certificate above did not, so this is the tip's real height above the
     # paper over the whole programme, measured by the independent checker.
+    summary["paper_z_m"] = float(paper_z)
+    summary["executor"] = EXECUTOR_NOTE
     if hover > 0:
         summary["hover"] = dict(
             asked_m=float(hover),
@@ -1123,31 +1384,79 @@ def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
         h_inv=float(pj["h_inv"]), program_json=pj,
         source_paths=dict(schedule=str(npz_path), program=str(pj_path)))
 
-    # ---- 5. THE JOINT REFERENCE'S OWN SPEED, before the CSV exists ---------
+    # ---- 5. THE CLOCK, and THE JOINT SPEED ON IT, before the CSV exists ----
     # The last gate, and the only one about the file rather than the scene.  A
     # reference that asks a joint for more than the FR3 will give is not a file
     # anybody should be able to stream, so it is refused here and the three
-    # files already written are taken back with it.
-    sa = speed_audit(prog, [[float(v) for v in row[11:18]] for row in pw.rows])
-    summary["joint_speed"] = sa
-    if verbose:
-        print(_speed_line(sa))
-    if not sa["ok"]:
+    # files already written are taken back with it.  The times come first
+    # because the speed is measured ON them.
+    def _undo():
         for p in (npz_path, pj_path, out_dir / f"{stem}_strokes.json"):
             try:
                 p.unlink()
             except OSError:
                 pass
+
+    got = _row_times(fp, z, arm, spec, os.environ["ARIS_TOOL"],
+                     float(pj["h_inv"]), len(pw.rows))
+    if got is None:
+        _undo()
+        raise Refused(
+            f"the {len(pw.rows)} CSV rows could not be matched to the "
+            f"timeline's frames, so the t_s column would be a guess.  Nothing "
+            f"written.")
+    t_s, n_synth = got
+    q_rows = [[float(v) for v in row[11:18]] for row in pw.rows]
+    sa = speed_audit(t_s, q_rows)
+    summary["joint_speed"] = sa
+    if verbose:
+        print(_speed_line(sa))
+    if not sa["ok"]:
+        _undo()
         c, k = sa["at_csv_rows"], sa["at_1khz"]
         raise Refused(
-            f"the joint reference EXCEEDS the FR3 velocity limit: "
-            f"joint {c['worst_joint']} reaches "
+            f"the joint reference EXCEEDS the FR3 velocity limit at its own "
+            f"t_s pacing: joint {c['worst_joint']} reaches "
             f"{100 * c['worst_frac']:.1f} % of its limit between CSV rows and "
             f"joint {k['worst_joint']} {100 * k['worst_frac']:.1f} % at 1 kHz "
             f"(limits {sa['qd_max_rad_s']} rad/s, pacer target "
-            f"{100 * sa['qd_frac_target']:.0f} %).  Nothing written.")
+            f"{100 * sa['qd_frac_target']:.0f} %"
+            + (f"; {sa['n_nonmonotonic_t']} row times do not increase"
+               if sa["n_nonmonotonic_t"] else "")
+            + ").  Nothing written.")
 
-    csv_path, man_path = _write_csv(pw, out_dir, name)
+    # ---- 6. IS EVERY PEN-UP RUN A CARTESIAN-FOLLOWABLE PATH? --------------
+    # The deployed executor walks consecutive non-draw rows as a CARTESIAN path
+    # (ARIS2_CONTRACTS §1) and latches its own nullspace, so a transit that
+    # reconfigures the arm between two rows is one it cannot follow: the tip
+    # would have to jump branches with nothing telling it to.  This measures
+    # the joint step the file actually asks for, per row and across pen-up
+    # pairs, against the conductor's own per-frame bound.
+    summary["rows"] = _row_step_audit(pw.rows, float(pj["h_inv"]),
+                                      spec, os.environ["ARIS_TOOL"],
+                                      hover=float(hover))
+    if verbose:
+        print(_rows_line(summary["rows"]))
+    if summary["rows"]["reconfigures"]:
+        _undo()
+        raise Refused(
+            f"a pen-up run in this file RECONFIGURES the arm: "
+            f"{summary['rows']['max_travel_dq_rad']:.3f} rad between two "
+            f"consecutive travel rows (bound "
+            f"{summary['rows']['bound_rad']:.3f}).  The deployed executor "
+            f"walks those rows as a Cartesian path and latches its own "
+            f"nullspace, so it cannot follow a branch change.  Nothing "
+            f"written.")
+
+    t_note = dict(
+        note=T_S_NOTE, fps=float(FPS), n_rows=int(len(t_s)),
+        n_synth_rows=int(n_synth),
+        t_first_s=float(t_s[0]), t_last_s=float(t_s[-1]),
+        programme_duration_s=float(dur), joint_speed=sa,
+        executor=EXECUTOR_NOTE, rows=summary["rows"],
+        park=park_pose(arm))
+    csv_path, man_path = _write_csv(pw, out_dir, name, times=t_s,
+                                    t_note=t_note)
     timing["export_s"] = time.perf_counter() - t0
     summary["files"] = dict(npz=str(npz_path), csv=str(csv_path),
                             manifest=str(man_path), program=str(pj_path))
@@ -1169,7 +1478,11 @@ def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
                                    "controller rather than thrown away and "
                                    "re-solved there",
                           q_limits_rad_s=[float(v) for v in frames.QD_MAX],
-                          q_peak_frac_of_limit=sa["at_csv_rows"]["worst_frac"])
+                          q_peak_frac_of_limit=sa["at_csv_rows"]["worst_frac"],
+                          columns=CSV_COLUMNS_T,
+                          t_s=dict(first_s=float(t_s[0]),
+                                   last_s=float(t_s[-1]),
+                                   n_synth_rows=int(n_synth), note=T_S_NOTE))
     (out_dir / f"{stem}.json").write_text(
         json.dumps(summary, indent=1, default=str) + "\n")
     summary["files"]["summary"] = str(out_dir / f"{stem}.json")
@@ -1202,8 +1515,16 @@ def cmd_word_arm(a):
     """`word --arm N`: the solo word, planned and certified here and now."""
     arm = int(a.arm)
     hov = float(a.hover or 0.0)
+    # THE MEASURED PAPER OFFSET LIVES IN THE SITE FILE, so a run that does not
+    # say otherwise uses the number somebody measured with a ruler and wrote
+    # down, rather than silently planning against the nominal plane.
+    pz = (float(a.paper_z) if a.paper_z
+          else float(slot_cfg(arm).get("paper_z") or 0.0))
     for ln in assumptions([arm]):
         print(ln)
+    if pz:
+        print(f"  --paper-z {1000 * pz:+.1f} mm: the real paper sits that far "
+              f"ABOVE the modelled plane, and the whole plan is lifted by it")
     print(f"arm {arm}: the word {WORD!r} alone, "
           + (f"HOVER {1000 * hov:.0f} mm above the paper — no ink, no contact"
              if hov > 0 else "ON THE PAPER"))
@@ -1212,7 +1533,8 @@ def cmd_word_arm(a):
     t0 = time.perf_counter()
     r = plan_word(arm, width=float(a.width), height=float(a.height),
                   dy=float(a.dy), name=a.name, hover=hov,
-                  out_dir=Path(a.out), allow_partial=bool(a.allow_partial))
+                  out_dir=Path(a.out), allow_partial=bool(a.allow_partial),
+                  paper_z=pz)
     s = r["summary"]
     print()
     print(_word_one_liner(s, True))
@@ -1454,6 +1776,321 @@ def cmd_word(a):
 
 
 # ===========================================================================
+# `site` — show and edit the one file everything site-specific lives in
+# ===========================================================================
+def _set_site(st, dotted):
+    """`slot31.arm=97` -> the edited dict. -> (path list, old, new).
+
+    `slot31` and `slot71` are spelled the way a person types them; everything
+    else is the literal JSON path.  The value is parsed as JSON when it can be
+    (so `97`, `true`, `null`, `0.003` keep their types) and kept as a string
+    when it cannot.
+    """
+    key, _, raw = str(dotted).partition("=")
+    if not _:
+        raise Refused(f"--set wants KEY=VALUE; got {dotted!r}")
+    parts = []
+    for k in key.strip().split("."):
+        if k.startswith("slot") and k[4:].isdigit():
+            parts += ["slots", k[4:]]
+        else:
+            parts.append(k)
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError:
+        val = raw
+    node = st
+    for k in parts[:-1]:
+        if k not in node or not isinstance(node[k], dict):
+            raise Refused(f"--set {key}: {'.'.join(parts[:parts.index(k)+1])} "
+                          f"is not in the site file")
+        node = node[k]
+    old = node.get(parts[-1], "<absent>")
+    node[parts[-1]] = val
+    return parts, old, val
+
+
+def cmd_site(a):
+    st = site(a.site) if getattr(a, "site", None) else site()
+    path = Path(st["_path"])
+    if a.set:
+        changed = []
+        for one in a.set:
+            parts, old, val = _set_site(st, one)
+            changed.append(f"  {'.'.join(parts)}: {old!r} -> {val!r}")
+        doc = {k: v for k, v in st.items() if k != "_path"}
+        doc["_updated"] = __import__("datetime").date.today().isoformat()
+        path.write_text(json.dumps(doc, indent=1) + "\n")
+        print(f"edited {path}")
+        for ln in changed:
+            print(ln)
+        print()
+        site(reload=True)
+    for ln in site_lines():
+        print(ln)
+    if not a.set:
+        print("edit it:  day1.py site --set slot31.arm=97 "
+              "--set slot31.mounted=true")
+        print("          day1.py site --set slot71.paper_z=0.003")
+        print("          day1.py site --set operator.host=USER@HOST")
+    return 0
+
+
+# ===========================================================================
+# `park` — the pose every file starts at, and a certified way back to it
+# ===========================================================================
+PARK_DOC = """The park pose, and a certified joint path to it.
+
+WHY THIS EXISTS.  The deployed impedance executor's FIRST move is an
+UNCERTIFIED straight ramp from wherever the arm is standing to row 0 of the
+file, and no gate in this repository has anything to say about it.  `park`
+answers the two questions that ramp raises:
+
+  day1.py park --arm 31
+      prints the park joint vector and the park tip pose in fr3_link0 — the
+      pose to drive the arm to, under position control, before streaming
+      anything (the operator's go_start_pos.py).
+
+  day1.py park --arm 31 --from-q <the arm's MEASURED joints>
+      plans a collision-free joint path from that configuration to the park
+      with the repo's own C-space RRT (`aris_sixarm.transit.plan` — the same
+      tier `paper.route` falls back to), against the static scene, the seam
+      bars and the other five arms standing at their parks, certifies it with
+      `scene_check` (self, frame, paper, inter-arm) and writes
+      out/day1/park_<arm>.{npz,csv,json}.
+
+READ THIS BEFORE BELIEVING THE CSV.  The deployed impedance executor FOLLOWS
+TIP POSES ONLY and latches its own nullspace, so this joint path is certified
+FOR A JOINT-CAPABLE EXECUTOR and is, on the deployed stack, a CHECK: it says a
+collision-free way from here to the park exists and what it costs, and it is
+the thing to compare the Cartesian ramp against.  THE WAY TO ACTUALLY GET THERE
+TODAY IS THE POSITION-CONTROL MOVE (go_start_pos.py), not this file."""
+
+PARK_DENSE = 65          # configurations per RRT leg handed to scene_check
+
+
+def _travel_rows(spec, Q, tool, h_inv, intensity=1.0):
+    """A joint path -> pen-up `travel` CSV rows + their clock. -> (rows, t_s).
+
+    Built with the exporter's OWN row formatter and FK so the file is the same
+    text the pathway exporter would write, and paced the way `writing` paces a
+    pen-up move — `QD_FRAC` of the joint-velocity limit — so `t_s` means the
+    same thing here as it does in a drawing file.
+    """
+    pen_lat, pen_ext = pathway.tool_offsets(tool)
+    Q = np.asarray(Q, float).reshape(-1, 7)
+    T, tip = pathway._tip_of(Q, pen_ext, pen_lat)
+    quats = pathway.quats_from_R(T[:, :3, :3])
+    rows = [pathway._fmt_row(0, i, pathway.KIND_TRAVEL, tip[i], quats[i],
+                             intensity, Q[i]) for i in range(len(Q))]
+    step = np.abs(np.diff(Q, axis=0)) / (np.asarray(frames.QD_MAX, float)
+                                         * writing.QD_FRAC)
+    dt = np.maximum(step.max(axis=1), 1e-4) if len(Q) > 1 else np.zeros(0)
+    return rows, np.concatenate([[0.0], np.cumsum(dt)])
+
+
+def plan_park(arm, q_from=None, out_dir=OUT_DIR, write=True, verbose=True,
+              dense=PARK_DENSE):
+    """The park pose, or a certified path to it from `q_from`. -> dict."""
+    arm = int(arm)
+    fl, h = rt.fleet_for(None, None, "uniform")
+    if arm not in fl:
+        raise Refused(f"arm {arm} is not in rig {os.environ['ARIS_RIG']!r} "
+                      f"(has {sorted(fl)})")
+    spec = fl[arm]
+    pose = park_pose(arm)
+    if q_from is None:
+        return dict(summary=dict(arm=arm, park=pose, path=None), report=None)
+
+    q0 = np.asarray(q_from, float).reshape(7)
+    q1 = np.asarray(spec.q_seed, float).reshape(7)
+    pen = float(frames.ext_of(None))
+    # THE SAME TIER `paper.route` FALLS BACK TO, with the same floors it hands
+    # in: the static scene (which is where the seam bars and the neighbours'
+    # base columns come from — `paper.static_boxes`), the paper, and the arm's
+    # own metal.  Nothing about the search is new here.
+    boxes = paper.static_boxes(spec)
+    # THE FLOORS ARE CLAMPED TO THE ENDPOINTS, exactly as `paper.route` clamps
+    # them, and that is not a detail: the park itself stands closer to the
+    # frame than `FRAME_FLOOR`, so a search held to the nominal floor has an
+    # infeasible GOAL and returns None for every start.  `effective_*` lower
+    # the floor to whatever the two ends already achieve, which is the only
+    # question a transit can be asked (`paper.effective_static_floor` explains
+    # why the clamp is not optional).
+    tip_fl, chain_fl = paper.effective_floors(spec, q0, q1, pen, h,
+                                              paper.TIP_CLEAR,
+                                              paper.CHAIN_CLEAR)
+    static_fl = (paper.effective_static_floor(spec, q0, q1, pen, h, boxes=boxes)
+                 if boxes and paper.STATIC_SAFE else -np.inf)
+    self_fl = (paper.self_floor(spec, q0, q1, pen) if paper.SELF_SAFE
+               else -np.inf)
+    t0 = time.perf_counter()
+    vias = transit.plan(spec, q0, q1, pen_ext=pen, h_inv=h, boxes=boxes,
+                        chain_floor=chain_fl, tip_floor=tip_fl,
+                        static_floor=static_fl, self_floor=self_fl)
+    t_rrt = time.perf_counter() - t0
+    if vias is None:
+        raise Refused(
+            f"no collision-free joint path from that configuration to arm "
+            f"{arm}'s park: the C-space RRT spent its budget "
+            f"({transit.ATTEMPTS} attempts x {transit.TIME_BUDGET:g} s, "
+            f"{transit.MAX_NODES} nodes) and found none.  Either the start "
+            f"pose is itself in collision — check it against the robot state "
+            f"you read it from — or the way out is narrow.  Nothing written.")
+    knots = [q0] + [np.asarray(v, float).reshape(7) for v in vias] + [q1]
+    Q = np.vstack([paper.line_samples(u, v, dense)
+                   for u, v in zip(knots[:-1], knots[1:])])
+    # drop the duplicated join between legs
+    keep = np.concatenate([[True], (np.abs(np.diff(Q, axis=0)).max(axis=1)
+                                    > 1e-12)])
+    Q = Q[keep]
+    M = len(Q)
+
+    rows, t_s = _travel_rows(spec, Q, os.environ["ARIS_TOOL"], h)
+    dq = np.abs(np.diff(Q, axis=0)).max(axis=1) if M > 1 else np.zeros(1)
+
+    # ---- the independent check, the other five arms at their parks --------
+    qt = {a: (Q if a == arm else np.tile(np.asarray(fl[a].q_seed, float),
+                                         (M, 1))) for a in sorted(fl)}
+    margin = float(coordination.PAIR_MARGIN)
+    dt = float(t_s[-1]) / max(M - 1, 1) if M > 1 else DT
+    rep = scene_check.check_timeline(
+        qt, dt, margin, programs=None, h_inv=h,
+        pen_ext={a: pen for a in sorted(fl)}, sub=SUB, verbose=False,
+        fleet=fl, drawing={a: np.zeros(M, bool) for a in sorted(fl)})
+    g = _gate_numbers(rep, margin)
+    if verbose:
+        print(f"  RRT: {len(vias)} vias, {M} configurations, "
+              f"{float(t_s[-1]):.2f} s at {100 * writing.QD_FRAC:.0f} % of the "
+              f"joint limit ({t_rrt:.2f} s of search)")
+        for ln in rt.summarise(rep, margin):
+            print("  " + ln)
+    if not rep["ok"]:
+        raise Refused(
+            f"the path to the park does NOT certify (frame "
+            f"{rep.get('frame_failed')}, paper {rep.get('paper_failed')}, "
+            f"column {rep.get('column_failed')}, self {rep.get('self_failed')},"
+            f" min inter-arm {1000 * rep['min_clearance']:.1f} mm against a "
+            f"{1000 * margin:.0f} mm gate).  Nothing written.")
+
+    sa = speed_audit(t_s, Q)
+    summary = dict(
+        arm=arm, certified=True, kind="park",
+        park=pose, from_q=[float(v) for v in q0],
+        rrt=dict(n_vias=len(vias), n_configs=int(M), wall_s=float(t_rrt),
+                 step_s=float(transit.STEP), attempts=int(transit.ATTEMPTS),
+                 max_nodes=int(transit.MAX_NODES),
+                 static_floor_m=float(static_fl),
+                 self_floor_m=float(self_fl),
+                 chain_floor_m=float(chain_fl),
+                 tip_floor_m=float(tip_fl),
+                 floors_note="clamped to the two endpoints the way "
+                             "`paper.route` clamps them; the nominal floors "
+                             "are TIP_CLEAR/CHAIN_CLEAR/FRAME_FLOOR/"
+                             "SELF_PLAN_MARGIN"),
+        duration_s=float(t_s[-1]),
+        rows=dict(n_rows=int(M), max_dq_rad=float(dq.max()),
+                  bound_rad=float(ROW_DQ_BOUND),
+                  reconfigures=bool(dq.max() > ROW_DQ_BOUND),
+                  n_over_bound=int((dq > ROW_DQ_BOUND).sum())),
+        joint_speed=sa,
+        rig=os.environ["ARIS_RIG"], tool=os.environ["ARIS_TOOL"], h_m=float(h),
+        seam_bars=dict(on=bool(mounts.SEAM_POSTS_ON), source=mounts.SEAM_SOURCE),
+        frozen_arms={str(a): [float(v) for v in fl[a].q_seed]
+                     for a in sorted(fl) if a != arm},
+        gates=g, executor=EXECUTOR_NOTE,
+        what_this_is=(
+            "A JOINT path, certified for a JOINT-CAPABLE executor.  The "
+            "deployed impedance executor follows tip poses only and latches "
+            "its own nullspace, so on that stack this file is a CHECK — it "
+            "says a collision-free way from here to the park exists and what "
+            "it costs — and the way to actually get there today is the "
+            "position-control move (go_start_pos.py)."))
+    if not write:
+        return dict(summary=summary, report=rep, rows=rows, t_s=t_s, Q=Q)
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"park_{arm}"
+    seg = {a: np.full(M, -1, np.int64) for a in sorted(fl)}
+    npz_path = out_dir / f"{stem}.npz"
+    np.savez_compressed(npz_path, **_payload(qt, seg, {a: pen for a in fl},
+                                             margin,
+                                             float(rep["min_clearance"]), stem))
+    csv_path = out_dir / f"{stem}.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(CSV_COLUMNS_T)
+        w.writerows([list(r) + [f"{float(t):.6f}"] for r, t in zip(rows, t_s)])
+    summary["files"] = dict(npz=str(npz_path), csv=str(csv_path),
+                            summary=str(out_dir / f"{stem}.json"))
+    (out_dir / f"{stem}.json").write_text(
+        json.dumps(summary, indent=1, default=str) + "\n")
+    return dict(summary=summary, report=rep, rows=rows, t_s=t_s, Q=Q,
+                csv=csv_path)
+
+
+def _q7(text, what="--from-q"):
+    parts = [p for p in str(text).replace(",", " ").split() if p]
+    if len(parts) != 7:
+        raise Refused(f"{what} wants SEVEN joint values in radians "
+                      f"(q1,...,q7); got {len(parts)}")
+    try:
+        return np.array([float(v) for v in parts], float)
+    except ValueError:
+        raise Refused(f"{what} wants seven numbers; got {text!r}")
+
+
+def cmd_park(a):
+    arm = int(a.arm)
+    pose = park_pose(arm)
+    print(f"ARM {arm} PARK POSE — where the certified PROGRAMME starts and "
+          f"ends, and the pose")
+    print(f"to drive the arm to under position control (go_start_pos.py) "
+          f"BEFORE streaming")
+    print(f"anything: the executor's first move is an UNCERTIFIED straight "
+          f"ramp from wherever")
+    print(f"the arm is standing to row 0 of the file.")
+    print(f"MEASURED, AND IT MATTERS: the CSV does NOT begin at the park.  "
+          f"The exporter starts")
+    print(f"the file at the first frame whose tip is 50 mm clear of the paper, "
+          f"walking back")
+    print(f"from the first ink — so row 0 is part-way through the park->hover "
+          f"leg, about 0.6 m")
+    print(f"and 4 rad from the park on the day-1 word files.  `send` prints "
+          f"that gap.")
+    for ln in _park_lines(arm):
+        print(ln)
+    if not a.from_q:
+        print()
+        print("  --from-q q1,...,q7  (the arm's MEASURED joints, read off the "
+              "robot state)")
+        print("  plans and certifies a collision-free joint path from there "
+              "to this pose.")
+        return 0
+    q0 = _q7(a.from_q)
+    print()
+    print(f"  from q  = " + ", ".join(f"{v:+.6f}" for v in q0))
+    print(f"  max joint difference from the park: "
+          f"{float(np.abs(q0 - np.asarray(pose['q'], float)).max()):.4f} rad")
+    r = plan_park(arm, q0, out_dir=Path(a.out))
+    s = r["summary"]
+    print()
+    print(_one_liner("park", arm, s["gates"], s["duration_s"], True)
+          + f"  {s['rrt']['n_configs']} rows  {s['rrt']['n_vias']} vias")
+    print(_speed_line(s["joint_speed"]))
+    print(f"  max dq/row {s['rows']['max_dq_rad']:.4f} rad (bound "
+          f"{s['rows']['bound_rad']:.4f})"
+          + ("  ! RECONFIGURES" if s["rows"]["reconfigures"] else ""))
+    print(f"  wrote {s['files']['csv']}")
+    print(f"        {s['files']['summary']}")
+    print()
+    for ln in _wrap(s["what_this_is"], "  "):
+        print(ln)
+    return 0
+
+
+# ===========================================================================
 # `send` — the interface to the arms.  File in, one command out.
 # ===========================================================================
 SEND_DOC = """Deliver ONE pathway CSV to the operator box and print the ONE
@@ -1461,41 +2098,121 @@ command that draws it.  This machine never moves an arm: `send` copies the file
 with scp and then PRINTS the supervisor command; `--live` is the only way it is
 ever run over ssh, and `--dry-run` copies nothing at all.
 
-The chain, from `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md`:
+THE CHAIN, as confirmed on the deployed branches in the 2026-09-17 hardware
+session.  THERE IS NO RUNNER FOR ARM 31 OR 71: the supervisor takes the CSV as
+its first positional argument and that is the whole interface.
 
     out/day1/<name>_<N>.csv
-      -- scp -->  OPERATOR  ~/RTff/pathway_persist/<folder>/<name>_<N>.csv
-      -- ARM_ID=<N> ~/RTff/draw_rtff_supervised.sh <csv> <fmin> <fmax>
-                    <levels> fresh
+      -- scp -->  <operator.host>:<remote_csv>, both from config/site.json
+      -- ssh host 'RTFF_CONTACT_DESCEND=0 RTFF_FORCE_SIGN=1
+                   RTFF_TRAVEL_SPEED=0.02 RTFF_MODE=observe
+                   RTFF_DEPART_LIFT=0 ARM_ID=<N>
+                   bash ~/RTff/draw_rtff_supervised.sh <csv> 1.0 2.5 5 fresh'
             -> ladder gate (position control)   [SKIPPED on inverted arms]
             -> MoveIt to the start (position control)
             -> pen_switch down  (cartesian_impedance_controller)
             -> rtff_pathway_exec.py --csv <csv>   ... the drawing
             -> pen_switch up    (fr3_arm_controller)
 
-WHAT THE BRIEFING DOES NOT SAY, AND THIS FILE THEREFORE DOES NOT INVENT.  It
-names `run_forever_arm13.sh` / `run_forever_arm17.sh` and a
-`dispatch_arm17_mine4H.sh`, and it names NO runner, NO dispatch script and NO
-`pathway_persist` folder for arms 31 or 71 — only their control-box IPs
-(192.168.50.12 / .14), their DDS domains (31 / 71) and that they are INVERTED.
-So `send` targets the supervisor directly, which is the one entry point the
-briefing gives a signature for, and leaves the keeper loop alone.  If the day
-has a `run_forever_arm31.sh` by then, hold it first
-(`bash ~/RTff/aris_hold.sh hold 31`) or the keeper will start its own pass on
-top of this one.
+THE FIVE RTFF_* VARIABLES ARE NOT DECORATION.  Each is off by default and each
+default is wrong for this file: CONTACT_DESCEND=0 flies the planned z instead
+of feeling for the paper, MODE=observe keeps depth open-loop for the first
+passes, TRAVEL_SPEED=0.02 is 20 mm/s, and DEPART_LIFT=0 is because our
+programmes already END AT THE PARK POSE — a depart lift on top of that is
+motion past the end of the certificate.
 
-TWO THINGS THE BRIEFING IS EMPHATIC ABOUT AND `send` PRINTS EVERY TIME.  The
-stack must be HEALTHY before a pass (hardware active, three controllers,
-robot_mode 2 — never heal on a user stop) and the ladder gate, which measures
-the paper plane before every descend, is SKIPPED FOR INVERTED ARMS.  Arms 31
-and 71 are inverted.  Nothing downstream will measure the plane for them, so
-the `z_m` baked into this CSV is the plane they will draw at: a hover pass with
-a ruler first is not optional on these two."""
+WHAT THE EXECUTOR READS.  The tip pose of each row, and nothing else: it paces
+by CARTESIAN ARC LENGTH, holds each row's orientation without slerping, and
+latches its own nullspace.  IT IGNORES q1..q7 AND t_s.  Those columns are the
+record of what the planner chose and the basis of the velocity certificate;
+on the deployed stack they are a check, not a command.
+
+AND THE FIRST MOVE IS NOT CERTIFIED BY ANYTHING.  The executor ramps in a
+straight line from the arm's measured configuration to row 0.  Row 0 is NOT the
+park: the exporter starts the file at the first frame whose tip is 50 mm clear
+of the paper walking back from the first ink, which on the day-1 word files is
+about 0.6 m and 4 rad from the park.  `send` prints the park pose AND that gap
+every time, so it is a number somebody looks at rather than a surprise.
+`day1.py park --arm N` prints the pose on its own, and with `--from-q` plans a
+certified joint path to it.
+
+Plain `ssh host 'cmd'`, key-only — not `bash -lc`, which would source a
+profile an ssh session has not got."""
 
 
 def _csv_rows(path):
     with open(path) as f:
         return sum(1 for ln in f if ln.strip()) - 1
+
+
+def _wrap(text, indent="  ", width=78):
+    import textwrap
+    return textwrap.wrap(" ".join(str(text).split()), width=width,
+                         initial_indent=indent, subsequent_indent=indent)
+
+
+def park_pose(arm, tool=None):
+    """The arm's park: its joints, and its tip pose in fr3_link0. -> dict.
+
+    THE POSE ROW 0 OF EVERY FILE THIS SCRIPT WRITES STARTS AT, and therefore
+    the pose the arm has to be standing in before anything is streamed: the
+    deployed executor's FIRST move is an uncertified straight ramp from the
+    arm's measured configuration to row 0, and no gate in this repository has
+    anything to say about that ramp.  `fr3_link0` is the arm's own base frame,
+    which is the frame the CSV's xyz/quaternion are already in.
+    """
+    arm = int(arm)
+    fl, _ = rt.fleet_for(None, None, "uniform")
+    if arm not in fl:
+        raise Refused(f"arm {arm} is not in rig {os.environ['ARIS_RIG']!r}")
+    spec = fl[arm]
+    q = np.asarray(spec.q_seed, float).reshape(7)
+    pen_lat, pen_ext = pathway.tool_offsets(tool or os.environ["ARIS_TOOL"])
+    T, tip = pathway._tip_of(q[None, :], pen_ext, pen_lat)
+    return dict(arm=arm, q=[float(v) for v in q],
+                tip_xyz_base_m=[float(v) for v in tip[0]],
+                tip_quat_xyzw=[float(v) for v in
+                               pathway.quat_xyzw(T[0, :3, :3])],
+                frame="fr3_link0", tool=tool or os.environ["ARIS_TOOL"])
+
+
+def _park_lines(arm, row0=None, indent="     "):
+    """The park pose, and how far row 0 is from it. -> list[str]."""
+    p = park_pose(arm)
+    out = [indent + "park q  = "
+           + ", ".join(f"{v:+.6f}" for v in p["q"]),
+           indent + "park tip (fr3_link0) xyz = "
+           + ", ".join(f"{v:+.6f}" for v in p["tip_xyz_base_m"])
+           + "  quat xyzw = "
+           + ", ".join(f"{v:+.6f}" for v in p["tip_quat_xyzw"])]
+    if row0 is not None:
+        try:
+            xyz = np.array([float(row0[3]), float(row0[4]), float(row0[5])])
+            q0 = np.array([float(v) for v in row0[11:18]])
+            d = 1000.0 * float(np.linalg.norm(
+                xyz - np.asarray(p["tip_xyz_base_m"], float)))
+            dq = float(np.abs(q0 - np.asarray(p["q"], float)).max())
+            out.append(indent + f"row 0 of this file is {d:.1f} mm and "
+                                f"{dq:.4f} rad from that park pose")
+            if d > 1.0 or dq > 0.01:
+                out.append(indent + "! row 0 is NOT the park — the ramp from "
+                                    "the park to row 0 is uncertified motion; "
+                                    "look at it before streaming")
+        except (ValueError, IndexError):
+            pass
+    return out
+
+
+def _summary_beside(csv_path):
+    """The `<stem>.json` this CSV was written with, if it is there. -> dict|None."""
+    p = Path(csv_path)
+    cand = p.with_suffix(".json")
+    if cand.exists():
+        try:
+            return json.loads(cand.read_text())
+        except Exception:
+            return None
+    return None
 
 
 def cmd_send(a):
@@ -1513,61 +2230,111 @@ def cmd_send(a):
             f"{src} does not carry this repo's pathway columns.\n"
             f"    want {','.join(pathway.CSV_COLUMNS)}\n"
             f"    got  {','.join(hdr)}")
-    arm = int(a.arm)
-    host = a.host or OPERATOR["host"]
-    folder = a.folder or f"day1_arm{arm}"
-    remote_dir = f"{OPERATOR['store']}/{folder}"
-    remote_csv = f"{remote_dir}/{src.name}"
-    fmin, fmax, levels = OPERATOR["force"]
-    mkdir = f"ssh {host} 'mkdir -p {remote_dir}'"
-    scp = f"scp {src} {host}:{remote_dir}/"
-    draw = (f"ARM_ID={arm} bash {OPERATOR['supervisor']} {remote_csv} "
-            f"{fmin} {fmax} {levels} {OPERATOR['mode']}")
-    stack = f"ssh {host} 'bash {OPERATOR['stack_check']} stack {arm}'"
+    slot = int(a.arm)
+    # THE SLOT IS THE PLAN, THE ARM IS THE ROBOT, AND THEY NEED NOT MATCH.
+    # `--arm` names the POSITION the word was planned for (31 = left-middle,
+    # 71 = right-middle); `--as-arm` names the physical arm bolted into it.
+    # The CSV's poses are in that POSITION's base frame, which is the physical
+    # arm's base frame for exactly as long as it is mounted there — so the one
+    # thing that has to be true is the mounting, and the printed line says so.
+    arm = int(a.as_arm) if a.as_arm else int(slot_cfg(slot).get("arm", slot))
+    st = site()
+    host = a.host or st["operator"]["host"]
+    remote_csv = (a.remote or st["remote_csv"]).format(arm=arm)
+    log = st["log"].format(arm=arm)
+    fmin, fmax, levels = st["force"]
+    env = " ".join(f"{k}={v}" for k, v in (st.get("rtff_env") or {}).items())
+    scp = f"scp {src} {host}:{remote_csv}"
+    # THE COMMAND, VERBATIM.  Plain `ssh host 'cmd'` — not `bash -lc`, which
+    # would source a profile the session does not have.  The supervisor takes
+    # the CSV as $1; ARM_ID is the DDS domain and the only thing that says
+    # which robot.
+    inner = (f"{env} ARM_ID={arm} bash {st['supervisor']} {remote_csv} "
+             f"{fmin} {fmax} {levels} {st['mode']}")
+    draw = f"ssh {host} '{inner}'"
+    stack = f"ssh {host} 'bash {st['stack_check']} stack {arm}'"
+    watch = f"ssh {host} 'tail -f {log}'"
 
-    print(f"ARM {arm}   {src}  ({_csv_rows(src)} rows, q1..q7 on every row)")
+    for ln in site_lines():
+        print(ln)
+    row0 = None
+    with open(src) as f:
+        rd = csv.reader(f)
+        next(rd, None)
+        row0 = next(rd, None)
+    where = slot_cfg(slot).get("position", f"slot {slot}")
+    ip = ((st.get("arms") or {}).get(str(arm)) or {}).get("ip")
+    if arm == slot:
+        print(f"ARM {arm}   {src}  ({_csv_rows(src)} rows)")
+    else:
+        print(f"slot {slot} -> arm {arm}  (base frame of the {where} "
+              f"position)")
+        print(f"  {src}  ({_csv_rows(src)} rows)")
+        print(f"  the poses in this file are the {where} POSITION's base "
+              f"frame.  They are")
+        print(f"  arm {arm}'s base frame for exactly as long as arm {arm} is "
+              f"bolted into that")
+        print(f"  position.  CONFIRM THE MOUNTING BEFORE YOU RUN IT — which "
+              f"arm ids are in")
+        print(f"  the two middle positions is NOT known from this repository.")
     print(f"  operator  {host}")
+    print(f"  ARM_ID    {arm}   (the DDS domain; control box "
+          f"{ip or 'UNKNOWN — not in the site file'})")
     print(f"  lands at  {remote_csv}")
     print()
     if a.dry_run:
-        print("DRY RUN — nothing copied.  The two commands are:")
-        print(f"  {mkdir}")
-        print(f"  {scp}")
+        print(f"DRY RUN — nothing copied.  The copy would be:\n  {scp}")
     else:
-        for cmd in (mkdir, scp):
-            print(f"  $ {cmd}")
-            r = subprocess.run(cmd, shell=True)
-            if r.returncode != 0:
-                raise Refused(f"`{cmd}` exited {r.returncode}.  The file is NOT "
-                              f"on the operator box.  Check the address at the "
-                              f"top of scripts/day1.py (or --host), and that "
-                              f"the key is loaded — the briefing says password "
-                              f"auth is disabled.")
+        print(f"  $ {scp}")
+        r = subprocess.run(scp, shell=True)
+        if r.returncode != 0:
+            raise Refused(f"`{scp}` exited {r.returncode}.  The file is NOT on "
+                          f"the operator box.  Check the address at the top of "
+                          f"scripts/day1.py (or --host), and that the key is "
+                          f"loaded — password auth is disabled.")
         print("  copied.")
     print()
-    print("BEFORE YOU RUN IT — the stack must be healthy (hardware active, "
-          "three controllers,")
-    print("robot_mode 2).  Never heal on a user stop (mode 5) or guiding "
-          "(mode 3):")
-    print(f"  {stack}")
+    print("1. WHERE THE ARM MUST BE STANDING.  The executor's FIRST move is "
+          "an UNCERTIFIED")
+    print("   straight ramp from the arm's measured configuration to row 0 of "
+          "this file.")
+    print("   Drive it under position control (go_start_pos.py) to the park — "
+          "where the")
+    print("   certified programme begins — and read the gap below:")
+    for ln in _park_lines(slot, row0):
+        print(ln)
     print()
-    print("THEN, ON THE OPERATOR BOX, exactly this one command:")
-    print(f"  {draw}")
+    print("2. THE STACK MUST BE HEALTHY — hardware active, three controllers, "
+          "robot_mode 2.")
+    print("   Never heal on a user stop (mode 5) or guiding (mode 3):")
+    print(f"     {stack}")
+    print()
+    print("3. THEN, exactly this one command:")
+    print(f"     {draw}")
+    print()
+    print("4. WATCH IT:")
+    print(f"     {watch}")
+    print()
+    for ln in _wrap(EXECUTOR_NOTE, "   "):
+        print(ln)
     print()
     print(f"ARM {arm} IS INVERTED, so the supervisor SKIPS the ladder gate: "
           f"nothing downstream")
-    print(f"will measure the paper plane for it.  The z in this file is the "
-          f"plane it will draw")
-    print(f"at.  Fly the hover pass and measure it with a ruler at three "
-          f"points first.")
+    print(f"will measure the paper plane for it, and RTFF_CONTACT_DESCEND=0 "
+          f"means it will not")
+    print(f"feel for it either.  The z_m baked into this file IS the plane it "
+          f"will draw at.")
+    print(f"Fly the hover pass, measure the tip with a ruler at three points, "
+          f"and re-plan with")
+    print(f"`word --arm {arm} --paper-z <measured>` if it is not where the "
+          f"file says.")
     print("ABORT: the physical e-stop.  The software gate and the 20 mrad "
           "watchdog are not the abort path.")
     if a.live:
         print()
-        print(f"--live: running it over ssh NOW.")
-        cmd = f"ssh {host} '{draw}'"
-        print(f"  $ {cmd}")
-        r = subprocess.run(cmd, shell=True)
+        print("--live: running it over ssh NOW.")
+        print(f"  $ {draw}")
+        r = subprocess.run(draw, shell=True)
         if r.returncode != 0:
             raise Refused(f"the draw command exited {r.returncode}.")
     return 0
@@ -1611,6 +2378,10 @@ the word at --dy = -0.10 m by default; try -0.15 or -0.20 if that refuses.
 
 everything is written to out/day1/.  An uncertified line, word or joint
 reference writes NOTHING.""")
+    ap.add_argument("--site", default=None, metavar="FILE",
+                    help="the site configuration (default config/site.json, "
+                         "or $ARIS_SITE).  Everything machine-specific is in "
+                         "it; `day1.py site` shows and edits it.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser(
@@ -1681,6 +2452,14 @@ reference writes NOTHING.""")
                         f"{HOVER_DEFAULT:g} m).  Plans with a pen that much "
                         f"longer and grades with the real one; the json states "
                         f"the measured tip height above the paper.")
+    w.add_argument("--paper-z", type=float, default=0.0, metavar="M",
+                   dest="paper_z",
+                   help="metres the REAL paper surface sits ABOVE the modelled "
+                        "plane; positive lifts the whole plan by that much "
+                        "(default 0).  After a hover pass measuring H metres "
+                        "of tip gap where 0.030 was asked for, pass "
+                        "--paper-z (0.030 - H).  Same lever as --hover: it is "
+                        "a longer pen in the plan, graded with the real one.")
     w.add_argument("--allow-partial", action="store_true",
                    help="write the certified subset instead of refusing when "
                         "some strokes will not certify (and say so)")
@@ -1700,21 +2479,60 @@ reference writes NOTHING.""")
                         f"output stem)")
     w.set_defaults(func=cmd_word)
 
+    st = sub.add_parser(
+        "site", formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="show (and edit) the one file everything site-specific lives in",
+        description="EVERYTHING SITE-SPECIFIC IS IN `config/site.json` — the "
+                    "operator host, each slot's physical arm id, its control "
+                    "box IP, its DDS domain, its measured paper z and whether "
+                    "the mounting is confirmed, plus the RTFF_* environment "
+                    "the dispatch line carries.  Nothing in this script "
+                    "hard-codes any of it, every run prints it, and the GUI "
+                    "reads and writes the same file.")
+    st.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="edit one field and write the file back, e.g. "
+                         "`--set slot31.arm=97`, `--set slot31.mounted=true`, "
+                         "`--set slot71.paper_z=0.003`.  Repeatable.")
+    st.set_defaults(func=cmd_site)
+
+    k = sub.add_parser(
+        "park", formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="the pose every file starts at, and a certified joint path to it",
+        description=PARK_DOC)
+    k.add_argument("--arm", type=int, required=True, choices=sorted(ARMS))
+    k.add_argument("--from-q", dest="from_q", default=None,
+                   metavar="q1,...,q7",
+                   help="the arm's MEASURED joints in radians, read off the "
+                        "robot state.  Given one, a collision-free joint path "
+                        "from there to the park is planned and certified.")
+    k.add_argument("--out", default=str(OUT_DIR))
+    k.set_defaults(func=cmd_park)
+
     s = sub.add_parser(
         "send", formatter_class=argparse.RawDescriptionHelpFormatter,
         help="deliver a pathway CSV to the operator box and print the one "
              "command that runs it",
         description=SEND_DOC)
     s.add_argument("--arm", type=int, required=True,
-                   help="the arm this file is for (its DDS domain id)")
+                   help="the SLOT this file was planned for: 31 = left-middle "
+                        "position, 71 = right-middle.  It names the base frame "
+                        "the poses are in, not necessarily the robot.")
+    s.add_argument("--as-arm", dest="as_arm", type=int, default=None,
+                   metavar="ID",
+                   help="the PHYSICAL arm id to dispatch to (its DDS domain, "
+                        "its ARM_ID and its /tmp file name).  Default: the "
+                        "same id as --arm.  Use it when the arm bolted into "
+                        "that position is not the one the plan is named after "
+                        "— which arms are mounted is NOT known from this "
+                        "repository, so identify the arm first.")
     s.add_argument("--file", required=True, metavar="CSV",
                    help="the pathway CSV, e.g. out/day1/unknown_31.csv")
     s.add_argument("--host", default=None, metavar="USER@HOST",
-                   help=f"the operator box (default {OPERATOR['host']!r} — "
-                        f"fill it in at the top of this file)")
-    s.add_argument("--folder", default=None, metavar="NAME",
-                   help="subfolder under the operator's pathway store "
-                        "(default: day1_arm<N>)")
+                   help="the operator box (default: the site file's "
+                        "`operator.host`)")
+    s.add_argument("--remote", default=None, metavar="PATH",
+                   help="where the CSV lands on the operator box (default: "
+                        "the site file's `remote_csv`)")
     s.add_argument("--dry-run", action="store_true",
                    help="print the scp and the run command, copy nothing")
     s.add_argument("--live", action="store_true",
@@ -1726,6 +2544,8 @@ reference writes NOTHING.""")
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
+    if getattr(a, "site", None):
+        site(a.site)
     return a.func(a)
 
 

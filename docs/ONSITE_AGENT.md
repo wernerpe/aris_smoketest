@@ -1,8 +1,12 @@
 # On-site agent runbook — read this first, you have zero context
 
 You are on a machine at the installation. Six Franka FR3 arms hang upside down
-over a paper table; today only two are mounted, **arm 31 and arm 71**, the middle
-row. The job today: **write the word "unknown" under each arm, one arm at a time,
+over a paper table; today only the two middle-row positions are used. **WHICH ARM
+IDS ARE MOUNTED IN THEM IS NOT KNOWN — identify the arms first** (2026-09-17:
+"may be 97 and 71, position unknown"). The PLAN is named after the POSITION:
+slot 31 is the left-middle position, slot 71 the right-middle, and `send
+--as-arm <id>` dispatches a slot's file to whatever arm is actually bolted
+there. The job today: **write the word "unknown" under each arm, one arm at a time,
 first floating 30 mm above the paper, then on the paper.** Nothing moves two arms
 at once. Pete (the PI) is with you; he holds the physical e-stop, which is the
 only abort that counts.
@@ -16,18 +20,30 @@ over ssh.
 
 ## 0. Facts you must not get wrong
 
+**Everything site-specific is `config/site.json`** — operator host, per-slot
+physical arm id, control-box IP, DDS domain, measured paper-z, whether the
+mounting is confirmed, and the `RTFF_*` environment the dispatch line carries.
+Run `day1.py site` before anything else, edit it with `day1.py site --set
+KEY=VALUE`, and never hand-edit an address into a script: there is none in
+there to edit (`tests/test_day1.py` enforces that).
+
+
 | fact | value |
 |---|---|
 | mounting height h | **0.970 m** from the paper top to the underside of the mounting plate |
-| arm 31 / 71 base, canvas frame | x 0.5967 / 1.2067 m, y 1.8153 m (the seam line), both inverted, same clocking |
+| slot 31 / 71 base, canvas frame | x 0.5967 / 1.2067 m, y 1.8153 m (the seam line), both inverted, same clocking. These are POSITIONS; the CSV's poses are in the position's base frame and are right for whichever arm is mounted there. |
+| which arm ids are mounted | **UNKNOWN. Identify first**, then record it: `day1.py site --set slot31.arm=97 --set slot31.mounted=true`. Nothing downstream checks this for you. |
 | tool tip in the hand frame | (0.0860, 0, 0.1494) m — from a photograph, **not a touchdown**; the floating pass exists to check it |
-| operator PC | `diemut@192.168.50.2`, key-only ssh (`ssh host 'cmd'`, never `bash -lc`) |
-| arm 31 / 71 control box | 192.168.50.12 (DDS domain 31) / 192.168.50.14 (domain 71) |
+| **everything site-specific** | **`config/site.json`** — operator host, each slot's physical arm id / control-box IP / DDS domain / measured paper-z / mounting confirmed, and the `RTFF_*` environment the dispatch line carries. `day1.py site` prints it, `day1.py site --set KEY=VALUE` edits it, every run prints it, and the GUI reads and writes the same file. **No address is hard-coded in any script** (a test enforces that). |
+| operator PC | `diemut@192.168.50.2`, key-only ssh (`ssh host 'cmd'`, never `bash -lc`) — from `config/site.json` |
+| control boxes | arm 31 → 192.168.50.12, arm 71 → 192.168.50.14, arm 97 → 192.168.50.15. The id is the DDS domain AND the `ARM_ID` the supervisor reads. |
 | executor | `~/RTff/draw_rtff_supervised.sh` on the operator PC; it **ignores the joint columns and timestamps** in our CSV, paces by arc length at 0.02 m/s, and keeps its own arm configuration. Today's runs therefore test the tool, the plane and the pose path — not the planner's redundancy resolution. Say so if asked. |
-| first move | the executor ramps in a straight line from wherever the arm is to row 0 of the file, uncertified. Every file we make starts and ends at the arm's **park pose**; the arm must be put at that pose before starting (operator's `go_start_pos.py`, position control). |
-| end of file | the executor lifts 80 mm along the pen axis unless `RTFF_DEPART_LIFT=0`; our dispatch line sets it, because the file already ends at the park. |
-| paper plane | no automatic gate for inverted arms: the executor descends to the height baked into the file and the impedance spring holds contact. The height must be **measured by hand** first (operator tools `jog_descend.py` or `probe_surface.sh`) and baked in with `--paper-z`. |
-| arm 31 quirk | it refuses a line exactly on the seam line y = 1.815 (go-home leg fails the paper gate); the word is placed at `--dy -0.10` by default. |
+| first move | the executor ramps in a straight line from wherever the arm is to row 0 of the file, uncertified. **MEASURED: row 0 is NOT the park.** The certified PROGRAMME starts and ends at the park, but the exporter begins the CSV at the first frame whose tip is 50 mm clear of the paper — about **0.6 m and 4 rad** from the park on the day-1 word files. Put the arm at the park (operator's `go_start_pos.py`, position control), then **look at the gap `send` prints** before starting. |
+| end of file | the executor lifts 80 mm along the pen axis unless `RTFF_DEPART_LIFT=0`; our dispatch line sets it, because the certified programme already ends at the park. |
+| paper plane | no automatic gate for inverted arms, and `RTFF_CONTACT_DESCEND=0` means it does not feel for it either: the executor goes to the height baked into the file and the impedance spring holds contact. Measure it by hand first (operator tools `jog_descend.py` or `probe_surface.sh`). **`--paper-z Z` is how far the REAL paper sits ABOVE the modelled plane**, and it lifts the whole plan by Z. After a floating pass that asked for 30 mm and measured H, pass `--paper-z (0.030 - H)`; record it with `day1.py site --set slot31.paper_z=<Z>` and it becomes the default for that slot. |
+| hover sign | `fr3_link0`'s +z points **down** on an inverted arm, so "30 mm above the paper" is `z_paper - 0.030` in the base frame. Verified in every file we write (`rows.tip_above_paper_base_m` in the json). |
+| slot 31 quirk | it refuses a line exactly on the seam line y = 1.815 (go-home leg fails the paper gate); the word is placed at `--dy -0.10` by default. |
+| the CSV | 19 columns: the v2 contract's 18, plus **`t_s` last** (the planner's pacing, same clock as the npz). A positional reader of the first 18 is unaffected. The executor ignores `q1..q7` and `t_s`. |
 | one arm at a time | always. The other arm is at its park, which is what every certificate assumes. |
 
 Do not edit gate constants, `frames.py`, `layout.py`, `mounts.py`, `scene_check.py`.
@@ -60,13 +76,16 @@ for a password, the key is not installed; stop and tell Pete.
 
 | command | what it does | output |
 |---|---|---|
-| `day1.py park --arm 31` | prints the park joint vector and park tip pose the files start from | text |
+| `day1.py site` | prints `config/site.json` — operator, slots, arm ids, IPs, paper-z, dispatch env. **Read it first.** `--set KEY=VALUE` edits it | text |
+| `day1.py park --arm 31` | prints the park joint vector and park tip pose — where the certified programme begins, and where to drive the arm before streaming | text |
 | `day1.py park --arm 31 --from-q q1,…,q7` | certified joint path from the MEASURED joints to the park (RRT) — a check that the straight ramp is clear; the deployed executor cannot follow joint paths | `out/day1/park_31.*` |
 | `day1.py word --arm 31 --hover` | the word under arm 31, floating 30 mm up; plans in ~20–50 s | `out/day1/unknown_hover_31.{csv,npz,json}` |
 | `day1.py word --arm 31 [--paper-z Z]` | the word on the paper, Z = measured tip height of the paper if it differs from 0 | `out/day1/unknown_31.*` |
 | `day1.py line --arm 31 --from x,y --to x,y --name N [--hover 0.03]` | one straight line, same pipeline, seconds | `out/day1/N_31.*` |
-| `day1.py send --arm 31 --file out/day1/<file>.csv --dry-run` | copies the CSV to the operator PC and PRINTS the run line | — |
-| `day1.py send … --live` | the same, and runs it | the arm moves |
+| `day1.py send --arm 31 --file out/day1/<file>.csv --dry-run` | PRINTS the scp and the run line, copies nothing | — |
+| `day1.py send --arm 31 --file …` | copies the CSV to the operator PC and prints the run line | — |
+| `day1.py send --arm 31 --as-arm 97 --file …` | the same, but dispatched to the PHYSICAL arm 97 standing in slot 31's position | — |
+| `day1.py send … --live` | the same, and runs it over ssh | the arm moves |
 | `python -m aris_sixarm.gui` | http://localhost:8765 — Day 1 panel does the above with buttons, a 3D viewer, and a "Run on arm" group with a typed confirmation | — |
 
 Every planning command prints ONE line `PASS …` or `FAIL …` with the gate numbers
@@ -78,8 +97,9 @@ FAIL writes **no CSV**. Never hand-edit a CSV.
 ## 3. What to check before an arm moves — every time
 
 1. **Stack health:** `ssh diemut@192.168.50.2 'bash ~/RTff/aris_hold.sh stack 31'` → must contain `STACK HEALTHY`. This script was written for arms 13/17; if it rejects 31, show Pete the raw output.
-2. **The arm is at its park pose** (compare the robot's joints to what `day1.py park --arm 31` prints; ±0.02 rad). If not, the operator's `go_start_pos.py` moves it there under position control.
-3. **The paper height is measured** and baked (`--paper-z`) for on-paper runs; for the floating run the baked plane is the nominal one and the 30 mm is the check.
+2. **The arm is at its park pose** (compare the robot's joints to what `day1.py park --arm 31` prints; ±0.02 rad). If not, the operator's `go_start_pos.py` moves it there under position control. `day1.py park --arm 31 --from-q <measured joints>` plans and certifies a collision-free joint path from where it actually is to the park — that is a CHECK that the way is clear (the deployed executor follows tip poses only and cannot execute a joint path); the position-control move is still how you get there.
+3. **The paper height is measured** and baked (`--paper-z`, or `site --set slot31.paper_z=Z`) for on-paper runs; for the floating run the baked plane is the nominal one and the 30 mm is the check.
+4. **The arm id is identified and recorded** (`site --set slot31.arm=<id> --set slot31.mounted=true`), and `send` is given `--as-arm <id>` if it differs from the slot.
 4. **The other arm is at its park** and nobody is under the arm.
 5. **Pete has the e-stop in hand.**
 6. **Ask Pete to confirm which way the fingers and the pen holder are mounted.**

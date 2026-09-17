@@ -59,7 +59,10 @@ def test_line_certifies_and_writes_a_joint_csv(arm, tmp_path):
     csv_path = tmp_path / f"t_{arm}.csv"
     assert csv_path.exists(), "a certified line must write its CSV"
     hdr, rows = _read_csv(csv_path)
-    assert hdr == day1.pathway.CSV_COLUMNS
+    # THE CLOCK IS THE LAST COLUMN, so the v1 contract's eighteen are still
+    # the first eighteen and a positional reader is unaffected.
+    assert hdr[:len(day1.pathway.CSV_COLUMNS)] == day1.pathway.CSV_COLUMNS
+    assert hdr == day1.CSV_COLUMNS_T and hdr[-1] == "t_s"
     assert len(rows) > 0
     # THE JOINT COLUMNS ARE THE POINT.  This is the file that answers "test our
     # redundancy resolution on the real thing": the planner's own choice of arm
@@ -68,7 +71,7 @@ def test_line_certifies_and_writes_a_joint_csv(arm, tmp_path):
     assert hdr[11:18] == ["q1", "q2", "q3", "q4", "q5", "q6", "q7"]
     for row in rows:
         assert all(c != "" for c in row[11:18])
-        assert len(row) == len(day1.pathway.CSV_COLUMNS)
+        assert len(row) == len(day1.CSV_COLUMNS_T)
     assert any(row[2] == day1.pathway.KIND_DRAW for row in rows)
 
     # ...and the summary says what it assumed, so a wrong number is findable
@@ -154,12 +157,13 @@ def test_word_arm_certifies_and_writes_a_joint_csv(arm, tmp_path):
     csv_path = tmp_path / f"w_{arm}.csv"
     assert csv_path.exists(), "a certified word must write its CSV"
     hdr, rows = _read_csv(csv_path)
-    assert hdr == day1.pathway.CSV_COLUMNS
+    assert hdr[:len(day1.pathway.CSV_COLUMNS)] == day1.pathway.CSV_COLUMNS
+    assert hdr == day1.CSV_COLUMNS_T and hdr[-1] == "t_s"
     assert len(rows) > 0
     assert hdr[11:18] == ["q1", "q2", "q3", "q4", "q5", "q6", "q7"]
     for row in rows:
         assert all(c != "" for c in row[11:18])
-        assert len(row) == len(day1.pathway.CSV_COLUMNS)
+        assert len(row) == len(day1.CSV_COLUMNS_T)
     assert any(row[2] == day1.pathway.KIND_DRAW for row in rows)
     # more than one stroke really reached the file
     assert len({row[0] for row in rows}) > 1
@@ -170,6 +174,47 @@ def test_word_arm_certifies_and_writes_a_joint_csv(arm, tmp_path):
     assert js["placement"]["baseline_y"] == pytest.approx(
         js["placement"]["seam_y"] + day1.WORD_DY)
     assert js["hover_m"] == 0.0
+
+
+def test_word_arm_csv_carries_the_planner_s_clock(tmp_path):
+    """`t_s` — the last column, the npz's clock, and checkable against it.
+
+    The exporter's CSV has no time in it at all. `day1.py` appends one without
+    touching `export/pathway.py`: it re-runs the exporter's OWN `_emit_frames`
+    to recover which timeline frame each row came from, so row k of the middle
+    block is frame `frame_idx[k]` at `frame_idx[k] / fps`. The proof that the
+    reconstruction is right is that the first DRAW row of every stroke lands on
+    the `t_start_s` the exporter computed for that stroke by a different route.
+    """
+    r = day1.plan_word(31, name="w", out_dir=tmp_path, verbose=False)
+    s = r["summary"]
+    hdr, rows = _read_csv(tmp_path / "w_31.csv")
+    assert hdr[-1] == "t_s"
+    t = np.array([float(row[-1]) for row in rows])
+    assert (np.diff(t) > 0).all(), "t_s must strictly increase"
+    assert t[0] >= 0.0
+    # the file is the certified span, so it starts after the programme does and
+    # ends before it does — it is the same clock, not a rebased one
+    assert 0.0 < t[0] < t[-1] <= s["duration_s"]
+    assert s["csv"]["t_s"]["first_s"] == pytest.approx(t[0])
+    assert s["csv"]["t_s"]["last_s"] == pytest.approx(t[-1])
+    assert s["csv"]["t_s"]["n_synth_rows"] == 0
+    assert s["csv"]["columns"] == hdr
+
+    man = json.loads((tmp_path / "w_31.manifest.json").read_text())
+    assert man["format"]["columns"] == hdr
+    assert "re-pace" in man["t_s"]["note"].lower() or \
+        "RE-PACE" in man["t_s"]["note"]
+
+    # THE CROSS-CHECK.  `manifest["strokes"][i]["t_start_s"]` is the exporter's
+    # own number, derived from `strokes_of` and never from this column.
+    first = {}
+    for row in rows:
+        if row[2] == day1.pathway.KIND_DRAW:
+            first.setdefault(int(row[0]), float(row[-1]))
+    assert len(first) == len(man["strokes"]) > 1
+    for m in man["strokes"]:
+        assert first[int(m["seg"])] == pytest.approx(m["t_start_s"], abs=1e-6)
 
 
 def test_word_arm_reports_the_joint_speed_against_the_fr3_limits(tmp_path):
@@ -193,7 +238,41 @@ def test_word_arm_reports_the_joint_speed_against_the_fr3_limits(tmp_path):
     # the pacer aims at QD_FRAC of the limit, so a healthy programme sits
     # there and not at the ceiling; a reading near 1.0 is a bug upstream
     assert sa["at_csv_rows"]["worst_frac"] < 0.9
-    assert day1._speed_line(sa).startswith("  joint speed OK")
+    assert day1._speed_line(sa).startswith("  joint speed OK  at t_s")
+
+    # IT IS MEASURED ON THE FILE'S OWN CLOCK, and says so.  A uniform reading
+    # would charge a collapsed hold the nominal frame period and invent a
+    # speed nothing moves at — the row spacing really is not uniform.
+    assert sa["source"] == "the CSV's own t_s column"
+    assert sa["n_nonmonotonic_t"] == 0
+    assert sa["at_csv_rows"]["dt_max_s"] > sa["at_csv_rows"]["dt_median_s"]
+    assert "re-pace" in sa["validity"].lower()
+
+    # ...and the same audit is in the manifest, beside the column it certifies
+    man = json.loads((tmp_path / "w_31.manifest.json").read_text())
+    assert man["t_s"]["joint_speed"]["at_csv_rows"]["worst_frac"] == \
+        pytest.approx(sa["at_csv_rows"]["worst_frac"])
+
+
+def test_speed_audit_uses_the_times_it_is_given(tmp_path):
+    """The audit is a function of (t, q) and catches an over-speed.
+
+    Stated on a two-row toy rather than a robot: the same poses half a second
+    apart pass, and a tenth of that apart do not — which is the whole point of
+    computing the certificate from `t_s` instead of from a nominal period.
+    """
+    import numpy as np
+    lim = np.asarray(day1.frames.QD_MAX, float)
+    q0 = np.zeros(7)
+    q1 = 0.5 * lim * 0.5                       # half the limit for 0.5 s
+    ok = day1.speed_audit([0.0, 0.5, 1.0], [q0, q1, q0 + 2 * q1])
+    assert ok["ok"] and ok["at_csv_rows"]["worst_frac"] == pytest.approx(0.5)
+    fast = day1.speed_audit([0.0, 0.05, 0.10], [q0, q1, q0 + 2 * q1])
+    assert not fast["ok"]
+    assert fast["at_csv_rows"]["worst_frac"] == pytest.approx(5.0)
+    # a clock that does not advance is refused rather than divided by
+    bad = day1.speed_audit([0.0, 0.0, 1.0], [q0, q1, q0])
+    assert bad["n_nonmonotonic_t"] == 1 and not bad["ok"]
 
 
 def test_word_arm_refuses_a_word_it_cannot_reach(tmp_path):
@@ -250,6 +329,174 @@ def test_word_arm_argv_is_the_command_a_person_would_type(tmp_path):
         build_day1_argv(dict(day1="word", arm=13), tmp_path)
 
 
+def test_word_arm_rows_are_cartesian_followable(tmp_path):
+    """No pen-up run may reconfigure the arm, and the hover must be signed right.
+
+    The deployed executor walks consecutive non-draw rows as a CARTESIAN path
+    and latches its own nullspace (ARIS2_CONTRACTS §1), so a joint step no
+    continuous IK branch could produce is a path it cannot follow.
+    """
+    r = day1.plan_word(31, name="w", out_dir=tmp_path, verbose=False)
+    rows = r["summary"]["rows"]
+    assert not rows["reconfigures"] and rows["n_over_bound"] == 0
+    assert rows["max_dq_rad"] < rows["bound_rad"]
+    assert rows["max_travel_dq_rad"] <= rows["max_dq_rad"]
+    # pen-down: the draw rows sit ON the plane, in the base frame
+    assert rows["tip_above_paper_base_m"]["draw_max"] == pytest.approx(
+        0.0, abs=1e-4)
+    assert "hover_check" not in rows
+
+
+def test_word_arm_hover_rows_are_below_paper_z_in_the_base_frame():
+    """fr3_link0's +z points DOWN on an inverted arm, so a hover is z_paper - h.
+
+    Getting this sign wrong would drive the pen 30 mm INTO the paper on the one
+    pass whose whole purpose is never to touch it.
+    """
+    r = day1.plan_word(31, hover=0.030, write=False, verbose=False)
+    # `write=False` stops before the rows exist, so the geometry is checked on
+    # the certificate instead: scene_check's own tip clearance is positive
+    assert r["summary"]["gates"]["min_paper_tip_m"] > 0.02
+
+
+def test_park_pose_is_the_arms_seed_and_reports_its_tip(tmp_path):
+    """`park --arm N` with no --from-q: the pose, and the tip in fr3_link0."""
+    fl, _ = day1.rt.fleet_for(None, None, "uniform")
+    for arm in (31, 71):
+        p = day1.park_pose(arm)
+        assert p["frame"] == "fr3_link0"
+        assert p["q"] == pytest.approx(
+            [float(v) for v in fl[arm].q_seed])
+        assert len(p["tip_xyz_base_m"]) == 3 and len(p["tip_quat_xyzw"]) == 4
+        # the park holds the pen well clear of the paper plane
+        assert p["tip_xyz_base_m"][2] < 0.970 - 0.05
+
+
+def test_park_plans_and_certifies_a_path_from_a_pose_off_the_park(tmp_path):
+    """0.5 rad off the park: an RRT path, certified, written as travel rows."""
+    q = np.asarray(day1.park_pose(31)["q"], float)
+    start = q.copy()
+    start[1] += 0.5
+    r = day1.plan_park(31, start, out_dir=tmp_path, verbose=False)
+    s = r["summary"]
+    assert s["certified"] and s["gates"]["ok"]
+    assert s["gates"]["min_inter_arm_m"] > day1.coordination.PAIR_MARGIN
+    assert s["rrt"]["n_configs"] > 1 and s["duration_s"] > 0.0
+    assert not s["rows"]["reconfigures"]
+    assert s["joint_speed"]["ok"]
+
+    hdr, rows = _read_csv(tmp_path / "park_31.csv")
+    assert hdr == day1.CSV_COLUMNS_T
+    assert len(rows) == s["rrt"]["n_configs"] > 1
+    # EVERY row is pen-up, and every row carries joints and a time
+    assert all(row[2] == day1.pathway.KIND_TRAVEL for row in rows)
+    for row in rows:
+        assert all(c != "" for c in row[11:18])
+    t = np.array([float(row[-1]) for row in rows])
+    assert (np.diff(t) > 0).all() and t[0] == 0.0
+    # the path ends AT the park
+    last = np.array([float(v) for v in rows[-1][11:18]])
+    assert last == pytest.approx(q, abs=1e-6)
+
+    # ...and it says, in as many words, what it is and is not
+    assert "CHECK" in s["what_this_is"]
+    assert "go_start_pos.py" in s["what_this_is"]
+    assert "IGNORES q1..q7" in s["executor"]
+
+
+def test_park_refuses_a_start_pose_that_is_in_collision(tmp_path):
+    """A start inside the static scene: refused, and nothing written.
+
+    +0.5 rad on joint 1 swings arm 31 into the structure — measured, its
+    clearance to the static boxes there is -88 mm, so the C-space search has an
+    infeasible root and says so rather than returning a path through metal.
+    """
+    q = np.asarray(day1.park_pose(31)["q"], float)
+    bad = q.copy()
+    bad[0] += 0.5
+    with pytest.raises(day1.Refused) as e:
+        day1.plan_park(31, bad, out_dir=tmp_path, verbose=False)
+    assert "collision" in str(e.value)
+    assert not list(tmp_path.glob("*.csv"))
+    assert not list(tmp_path.glob("*.npz"))
+
+
+def test_the_site_file_is_the_only_place_addresses_live(tmp_path):
+    """`config/site.json` holds every machine-specific fact; the script holds none.
+
+    Pete: "make sure it is easy to reconfigure the setup." The test of that is
+    mechanical — no IP, no user@host and no /tmp path may appear in the script
+    at all, and everything the dispatch line is built from must come out of one
+    tracked JSON file that `day1.py site --set` can edit.
+    """
+    import re
+    src = (ROOT / "scripts" / "day1.py").read_text()
+    # an address or a remote path in the SCRIPT is the thing this forbids
+    assert not re.search(r"\b192\.168\.\d+\.\d+", src), \
+        "an IP address is hard-coded in day1.py; it belongs in config/site.json"
+    assert not re.search(r"\b\w+@\d+\.\d+\.\d+\.\d+", src)
+    assert "/tmp/impedance_pathway" not in src
+    assert "OPERATOR" not in src
+
+    st = day1.site()
+    assert st["operator"]["host"]
+    for k in ("31", "71"):
+        sl = st["slots"][k]
+        for f in ("position", "arm", "ip", "domain", "paper_z", "mounted"):
+            assert f in sl, f
+    assert st["slots"]["31"]["mounted"] is None, \
+        "which arms are mounted is UNKNOWN until somebody confirms it"
+    for k in ("RTFF_CONTACT_DESCEND", "RTFF_FORCE_SIGN", "RTFF_TRAVEL_SPEED",
+              "RTFF_MODE", "RTFF_DEPART_LIFT"):
+        assert k in st["rtff_env"], k
+    assert st["rtff_env"]["RTFF_DEPART_LIFT"] == "0"
+    assert "97" in st["arms"]                      # the spare is known of
+
+
+def test_site_set_edits_the_file_and_nothing_else(tmp_path):
+    """`site --set slot31.arm=97` writes the file back, typed."""
+    src = json.loads((ROOT / "config" / "site.json").read_text())
+    p = tmp_path / "site.json"
+    p.write_text(json.dumps(src, indent=1))
+    ap = day1.build_parser()
+    a = ap.parse_args(["--site", str(p), "site", "--set", "slot31.arm=97",
+                       "--set", "slot31.mounted=true",
+                       "--set", "slot71.paper_z=0.003"])
+    day1.site(str(p), reload=True)
+    assert day1.cmd_site(a) == 0
+    got = json.loads(p.read_text())
+    assert got["slots"]["31"]["arm"] == 97            # int, not "97"
+    assert got["slots"]["31"]["mounted"] is True      # bool, not "true"
+    assert got["slots"]["71"]["paper_z"] == 0.003     # float
+    assert got["operator"]["host"] == src["operator"]["host"]
+    with pytest.raises(day1.Refused):
+        day1.cmd_site(ap.parse_args(
+            ["--site", str(p), "site", "--set", "nonsense"]))
+    day1.site(reload=True)             # leave the module on the real file
+
+
+def test_send_dispatches_a_slot_to_a_different_physical_arm(tmp_path, capsys):
+    """`--as-arm`: the plan is a POSITION, the arm bolted into it may differ."""
+    good = tmp_path / "unknown_31.csv"
+    good.write_text(",".join(day1.CSV_COLUMNS_T) + "\n"
+                    + ",".join(["0"] * len(day1.CSV_COLUMNS_T)) + "\n")
+    ap = day1.build_parser()
+    assert day1.cmd_send(ap.parse_args(
+        ["send", "--arm", "31", "--as-arm", "97", "--file", str(good),
+         "--dry-run"])) == 0
+    out = capsys.readouterr().out
+    assert "slot 31 -> arm 97" in out
+    assert "left-middle" in out
+    assert "ARM_ID    97" in out
+    assert "192.168.50.15" in out                   # arm 97's box, from the site
+    assert "/tmp/impedance_pathway_arm97.csv" in out
+    assert "ARM_ID=97 bash" in out
+    assert "CONFIRM THE MOUNTING" in out
+    # ...and the park it prints is the SLOT's, because that is the base frame
+    # the file's poses are in
+    assert "park q  =" in out
+
+
 def test_send_refuses_a_file_that_is_not_a_pathway_csv(tmp_path):
     """`send` is the interface to the arms and it checks what it is handing over."""
     ap = day1.build_parser()
@@ -277,12 +524,19 @@ def test_send_dry_run_copies_nothing_and_prints_the_one_command(tmp_path,
          "someone@10.0.0.1", "--dry-run"])) == 0
     out = capsys.readouterr().out
     assert "DRY RUN" in out and "nothing copied" in out
-    assert f"scp {good} someone@10.0.0.1:" in out
-    assert "ARM_ID=31" in out
-    assert day1.OPERATOR["supervisor"] in out
-    # the two things the briefing is emphatic about, said every time
+    assert f"scp {good} someone@10.0.0.1:/tmp/impedance_pathway_arm31.csv" in out
+    # THE DISPATCH LINE, VERBATIM — this is the string somebody pastes
+    assert ("RTFF_CONTACT_DESCEND=0 RTFF_FORCE_SIGN=1 RTFF_TRAVEL_SPEED=0.02 "
+            "RTFF_MODE=observe RTFF_DEPART_LIFT=0 ARM_ID=31 bash "
+            "~/RTff/draw_rtff_supervised.sh /tmp/impedance_pathway_arm31.csv "
+            "1.0 2.5 5 fresh") in out
+    assert "aris_hold.sh stack 31" in out
+    assert "tail -f /tmp/rtff_draw_arm31.log" in out
+    # the things that must be said every time
     assert "ladder gate" in out.lower()
     assert "e-stop" in out.lower()
+    assert "IGNORES q1..q7 AND t_s" in out
+    assert "park q  =" in out          # where the arm has to be standing
 
 
 @pytest.mark.skipif(not day1.VARIANTS["alt"]["npz"].exists(),
