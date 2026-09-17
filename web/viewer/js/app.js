@@ -7,9 +7,10 @@
 // identical progress history — which is the property that makes the recorded
 // stream worth keeping at all.
 
-import {api, openStream, fetchBin} from "./api.js";
+import {api, operator as opApi, openStream, fetchBin} from "./api.js";
 import {newState, reduce, stageTimes} from "./state.js";
 import {Panel, F, fmtS, esc} from "./panel.js";
+import {RunOnArm} from "./operator.js";
 import {Strip} from "./strip.js";
 import {Panels} from "./panels.js";
 import {Scene3D} from "./scene3d.js";
@@ -28,9 +29,30 @@ const app = {
 // --------------------------------------------------------------------------
 async function boot() {
   app.view = new Scene3D(el("view"));
+  // RUN ON ARM.  Built here and handed to the panel, so the only module that
+  // knows both the DOM helpers and the operator endpoints is this one.
+  // `onJob` is what puts the run's own output in the log pane on the right:
+  // the RUN button creates an ordinary job, and the viewer then watches it
+  // exactly as it watches a planning run.
+  app.runOnArm = new RunOnArm({
+    config: opApi.config, check: opApi.check, copy: opApi.copy,
+    run: opApi.run, hold: opApi.hold, kill: opApi.kill,
+    tail: opApi.tail, tailRead: opApi.tailRead,
+    site: opApi.site, identify: opApi.identify, pose: opApi.pose,
+    // WHERE THE LIVE JOINTS GO.  Straight into the three.js fleet, with the
+    // tool model on: the picture a person holds next to the machine to settle
+    // which way the holder is bolted has to show the holder.
+    onPose: (arm, q) => {
+      app.view.setJoints(Number(arm), q);
+      if (!app.layers.pens) {
+        app.layers.pens = 1;
+        app.view.setLayer("pens", true);
+      }
+    },
+    onJob: (id) => { refreshJobs().then(() => selectJob(id)); }});
   app.panel = new Panel(el("side"), {
     onStart: startJob, onCancel: cancelJob, onSelect: selectJob,
-    onMeshcat: api.openMeshcat});
+    onMeshcat: api.openMeshcat, operator: app.runOnArm});
   app.strip = new Strip(el("stages"), el("counters"), el("loads"));
   app.strip.armColor = colorOf;
   app.panels = new Panels({

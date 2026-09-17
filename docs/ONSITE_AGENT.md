@@ -38,9 +38,9 @@ there to edit (`tests/test_day1.py` enforces that).
 | operator PC | `diemut@192.168.50.2`, key-only ssh (`ssh host 'cmd'`, never `bash -lc`) — from `config/site.json` |
 | control boxes | arm 31 → 192.168.50.12, arm 71 → 192.168.50.14, arm 97 → 192.168.50.15. The id is the DDS domain AND the `ARM_ID` the supervisor reads. |
 | executor | `~/RTff/draw_rtff_supervised.sh` on the operator PC; it **ignores the joint columns and timestamps** in our CSV, paces by arc length at 0.02 m/s, and keeps its own arm configuration. Today's runs therefore test the tool, the plane and the pose path — not the planner's redundancy resolution. Say so if asked. |
-| first move | the executor ramps in a straight line from wherever the arm is to row 0 of the file, uncertified. **MEASURED: row 0 is NOT the park.** The certified PROGRAMME starts and ends at the park, but the exporter begins the CSV at the first frame whose tip is 50 mm clear of the paper — about **0.6 m and 4 rad** from the park on the day-1 word files. Put the arm at the park (operator's `go_start_pos.py`, position control), then **look at the gap `send` prints** before starting. |
-| end of file | the executor lifts 80 mm along the pen axis unless `RTFF_DEPART_LIFT=0`; our dispatch line sets it, because the certified programme already ends at the park. |
-| paper plane | no automatic gate for inverted arms, and `RTFF_CONTACT_DESCEND=0` means it does not feel for it either: the executor goes to the height baked into the file and the impedance spring holds contact. Measure it by hand first (operator tools `jog_descend.py` or `probe_surface.sh`). **`--paper-z Z` is how far the REAL paper sits ABOVE the modelled plane**, and it lifts the whole plan by Z. After a floating pass that asked for 30 mm and measured H, pass `--paper-z (0.030 - H)`; record it with `day1.py site --set slot31.paper_z=<Z>` and it becomes the default for that slot. |
+| **START POSE** | **ROW 0 of the CSV — not the park.** The executor ramps in an uncertified straight line from wherever the arm is to row 0, and it cannot execute a joint transit (it walks rows as a Cartesian path with its own nullspace). So drive the arm to **row 0's joints** under POSITION control (`go_start_pos.py`) and the ramp is then zero. `day1.py send` prints those joints; `send --from-q <measured joints>` **refuses to dispatch** if the arm is more than 0.05 rad or 10 mm away (`--allow-ramp` overrides, deliberately). |
+| **END POSE** | the **last row** of the CSV. `RTFF_DEPART_LIFT=0`, so the arm stops there rather than lifting 80 mm. `send` prints those joints too; return to the park under POSITION control afterwards. `day1.py park --arm N --from-q <end joints>` gives the certified path and the check that it is clear. |
+| paper plane | no automatic gate for inverted arms, and `RTFF_CONTACT_DESCEND=0` means it does not feel for it either: the executor goes to the height baked into the file and the impedance spring holds contact. Measure it by hand first (operator tools `jog_descend.py` or `probe_surface.sh`). **`--measured-float H` is the one to use**: H is what the ruler read on the floating pass, and it computes the offset for you. (`--paper-z Z` is the same thing stated as how far the REAL paper sits ABOVE the modelled plane, Z = 0.030 − H; it lifts the whole plan by Z.) Record it with `day1.py site --set slot31.paper_z=<Z>` and it becomes that slot's default. |
 | hover sign | `fr3_link0`'s +z points **down** on an inverted arm, so "30 mm above the paper" is `z_paper - 0.030` in the base frame. Verified in every file we write (`rows.tip_above_paper_base_m` in the json). |
 | slot 31 quirk | it refuses a line exactly on the seam line y = 1.815 (go-home leg fails the paper gate); the word is placed at `--dy -0.10` by default. |
 | the CSV | 19 columns: the v2 contract's 18, plus **`t_s` last** (the planner's pacing, same clock as the npz). A positional reader of the first 18 is unaffected. The executor ignores `q1..q7` and `t_s`. |
@@ -77,16 +77,33 @@ for a password, the key is not installed; stop and tell Pete.
 | command | what it does | output |
 |---|---|---|
 | `day1.py site` | prints `config/site.json` — operator, slots, arm ids, IPs, paper-z, dispatch env. **Read it first.** `--set KEY=VALUE` edits it | text |
-| `day1.py park --arm 31` | prints the park joint vector and park tip pose — where the certified programme begins, and where to drive the arm before streaming | text |
+| `day1.py park --arm 31` | the park joints and tip pose — where the programme begins and ends, and where to put the arm **after** a run. **Not** where a run starts | text |
 | `day1.py park --arm 31 --from-q q1,…,q7` | certified joint path from the MEASURED joints to the park (RRT) — a check that the straight ramp is clear; the deployed executor cannot follow joint paths | `out/day1/park_31.*` |
 | `day1.py word --arm 31 --hover` | the word under arm 31, floating 30 mm up; plans in ~20–50 s | `out/day1/unknown_hover_31.{csv,npz,json}` |
-| `day1.py word --arm 31 [--paper-z Z]` | the word on the paper, Z = measured tip height of the paper if it differs from 0 | `out/day1/unknown_31.*` |
+| `day1.py word --arm 31 [--measured-float H]` | the word on the paper. H = what the ruler read on the floating pass (the tool does the arithmetic; `--paper-z Z` is the raw form) | `out/day1/unknown_31.*` |
 | `day1.py line --arm 31 --from x,y --to x,y --name N [--hover 0.03]` | one straight line, same pipeline, seconds | `out/day1/N_31.*` |
-| `day1.py send --arm 31 --file out/day1/<file>.csv --dry-run` | PRINTS the scp and the run line, copies nothing | — |
+| `day1.py send --arm 31 --file out/day1/<file>.csv --dry-run` | PRINTS the START/END poses, the scp and the run line; copies nothing | — |
+| `day1.py send … --from-q <measured joints>` | the same, and **refuses** unless the arm is already at row 0 (0.05 rad / 10 mm) | — |
 | `day1.py send --arm 31 --file …` | copies the CSV to the operator PC and prints the run line | — |
 | `day1.py send --arm 31 --as-arm 97 --file …` | the same, but dispatched to the PHYSICAL arm 97 standing in slot 31's position | — |
 | `day1.py send … --live` | the same, and runs it over ssh | the arm moves |
 | `python -m aris_sixarm.gui` | http://localhost:8765 — Day 1 panel does the above with buttons, a 3D viewer, and a "Run on arm" group with a typed confirmation | — |
+
+**The GUI's "Run on arm" group** (left column, under Day 1) does §3 and §4 with
+buttons and runs **the same `day1.py send` as a subprocess** — it re-implements
+nothing. In order: **Check stack** (green only on `STACK HEALTHY`, raw output
+shown), **Copy to operator** (`send --dry-run`: copies nothing, prints the run
+line), **RUN (observe mode)** — *disabled until the stack check is green AND you
+have typed `RUN <slot>` into the confirm box* — then **Hold** and **Kill
+executor**. Every command is echoed verbatim before its output; the run's own
+output streams into the log pane on the right as an ordinary job, and **Start log
+tail** streams `tail -f /tmp/rtff_draw_arm<id>.log` off the operator PC into the
+panel. Above them, **Site setup** edits `config/site.json` in place (host, per
+slot: arm id / paper-z / mounting confirmed) and **Identify arms** polls ids
+31/71/97 for live joints every few seconds, poses the ones that answer in the 3D
+viewer with the tool model, and is how the slot → arm mapping gets filled in.
+Every line prints `slot 31 → arm 97`. **The physical e-stop is still the abort;
+nothing in the GUI is.**
 
 Every planning command prints ONE line `PASS …` or `FAIL …` with the gate numbers
 (inter-arm, frame, self, paper, joint speed as a fraction of the FR3 limit). A
@@ -97,16 +114,18 @@ FAIL writes **no CSV**. Never hand-edit a CSV.
 ## 3. What to check before an arm moves — every time
 
 1. **Stack health:** `ssh diemut@192.168.50.2 'bash ~/RTff/aris_hold.sh stack 31'` → must contain `STACK HEALTHY`. This script was written for arms 13/17; if it rejects 31, show Pete the raw output.
-2. **The arm is at its park pose** (compare the robot's joints to what `day1.py park --arm 31` prints; ±0.02 rad). If not, the operator's `go_start_pos.py` moves it there under position control. `day1.py park --arm 31 --from-q <measured joints>` plans and certifies a collision-free joint path from where it actually is to the park — that is a CHECK that the way is clear (the deployed executor follows tip poses only and cannot execute a joint path); the position-control move is still how you get there.
-3. **The paper height is measured** and baked (`--paper-z`, or `site --set slot31.paper_z=Z`) for on-paper runs; for the floating run the baked plane is the nominal one and the 30 mm is the check.
+2. **The arm is at ROW 0 of the file you are about to send** — not at the park. `day1.py send --arm 31 --file <csv> --dry-run` prints the START joints; move the arm there with the operator's `go_start_pos.py` under position control, then run `send … --from-q <measured joints>`, which refuses to dispatch unless the arm is within **0.05 rad on every joint and 10 mm at the tip**. The executor's opening ramp is then zero. Afterwards the arm stops at the END pose `send` printed; return it to the park under position control (`day1.py park --arm 31 --from-q <end joints>` is the certified check that the way back is clear).
+3. **The paper height is measured** and baked (`word --measured-float H` with the ruler's reading, or `site --set slot31.paper_z=Z`) for on-paper runs; for the floating run the baked plane is the nominal one and the 30 mm is the check.
 4. **The arm id is identified and recorded** (`site --set slot31.arm=<id> --set slot31.mounted=true`), and `send` is given `--as-arm <id>` if it differs from the slot.
 4. **The other arm is at its park** and nobody is under the arm.
 5. **Pete has the e-stop in hand.**
 6. **Ask Pete to confirm which way the fingers and the pen holder are mounted.**
    This is still ambiguous: the holder can sit in the jaw either way round, and the
    model's tool tip (86 mm to one side of the hand) depends on it. Use the GUI's
-   "Show current pose" (reads the arm's live joints from the operator PC and poses
-   the model with the tool drawn) and hold it next to the real hand: the pen must
+   **Identify arms** view (reads each arm's live joints from the operator PC and
+   poses the model with the tool drawn, refreshing every few seconds — move one
+   by hand in guiding mode to see which id it is) and hold it next to the real
+   hand: the pen must
    jut out on the same side and lean the same way. If it does not, STOP and tell
    Pete — every plan assumes the modelled side. Take a photo either way.
 
@@ -118,20 +137,33 @@ For arm 31, then repeat everything for arm 71 (`--arm 71`, control box .14, doma
 
 ```bash
 day1.py word --arm 31 --hover                       # PASS line, tip ≈ +27..30 mm
-day1.py send --arm 31 --file out/day1/unknown_hover_31.csv --dry-run   # read the line it prints
-day1.py send --arm 31 --file out/day1/unknown_hover_31.csv --live      # floating pass
+day1.py send --arm 31 --file out/day1/unknown_hover_31.csv --dry-run   # read the START joints it prints
+#   -> move the arm to those joints with the operator's go_start_pos.py (POSITION control)
+day1.py send --arm 31 --file out/day1/unknown_hover_31.csv \
+        --from-q <measured joints> --live                              # floating pass
 ```
+`--from-q` is the gate: it refuses to dispatch unless the arm is already at row
+0 (0.05 rad / 10 mm), because everything between there and row 0 is flown as an
+uncertified straight ramp.
 Watch: `ssh diemut@192.168.50.2 'tail -f /tmp/rtff_draw_arm31.log'`.
 **Pass:** the pen traces the word in the air, about 27–30 mm above the paper by
-eye/ruler everywhere, no reflex, no stop, the arm returns to its park. If the
-height is wrong by more than 5 mm the tool transform is off: record the observed
-height and tell Pete before anything touches paper.
+eye/ruler everywhere, no reflex, no stop, and the arm **stops at the END pose**
+`send` printed (`RTFF_DEPART_LIFT=0`) — return it to the park under position
+control. **Measure the height with a ruler at three points and write it down:
+it is the input to the next step.** If it is wrong by more than 5 mm the tool
+transform is off; tell Pete before anything touches paper.
 
 Then on paper:
 ```bash
-day1.py word --arm 31 --paper-z <measured>          # only if measured ≠ 0
-day1.py send --arm 31 --file out/day1/unknown_31.csv --live
+day1.py word --arm 31 --measured-float <ruler reading, m>   # e.g. 0.027
+day1.py send --arm 31 --file out/day1/unknown_31.csv --dry-run  # read the START joints
+#   -> go_start_pos.py to those joints (POSITION control)
+day1.py send --arm 31 --file out/day1/unknown_31.csv \
+        --from-q <measured joints> --live
 ```
+`--measured-float H` is the ruler's reading from the floating pass; it computes
+the paper offset for you (`--paper-z` is the same thing stated raw). Record it:
+`day1.py site --set slot31.paper_z=<Z>` makes it that slot's default.
 **Pass:** a continuous "unknown", no gaps inside strokes, no gouging, arm returns
 to park. The first passes run in `RTFF_MODE=observe` (open-loop depth); closed-
 loop force is a later step.

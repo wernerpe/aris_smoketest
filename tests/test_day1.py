@@ -479,6 +479,7 @@ def test_send_dispatches_a_slot_to_a_different_physical_arm(tmp_path, capsys):
     """`--as-arm`: the plan is a POSITION, the arm bolted into it may differ."""
     good = tmp_path / "unknown_31.csv"
     good.write_text(",".join(day1.CSV_COLUMNS_T) + "\n"
+                    + ",".join(["0"] * len(day1.CSV_COLUMNS_T)) + "\n"
                     + ",".join(["0"] * len(day1.CSV_COLUMNS_T)) + "\n")
     ap = day1.build_parser()
     assert day1.cmd_send(ap.parse_args(
@@ -492,9 +493,95 @@ def test_send_dispatches_a_slot_to_a_different_physical_arm(tmp_path, capsys):
     assert "/tmp/impedance_pathway_arm97.csv" in out
     assert "ARM_ID=97 bash" in out
     assert "CONFIRM THE MOUNTING" in out
-    # ...and the park it prints is the SLOT's, because that is the base frame
-    # the file's poses are in
-    assert "park q  =" in out
+    # ...and the start pose it prints is the FILE's row 0, in the slot's base
+    # frame, which is the frame the poses are in
+    assert "START POSE = ROW 0" in out
+
+
+def test_send_prints_row_0_as_the_start_pose_and_the_last_row_as_the_end(
+        tmp_path, capsys):
+    """THE START POSE IS ROW 0, NOT THE PARK.
+
+    The executor ramps in an uncertified straight line from wherever the arm is
+    to row 0, and it cannot execute our park->hover joint transit (it walks
+    rows as a Cartesian path with its own nullspace).  So the pose to drive to
+    under position control is row 0's, and `send` prints it — and the last
+    row's, because RTFF_DEPART_LIFT=0 leaves the arm standing there.
+    """
+    good = tmp_path / "unknown_31.csv"
+    rows = [",".join(day1.CSV_COLUMNS_T),
+            "0,0,travel,0.1,0.2,0.9,0,0,0,1,1.0,"
+            "0.1,0.2,0.3,-1.0,0.5,0.6,0.7,0.0",
+            "0,1,travel,0.3,0.4,0.9,0,0,0,1,1.0,"
+            "0.9,0.8,0.7,-1.5,0.5,0.4,0.3,1.0"]
+    good.write_text("\n".join(rows) + "\n")
+    ap = day1.build_parser()
+    assert day1.cmd_send(ap.parse_args(
+        ["send", "--arm", "31", "--file", str(good), "--dry-run"])) == 0
+    out = capsys.readouterr().out
+    assert "START POSE = ROW 0" in out
+    assert "go_start_pos.py" in out
+    assert "the executor's ramp is then zero" in out
+    assert "+0.100000, +0.200000, +0.300000" in out      # row 0's joints
+    assert "END POSE = the LAST row" in out
+    assert "+0.900000, +0.800000, +0.700000" in out      # the last row's
+    assert "park --arm 31 --from-q" in out
+    # the old instruction must be gone
+    assert "at the park pose" not in out
+    assert "MUST ALREADY BE AT THE PARK" not in out
+
+
+def test_send_refuses_when_the_arm_is_not_at_row_0(tmp_path, capsys):
+    """`--from-q`: the ramp gate, in radians AND at the tip."""
+    src = ROOT / "out" / "day1" / "unknown_31.csv"
+    if not src.exists():
+        pytest.skip("out/day1/unknown_31.csv is not in this checkout")
+    row0, _ = day1._csv_ends(src)
+    q0 = np.asarray(day1._row_pose(row0)["q"], float)
+    ap = day1.build_parser()
+
+    def run(q, extra=()):
+        return day1.cmd_send(ap.parse_args(
+            ["send", "--arm", "31", "--file", str(src), "--from-q",
+             ",".join(str(v) for v in q), "--dry-run", *extra]))
+
+    assert run(q0) == 0                     # already there: dispatches
+    out = capsys.readouterr().out
+    assert "ramp is effectively zero" in out
+
+    off = q0.copy()
+    off[3] += 0.5
+    with pytest.raises(day1.Refused) as e:
+        run(off)
+    msg = str(e.value)
+    assert "NOT at this file's start pose" in msg
+    assert "0.5000 rad on joint 4" in msg and "mm at the tip" in msg
+    assert "Nothing copied" in msg
+
+    assert run(off, ("--allow-ramp",)) == 0      # deliberate override
+    assert "--allow-ramp" in capsys.readouterr().out
+
+    # the gate is BOTH distances: a pose inside the joint gate but outside the
+    # tip gate is still refused, and vice versa
+    c = day1._ramp_check(row0, off)
+    assert c["max_dq_rad"] == pytest.approx(0.5)
+    assert c["tip_m"] > day1.START_GATE_M and not c["ok"]
+    near = q0.copy()
+    near[6] += 0.02                      # inside both gates
+    assert day1._ramp_check(row0, near)["ok"]
+
+
+def test_measured_float_is_paper_z_without_the_arithmetic():
+    """`--measured-float H` == `--paper-z (0.030 - H)`, and they do not mix."""
+    ap = day1.build_parser()
+    a = ap.parse_args(["word", "--arm", "31", "--measured-float", "0.027"])
+    assert a.measured_float == pytest.approx(0.027) and a.paper_z == 0.0
+    # a float that read 27 mm where 30 was asked: the paper is 3 mm HIGH
+    assert day1.HOVER_DEFAULT - a.measured_float == pytest.approx(0.003)
+    b = ap.parse_args(["word", "--arm", "31", "--measured-float", "0.027",
+                       "--paper-z", "0.003"])
+    with pytest.raises(day1.Refused):
+        day1.cmd_word(b)
 
 
 def test_send_refuses_a_file_that_is_not_a_pathway_csv(tmp_path):
@@ -536,7 +623,8 @@ def test_send_dry_run_copies_nothing_and_prints_the_one_command(tmp_path,
     assert "ladder gate" in out.lower()
     assert "e-stop" in out.lower()
     assert "IGNORES q1..q7 AND t_s" in out
-    assert "park q  =" in out          # where the arm has to be standing
+    # where the arm has to be standing, and it is ROW 0 rather than the park
+    assert "START POSE = ROW 0" in out and "END POSE = the LAST row" in out
 
 
 @pytest.mark.skipif(not day1.VARIANTS["alt"]["npz"].exists(),

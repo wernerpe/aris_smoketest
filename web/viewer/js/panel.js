@@ -318,7 +318,7 @@ export class Day1 {
 }
 
 export class Panel {
-  constructor(el, {onStart, onCancel, onSelect, onMeshcat}) {
+  constructor(el, {onStart, onCancel, onSelect, onMeshcat, operator}) {
     this.el = el;
     this.cb = {onStart, onCancel, onSelect, onMeshcat};
     this.inputs = {};
@@ -326,6 +326,12 @@ export class Panel {
     // FIRST IN THE COLUMN, because on a hardware day it is the only thing
     // anybody touches; the planner form below it is the other days' panel.
     this.day1 = new Day1(onStart, onMeshcat);
+    // ...and DIRECTLY BELOW IT, because it is the next thing that happens to
+    // the file the panel above just certified: plan it here, then fly it here.
+    // PASSED IN ALREADY BUILT, not constructed here: `operator.js` imports `F`
+    // from this file, and a panel that imported it back would be a module
+    // cycle for no gain.
+    this.operator = operator || null;
   }
 
   build(cfg) {
@@ -333,6 +339,7 @@ export class Panel {
     const d = cfg.defaults || {};
     this.el.innerHTML = "";
     this.el.appendChild(this.day1.build(cfg));
+    if (this.operator) this.el.appendChild(this.operator.build(cfg));
     const opts = Object.assign({}, OPTIONS, {
       rigs: cfg.rigs, tools: cfg.tools,
       atlases: [""].concat(cfg.atlases || []),
@@ -427,10 +434,17 @@ export class Panel {
     this.day1.setRunning(live);
   }
 
-  setDay1(result) { this.day1.show(result); }
+  setDay1(result) {
+    this.day1.show(result);
+    // THE CSV THE RUN PANEL WILL FLY IS THE ONE THIS RUN JUST CERTIFIED.  Only
+    // on a PASS, and only until somebody types in the box themselves.
+    if (this.operator) this.operator.suggestCsv(result);
+  }
+
   clearDay1() { this.day1.clear(); }
 
   setJobs(jobs, selectedId) {
+    if (this.operator) this.operator.noteJobs(jobs);
     this.jobList.innerHTML = "";
     for (const j of jobs) {
       const when = new Date(j.created * 1000).toLocaleTimeString();
@@ -440,8 +454,9 @@ export class Panel {
       });
       el.innerHTML =
         `<span class="st ${j.status}">${j.status}</span>` +
-        `<b>${esc(j.params.day1 ? _day1Label(j.params)
-                                : (j.params.out || j.params.source || j.id))}</b><br>` +
+        `<b>${esc(j.params.day1 || j.params.operator
+                  ? _day1Label(j.params)
+                  : (j.params.out || j.params.source || j.id))}</b><br>` +
         `<span class="t">${when} · ${fmtS(j.elapsed_s)} · ` +
         `${esc(j.params.rig || "")}/${esc(j.params.tool || "")}</span>`;
       this.jobList.appendChild(el);
@@ -450,6 +465,7 @@ export class Panel {
 }
 
 function _day1Label(p) {
+  if (p.operator === "run") return `RUN arm ${p.arm}`;
   if (p.day1 === "line") return `line ${p.name || ""}_${p.arm}`;
   if (p.arm) return `word arm ${p.arm}${p.hover ? " hover" : ""}`;
   return `word ${p.variant || "alt"}`;

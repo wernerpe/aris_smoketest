@@ -1012,16 +1012,25 @@ at the park.
 > command — so today's runs test the tool, the plane and the pose path, and
 > *not* the planner's redundancy resolution. Say so if asked.
 
-> **AND ROW 0 IS NOT THE PARK.** The executor's first move is an uncertified
-> straight ramp from the arm's measured configuration to row 0. The certified
-> programme starts and ends at the park, but the exporter begins the CSV at the
-> first frame whose tip is 50 mm clear of the paper — **measured, about 0.6 m
-> and 4 rad from the park** on the day-1 word files. `send` prints the park
-> pose and that gap every time. `day1.py park --arm N` prints the pose alone;
-> `--from-q <measured joints>` plans and certifies a collision-free joint path
-> from where the arm actually is to the park (a CHECK — the deployed executor
-> cannot execute a joint path; `go_start_pos.py` under position control is how
-> you actually get there).
+> **THE START POSE IS ROW 0, NOT THE PARK.** The executor's first move is an
+> uncertified straight ramp from the arm's measured configuration to row 0, and
+> it cannot execute our park→hover joint transit — it walks rows as a Cartesian
+> path with its own nullspace. The certified programme does park at both ends,
+> but the exporter begins the CSV at the first frame whose tip is 50 mm clear
+> of the paper: **measured, about 0.6 m and 4 rad from the park** on the day-1
+> word files. So the arm is driven to **row 0's joints** under POSITION control
+> (the operator's `go_start_pos.py`) and the executor's ramp is then zero.
+> `send` prints those joints as **START POSE** every time, and
+> `send --from-q <measured joints>` **refuses to dispatch** unless the arm is
+> within **0.05 rad on every joint and 10 mm at the tip** (`--allow-ramp`
+> overrides, deliberately).
+>
+> **And the arm STOPS at the last row**, because `RTFF_DEPART_LIFT=0`. `send`
+> prints that as **END POSE**; return to the park under position control
+> afterwards. `day1.py park --arm N` prints the park pose, and
+> `--from-q <end joints>` plans and certifies a collision-free joint path back
+> to it — a CHECK that the way is clear, since the deployed executor cannot
+> execute a joint path.
 The supervisor is what runs the ladder gate, drives MoveIt to the start,
 switches `fr3_arm_controller` → `cartesian_impedance_controller`, and calls
 `rtff_pathway_exec.py --csv <file>`. The arm is chosen by the **`ARM_ID`
@@ -1055,6 +1064,33 @@ near the e-stop.
 > (`bash ~/RTff/aris_hold.sh hold <N>`) or the keeper will start its own pass
 > on top of this one. There is also a **retired** box at 192.168.50.4 whose
 > `~/RTff` is a stale copy; never point `--host` at it.
+
+### 5.4 The same thing with buttons — the GUI's "Run on arm" group
+
+`python -m aris_sixarm.gui` → http://localhost:8765. Under the Day 1 panel, in
+the left column. It **runs `scripts/day1.py send` as a subprocess** and shows
+what it printed: no address, no supervisor line and no `RTFF_*` variable is
+built in the GUI, so this section and that file cannot drift apart. Every
+command is echoed verbatim (`$ ssh -o BatchMode=yes …`) above its own output,
+and a command that cannot reach the operator box shows its refusal and its exit
+code rather than spinning.
+
+| control | what it runs | when it is available |
+|---|---|---|
+| **Site setup** → Save site | writes `config/site.json` (host, per slot: arm id, paper-z, mounting confirmed) | always |
+| **Identify arms** | `ARM_ID=<id> source ~/impedance_helpers/arm_env.sh && timeout 5 ros2 topic echo --once /joint_states` for ids 31/71/97, every 4 s; poses the ones that answer in the 3D viewer with the tool model, and offers each to Drake Meshcat | always |
+| **Check stack** | `bash ~/RTff/aris_hold.sh stack <id>` | always — **green only on `STACK HEALTHY`**, and the raw output is shown either way |
+| **Copy to operator (dry run)** | `day1.py send --arm <slot> [--as-arm <id>] --file <csv> --dry-run` | always — copies nothing |
+| **RUN (observe mode)** | the same with `--live`, as an ordinary job whose output streams into the log pane | **only** with a green stack check for that arm (15 min) **and** `RUN <slot>` typed into the confirm box |
+| **Hold** / **Kill executor** | `aris_hold.sh hold <id>` (keeps the checkpoint) / `arm_pkill rtff_pathway_exec` | once a run has been started |
+| **Start log tail** | `ssh … 'tail -n 50 -f /tmp/rtff_draw_arm<id>.log'` into the panel, stoppable | always |
+
+The gate is the SERVER's, not the button's: `POST /api/operator/run` refuses
+without both conditions, so a `curl` at the endpoint meets the same refusal.
+The slot → arm mapping is printed on every line the panel and the job produce
+(`slot 31 -> arm 97 (left-middle)`, and `MOUNTING NOT CONFIRMED` until somebody
+has ticked it). **The physical e-stop is the abort. Nothing in this panel is** —
+it says so, in red, above the buttons.
 
 ---
 

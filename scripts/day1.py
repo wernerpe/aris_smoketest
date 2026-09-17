@@ -964,6 +964,9 @@ def cmd_line(a):
     if hov > 0:
         print(f"  the pen rides {1000 * hov:.0f} mm off the paper: measure it "
               f"with a ruler at three points before ANY pen-down run.")
+    print()
+    for ln in _file_pose_lines(s["files"]["csv"], int(a.arm)):
+        print(ln)
     return 0
 
 
@@ -1518,10 +1521,25 @@ def cmd_word_arm(a):
     # THE MEASURED PAPER OFFSET LIVES IN THE SITE FILE, so a run that does not
     # say otherwise uses the number somebody measured with a ruler and wrote
     # down, rather than silently planning against the nominal plane.
-    pz = (float(a.paper_z) if a.paper_z
-          else float(slot_cfg(arm).get("paper_z") or 0.0))
+    # --measured-float H IS --paper-z (0.030 - H) AND NOTHING ELSE.  The ruler
+    # reads the gap; the plan needs the offset; doing that subtraction in a
+    # person's head at the rig is how a sign error gets into the paper.
+    if a.measured_float is not None:
+        if a.paper_z:
+            raise Refused("--measured-float and --paper-z say the same thing "
+                          "two ways; give one.")
+        pz = HOVER_DEFAULT - float(a.measured_float)
+    elif a.paper_z:
+        pz = float(a.paper_z)
+    else:
+        pz = float(slot_cfg(arm).get("paper_z") or 0.0)
     for ln in assumptions([arm]):
         print(ln)
+    if a.measured_float is not None:
+        print(f"  --measured-float {1000 * a.measured_float:.1f} mm: the "
+              f"floating pass asked for {1000 * HOVER_DEFAULT:.0f} and the "
+              f"ruler read {1000 * a.measured_float:.1f}, so the paper sits "
+              f"{1000 * pz:+.1f} mm from where the model puts it")
     if pz:
         print(f"  --paper-z {1000 * pz:+.1f} mm: the real paper sits that far "
               f"ABOVE the modelled plane, and the whole plan is lifted by it")
@@ -1558,8 +1576,12 @@ def cmd_word_arm(a):
               f"the paper (asked {1000 * hov:.0f}; scene_check's own minimum "
               f"over the programme): measure it with a ruler at three points "
               f"before ANY pen-down run.")
+    print()
+    for ln in _file_pose_lines(s["files"]["csv"], arm):
+        print(ln)
+    print()
     print(f"  send it:  scripts/day1.py send --arm {arm} "
-          f"--file {s['files']['csv']}")
+          f"--file {s['files']['csv']} --from-q <measured joints>")
     return 0
 
 
@@ -2045,20 +2067,17 @@ def cmd_park(a):
     arm = int(a.arm)
     pose = park_pose(arm)
     print(f"ARM {arm} PARK POSE — where the certified PROGRAMME starts and "
-          f"ends, and the pose")
-    print(f"to drive the arm to under position control (go_start_pos.py) "
-          f"BEFORE streaming")
-    print(f"anything: the executor's first move is an UNCERTIFIED straight "
-          f"ramp from wherever")
-    print(f"the arm is standing to row 0 of the file.")
-    print(f"MEASURED, AND IT MATTERS: the CSV does NOT begin at the park.  "
-          f"The exporter starts")
-    print(f"the file at the first frame whose tip is 50 mm clear of the paper, "
-          f"walking back")
-    print(f"from the first ink — so row 0 is part-way through the park->hover "
-          f"leg, about 0.6 m")
-    print(f"and 4 rad from the park on the day-1 word files.  `send` prints "
-          f"that gap.")
+          f"ends, and where to")
+    print(f"put the arm AFTER a run.  IT IS NOT WHERE A RUN STARTS: the "
+          f"exporter begins the")
+    print(f"CSV at the first frame whose tip is 50 mm clear of the paper, so "
+          f"row 0 is about")
+    print(f"0.6 m and 4 rad from here on the day-1 word files.  THE START POSE "
+          f"IS ROW 0 —")
+    print(f"`day1.py send` prints it, and that is the pose to drive to under "
+          f"position control.")
+    print(f"This pose is what `--from-q <end joints>` plans a certified path "
+          f"BACK to.")
     for ln in _park_lines(arm):
         print(ln)
     if not a.from_q:
@@ -2127,14 +2146,16 @@ latches its own nullspace.  IT IGNORES q1..q7 AND t_s.  Those columns are the
 record of what the planner chose and the basis of the velocity certificate;
 on the deployed stack they are a check, not a command.
 
-AND THE FIRST MOVE IS NOT CERTIFIED BY ANYTHING.  The executor ramps in a
-straight line from the arm's measured configuration to row 0.  Row 0 is NOT the
-park: the exporter starts the file at the first frame whose tip is 50 mm clear
-of the paper walking back from the first ink, which on the day-1 word files is
-about 0.6 m and 4 rad from the park.  `send` prints the park pose AND that gap
-every time, so it is a number somebody looks at rather than a surprise.
-`day1.py park --arm N` prints the pose on its own, and with `--from-q` plans a
-certified joint path to it.
+THE START POSE IS ROW 0, NOT THE PARK.  The executor ramps in an uncertified
+straight line from the arm's measured configuration to row 0, and it cannot
+execute a joint transit, so the arm is driven to ROW 0's JOINTS under POSITION
+control (the operator's go_start_pos.py) and the ramp is then zero.  `send`
+prints those joints as START POSE, and `--from-q <measured joints>` REFUSES to
+dispatch unless the arm is already within 0.05 rad and 10 mm of them
+(`--allow-ramp` overrides, deliberately).  The arm then STOPS at the last row
+(RTFF_DEPART_LIFT=0), which `send` prints as END POSE; return it to the park
+under position control afterwards, and `day1.py park --arm N --from-q <end
+joints>` is the certified check that the way back is clear.
 
 Plain `ssh host 'cmd'`, key-only — not `bash -lc`, which would source a
 profile an ssh session has not got."""
@@ -2176,31 +2197,132 @@ def park_pose(arm, tool=None):
                 frame="fr3_link0", tool=tool or os.environ["ARIS_TOOL"])
 
 
-def _park_lines(arm, row0=None, indent="     "):
-    """The park pose, and how far row 0 is from it. -> list[str]."""
-    p = park_pose(arm)
-    out = [indent + "park q  = "
-           + ", ".join(f"{v:+.6f}" for v in p["q"]),
-           indent + "park tip (fr3_link0) xyz = "
-           + ", ".join(f"{v:+.6f}" for v in p["tip_xyz_base_m"])
-           + "  quat xyzw = "
-           + ", ".join(f"{v:+.6f}" for v in p["tip_quat_xyzw"])]
-    if row0 is not None:
-        try:
-            xyz = np.array([float(row0[3]), float(row0[4]), float(row0[5])])
-            q0 = np.array([float(v) for v in row0[11:18]])
-            d = 1000.0 * float(np.linalg.norm(
-                xyz - np.asarray(p["tip_xyz_base_m"], float)))
-            dq = float(np.abs(q0 - np.asarray(p["q"], float)).max())
-            out.append(indent + f"row 0 of this file is {d:.1f} mm and "
-                                f"{dq:.4f} rad from that park pose")
-            if d > 1.0 or dq > 0.01:
-                out.append(indent + "! row 0 is NOT the park — the ramp from "
-                                    "the park to row 0 is uncertified motion; "
-                                    "look at it before streaming")
-        except (ValueError, IndexError):
-            pass
+# --- THE START POSE IS ROW 0, AND IT IS NOT THE PARK -----------------------
+# MEASURED, and it decided the interface: the certified PROGRAMME parks at both
+# ends, but the exporter begins the CSV at the first frame whose tip is 50 mm
+# clear of the paper — 641.7 mm and 4.16 rad from the park on the arm-31 word.
+# The deployed executor ramps from wherever the arm is standing to row 0 in a
+# straight line that nothing in this repository certifies, AND it cannot
+# execute our park->hover joint transit (it walks rows as a Cartesian path with
+# its own nullspace).  So the arm is driven to ROW 0 under position control and
+# the executor's ramp is then zero.  Every command that writes or sends a file
+# prints the row-0 joints for exactly that purpose.
+START_GATE_RAD = 0.05     # per joint, between the measured pose and row 0
+START_GATE_M = 0.010      # at the tip
+
+
+def _row_pose(row):
+    """One CSV row -> dict(q, tip_xyz, tip_quat).  Raises on a malformed row."""
+    return dict(q=[float(v) for v in row[11:18]],
+                tip_xyz_base_m=[float(row[3]), float(row[4]), float(row[5])],
+                tip_quat_xyzw=[float(row[6]), float(row[7]), float(row[8]),
+                               float(row[9])])
+
+
+def _csv_ends(path):
+    """The first and last data rows of a pathway CSV. -> (row0, rowN)."""
+    with open(path) as f:
+        rd = csv.reader(f)
+        next(rd, None)
+        rows = [r for r in rd if r]
+    if not rows:
+        raise Refused(f"{path} has a header and no rows.")
+    return rows[0], rows[-1]
+
+
+def _pose_lines(tag, pose, indent="     "):
+    return [indent + f"{tag} q1..q7 = "
+            + ", ".join(f"{v:+.6f}" for v in pose["q"]),
+            indent + f"{' ' * len(tag)} tip (fr3_link0) xyz = "
+            + ", ".join(f"{v:+.6f}" for v in pose["tip_xyz_base_m"])
+            + "  quat xyzw = "
+            + ", ".join(f"{v:+.6f}" for v in pose["tip_quat_xyzw"])]
+
+
+def _start_end_lines(row0, rowN, arm, indent="     "):
+    """What to do before and after the run, as the poses to do it with."""
+    out = [indent + "START POSE = ROW 0 of this file.  Move the arm HERE under "
+                    "POSITION control first"]
+    out += [indent + "(the operator's go_start_pos.py, with these joints); the "
+                     "executor's ramp is then zero."]
+    out += _pose_lines("START", _row_pose(row0), indent)
+    out += ["", indent + "END POSE = the LAST row.  RTFF_DEPART_LIFT=0, so the "
+                         "executor stops here.",
+            indent + f"Return to park under POSITION control afterwards; "
+                     f"`day1.py park --arm {arm} --from-q <end joints>`",
+            indent + "gives the certified path and the check that it is clear."]
+    out += _pose_lines("END  ", _row_pose(rowN), indent)
     return out
+
+
+def _tip_of_q(q):
+    """FK tip of one configuration, in the arm's own base frame. -> (3,)."""
+    pen_lat, pen_ext = pathway.tool_offsets(os.environ["ARIS_TOOL"])
+    _T, tip = pathway._tip_of(np.asarray(q, float).reshape(1, 7), pen_ext,
+                              pen_lat)
+    return np.asarray(tip[0], float)
+
+
+def _ramp_check(row0, q_from):
+    """How far the measured pose is from row 0. -> dict.
+
+    Both distances, because either one alone can be small while the other is
+    not: a wrist roll moves 2 rad and no millimetres, and a shoulder nudge
+    moves 10 mm and almost no radians.  Both are the ramp the executor flies.
+    """
+    p0 = _row_pose(row0)
+    q0 = np.asarray(p0["q"], float)
+    qm = np.asarray(q_from, float).reshape(7)
+    dq = np.abs(qm - q0)
+    d_tip = float(np.linalg.norm(_tip_of_q(qm)
+                                 - np.asarray(p0["tip_xyz_base_m"], float)))
+    return dict(max_dq_rad=float(dq.max()),
+                worst_joint=int(np.argmax(dq)) + 1,
+                per_joint_rad=[float(v) for v in dq],
+                tip_m=d_tip,
+                gate_rad=float(START_GATE_RAD), gate_m=float(START_GATE_M),
+                ok=bool(dq.max() <= START_GATE_RAD and d_tip <= START_GATE_M))
+
+
+def _ramp_lines(row0, q_from, allowed, indent="     "):
+    c = _ramp_check(row0, q_from)
+    out = [indent + f"measured pose -> row 0: {c['max_dq_rad']:.4f} rad "
+                    f"(worst j{c['worst_joint']}, gate "
+                    f"{c['gate_rad']:.2f}), {1000 * c['tip_m']:.1f} mm at the "
+                    f"tip (gate {1000 * c['gate_m']:.0f})"]
+    if c["ok"]:
+        out.append(indent + "the executor's ramp is effectively zero.  Good.")
+    elif allowed:
+        out.append(indent + "! --allow-ramp: dispatching anyway.  That gap is "
+                            "flown as an UNCERTIFIED straight line.")
+    return out
+
+
+def _file_pose_lines(csv_path, arm, indent="  "):
+    """The two poses a person needs before and after streaming a file."""
+    try:
+        row0, rowN = _csv_ends(csv_path)
+    except (Refused, OSError):
+        return []
+    return _start_end_lines(row0, rowN, arm, indent)
+
+
+def _gate_ramp(row0, q_from, allowed):
+    """Refuse to dispatch a file whose row 0 is far from the measured pose."""
+    c = _ramp_check(row0, q_from)
+    if c["ok"] or allowed:
+        return c
+    raise Refused(
+        f"the arm is NOT at this file's start pose: "
+        f"{c['max_dq_rad']:.4f} rad on joint {c['worst_joint']} (gate "
+        f"{c['gate_rad']:.2f}) and {1000 * c['tip_m']:.1f} mm at the tip "
+        f"(gate {1000 * c['gate_m']:.0f}).\n"
+        f"  The executor would fly that gap as an UNCERTIFIED straight ramp.  "
+        f"Move the arm to row 0\n"
+        f"  under POSITION control first (go_start_pos.py with the START "
+        f"joints below), then send again.\n"
+        + "\n".join(_pose_lines("START", _row_pose(row0), "  "))
+        + "\n  --allow-ramp dispatches anyway, deliberately.  Nothing copied.")
 
 
 def _summary_beside(csv_path):
@@ -2257,11 +2379,13 @@ def cmd_send(a):
 
     for ln in site_lines():
         print(ln)
-    row0 = None
-    with open(src) as f:
-        rd = csv.reader(f)
-        next(rd, None)
-        row0 = next(rd, None)
+    row0, rowN = _csv_ends(src)
+    # THE GATE ON THE RAMP, AND IT REFUSES BEFORE IT COPIES.  Handed the
+    # measured joints, `send` will not dispatch a file whose row 0 is far from
+    # where the arm is actually standing: that gap is flown as an uncertified
+    # straight line and it is the one motion of the day nothing has graded.
+    if a.from_q:
+        _gate_ramp(row0, _q7(a.from_q, "--from-q"), bool(a.allow_ramp))
     where = slot_cfg(slot).get("position", f"slot {slot}")
     ip = ((st.get("arms") or {}).get(str(arm)) or {}).get("ip")
     if arm == slot:
@@ -2294,15 +2418,20 @@ def cmd_send(a):
                           f"loaded — password auth is disabled.")
         print("  copied.")
     print()
-    print("1. WHERE THE ARM MUST BE STANDING.  The executor's FIRST move is "
-          "an UNCERTIFIED")
-    print("   straight ramp from the arm's measured configuration to row 0 of "
-          "this file.")
-    print("   Drive it under position control (go_start_pos.py) to the park — "
-          "where the")
-    print("   certified programme begins — and read the gap below:")
-    for ln in _park_lines(slot, row0):
+    print("1. WHERE THE ARM MUST BE STANDING, AND WHERE IT WILL STOP.  The "
+          "executor's FIRST")
+    print("   move is an UNCERTIFIED straight ramp from the arm's measured "
+          "configuration to")
+    print("   row 0, and it cannot execute a joint transit — it walks rows as "
+          "a Cartesian")
+    print("   path with its own nullspace.  So the start pose IS ROW 0, not "
+          "the park:")
+    for ln in _start_end_lines(row0, rowN, slot):
         print(ln)
+    if a.from_q:
+        for ln in _ramp_lines(row0, _q7(a.from_q, "--from-q"),
+                              bool(a.allow_ramp)):
+            print(ln)
     print()
     print("2. THE STACK MUST BE HEALTHY — hardware active, three controllers, "
           "robot_mode 2.")
@@ -2452,6 +2581,14 @@ reference writes NOTHING.""")
                         f"{HOVER_DEFAULT:g} m).  Plans with a pen that much "
                         f"longer and grades with the real one; the json states "
                         f"the measured tip height above the paper.")
+    w.add_argument("--measured-float", type=float, default=None, metavar="M",
+                   dest="measured_float",
+                   help=f"what the RULER READ during the floating pass, in "
+                        f"metres.  The human-facing alias for --paper-z: it "
+                        f"computes --paper-z = {HOVER_DEFAULT:g} - H, so "
+                        f"nobody does arithmetic at the rig.  A float that "
+                        f"measured 27 mm means the paper is 3 mm higher than "
+                        f"the model: --measured-float 0.027.")
     w.add_argument("--paper-z", type=float, default=0.0, metavar="M",
                    dest="paper_z",
                    help="metres the REAL paper surface sits ABOVE the modelled "
@@ -2533,6 +2670,17 @@ reference writes NOTHING.""")
     s.add_argument("--remote", default=None, metavar="PATH",
                    help="where the CSV lands on the operator box (default: "
                         "the site file's `remote_csv`)")
+    s.add_argument("--from-q", dest="from_q", default=None,
+                   metavar="q1,...,q7",
+                   help="the arm's MEASURED joints (the GUI's Identify view "
+                        "shows them).  Given these, `send` REFUSES to "
+                        "dispatch unless the arm is already at row 0 — within "
+                        f"{START_GATE_RAD:g} rad on every joint and "
+                        f"{1000 * START_GATE_M:.0f} mm at the tip.")
+    s.add_argument("--allow-ramp", action="store_true",
+                   help="dispatch even though the arm is not at row 0.  The "
+                        "executor then flies that gap as an UNCERTIFIED "
+                        "straight ramp.  Deliberate only.")
     s.add_argument("--dry-run", action="store_true",
                    help="print the scp and the run command, copy nothing")
     s.add_argument("--live", action="store_true",

@@ -30,6 +30,31 @@ export const api = {
                               body: JSON.stringify(body)}),
 };
 
+// RUN ON ARM.  Six calls, and not one of them carries a command: the argument
+// lists live in `aris_sixarm/gui/operator.py`, which reads `scripts/day1.py`'s
+// OPERATOR block, so the browser cannot invent an address or a flag.  `run` is
+// the only one that can move an arm and it carries the typed confirmation,
+// which the server checks again against its own record of the stack check.
+const post = (url, body) => j(url, {
+  method: "POST", headers: {"Content-Type": "application/json"},
+  body: JSON.stringify(body || {})});
+
+export const operator = {
+  config:   ()              => j("/api/operator"),
+  site:     (patch)         => post("/api/operator/site", patch),
+  identify: (body)          => post("/api/operator/identify", body || {}),
+  pose:     (body)          => post("/api/operator/pose", body || {}),
+  check:    (arm)           => post("/api/operator/check", {arm}),
+  copy:     (slot, csv)     => post("/api/operator/copy", {slot, csv}),
+  run:      (slot, csv, confirm) =>
+                               post("/api/operator/run", {slot, csv, confirm}),
+  hold:     (arm)           => post("/api/operator/hold", {arm}),
+  kill:     (arm)           => post("/api/operator/kill", {arm}),
+  tail:     (arm, action)   => post("/api/operator/tail", {arm, action}),
+  tailRead: (arm, offset)   => j(`/api/operator/tail?arm=${arm}`
+                                 + `&offset=${offset || 0}`),
+};
+
 export async function fetchBin(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: ${r.status}`);

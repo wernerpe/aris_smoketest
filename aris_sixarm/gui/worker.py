@@ -491,7 +491,7 @@ def main(argv=None):
     # directory is the job (see `jobs.py`), so the default belongs here and not
     # in the form.  A day-1 job takes no `--outdir`: its files belong in
     # `out/day1/`, which is where the runbook says to look for them.
-    if not params.get("day1"):
+    if not params.get("day1") and not params.get("operator"):
         params.setdefault("outdir", str(job_dir))
 
     sys.path.insert(0, str(ROOT))
@@ -511,7 +511,14 @@ def main(argv=None):
     ok, err = True, None
     day1_result = None
     try:
-        if params.get("day1"):
+        if params.get("operator"):
+            # RUN ON ARM.  One subprocess — `scripts/day1.py send --live` — and
+            # its output teed into this job's event log.  It plans nothing and
+            # writes no bundle; see `gui/operator.py` for why it is a
+            # subprocess and where the gate is.
+            from .operator import run_operator
+            ok, err = run_operator(job_dir, params, progress)
+        elif params.get("day1"):
             ok, err, day1_result = run_day1(job_dir, params, progress)
         else:
             args = build_argv(params)
@@ -535,7 +542,10 @@ def main(argv=None):
         files = sorted(p.name for p in job_dir.iterdir()) \
             if job_dir.exists() else []
         bundle_err = None
-        if ok:
+        # An operator run has no programme of its own — it FLIES one that was
+        # certified and bundled by an earlier job — so there is nothing here to
+        # export and "no schedule to bundle" would be a false alarm.
+        if ok and not params.get("operator"):
             try:
                 bundle_err = (_day1_bundle(job_dir, day1_result, progress)
                               if day1_result is not None

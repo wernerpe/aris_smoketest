@@ -71,6 +71,12 @@ button:hover { border-color: var(--dim2); }
 button.primary { background: var(--accent); color: #17130f; border-color: var(--accent); font-weight: 600; }
 button.danger  { color: var(--bad); border-color: var(--bad); }
 button:disabled { opacity: .4; cursor: default; }
+/* A DISABLED RUN BUTTON MUST NOT LOOK ARMED.  `primary` is the accent fill;
+   at 40 % opacity on this ground it still reads as the bright one, and the one
+   button on the page that moves a robot may not be the button that looks ready
+   when it is not. */
+button.primary:disabled { background: var(--panel2); color: var(--dim2);
+                          border-color: var(--line); opacity: 1; }
 .btnrow { display: grid; grid-template-columns: 2fr 1fr; gap: 6px; margin: 10px 0; }
 .btnrow.one { grid-template-columns: 1fr; }
 
@@ -91,6 +97,45 @@ button:disabled { opacity: .4; cursor: default; }
   font-size: 10px; color: var(--dim); overflow-wrap: anywhere;
 }
 #day1out .filerow button { width: auto; font-size: 10px; padding: 2px 7px; }
+
+/* ---------------- run on arm ---------------- */
+.opwarn {
+  color: var(--bad); border: 1px solid var(--bad); border-radius: 3px;
+  padding: 4px 6px; font-size: 10.5px; margin-bottom: 6px;
+}
+.opmap {
+  font-size: 11px; color: var(--fg); background: var(--panel2);
+  border: 1px solid var(--line); border-left: 3px solid var(--ok);
+  border-radius: 3px; padding: 3px 6px; margin: 4px 0;
+}
+.opmap.warn { border-left-color: var(--warn); color: var(--warn); }
+.opsite { border-bottom: 1px solid var(--line); padding-bottom: 8px;
+          margin-bottom: 8px; }
+#opident { margin: 4px 0 8px; }
+#opident .idrow {
+  display: flex; gap: 8px; align-items: baseline; font-size: 11px;
+  border-top: 1px solid var(--line); padding-top: 3px; margin-top: 3px;
+}
+#opident .idrow.ok { color: var(--ok); } #opident .idrow.bad { color: var(--dim2); }
+#opident .idq { font-size: 10px; color: var(--dim);
+                font-variant-numeric: tabular-nums; white-space: pre-wrap;
+                word-break: break-word; }
+#opident .idq.bad { color: var(--bad); }
+#opident button.wee { width: auto; font-size: 10px; padding: 1px 6px;
+                      margin-top: 2px; }
+#opout { max-height: 200px; overflow-y: auto; background: #101216;
+         border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px;
+         margin: 6px 0; }
+#opout .opline { font-size: 10.5px; white-space: pre-wrap;
+                 word-break: break-word; color: var(--dim); }
+#opout .opline.cmd { color: var(--accent); }
+#opout .opline.ok  { color: var(--ok); }
+#opout .opline.bad { color: var(--bad); }
+#optail { max-height: 180px; overflow-y: auto; background: #101216;
+          border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px;
+          font-size: 10.5px; color: var(--dim); white-space: pre-wrap;
+          word-break: break-word; margin: 0; }
+b.bad { color: var(--bad); }
 
 /* ---------------- job list ---------------- */
 #joblist { display: flex; flex-direction: column; gap: 3px; }

@@ -24,6 +24,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -31,6 +32,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                PlainTextResponse, Response)
 from fastapi.staticfiles import StaticFiles
 
+from . import operator                 # RUN ON ARM: ssh, day1.py send, tails
 from .jobs import JobManager
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -106,6 +108,11 @@ def create_app(jobs_dir=None):
     mgr = JobManager(jobs_dir) if jobs_dir else JobManager()
     app.state.jobs = mgr
     app.state.meshcat_proc = None
+    # WHICH ARM HAS A GREEN STACK CHECK, AND WHEN.  Session state, deliberately
+    # not persisted: a check is a statement about the rig a minute ago, and a
+    # server that restarted has not made one.
+    app.state.op_checks = {}
+    app.state.tails = operator.Tails()
 
     # ---- the viewer ----------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -270,6 +277,226 @@ def create_app(jobs_dir=None):
                     pid=(proc.pid if live else None),
                     url=f"http://{socket.getfqdn()}:{MESHCAT_PORT}/")
 
+    # ---- RUN ON ARM: the operator box ------------------------------------
+    #
+    # FIVE BUTTONS AND A TAIL, AND THE SERVER HOLDS THE GATE.  `gui/operator.py`
+    # builds every argument list and owns the refusal; this layer only records
+    # which arm has a green stack check in THIS server's lifetime, because that
+    # is a fact about the session and not about a request.  A client cannot
+    # assert it: `stack_ok` is written here, from `app.state.op_checks`, and
+    # whatever the body said about it is dropped.
+    @app.get("/api/operator")
+    def operator_config():
+        st = getattr(app.state, "op_checks", {})
+        now = time.time()
+        return dict(
+            **operator.config(),
+            checks={str(a): dict(ok=bool(v.get("ok")),
+                                 age_s=round(now - v.get("wall", now), 1),
+                                 fresh=_check_fresh(v, now),
+                                 cmd=v.get("cmd"), output=v.get("output"))
+                    for a, v in st.items()},
+            tails={str(a): dict(live=app.state.tails.live(a))
+                   for a in operator.CANDIDATE_IDS},
+            csv=operator.last_pass_csv(mgr))
+
+    @app.post("/api/operator/site")
+    def operator_site(body: dict):
+        """Write `config/site.json` — the Site setup form's Save button.
+
+        ONE TRACKED FILE FOR THE WHOLE INSTALLATION, and the GUI edits it in
+        place rather than keeping a second copy of the same facts.  The answer
+        is the file as it now reads, so the form shows what was actually
+        stored and not what it hoped to store.
+        """
+        try:
+            st, source = operator.save_site(body or {})
+        except OSError as exc:
+            raise HTTPException(500, f"could not write the site file: {exc}")
+        return dict(site=st, source=source, map={
+            str(s): dict(arm=operator.arm_of(s, st),
+                         line=operator.mapping_line(s, st))
+            for s in operator.SLOTS})
+
+    @app.post("/api/operator/identify")
+    def operator_identify(body: dict):
+        """Poll 31 / 71 / 97 for live joints: which robot is where.
+
+        THE ONE HONEST ANSWER TO "WHICH ARM IS THAT".  Every id is asked over
+        ssh, the ones that answer come back with their joints, and the browser
+        poses them in the viewer with the tool model drawn.  Moving an arm by
+        hand and watching which row changes is the identification.
+        """
+        ids = body.get("ids") if body else None
+        rows = operator.identify(ids)
+        st, _ = operator.site()
+        parks = {}
+        rig = str((body or {}).get("rig") or "proposed")
+        tool = str((body or {}).get("tool") or "lateral")
+        if rig in RIGS and tool in TOOLS:
+            try:
+                doc = json.loads(_ensure_scene(rig, tool).read_text())
+                parks = {int(a["arm"]): [float(x) for x in a["q_seed"]]
+                         for a in doc.get("arms", [])}
+            except Exception:
+                parks = {}
+        for r in rows:
+            park = parks.get(r["arm"])
+            r["park"] = park
+            r["delta"] = ([round(q - p, 6) for q, p in zip(r["q"], park)]
+                          if r.get("q") and park else None)
+        return dict(arms=rows, slots={str(s): operator.arm_of(s, st)
+                                      for s in operator.SLOTS},
+                    map={str(s): operator.mapping_line(s, st)
+                         for s in operator.SLOTS})
+
+    @app.post("/api/operator/check")
+    def operator_check(body: dict):
+        arm = _op_arm(body)
+        r = operator.run_capture(operator.check_argv(arm))
+        r["healthy"] = operator.is_healthy(r["output"])
+        # ONLY "STACK HEALTHY" IS GREEN.  A zero exit code from a script that
+        # printed something else is not a healthy stack, and an ssh that could
+        # not connect is certainly not one.
+        app.state.op_checks[arm] = dict(ok=r["healthy"], wall=time.time(),
+                                        cmd=r["cmd"], output=r["output"])
+        return r
+
+    @app.post("/api/operator/copy")
+    def operator_copy(body: dict):
+        """`day1.py send --dry-run`: copies nothing, prints the run line.
+
+        ADDRESSED BY SLOT, dispatched to whatever arm `config/site.json` says
+        is bolted into it — `send_argv` adds `--as-arm` when those differ, and
+        refuses when they differ and `day1.py` cannot say so.
+        """
+        slot = _op_slot(body)
+        csv = str(body.get("csv") or "")
+        try:
+            argv = operator.send_argv(slot, csv)
+        except operator.GateRefused as exc:
+            raise HTTPException(400, str(exc))
+        r = operator.run_capture(argv)
+        r["mapping"] = operator.mapping_line(slot)
+        return r
+
+    @app.post("/api/operator/hold")
+    def operator_hold(body: dict):
+        return operator.run_capture(operator.hold_argv(_op_arm(body)))
+
+    @app.post("/api/operator/kill")
+    def operator_kill(body: dict):
+        return operator.run_capture(operator.kill_argv(_op_arm(body)))
+
+    @app.post("/api/operator/run")
+    def operator_run(body: dict):
+        """THE ONLY ENDPOINT ON THIS PAGE THAT CAN MOVE AN ARM.
+
+        The slot is what was chosen and typed; the ARM is what
+        `config/site.json` maps it to, and the stack check that gates it is the
+        check for THAT arm — checking slot 31 while 97 is bolted into it would
+        be a green light from a robot nobody is about to move.
+        """
+        slot = _op_slot(body)
+        arm = operator.arm_of(slot)
+        chk = app.state.op_checks.get(arm, {})
+        params = dict(operator="run", slot=slot, arm=arm,
+                      csv=str(body.get("csv") or ""),
+                      confirm=str(body.get("confirm") or ""),
+                      rig=str(body.get("rig") or "proposed"),
+                      tool=str(body.get("tool") or "lateral"),
+                      # NOT FROM THE BODY.  This server ran the check and this
+                      # server remembers the answer.
+                      stack_ok=bool(chk.get("ok"))
+                      and _check_fresh(chk, time.time()))
+        try:
+            argv = operator.build_run_argv(params)
+        except operator.GateRefused as exc:
+            raise HTTPException(409, str(exc))
+        job = mgr.create(params)
+        d = job.to_dict()
+        d["cmd"] = operator.shown(argv)
+        d["mapping"] = operator.mapping_line(slot)
+        return d
+
+    @app.post("/api/operator/pose")
+    def operator_pose(body: dict):
+        """SHOW CURRENT POSE — the arm's live joints, and what they mean.
+
+        A MEASUREMENT, NOT A MODEL.  The answer is whatever the operator box
+        published, together with the raw text it came in; the park it is
+        compared against is the scene's own `q_seed` for that arm, which is the
+        pose the viewer draws when nothing is playing.  The difference per
+        joint is the number a person reads while holding the rendered hand next
+        to the real one — the tool model is drawn in both pictures, which is the
+        whole point of the button.
+        """
+        arm = _op_arm(body)
+        rig = str(body.get("rig") or "proposed")
+        tool = str(body.get("tool") or "lateral")
+        if rig not in RIGS or tool not in TOOLS:
+            raise HTTPException(400, f"unknown rig/tool {rig!r}/{tool!r}")
+        r = operator.read_pose(arm)
+        parks = {}
+        try:
+            doc = json.loads(_ensure_scene(rig, tool).read_text())
+            parks = {int(a["arm"]): [float(x) for x in a["q_seed"]]
+                     for a in doc.get("arms", [])}
+        except Exception as exc:
+            r["park_error"] = f"{type(exc).__name__}: {exc}"
+        r["rig"], r["tool"] = rig, tool
+        r["park"] = parks.get(arm)
+        r["delta"] = ([round(q - p, 6) for q, p in zip(r["q"], r["park"])]
+                      if r.get("q") and r.get("park") else None)
+        r["meshcat"] = None
+        # THE DRAKE SCENE TOO, WHEN ONE IS ASKED FOR.  It is the same launch
+        # path the panel's own button uses, handed a two-frame npz of this
+        # pose, so `scripts/meshcat_drake.py` is untouched by this feature.
+        if r.get("q") and body.get("meshcat"):
+            try:
+                npz = operator.pose_npz(
+                    arm, r["q"], parks,
+                    ROOT / "out" / "gui_operator" / f"pose_arm{arm}.npz")
+                r["meshcat"] = open_meshcat(dict(
+                    npz=str(npz.relative_to(ROOT)), rig=rig, tool=tool,
+                    only_arms=str(arm)))
+            except HTTPException as exc:
+                r["meshcat_error"] = str(exc.detail)
+            except Exception as exc:
+                r["meshcat_error"] = f"{type(exc).__name__}: {exc}"
+        return r
+
+    @app.post("/api/operator/tail")
+    def operator_tail(body: dict):
+        arm = _op_arm(body)
+        action = str(body.get("action") or "start")
+        if action == "stop":
+            return app.state.tails.stop(arm)
+        return app.state.tails.start(arm, operator.tail_argv(arm))
+
+    @app.get("/api/operator/tail")
+    def operator_tail_read(arm: int, offset: int = 0):
+        try:
+            return app.state.tails.read(arm, offset)
+        except operator.GateRefused as exc:
+            raise HTTPException(400, str(exc))
+
+    # AN ARM IS A ROBOT AND A SLOT IS A POSITION, and the two endpoints that
+    # take one must not take the other: `check`/`hold`/`kill`/`tail`/`pose`
+    # address a DDS domain, `copy`/`run` address a plan.
+    def _op_arm(body):
+        try:
+            return operator._id((body or {}).get("arm"), operator.site()[0])
+        except operator.GateRefused as exc:
+            raise HTTPException(400, str(exc))
+
+    def _op_slot(body):
+        b = body or {}
+        try:
+            return operator._slot(b.get("slot", b.get("arm")))
+        except operator.GateRefused as exc:
+            raise HTTPException(400, str(exc))
+
     # ---- the live stream -------------------------------------------------
     @app.websocket("/api/jobs/{job_id}/stream")
     async def stream(ws: WebSocket, job_id: str):
@@ -319,9 +546,25 @@ def create_app(jobs_dir=None):
     @app.on_event("shutdown")
     def _shutdown():
         _kill_meshcat(app.state)
+        app.state.tails.shutdown()
         mgr.shutdown()
 
     return app
+
+
+def _check_fresh(check, now=None):
+    """A stack check is only good for `CHECK_TTL_S`.  -> bool.
+
+    A HEALTHY STACK IS A PERISHABLE FACT.  The panel's gate is "somebody
+    checked this arm and it was healthy", and an hour-old check is not that —
+    the arm may have been stopped, guided by hand, or had its controllers
+    swapped since.  Going stale disarms the RUN button rather than refusing at
+    the end of a long press, which is the order a person wants.
+    """
+    if not check:
+        return False
+    return ((now or time.time()) - float(check.get("wall", 0.0))
+            <= operator.CHECK_TTL_S)
 
 
 def _under_root(name, suffix):

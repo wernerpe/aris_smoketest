@@ -702,3 +702,296 @@ def test_the_day1_panel_has_the_drake_meshcat_button(client):
     assert "this.last = r" in panel, "show() must keep the verdict's npz"
     assert "openMeshcat" in client.get("/js/api.js").text
     assert "onMeshcat: api.openMeshcat" in client.get("/js/app.js").text
+
+
+# --------------------------------------------------------------------------
+# RUN ON ARM — the panel that talks to the operator box
+#
+# NOT ONE ssh IS RUN HERE.  Every test in this section either grades an
+# ARGUMENT LIST (the thing that would have been executed) or hands the module a
+# fake runner; the real `ssh` and the real `scripts/day1.py send` are never
+# invoked, because the whole point of this panel is that a mistake in it moves
+# a robot.  The gate — a typed `RUN <slot>` and a green stack check — is tested
+# on the module AND through the endpoint, since the browser's disabled button
+# is a courtesy and the server's refusal is the actual gate.
+from aris_sixarm.gui import operator as OP                    # noqa: E402
+
+
+@pytest.fixture
+def site(tmp_path, monkeypatch):
+    """A site file of this test's own, so nothing writes config/site.json."""
+    p = tmp_path / "site.json"
+    monkeypatch.setattr(OP, "SITE_PATH", p)
+    return p
+
+
+def _fake_runner(output="", rc=0, calls=None):
+    def run(argv, **kw):
+        if calls is not None:
+            calls.append([str(a) for a in argv])
+        return dict(cmd=OP.shown(argv), argv=[str(a) for a in argv],
+                    returncode=rc, output=output, ok=rc == 0, elapsed_s=0.0)
+    return run
+
+
+def test_every_button_is_the_command_the_runbook_names(site):
+    cfg = OP.config()
+    assert OP.shown(OP.check_argv(31, cfg)).endswith(
+        "'bash ~/RTff/aris_hold.sh stack 31'")
+    assert OP.shown(OP.hold_argv(71, cfg)).endswith(
+        "'bash ~/RTff/aris_hold.sh hold 71'")
+    kill = OP.shown(OP.kill_argv(97, cfg))
+    assert "ARM_ID=97" in kill and "arm_pkill rtff_pathway_exec" in kill
+    assert "source ~/impedance_helpers/arm_env.sh" in kill
+    tail = OP.shown(OP.tail_argv(31, cfg))
+    assert "tail -n 50 -f /tmp/rtff_draw_arm31.log" in tail
+    pose = OP.shown(OP.pose_argv(97, cfg=cfg))
+    assert "ARM_ID=97" in pose and "ros2 topic echo --once /joint_states" in pose
+    assert "timeout 5" in pose
+    # ssh that fails instead of hanging, and it is visible in what is echoed
+    for argv in (OP.check_argv(31, cfg), OP.tail_argv(31, cfg)):
+        assert argv[0] == "ssh" and "BatchMode=yes" in argv
+    # the delivery is scripts/day1.py, as a subprocess, never re-implemented
+    send = OP.send_argv(31, "out/day1/probe_31.csv")
+    assert send[1].endswith("scripts/day1.py")
+    assert send[2] == "send" and send[send.index("--arm") + 1] == "31"
+    assert send[-1] == "--dry-run" and "--live" not in send
+    assert OP.send_argv(31, "x.csv", live=True)[-1] == "--live"
+
+
+def test_the_gate_refuses_without_the_typed_words_or_a_green_check(site):
+    ok = dict(slot=31, csv="x.csv", confirm="RUN 31", stack_ok=True)
+    assert OP.build_run_argv(ok)[-1] == "--live"
+    for bad, why in [
+            (dict(ok, confirm=""), "nothing typed"),
+            (dict(ok, confirm="run 31"), "lower case is not the token"),
+            (dict(ok, confirm="RUN 71"), "the other slot's token"),
+            (dict(ok, confirm="yes"), "a different word"),
+            (dict(ok, stack_ok=False), "no green stack check")]:
+        with pytest.raises(OP.GateRefused):
+            OP.build_run_argv(bad)
+    with pytest.raises(OP.GateRefused):                 # and no CSV is no run
+        OP.build_run_argv(dict(ok, csv=""))
+
+
+def test_only_the_words_stack_healthy_are_green():
+    assert OP.is_healthy("... STACK HEALTHY (3 controllers) ...")
+    for s in ("", "stack healthy", "STACK UNHEALTHY", "robot_mode 5",
+              "ssh: connect to host 192.168.50.2 port 22: No route to host"):
+        assert not OP.is_healthy(s), s
+
+
+def test_a_slot_dispatched_to_another_arm_says_so_in_every_line(site):
+    """slot 31 -> arm 97: `--as-arm`, and the sentence that must be printed."""
+    OP.save_site({"slots": {"31": {"arm": 97, "mounted": True}}})
+    st, _ = OP.site()
+    assert OP.arm_of(31, st) == 97
+    line = OP.mapping_line(31, st)
+    assert "slot 31 -> arm 97" in line and "left-middle" in line
+    argv = OP.send_argv(31, "out/day1/probe_31.csv", st=st)
+    assert argv[argv.index("--arm") + 1] == "31", "the PLAN is for the slot"
+    assert argv[argv.index("--as-arm") + 1] == "97", "the ROBOT is the arm"
+    # an unconfirmed mounting is said out loud rather than assumed away
+    OP.save_site({"slots": {"31": {"arm": 97, "mounted": None}}})
+    assert "MOUNTING NOT CONFIRMED" in OP.mapping_line(31)
+
+
+def test_the_site_file_is_created_read_and_written_in_one_schema(site):
+    st, source = OP.site()
+    assert site.exists(), "a missing site file is written, not guessed at"
+    assert str(site) in source or "created" in source
+    # the schema `scripts/day1.py` reads: slots -> arm/ip/domain/paper_z
+    for s in ("31", "71"):
+        for k in ("position", "arm", "ip", "domain", "paper_z", "mounted"):
+            assert k in st["slots"][s], (s, k)
+    assert st["operator"]["host"] and st["stack_check"] and st["log"]
+    st2, _ = OP.save_site({"operator": {"host": "pete@10.0.0.9"},
+                           "slots": {"71": {"paper_z": 0.933}}})
+    assert st2["operator"]["host"] == "pete@10.0.0.9"
+    assert st2["slots"]["71"]["paper_z"] == 0.933
+    assert st2["slots"]["31"]["arm"] == 31, "one slot's edit leaves the other"
+    assert json.loads(site.read_text())["operator"]["host"] == "pete@10.0.0.9"
+
+
+def test_identify_polls_every_candidate_id_and_reads_the_joints(site):
+    """The Identify view: three ids asked, the ones that answer parsed."""
+    calls = []
+    good = ("name:\n- fr3_joint1\n- fr3_joint2\n- fr3_joint3\n- fr3_joint4\n"
+            "- fr3_joint5\n- fr3_joint6\n- fr3_joint7\n- fr3_finger_joint1\n"
+            "position:\n- 0.1\n- -0.2\n- 0.3\n- -1.4\n- 0.5\n- 1.6\n- 0.7\n"
+            "- 0.035\n")
+
+    def run(argv, **kw):
+        calls.append(" ".join(str(a) for a in argv))
+        alive = "ARM_ID=97" in calls[-1] or "ARM_ID=31" in calls[-1]
+        return dict(cmd=OP.shown(argv), argv=[str(a) for a in argv],
+                    returncode=0 if alive else 255,
+                    output=good if alive else "No route to host",
+                    ok=alive, elapsed_s=0.0)
+
+    rows = OP.identify(run=run)
+    assert [r["arm"] for r in rows] == [31, 71, 97]
+    assert [r["reachable"] for r in rows] == [True, False, True]
+    # the finger joint is NOT joint 7 — seven ARM joints, picked by name
+    assert rows[0]["q"] == [0.1, -0.2, 0.3, -1.4, 0.5, 1.6, 0.7]
+    assert rows[1]["q"] is None and "No route" in rows[1]["output"]
+    assert all("ros2 topic echo --once" in c for c in calls)
+    # the DDS domain comes from arm_env.sh, per id, never from a flag
+    assert any("ARM_ID=97 source" in c for c in calls)
+
+
+def test_the_robot_state_topic_is_the_fallback_and_q_is_read_from_it(site):
+    """`/joint_states` silent -> `/franka_robot_state_broadcaster/robot_state`."""
+    def run(argv, **kw):
+        joint = "/joint_states" in " ".join(str(a) for a in argv)
+        return dict(cmd=OP.shown(argv), argv=[str(a) for a in argv],
+                    returncode=0, ok=True, elapsed_s=0.0,
+                    output="" if joint else
+                           "q:\n- 0.0\n- -0.78\n- 0.0\n- -2.35\n- 0.0\n"
+                           "- 1.57\n- 0.78\ndq:\n- 0.0\n")
+    r = OP.read_pose(31, run=run)
+    assert r["ok"] and r["topic"].endswith("robot_state") and r["key"] == "q"
+    assert r["q"][3] == -2.35 and len(r["q"]) == 7
+    assert [t["topic"] for t in r["tried"]] == list(OP.JOINT_TOPICS)
+
+
+def test_unparseable_output_is_shown_raw_and_never_guessed_at(site):
+    r = OP.read_pose(71, run=_fake_runner("ros2: command not found", rc=127))
+    assert r["ok"] is False and r["q"] is None
+    assert "command not found" in r["output"] and r["error"]
+
+
+# ---- through the endpoints, with the runner faked -------------------------
+@pytest.fixture
+def no_ssh(monkeypatch, site):
+    """Every operator command answers HEALTHY without leaving the machine."""
+    calls = []
+    monkeypatch.setattr(OP, "run_capture",
+                        _fake_runner("STACK HEALTHY\n", calls=calls))
+    return calls
+
+
+def test_the_check_endpoint_arms_the_run_and_nothing_else_does(client, no_ssh):
+    r = client.post("/api/operator/run",
+                    json=dict(slot=31, csv="x.csv", confirm="RUN 31"))
+    assert r.status_code == 409, "no check yet: the run is refused"
+    assert "Check stack" in r.json()["detail"]
+
+    c = client.post("/api/operator/check", json=dict(arm=31)).json()
+    assert c["healthy"] is True and "aris_hold.sh stack 31" in c["cmd"]
+
+    r = client.post("/api/operator/run",
+                    json=dict(slot=31, csv="x.csv", confirm="RUN 99"))
+    assert r.status_code == 409, "the typed token still has to be right"
+    # THE CSV DOES NOT EXIST, and that is what makes this safe to run anywhere:
+    # the job starts, `scripts/day1.py send` refuses on the missing file before
+    # it scps or ssh's anything, and the arm is never addressed.  What is being
+    # graded here is the GATE and the argument list, not a delivery.
+    r = client.post("/api/operator/run",
+                    json=dict(slot=31, csv="x.csv", confirm="RUN 31"))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["params"]["operator"] == "run" and d["params"]["slot"] == 31
+    assert "--live" in d["cmd"] and "day1.py" in d["cmd"]
+    assert "slot 31 -> arm 31" in d["mapping"]
+    client.post(f"/api/jobs/{d['id']}/cancel")
+
+
+def test_an_unhealthy_check_leaves_the_button_shut(client, monkeypatch, site):
+    monkeypatch.setattr(OP, "run_capture", _fake_runner("robot_mode 5\n"))
+    c = client.post("/api/operator/check", json=dict(arm=71)).json()
+    assert c["healthy"] is False
+    r = client.post("/api/operator/run",
+                    json=dict(slot=71, csv="x.csv", confirm="RUN 71"))
+    assert r.status_code == 409
+
+
+def test_copy_is_a_dry_run_and_names_the_slot_mapping(client, no_ssh):
+    d = client.post("/api/operator/copy",
+                    json=dict(slot=71, csv="out/day1/x_71.csv")).json()
+    assert "--dry-run" in d["cmd"] and "--live" not in d["cmd"]
+    assert "slot 71 -> arm 71" in d["mapping"]
+    assert client.post("/api/operator/copy",
+                       json=dict(slot=71, csv="")).status_code == 400
+
+
+def test_hold_and_kill_are_the_two_stops_and_the_estop_is_neither(client,
+                                                                  no_ssh):
+    h = client.post("/api/operator/hold", json=dict(arm=31)).json()
+    assert "aris_hold.sh hold 31" in h["cmd"]
+    k = client.post("/api/operator/kill", json=dict(arm=31)).json()
+    assert "arm_pkill" in k["cmd"]
+    cfg = client.get("/api/operator").json()
+    assert "E-STOP" in cfg["abort"]
+
+
+def test_an_unknown_arm_or_slot_is_a_400_not_a_500(client, no_ssh):
+    assert client.post("/api/operator/check",
+                       json=dict(arm=13)).status_code == 400
+    assert client.post("/api/operator/copy",
+                       json=dict(slot=97, csv="x.csv")).status_code == 400
+
+
+def test_the_log_tail_is_a_background_job_that_starts_and_stops(tmp_path):
+    """One `ssh … tail -f` per arm, read by offset, stopped on demand."""
+    class _P:
+        def __init__(self, argv, **kw):
+            self.argv, self.pid, self._rc = argv, 12345, None
+            Path(kw["stdout"].name).write_text("frame 1\nframe 2\n")
+
+        def poll(self):
+            return self._rc
+
+    tails = OP.Tails(tmp_path)
+    started = tails.start(31, OP.tail_argv(31), spawn=_P)
+    assert started["live"] is True and "tail -n 50 -f" in started["cmd"]
+    first = tails.read(31, 0)
+    assert first["text"].startswith("frame 1") and first["offset"] > 0
+    assert tails.read(31, first["offset"])["text"] == "", "no line twice"
+    killed = []
+    import aris_sixarm.gui.jobs as J
+    J_kill = J._kill_group
+    try:
+        J._kill_group = lambda pid: killed.append(pid)
+        assert tails.stop(31)["stopped"] is True
+    finally:
+        J._kill_group = J_kill
+    assert killed == [12345]
+    assert tails.live(31) is False
+
+
+def test_a_tail_that_dies_says_so_instead_of_spinning(tmp_path):
+    """No route to the operator box: the pane shows the refusal and stops."""
+    class _Dead:
+        def __init__(self, argv, **kw):
+            self.pid = 999
+            Path(kw["stdout"].name).write_text(
+                "ssh: connect to host 192.168.50.2 port 22: No route to host\n")
+
+        def poll(self):
+            return 255
+
+    tails = OP.Tails(tmp_path)
+    tails.start(71, OP.tail_argv(71), spawn=_Dead)
+    r = tails.read(71, 0)
+    assert r["live"] is False and r["returncode"] == 255
+    assert "No route to host" in r["text"]
+
+
+def test_the_run_panel_is_wired_into_the_page(client):
+    """The module, its buttons, the gate in the browser, and the api calls."""
+    js = client.get("/js/operator.js")
+    assert js.status_code == 200
+    for bit in ["Check stack", "Copy to operator", "RUN  (observe mode)",
+                "Hold", "Kill executor", "Identify arms", "Save site",
+                "Start log tail", "PHYSICAL E-STOP"]:
+        assert bit in js.text, bit
+    # the browser's half of the gate: green check AND the typed slot token
+    assert "`RUN ${s}`" in js.text and "this.checked[a]" in js.text
+    assert "onPose" in js.text, "the identified arms are posed in the viewer"
+    api = client.get("/js/api.js").text
+    for call in ["/api/operator/check", "/api/operator/copy",
+                 "/api/operator/run", "/api/operator/tail",
+                 "/api/operator/identify", "/api/operator/site"]:
+        assert call in api, call
+    assert "RunOnArm" in client.get("/js/app.js").text
