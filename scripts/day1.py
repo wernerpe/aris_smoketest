@@ -2,6 +2,8 @@
 """HARDWARE DAY 1 — one front door, two subcommands.  Read this at the rig.
 
     scripts/day1.py line --arm 31 --from 0.50,1.70 --to 0.65,1.70 --name probe
+    scripts/day1.py word --arm 31 --hover
+    scripts/day1.py word --arm 31
     scripts/day1.py word --variant alt
 
 `line` is rung B of `docs/HARDWARE_DAY1.md` cut down to ONE straight line for
@@ -13,7 +15,23 @@ every gate, the seam bars in, the other five arms standing at their parks), and
 only then writes the timeline, the impedance pathway CSV and a summary.  An
 uncertifiable line is a non-zero exit and no CSV.
 
-`word` is rungs C/D and it PLANS NOTHING.  It takes yesterday's certified
+`word --arm 31` (or 71) is the SOLO WORD — the rung between the two.  It is
+`line` with thirteen strokes instead of one and an ordering step in the middle,
+and every other thing about it is `line`'s: the same certified single-arm
+planner per stroke, the same `arm_program`, the same independent whole-timeline
+check with the other five arms frozen at their parks, the same three files.
+The word comes from `scripts/text_strokes.py` — the vendored single-stroke
+Hershey font — sized to `--width` and centred on THAT ARM's own J1 axis, with
+its baseline `--dy` off the seam line (default -0.10 m, because arm 31 refuses
+lines exactly on the seam: the go-home leg does not clear the paper plane
+there).  The strokes are ordered by `aris_sixarm.sequence` over the REAL
+transit cost — the same Held-Karp the conductor runs, not a left-to-right
+sweep — so the pen-up legs between letters are the ones the timeline pays.
+If any stroke will not certify, NOTHING is written and the refusals are named;
+`--allow-partial` writes the certified subset instead and says so.
+
+`word` WITHOUT `--arm` is rungs C/D and it PLANS NOTHING.  It takes yesterday's
+certified
 h = 0.970 assets, re-derives the certificate on site by re-running the
 independent whole-timeline check on them today, copies the per-arm CSVs into
 `out/day1/`, and prints the run order and the pass criteria.  `--replan` is the
@@ -53,9 +71,11 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -70,11 +90,13 @@ for _p in (str(ROOT), str(ROOT / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from aris_sixarm import (coordination, fleet, frames, layout,  # noqa: E402
-                         mounts, pwl, scene_check, stroke_api, writing)
+from aris_sixarm import (allocate, coordination, fleet, frames,  # noqa: E402
+                         layout, mounts, pwl, scene_check, sequence,
+                         stroke_api, writing)
 from aris_sixarm.export import pathway                          # noqa: E402
 
 import recheck_timeline as rt                                   # noqa: E402
+import text_strokes                                             # noqa: E402
 
 # --- the numbers a one-line run is conducted at ----------------------------
 # The fleet clock of every programme in `out/`: `--fps 48 --substeps 1`, so the
@@ -89,6 +111,34 @@ TILT_MAX_DEG = 15.0                       # v19's cone; changes the atlas rights
 HOVER_DEFAULT = 0.030                     # m, the day plan's hover height
 OUT_DIR = ROOT / "out" / "day1"
 ARMS = (31, 71)
+
+# --- THE ONLY PLACE THIS FILE KNOWS ABOUT ANOTHER MACHINE ------------------
+# `send` delivers a pathway CSV to the box that runs the arms and prints the
+# one command that draws it.  Everything machine-specific is here, it is all
+# strings, and every one of them is overridable from the command line or the
+# environment — so a clone on the robot PC edits this block and nothing else.
+#
+# The values are `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md`
+# §1/§8: the OPERATOR is the Dell Precision 7960 on the direct NIC, the CSV
+# lands under `~/RTff/pathway_persist/<folder>/`, and the supervisor
+# `~/RTff/draw_rtff_supervised.sh <csv> <fmin> <fmax> <levels> <fresh|resume>`
+# is what turns it into motion (it runs the ladder gate, switches to impedance,
+# and calls `rtff_pathway_exec.py --csv ...`).  The arm is chosen by the
+# `ARM_ID` environment variable — it is the DDS domain, not a flag and not an
+# IP.  CHECK THE ADDRESS BEFORE THE FIRST SEND; the briefing also names a
+# RETIRED box at 192.168.50.4 whose `~/RTff` is a stale copy, and this file
+# must never point there.
+OPERATOR = dict(
+    host=os.environ.get("ARIS_OPERATOR", "diemut@192.168.50.2"),
+    store="~/RTff/pathway_persist",          # where the CSV lands
+    supervisor="~/RTff/draw_rtff_supervised.sh",
+    stack_check="~/RTff/aris_hold.sh",       # `aris_hold.sh stack <N>`
+    force=("1.0", "2.5", "5"),               # <fmin> <fmax> <levels>, the
+    #   executor's own defaults (--force-min/--force-max/--force-levels)
+    mode="fresh",                            # NOT `resume`: the runner decides
+    #   fresh vs resume from a progress file, and a new CSV dropped next to an
+    #   old checkpoint is picked up as a resume of the old one
+)
 
 # --- where yesterday's assets live on a machine with no out/ ----------------
 # `out/` is gitignored, so a fresh clone on the robot PC has none of it.  The
@@ -250,7 +300,8 @@ def _payload(qtraj, segtraj, pens, margin, min_clearance, name):
     return d
 
 
-def _plan_segment_json(plan, draw_s):
+def _plan_segment_json(plan, draw_s, seg=0, stroke_id=0, kind="line",
+                       direction=1, flipped=False):
     """The certified plan as ONE phase-segment record. -> dict.
 
     The shape is `csail_allocate._phase_json`'s, which is the shape the pathway
@@ -258,10 +309,16 @@ def _plan_segment_json(plan, draw_s):
     it is the plan's own — nothing is invented here.  A one-line run has no
     allocator to write it, in the same way it has no allocator to write
     `_segment`'s programme entry.
+
+    `seg` is the index of this segment in the arm's DRAW ORDER, which is what
+    `export.pathway._program_stroke_labels` and `program_schema` both key on;
+    `stroke_id` names the artwork stroke it is a piece of, and for a solo word
+    those two differ the moment the sequencer reorders anything.
     """
     return dict(
-        seg=0, stroke_id=0, s_range=[0.0, 1.0], direction=1, flipped=False,
-        length_m=float(plan["arc_len"]), color="black", kind="line",
+        seg=int(seg), stroke_id=int(stroke_id), s_range=[0.0, 1.0],
+        direction=int(direction), flipped=bool(flipped),
+        length_m=float(plan["arc_len"]), color="black", kind=kind,
         min_sigma=float(plan["min_sigma"]),
         min_margin=float(plan["min_margin"]),
         tip_err_m=float(plan["tip_err"]),
@@ -276,10 +333,16 @@ def _plan_segment_json(plan, draw_s):
         pts=[[float(x), float(y)] for x, y in np.asarray(plan["stroke"], float)])
 
 
-def _program_json(arm, name, source, plan, pen_plan, pen_real, hover,
-                  draw_s=0.0):
-    """The label file the exporter reads.  Nothing load-bearing is in it."""
-    seg = _plan_segment_json(plan, draw_s)
+def _program_json(arm, name, source, segs_json, strokes_json, pen_plan,
+                  pen_real, hover, phase_name="single line", wall_s=0.0):
+    """The label file the exporter reads.  Nothing load-bearing is in it.
+
+    `segs_json` are `_plan_segment_json` records IN DRAW ORDER; `strokes_json`
+    are the artwork strokes they are pieces of (`id`, `color`, `kind`,
+    `length`).  One line is the one-segment, one-stroke case of both.
+    """
+    drawn = float(sum(s["length_m"] for s in segs_json))
+    traced = float(sum(s["length"] for s in strokes_json))
     return dict(
         rig=os.environ["ARIS_RIG"], tool=os.environ["ARIS_TOOL"],
         h_inv=float(fleet.H_INV_DEFAULT),
@@ -289,14 +352,15 @@ def _program_json(arm, name, source, plan, pen_plan, pen_real, hover,
         inks=["black"], palette=dict(black="#111111"),
         pens_mm={str(arm): 1000.0 * pen_real},
         plan_pen_ext_m=float(pen_plan), hover_m=float(hover),
-        strokes=[dict(id=0, color="black", kind="line",
-                      length=float(plan["arc_len"]))],
-        totals=dict(traced_m=float(plan["arc_len"]),
-                    drawn_m=float(plan["arc_len"]), dropped_m=0.0,
-                    coverage_pct=100.0, n_strokes=1, n_segments=1, wall_s=0.0),
-        phases=[dict(name="single line", ink="black", draw_speed=DRAW_SPEED,
-                     arms={str(arm): [seg]}, dropped=[])],
-        arms={str(arm): [seg]},
+        strokes=list(strokes_json),
+        totals=dict(traced_m=traced, drawn_m=drawn,
+                    dropped_m=max(0.0, traced - drawn),
+                    coverage_pct=(100.0 * drawn / traced if traced > 0 else 0.0),
+                    n_strokes=len(strokes_json), n_segments=len(segs_json),
+                    wall_s=float(wall_s)),
+        phases=[dict(name=phase_name, ink="black", draw_speed=DRAW_SPEED,
+                     arms={str(arm): list(segs_json)}, dropped=[])],
+        arms={str(arm): list(segs_json)},
         colors={str(arm): "black"})
 
 
@@ -344,6 +408,82 @@ def _gate_numbers(rep, margin):
         frame_failed=rep.get("frame_failed"), paper_failed=rep.get("paper_failed"),
         column_failed=rep.get("column_failed"), self_failed=rep.get("self_failed"),
         ok=bool(rep["ok"]))
+
+
+def _rates(Q, dt):
+    """Peak |dq/dt| and |d2q/dt2| per joint. -> (7,), (7,)."""
+    Q = np.asarray(Q, float).reshape(-1, 7)
+    if len(Q) < 2:
+        return np.zeros(7), np.zeros(7)
+    v = np.diff(Q, axis=0) / float(dt)
+    a = (np.diff(v, axis=0) / float(dt)) if len(v) > 1 else np.zeros((1, 7))
+    return np.abs(v).max(axis=0), np.abs(a).max(axis=0)
+
+
+def speed_audit(prog, q_rows, fps=FPS, khz_dt=0.001):
+    """Is the joint reference inside the FR3's velocity limits? -> dict.
+
+    THE CSV IS A JOINT REFERENCE AND SOMEBODY IS GOING TO STREAM IT.  Every
+    other gate in this file is about where the arm is; this one is about how
+    fast it gets there, and it is the one a stiff controller turns into torque.
+    `frames.QD_MAX` is the FR3's own per-joint limit and `writing.QD_FRAC`
+    (0.30) is the fraction the pacer aims at, so a healthy programme reads
+    about a third of the limit and anything near 1.0 is a bug upstream, not a
+    tight day.
+
+    TWO READINGS, because they answer different questions:
+      `at_csv_rows`   consecutive CSV rows one frame period apart.  This is
+                      what a controller that consumes the file row by row at
+                      the planning rate sees.  The synthesized lift ramps at
+                      the ends of a stroke carry no time of their own and are
+                      charged the same period, which OVER-states their speed —
+                      conservative on purpose.
+      `at_1khz`       the programme's own waypoints linearly interpolated onto
+                      a 1 ms grid, which is the stream rate of the deployed
+                      stack.  Linear interpolation makes the velocity
+                      piecewise-constant, so the peak speed matches the
+                      waypoint intervals and the ACCELERATION is the step
+                      between two of them divided by a millisecond — an
+                      impulse, reported for information and not gated.
+    """
+    lim = np.asarray(frames.QD_MAX, float).reshape(7)
+    t = np.asarray(prog["t"], float)
+    Q = np.asarray(prog["q"], float).reshape(-1, 7)
+    grid = np.arange(0.0, float(t[-1]) + khz_dt, khz_dt) if len(t) > 1 \
+        else np.zeros(1)
+    Qi = np.column_stack([np.interp(grid, t, Q[:, j]) for j in range(7)])
+    out = {}
+    for key, (QQ, dt) in dict(
+            at_csv_rows=(np.asarray(q_rows, float).reshape(-1, 7), 1.0 / fps),
+            at_1khz=(Qi, khz_dt)).items():
+        v, a = _rates(QQ, dt)
+        frac = v / lim
+        out[key] = dict(
+            dt_s=float(dt), n_samples=int(len(QQ)),
+            peak_qd_rad_s=[float(x) for x in v],
+            frac_of_limit=[float(x) for x in frac],
+            worst_joint=int(np.argmax(frac)) + 1,
+            worst_frac=float(frac.max()),
+            peak_qdd_rad_s2=[float(x) for x in a],
+            ok=bool((frac <= 1.0).all()))
+    out.update(qd_max_rad_s=[float(x) for x in lim],
+               qd_frac_target=float(writing.QD_FRAC),
+               ok=bool(out["at_csv_rows"]["ok"] and out["at_1khz"]["ok"]),
+               note="q1..q7 on every CSV row are THE PLANNER'S OWN redundancy "
+                    "resolution for that waypoint — the configuration the "
+                    "certified plan chose, carried alongside the Cartesian "
+                    "pose, not re-solved by the controller.")
+    return out
+
+
+def _speed_line(sa):
+    """The joint-speed verdict, as one line. -> str."""
+    c, k = sa["at_csv_rows"], sa["at_1khz"]
+    return (f"  joint speed {'OK ' if sa['ok'] else 'OVER'}  "
+            f"rows {100 * c['worst_frac']:5.1f} % of limit (worst j"
+            f"{c['worst_joint']})  1 kHz {100 * k['worst_frac']:5.1f} % (worst j"
+            f"{k['worst_joint']})  peak qdd {max(k['peak_qdd_rad_s2']):.0f} "
+            f"rad/s^2 @1 kHz, {max(c['peak_qdd_rad_s2']):.0f} @rows")
 
 
 def _one_liner(name, arm, g, dur, certified):
@@ -497,9 +637,12 @@ def plan_line(arm, p0, p1, name="line", hover=0.0, out_dir=OUT_DIR,
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{name}_{arm}"
     npz_path = out_dir / f"{stem}.npz"
-    pj = _program_json(arm, f"day1 line, arm {arm}", "scripts/day1.py line",
-                       plan, pen_plan, pen_real, hover,
-                       draw_s=float(prog["draw_s"]))
+    pj = _program_json(
+        arm, f"day1 line, arm {arm}", "scripts/day1.py line",
+        [_plan_segment_json(plan, float(prog["draw_s"]))],
+        [dict(id=0, color="black", kind="line",
+              length=float(plan["arc_len"]))],
+        pen_plan, pen_real, hover)
     pj_path = out_dir / f"{stem}_program.json"
     pj_path.write_text(json.dumps(pj, indent=1) + "\n")
     # The TARGET polyline, under the name `program_schema._stroke_polylines`
@@ -571,7 +714,535 @@ def cmd_line(a):
 
 
 # ===========================================================================
-# `word`
+# `word --arm N` — the SOLO word.  `line` with thirteen strokes.
+# ===========================================================================
+WORD = "unknown"
+WORD_WIDTH = 0.55          # m of ink across, centred on the arm's own J1 axis
+WORD_HEIGHT = 0.10         # m x-height: how tall 'u', 'n', 'o', 'w' come out
+WORD_DY = -0.10            # m off the seam line.  NOT zero, and not a taste:
+#   arm 31 refuses a line whose baseline is exactly on the seam (y = 1.8153) —
+#   the pen-up leg to or from its park does not clear the paper plane there.
+#   `tests/test_day1.py` pins that refusal, `docs/HARDWARE_DAY1.md` measures it,
+#   and this default is the one number that keeps a person from meeting it.
+
+
+def _word_geometry(spec, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
+                   word=WORD):
+    """The word as polylines in the canvas datum. -> (polys, info, x0, x1, y).
+
+    Centred in x on THIS ARM's J1 axis and baselined `dy` off the seam line,
+    both read off the arm's own base transform rather than restated here, so a
+    layout change moves the word instead of leaving it behind.
+    `text_strokes.layout` is the single-stroke Hershey font and the only place
+    a letter shape is defined.
+    """
+    T = np.asarray(spec.T_world_base(), float)
+    cx, seam = float(T[0, 3]), float(T[1, 3])
+    x0, x1 = cx - 0.5 * float(width), cx + 0.5 * float(width)
+    y = seam + float(dy)
+    polys, info = text_strokes.layout(word, float(height), x0, x1, y)
+    return polys, info, x0, x1, y
+
+
+def _draw_times(prog, n):
+    """Seconds the timeline spends inside each segment. -> list[float]."""
+    t = np.asarray(prog["t"], float)
+    s = np.asarray(prog["seg"], int)
+    out = []
+    for k in range(n):
+        m = s == k
+        out.append(float(t[m].max() - t[m].min()) if m.any() else 0.0)
+    return out
+
+
+SEQ_RETRIES = 8            # orders to try against the cheap matrix before the
+#   expensive one.  Each retry is one Held-Karp solve and one `arm_program`
+#   (~0.8 s together); building the routed matrix is ~100 s, so the retries are
+#   free by comparison and the fallback is still there behind them.
+
+# `writing.arm_program` refuses a pen-up leg it cannot fly with
+# "arm 31: transit at segment 2 cannot clear the paper plane" — the `what` and
+# the `k` in `writing.arm_program.need`.  That names ONE edge of the tour, and
+# marking exactly that edge infinite is what the routed matrix would have done
+# for it, at the cost of one solve instead of a hundred seconds of routing.
+_REFUSAL = re.compile(
+    r"(entry|transit|go-home|final lift|retreat) at segment (\d+)")
+
+
+def _refused_edge(msg, tour, n):
+    """The cost-matrix cell a `PaperRefused` names. -> (a, b) or None.
+
+    `tour` is `sequence.tour_of`'s: the depot at index 0, then one node per
+    segment IN DRAW ORDER, each node already carrying the direction the tour
+    chose.  A `what` this does not recognise (a retreat, a final lift — neither
+    of which a `park="home"` programme lays down) returns None, and the caller
+    falls back to the expensive matrix rather than guessing.
+    """
+    m = _REFUSAL.search(str(msg))
+    if m is None:
+        return None
+    what, k, depot = m.group(1), int(m.group(2)), 2 * n
+
+    def node(j):
+        return tour[1 + j] if 0 <= j < n else None
+
+    if what == "entry":
+        a, b = (depot, node(k)) if k == 0 else (node(k - 1), node(k))
+    elif what == "transit":
+        a, b = node(k), node(k + 1)
+    elif what == "go-home":
+        a, b = node(k), depot
+    else:
+        return None
+    return None if a is None or b is None else (int(a), int(b))
+
+
+def _apply_order(spec, segs, order, dirs, opts):
+    """Segments in the tour's order, reversed where it asked. -> (segs, n_flip).
+
+    A segment the tour wants drawn backwards is re-certified by
+    `allocate.reverse_segment`, which re-runs the independent validator rather
+    than inheriting a certificate; one that will not re-certify keeps its
+    forward orientation and pays the extra transit.
+    """
+    out, flipped = [], 0
+    for i, d in zip(order, dirs):
+        seg = segs[int(i)]
+        if int(d) < 0:
+            rev = allocate.reverse_segment(seg, spec, opts)
+            if rev is not None:
+                seg, flipped = rev, flipped + 1
+        out.append(seg)
+    return out, flipped
+
+
+def _plan_programme(spec, unordered, h_inv, pen_ext, opts, verbose=True,
+                    retries=SEQ_RETRIES):
+    """An order and the programme that flies it.  -> (segs, prog, info, 3 walls).
+
+    THE MATRIX IS BUILT CHEAP, AND THAT COSTS SECONDS OF CLOCK, NOT SAFETY.
+    With `paper_safe=True` `sequence.cost_matrix` ROUTES every crossing that
+    dives through the canvas, grazes a base column or folds the arm through its
+    own shoulder, so the tour is chosen against the detours it causes.
+    Measured on this word: 410 of the 676 crossings dive, routing them costs
+    ~100 s on 24 workers, and the tour it buys is 32.3 s of transit against the
+    cheap matrix's 35.2 s — three seconds of programme for a hundred of
+    planning, on the one run whose whole point is to iterate.  So the cheap
+    matrix goes first.
+
+    THE ORDER AND THE PROGRAMME ARE THEN ONE QUESTION, because the only thing
+    that can go wrong with a cheap order is that a leg of it will not fly.  The cheap
+    matrix does not know that; `writing.arm_program` does, and it NAMES the leg
+    when it refuses.  So the loop is: solve, build, and on a refusal mark that
+    one edge infinite and solve again.  Each round is 0.07 s of Held-Karp and
+    under a second of programme building, against ~100 s to route all 676
+    crossings up front, and it converges in one or two rounds because a word's
+    unflyable crossings are a handful of long reaches across the arm's own base.
+
+    If the retries run out — or the refusal names something that is not a tour
+    edge, or the marked matrix has no finite tour left — the expensive matrix is
+    built after all and asked once.  That is the answer the sequencer would have
+    given from the start, so the fallback costs time and nothing else.
+
+    NO GATE IS INVOLVED IN ANY OF THIS.  The matrix chooses an ORDER; every
+    certificate is `plan_stroke`'s per stroke, `arm_program`'s per leg and
+    `scene_check`'s over the finished timeline, and all three are unchanged.
+    """
+    n = len(unordered)
+    t_mat = t_solve = t_prog = 0.0
+    last = None
+    for paper_safe in (False, True):
+        t0 = time.perf_counter()
+        C = sequence.cost_matrix(spec, unordered, TRANSIT_SPEED,
+                                 writing.QD_FRAC, h_inv, pen_ext=pen_ext,
+                                 q_start=spec.q_seed, return_home=True,
+                                 paper_safe=paper_safe)
+        t_mat += time.perf_counter() - t0
+        for attempt in range(1 if paper_safe else max(1, int(retries))):
+            t0 = time.perf_counter()
+            try:
+                res = sequence.solve(C, n)
+            except RuntimeError as e:          # nothing finite left to try
+                last = e
+                break
+            t_solve += time.perf_counter() - t0
+            segs, flipped = _apply_order(spec, unordered, res["order"],
+                                         res["dirs"], opts)
+            info = dict(cost_s=float(res["cost"]), method=str(res["method"]),
+                        matrix_wall_s=t_mat, solve_wall_s=t_solve,
+                        reversed_n=int(flipped), paper_safe=bool(paper_safe),
+                        retries=int(attempt), marked_edges=[],
+                        order=[int(i) for i in res["order"]],
+                        dirs=[int(d) for d in res["dirs"]])
+            if verbose:
+                print(f"  sequence: {n} strokes, {info['method']}, transit "
+                      f"{info['cost_s']:.2f} s, {flipped} drawn backwards, "
+                      f"{'routed' if paper_safe else 'cheap'} matrix"
+                      + (f", attempt {attempt + 1}" if attempt else "")
+                      + f" ({t_mat:.2f} s matrix + {t_solve:.2f} s solve)")
+            t0 = time.perf_counter()
+            try:
+                prog = writing.arm_program(
+                    spec, segs, draw_speed=DRAW_SPEED,
+                    transit_speed=TRANSIT_SPEED, h_inv=fleet.H_INV_DEFAULT,
+                    pen_ext=pen_ext, q_start=spec.q_seed,
+                    park=writing.PARK_HOME)
+                t_prog += time.perf_counter() - t0
+                return segs, prog, info, t_mat, t_solve, t_prog
+            except writing.PaperRefused as e:
+                t_prog += time.perf_counter() - t0
+                last = e
+                edge = _refused_edge(
+                    e, sequence.tour_of(res["order"], res["dirs"], n), n)
+                if paper_safe or edge is None:
+                    break
+                if verbose:
+                    print(f"    ! {e} — marking that one crossing unflyable "
+                          f"and re-ordering")
+                C[edge] = np.inf
+        if verbose and not paper_safe:
+            print(f"  ! the cheap matrix ran out of orders; building the "
+                  f"routed one (slow, ~100 s)")
+    raise Refused(
+        f"{last}.  Every stroke certifies but a pen-up leg does not clear the "
+        "paper plane, and re-ordering with the full routing screen did not "
+        "find a way round it — the entry, a crossing between two letters, or "
+        "the go-home.  Move the word (--dy, --width).  Nothing written.")
+
+
+def plan_word(arm, width=WORD_WIDTH, height=WORD_HEIGHT, dy=WORD_DY,
+              word=WORD, name=None, hover=0.0, out_dir=OUT_DIR, write=True,
+              verbose=True, allow_partial=False):
+    """Plan, certify and (if it certifies) write the SOLO word.  -> dict.
+
+    Everything `plan_line` does, thirteen times, with `sequence` choosing the
+    order in the middle.  The refusal rule is `plan_line`'s and one step
+    stronger: a stroke the certified planner will not certify stops the whole
+    run and NOTHING is written, because a word with a letter missing is not the
+    word.  `allow_partial` trades that for the certified subset and says so in
+    the one-liner and in the json.
+    """
+    arm = int(arm)
+    name = name or (f"{word}_hover" if hover > 0 else word)
+    fl, h = rt.fleet_for(None, None, "uniform")
+    if arm not in fl:
+        raise Refused(f"arm {arm} is not in rig {os.environ['ARIS_RIG']!r} "
+                      f"(has {sorted(fl)})")
+    spec = fl[arm]
+    pen_real = float(frames.ext_of(None))
+    pen_plan = pen_real + float(hover)
+    polys, info, x0, x1, y = _word_geometry(spec, width, height, dy, word)
+    if verbose:
+        print(f"  {word!r}: {len(polys)} single-stroke Hershey polylines, "
+              f"x {x0:.4f} .. {x1:.4f} m (centred on arm {arm}'s J1 axis), "
+              f"baseline y = {y:.4f} m = seam {dy:+.3f} m")
+        print(f"  x-height {1000 * height:.0f} mm, ascender "
+              f"{1000 * info['ascender_m']:.0f} mm, tracking "
+              f"{1000 * info['tracking_m']:+.1f} mm per gap")
+        if info["tight"]:
+            print(f"  !! NEGATIVE TRACKING: at this height the word's natural "
+                  f"width is {info['natural_width']:.3f} m and --width is "
+                  f"{width:.3f} m, so the letters are being pushed into each "
+                  f"other.  Raise --width or lower --height "
+                  f"(~{width / 9.0:.3f} m x-height fits {width:.2f} m).")
+
+    # ---- 1. the certified single-arm stroke planner, once per stroke -------
+    opts = dict(objective=pwl.OBJECTIVE, tilt_max_deg=TILT_MAX_DEG,
+                pen_ext=pen_plan)
+    t0 = time.perf_counter()
+    segs, refused, strokes_json = [], [], []
+    for i, p in enumerate(polys):
+        pts = np.asarray(p, float)
+        L = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+        strokes_json.append(dict(id=i, color="black", kind="outline", length=L))
+        plan = stroke_api.plan_stroke(pts, spec, opts)
+        if plan["status"] != "ok":
+            refused.append(dict(stroke=i, length_m=L,
+                                status=str(plan["status"]),
+                                reason=str(plan.get("reason")),
+                                s_star=float(plan.get("s_star", 0.0) or 0.0),
+                                x0=float(pts[0, 0]), y0=float(pts[0, 1])))
+            continue
+        segs.append(_segment(plan, stroke_id=i, kind="outline"))
+    t_plan = time.perf_counter() - t0
+    if verbose:
+        print(f"  plan_stroke: {len(segs)}/{len(polys)} certified in "
+              f"{t_plan:.2f} s")
+    if refused and not allow_partial:
+        raise Refused(
+            f"arm {arm} cannot draw {len(refused)} of {len(polys)} strokes of "
+            f"{word!r} at width {width:.3f} m, baseline y = {y:.4f}:\n"
+            + "\n".join(f"    stroke {r['stroke']:2d} at "
+                        f"({r['x0']:.3f}, {r['y0']:.3f}) m, "
+                        f"{1000 * r['length_m']:.0f} mm: {r['status']} / "
+                        f"{r['reason']!r}" for r in refused)
+            + f"\n  Move the word (--dy, --width) or pass --allow-partial to "
+              f"write the {len(segs)} that certify.  Nothing written.")
+    if not segs:
+        raise Refused(f"arm {arm} certifies NONE of {word!r} at width "
+                      f"{width:.3f} m, baseline y = {y:.4f}.  Nothing written.")
+
+    # ---- 2. the order, and 3. the solo programme ---------------------------
+    segs, prog, seq_info, t_mat, t_solve, t_prog = _plan_programme(
+        spec, segs, h, pen_plan, opts, verbose)
+    samp = writing.uniform_samples(prog, DT)
+    M = int(samp["n"])
+
+    # ---- 4. the six-arm scene: the mover, and five arms at their parks -----
+    t0 = time.perf_counter()
+    q = {a: (np.asarray(samp["q"], float) if a == arm
+             else np.tile(np.asarray(fl[a].q_seed, float), (M, 1)))
+         for a in sorted(fl)}
+    seg = {a: (np.asarray(samp["seg"], np.int64) if a == arm
+               else np.full(M, -1, np.int64)) for a in sorted(fl)}
+    pens = {a: pen_real for a in sorted(fl)}
+    margin = float(coordination.PAIR_MARGIN)
+    rep = scene_check.check_timeline(
+        q, DT, margin, programs=None, h_inv=h, pen_ext=pens, sub=SUB,
+        verbose=False, fleet=fl, drawing={a: seg[a] >= 0 for a in sorted(fl)})
+    t_check = time.perf_counter() - t0
+    g = _gate_numbers(rep, margin)
+    dur = float(prog["duration"])
+    if verbose:
+        for ln in rt.summarise(rep, margin):
+            print("  " + ln)
+    if not rep["ok"]:
+        raise Refused(
+            f"the independent scene check FAILS for this word "
+            f"(frame {rep.get('frame_failed')}, paper {rep.get('paper_failed')}, "
+            f"column {rep.get('column_failed')}, self {rep.get('self_failed')}, "
+            f"min inter-arm {1000 * rep['min_clearance']:.1f} mm against a "
+            f"{1000 * margin:.0f} mm gate).  Nothing written.")
+
+    T = np.asarray(spec.T_world_base(), float)
+    draw_times = _draw_times(prog, len(segs))
+    timing = dict(plan_strokes_s=t_plan, cost_matrix_s=t_mat, solve_s=t_solve,
+                  arm_program_s=t_prog, scene_check_s=t_check, export_s=0.0)
+    summary = dict(
+        name=name, arm=arm, certified=True, word=word,
+        placement=dict(width_m=float(width), height_m=float(height),
+                       dy_m=float(dy), x0=float(x0), x1=float(x1),
+                       baseline_y=float(y), seam_y=float(T[1, 3]),
+                       centre_x=float(T[0, 3]),
+                       tracking_m=float(info["tracking_m"]),
+                       tight=bool(info["tight"]),
+                       natural_width_m=float(info["natural_width"]),
+                       ascender_m=float(info["ascender_m"]),
+                       bbox=[float(v) for v in info["bbox"]]),
+        hover_m=float(hover),
+        rig=os.environ["ARIS_RIG"], tool=os.environ["ARIS_TOOL"],
+        h_m=float(h), duration_s=dur,
+        draw_speed_m_s=DRAW_SPEED, draw_s=float(prog["draw_s"]),
+        transit_speed_m_s=TRANSIT_SPEED, fps=FPS, stride=STRIDE, sub=SUB,
+        strokes=dict(asked=len(polys), planned=len(segs),
+                     refused=len(refused), partial=bool(refused),
+                     allow_partial=bool(allow_partial),
+                     refusals=refused,
+                     draw_order=[int(s["stroke_id"]) for s in segs],
+                     directions=[int(s["direction"]) for s in segs]),
+        sequence=dict(transit_s=seq_info["cost_s"], method=seq_info["method"],
+                      reversed_n=seq_info["reversed_n"],
+                      paper_routed_matrix=seq_info["paper_safe"],
+                      retries=seq_info.get("retries", 0),
+                      order=seq_info["order"], dirs=seq_info["dirs"]),
+        arc_len_m=float(sum(s["length"] for s in segs)),
+        traced_len_m=float(sum(s["length"] for s in strokes_json)),
+        plan=dict(min_sigma=float(min(s["plan"]["min_sigma"] for s in segs)),
+                  min_margin=float(min(s["plan"]["min_margin"] for s in segs)),
+                  tip_err_m=float(max(s["plan"]["tip_err"] for s in segs)),
+                  n_dense=int(sum(s["plan"]["n_dense"] for s in segs)),
+                  lean_deg=float(max(s["plan"].get("lean_deg", 0.0) or 0.0
+                                     for s in segs)),
+                  tilt_max_deg=TILT_MAX_DEG, objective=pwl.OBJECTIVE),
+        timing_s=timing,
+        tool_tip=dict(
+            pen_lat_m=float(frames.lat_of(None)),
+            pen_ext_m=pen_real, plan_pen_ext_m=pen_plan,
+            hand_tcp_offset_m=[float(frames.lat_of(None)), 0.0, pen_real],
+            flange_frame_m=[float(frames.lat_of(None)), 0.0,
+                            float(frames.D_HAND_TCP) + pen_real],
+            source="USER-SPECIFIED, read off a photograph; no touchdown"),
+        base=dict(T_world_base=[float(v) for v in T.reshape(-1)],
+                  translation_m=[float(v) for v in T[:3, 3]],
+                  yaw_deg=float(np.degrees(np.arctan2(T[1, 0], T[0, 0]))),
+                  mount=str(spec.mount)),
+        seam_bars=dict(on=bool(mounts.SEAM_POSTS_ON), source=mounts.SEAM_SOURCE),
+        frozen_arms={str(a): [float(v) for v in fl[a].q_seed]
+                     for a in sorted(fl) if a != arm},
+        gates=g)
+    # THE HOVER'S WHOLE POINT, AS A NUMBER.  The plan used a 30 mm longer pen;
+    # the certificate above did not, so this is the tip's real height above the
+    # paper over the whole programme, measured by the independent checker.
+    if hover > 0:
+        summary["hover"] = dict(
+            asked_m=float(hover),
+            measured_tip_above_paper_m=g["min_paper_tip_m"],
+            note="the plan used a pen `asked_m` longer and the certificate was "
+                 "re-derived with the REAL pen; `measured_tip_above_paper_m` is "
+                 "scene_check's own minimum tip clearance over the programme. "
+                 "Measure it with a ruler at three points before any pen-down "
+                 "run.")
+
+    if not write:
+        return dict(summary=summary, report=rep, payload=None, csv=None,
+                    segs=segs)
+
+    t0 = time.perf_counter()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{name}_{arm}"
+    npz_path = out_dir / f"{stem}.npz"
+    pj = _program_json(
+        arm, f"day1 {word}, arm {arm}", "scripts/day1.py word --arm",
+        [_plan_segment_json(s["plan"], dt, seg=k, stroke_id=s["stroke_id"],
+                            kind="outline", direction=int(s["direction"]),
+                            flipped=bool(s.get("flipped", False)))
+         for k, (s, dt) in enumerate(zip(segs, draw_times))],
+        strokes_json, pen_plan, pen_real, hover,
+        phase_name=f"{word}, arm {arm}",
+        wall_s=sum(timing.values()))
+    pj_path = out_dir / f"{stem}_program.json"
+    pj_path.write_text(json.dumps(pj, indent=1) + "\n")
+    # The TARGET polylines, under the name `program_schema._stroke_polylines`
+    # looks for: without them the 3D viewer can animate the arm but cannot draw
+    # the word it is drawing.
+    (out_dir / f"{stem}_strokes.json").write_text(json.dumps(dict(
+        strokes=[dict(sj, pts=[[float(x), float(y_)] for x, y_ in
+                               np.asarray(p, float)])
+                 for sj, p in zip(strokes_json, polys)]), indent=1) + "\n")
+    np.savez_compressed(npz_path, **_payload(q, seg, pens, margin,
+                                             float(rep["min_clearance"]), stem))
+
+    from aris_sixarm.execute.program import from_schedule
+    fp = from_schedule(npz_path, pj_path)
+    z = np.load(npz_path, allow_pickle=False)
+    pw = pathway.build_arm_pathway(
+        fp, z, arm, spec, tool=os.environ["ARIS_TOOL"],
+        rig=os.environ["ARIS_RIG"], intensity=1.0,
+        z_mode=("fk" if hover > 0 else "plane"),
+        h_inv=float(pj["h_inv"]), program_json=pj,
+        source_paths=dict(schedule=str(npz_path), program=str(pj_path)))
+
+    # ---- 5. THE JOINT REFERENCE'S OWN SPEED, before the CSV exists ---------
+    # The last gate, and the only one about the file rather than the scene.  A
+    # reference that asks a joint for more than the FR3 will give is not a file
+    # anybody should be able to stream, so it is refused here and the three
+    # files already written are taken back with it.
+    sa = speed_audit(prog, [[float(v) for v in row[11:18]] for row in pw.rows])
+    summary["joint_speed"] = sa
+    if verbose:
+        print(_speed_line(sa))
+    if not sa["ok"]:
+        for p in (npz_path, pj_path, out_dir / f"{stem}_strokes.json"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        c, k = sa["at_csv_rows"], sa["at_1khz"]
+        raise Refused(
+            f"the joint reference EXCEEDS the FR3 velocity limit: "
+            f"joint {c['worst_joint']} reaches "
+            f"{100 * c['worst_frac']:.1f} % of its limit between CSV rows and "
+            f"joint {k['worst_joint']} {100 * k['worst_frac']:.1f} % at 1 kHz "
+            f"(limits {sa['qd_max_rad_s']} rad/s, pacer target "
+            f"{100 * sa['qd_frac_target']:.0f} %).  Nothing written.")
+
+    csv_path, man_path = _write_csv(pw, out_dir, name)
+    timing["export_s"] = time.perf_counter() - t0
+    summary["files"] = dict(npz=str(npz_path), csv=str(csv_path),
+                            manifest=str(man_path), program=str(pj_path))
+    summary["csv"] = dict(n_rows=pw.stats["n_rows"],
+                          n_draw_rows=pw.stats["n_draw_rows"],
+                          n_travel_rows=pw.stats["n_travel_rows"],
+                          draw_length_m=pw.stats["draw_length_m"],
+                          paper_z_base_m=pw.stats["paper_z_base_m"],
+                          max_row_dq_rad=pw.stats["max_row_dq_rad"],
+                          n_strokes=len(pw.stroke_meta)
+                          if hasattr(pw, "stroke_meta") else len(segs),
+                          joint_columns=True,
+                          # THE HALF OF PETE'S CRITERION THE INK DOES NOT TEST,
+                          # said in the file that gets streamed.
+                          q_source="q1..q7 on every row are the certified "
+                                   "plan's own joint solution for that "
+                                   "waypoint — THE PLANNER'S REDUNDANCY "
+                                   "RESOLUTION, carried through to the "
+                                   "controller rather than thrown away and "
+                                   "re-solved there",
+                          q_limits_rad_s=[float(v) for v in frames.QD_MAX],
+                          q_peak_frac_of_limit=sa["at_csv_rows"]["worst_frac"])
+    (out_dir / f"{stem}.json").write_text(
+        json.dumps(summary, indent=1, default=str) + "\n")
+    summary["files"]["summary"] = str(out_dir / f"{stem}.json")
+    return dict(summary=summary, report=rep, payload=npz_path, csv=csv_path,
+                pathway=pw, segs=segs)
+
+
+def _timing_line(t):
+    """The planning breakdown, as one line of the one-liner. -> str."""
+    return ("  wall " + " ".join(
+        f"{k}={t[k]:.2f}" for k in ("plan_strokes_s", "cost_matrix_s",
+                                    "solve_s", "arm_program_s",
+                                    "scene_check_s", "export_s")
+        if k in t).replace("_s=", " ")
+        + f"  total {sum(t.values()):.2f} s")
+
+
+def _word_one_liner(s, certified):
+    """PASS/FAIL for a solo word: `line`'s gates plus what it drew. -> str."""
+    st = s["strokes"]
+    head = _one_liner(s["name"], s["arm"], s["gates"], s["duration_s"],
+                      certified)
+    tail = (f"  strokes {st['planned']}/{st['asked']}"
+            + (f" (PARTIAL, {st['refused']} refused)" if st["refused"] else "")
+            + f"  ink {s['arc_len_m']:.3f} m")
+    return head + tail
+
+
+def cmd_word_arm(a):
+    """`word --arm N`: the solo word, planned and certified here and now."""
+    arm = int(a.arm)
+    hov = float(a.hover or 0.0)
+    for ln in assumptions([arm]):
+        print(ln)
+    print(f"arm {arm}: the word {WORD!r} alone, "
+          + (f"HOVER {1000 * hov:.0f} mm above the paper — no ink, no contact"
+             if hov > 0 else "ON THE PAPER"))
+    print(f"  the other five arms stand at their parks for the whole programme; "
+          f"every gate is graded against all six.")
+    t0 = time.perf_counter()
+    r = plan_word(arm, width=float(a.width), height=float(a.height),
+                  dy=float(a.dy), name=a.name, hover=hov,
+                  out_dir=Path(a.out), allow_partial=bool(a.allow_partial))
+    s = r["summary"]
+    print()
+    print(_word_one_liner(s, True))
+    print(_speed_line(s["joint_speed"]))
+    print(_timing_line(s["timing_s"]))
+    print(f"  wall total (this command) {time.perf_counter() - t0:.2f} s")
+    if s["strokes"]["refused"]:
+        print(f"  ! PARTIAL: {s['strokes']['refused']} strokes were refused and "
+              f"are NOT in this file:")
+        for rf in s["strokes"]["refusals"]:
+            print(f"      stroke {rf['stroke']:2d} at ({rf['x0']:.3f}, "
+                  f"{rf['y0']:.3f}) m: {rf['status']} / {rf['reason']!r}")
+    print(f"  wrote {s['files']['npz']}")
+    print(f"        {s['files']['csv']}  ({s['csv']['n_rows']} rows, "
+          f"{s['csv']['n_draw_rows']} draw + {s['csv']['n_travel_rows']} travel, "
+          f"q1..q7 on every row)")
+    print(f"        {s['files']['summary']}")
+    if hov > 0:
+        print(f"  the pen rides "
+              f"{1000 * s['hover']['measured_tip_above_paper_m']:.1f} mm off "
+              f"the paper (asked {1000 * hov:.0f}; scene_check's own minimum "
+              f"over the programme): measure it with a ruler at three points "
+              f"before ANY pen-down run.")
+    print(f"  send it:  scripts/day1.py send --arm {arm} "
+          f"--file {s['files']['csv']}")
+    return 0
+
+
+# ===========================================================================
+# `word` — yesterday's two-arm assets
 # ===========================================================================
 ALT_INSTRUCTIONS = """RUN ORDER — ALTERNATING (rung C, the deliverable):
   1. start arm 31's block.  Arm 71 stands at its park and does not move.
@@ -694,6 +1365,11 @@ def replan(strokes, out_name, arms=ARMS, outdir=ROOT / "out", verbose=True):
 
 
 def cmd_word(a):
+    # `--arm N` is the SOLO word and it PLANS; everything below it is the
+    # two-arm asset re-check and plans nothing.  One subcommand, because at the
+    # rig "run the word on arm 31" and "run the word" are the same sentence.
+    if getattr(a, "arm", None):
+        return cmd_word_arm(a)
     arms = [int(x) for x in str(a.arms).replace(",", " ").split()]
     for ln in assumptions(arms):
         print(ln)
@@ -778,14 +1454,134 @@ def cmd_word(a):
 
 
 # ===========================================================================
+# `send` — the interface to the arms.  File in, one command out.
+# ===========================================================================
+SEND_DOC = """Deliver ONE pathway CSV to the operator box and print the ONE
+command that draws it.  This machine never moves an arm: `send` copies the file
+with scp and then PRINTS the supervisor command; `--live` is the only way it is
+ever run over ssh, and `--dry-run` copies nothing at all.
+
+The chain, from `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md`:
+
+    out/day1/<name>_<N>.csv
+      -- scp -->  OPERATOR  ~/RTff/pathway_persist/<folder>/<name>_<N>.csv
+      -- ARM_ID=<N> ~/RTff/draw_rtff_supervised.sh <csv> <fmin> <fmax>
+                    <levels> fresh
+            -> ladder gate (position control)   [SKIPPED on inverted arms]
+            -> MoveIt to the start (position control)
+            -> pen_switch down  (cartesian_impedance_controller)
+            -> rtff_pathway_exec.py --csv <csv>   ... the drawing
+            -> pen_switch up    (fr3_arm_controller)
+
+WHAT THE BRIEFING DOES NOT SAY, AND THIS FILE THEREFORE DOES NOT INVENT.  It
+names `run_forever_arm13.sh` / `run_forever_arm17.sh` and a
+`dispatch_arm17_mine4H.sh`, and it names NO runner, NO dispatch script and NO
+`pathway_persist` folder for arms 31 or 71 — only their control-box IPs
+(192.168.50.12 / .14), their DDS domains (31 / 71) and that they are INVERTED.
+So `send` targets the supervisor directly, which is the one entry point the
+briefing gives a signature for, and leaves the keeper loop alone.  If the day
+has a `run_forever_arm31.sh` by then, hold it first
+(`bash ~/RTff/aris_hold.sh hold 31`) or the keeper will start its own pass on
+top of this one.
+
+TWO THINGS THE BRIEFING IS EMPHATIC ABOUT AND `send` PRINTS EVERY TIME.  The
+stack must be HEALTHY before a pass (hardware active, three controllers,
+robot_mode 2 — never heal on a user stop) and the ladder gate, which measures
+the paper plane before every descend, is SKIPPED FOR INVERTED ARMS.  Arms 31
+and 71 are inverted.  Nothing downstream will measure the plane for them, so
+the `z_m` baked into this CSV is the plane they will draw at: a hover pass with
+a ruler first is not optional on these two."""
+
+
+def _csv_rows(path):
+    with open(path) as f:
+        return sum(1 for ln in f if ln.strip()) - 1
+
+
+def cmd_send(a):
+    """scp the CSV, then print the command that draws it.  -> 0."""
+    src = Path(a.file)
+    if not src.exists():
+        raise Refused(f"no CSV at {src}.  `word --arm {a.arm}` writes one into "
+                      f"{OUT_DIR}.")
+    if src.suffix.lower() != ".csv":
+        raise Refused(f"{src} is not a .csv — `send` delivers the impedance "
+                      f"pathway CSV and nothing else.")
+    hdr = open(src).readline().rstrip("\n").split(",")
+    if hdr[:len(pathway.CSV_COLUMNS)] != pathway.CSV_COLUMNS:
+        raise Refused(
+            f"{src} does not carry this repo's pathway columns.\n"
+            f"    want {','.join(pathway.CSV_COLUMNS)}\n"
+            f"    got  {','.join(hdr)}")
+    arm = int(a.arm)
+    host = a.host or OPERATOR["host"]
+    folder = a.folder or f"day1_arm{arm}"
+    remote_dir = f"{OPERATOR['store']}/{folder}"
+    remote_csv = f"{remote_dir}/{src.name}"
+    fmin, fmax, levels = OPERATOR["force"]
+    mkdir = f"ssh {host} 'mkdir -p {remote_dir}'"
+    scp = f"scp {src} {host}:{remote_dir}/"
+    draw = (f"ARM_ID={arm} bash {OPERATOR['supervisor']} {remote_csv} "
+            f"{fmin} {fmax} {levels} {OPERATOR['mode']}")
+    stack = f"ssh {host} 'bash {OPERATOR['stack_check']} stack {arm}'"
+
+    print(f"ARM {arm}   {src}  ({_csv_rows(src)} rows, q1..q7 on every row)")
+    print(f"  operator  {host}")
+    print(f"  lands at  {remote_csv}")
+    print()
+    if a.dry_run:
+        print("DRY RUN — nothing copied.  The two commands are:")
+        print(f"  {mkdir}")
+        print(f"  {scp}")
+    else:
+        for cmd in (mkdir, scp):
+            print(f"  $ {cmd}")
+            r = subprocess.run(cmd, shell=True)
+            if r.returncode != 0:
+                raise Refused(f"`{cmd}` exited {r.returncode}.  The file is NOT "
+                              f"on the operator box.  Check the address at the "
+                              f"top of scripts/day1.py (or --host), and that "
+                              f"the key is loaded — the briefing says password "
+                              f"auth is disabled.")
+        print("  copied.")
+    print()
+    print("BEFORE YOU RUN IT — the stack must be healthy (hardware active, "
+          "three controllers,")
+    print("robot_mode 2).  Never heal on a user stop (mode 5) or guiding "
+          "(mode 3):")
+    print(f"  {stack}")
+    print()
+    print("THEN, ON THE OPERATOR BOX, exactly this one command:")
+    print(f"  {draw}")
+    print()
+    print(f"ARM {arm} IS INVERTED, so the supervisor SKIPS the ladder gate: "
+          f"nothing downstream")
+    print(f"will measure the paper plane for it.  The z in this file is the "
+          f"plane it will draw")
+    print(f"at.  Fly the hover pass and measure it with a ruler at three "
+          f"points first.")
+    print("ABORT: the physical e-stop.  The software gate and the 20 mrad "
+          "watchdog are not the abort path.")
+    if a.live:
+        print()
+        print(f"--live: running it over ssh NOW.")
+        cmd = f"ssh {host} '{draw}'"
+        print(f"  $ {cmd}")
+        r = subprocess.run(cmd, shell=True)
+        if r.returncode != 0:
+            raise Refused(f"the draw command exited {r.returncode}.")
+    return 0
+
+
+# ===========================================================================
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="scripts/day1.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Hardware day 1: draw one line with one arm, then run the "
-                    "word with two.  Nothing here plans the word — that was "
-                    "done and certified yesterday.",
-        epilog="""examples
+        description="Hardware day 1: one line with one arm, then the word with "
+                    "one arm, then the word with two.  `send` hands the "
+                    "resulting CSV to the box that runs the arms.",
+        epilog="""examples — the ladder, in order
   # one arm, one straight line, on the paper, certified end to end
   scripts/day1.py line --arm 31 --from 0.50,1.70 --to 0.65,1.70 --name probe
 
@@ -793,14 +1589,28 @@ def build_parser():
   scripts/day1.py line --arm 31 --from 0.50,1.70 --to 0.65,1.70 --hover 0.03 \\
       --name probe_hover
 
-  # the word, alternating: re-check yesterday's certified file, today
+  # the SOLO word, 30 mm above the paper, then on it.  One arm, then the other
+  scripts/day1.py word --arm 31 --hover
+  scripts/day1.py word --arm 31
+  scripts/day1.py word --arm 71 --hover
+  scripts/day1.py word --arm 71
+
+  # the two-arm word, alternating: re-check yesterday's certified file, today
   scripts/day1.py word --variant alt
+
+  # deliver a CSV to the operator box and print the command that draws it
+  scripts/day1.py send --arm 31 --file out/day1/unknown_31.csv --dry-run
 
 coordinates are METRES in the canvas datum: x across the 1.8034 m sheet, y
 along the 3.63064 m one.  The seam / the middle row's own line is y = 1.8153.
 Arm 31's J1 axis is at x = 0.5967, arm 71's at x = 1.2067.
 
-everything is written to out/day1/.  An uncertified line writes NOTHING.""")
+ARM 31 REFUSES LINES EXACTLY ON THE SEAM LINE: the pen-up leg to or from its
+park does not clear the paper plane there.  `word --arm` therefore baselines
+the word at --dy = -0.10 m by default; try -0.15 or -0.20 if that refuses.
+
+everything is written to out/day1/.  An uncertified line, word or joint
+reference writes NOTHING.""")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser(
@@ -829,13 +1639,51 @@ everything is written to out/day1/.  An uncertified line writes NOTHING.""")
 
     w = sub.add_parser(
         "word", formatter_class=argparse.RawDescriptionHelpFormatter,
-        help="re-check yesterday's certified word and print how to run it",
-        description="Does NOT plan.  Re-runs the independent whole-timeline "
-                    "check on a certified 2026-09-15 asset, copies the per-arm "
-                    "pathway CSVs into out/day1/, and prints the run order and "
-                    "the pass criteria.  --replan re-plans from a strokes file "
-                    "with the conductor's exact job parameters and refuses to "
-                    "report success on anything but the conducted coverage.")
+        help="the word: --arm N plans a SOLO one; without it, re-check "
+             "yesterday's two-arm asset",
+        description=f"WITH --arm N: plans, certifies and exports the word "
+                    f"{WORD!r} for ONE arm, the other five frozen at their "
+                    f"parks.  Same planner, same programme builder, same "
+                    f"independent check and same three files as `line`, with "
+                    f"`sequence` choosing the stroke order over the real "
+                    f"transit cost in the middle.  A stroke that will not "
+                    f"certify stops the run and writes nothing unless "
+                    f"--allow-partial.\n\n"
+                    f"WITHOUT --arm: does NOT plan.  Re-runs the independent "
+                    f"whole-timeline check on a certified 2026-09-15 asset, "
+                    f"copies the per-arm pathway CSVs into out/day1/, and "
+                    f"prints the run order and the pass criteria.  --replan "
+                    f"re-plans from a strokes file with the conductor's exact "
+                    f"job parameters and refuses to report success on anything "
+                    f"but the conducted coverage.")
+    w.add_argument("--arm", type=int, default=None, choices=sorted(ARMS),
+                   help="plan the SOLO word for this arm (31 or 71).  Without "
+                        "it this subcommand re-checks the two-arm asset.")
+    w.add_argument("--width", type=float, default=WORD_WIDTH, metavar="M",
+                   help=f"metres of ink across, centred on the arm's own J1 "
+                        f"axis (default {WORD_WIDTH:g}; arm 31's axis is at "
+                        f"x = 0.5967, arm 71's at x = 1.2067)")
+    w.add_argument("--height", type=float, default=WORD_HEIGHT, metavar="M",
+                   help=f"x-HEIGHT: how tall 'u', 'n', 'o', 'w' come out "
+                        f"(default {WORD_HEIGHT:g}; 'k' reaches 1.5x this).  "
+                        f"The word's NATURAL width is about 9x this, so a "
+                        f"--width below that squeezes the letters together.")
+    w.add_argument("--dy", type=float, default=WORD_DY, metavar="M",
+                   help=f"baseline offset from the seam line y = 1.8153 "
+                        f"(default {WORD_DY:g}).  NOT zero: arm 31 refuses "
+                        f"lines exactly on the seam line — the pen-up leg to "
+                        f"or from its park does not clear the paper plane "
+                        f"there.  Try -0.15 or -0.20 if -0.10 refuses.")
+    w.add_argument("--hover", type=float, nargs="?", const=HOVER_DEFAULT,
+                   default=0.0, metavar="M",
+                   help=f"fly the word this far ABOVE the paper instead of on "
+                        f"it (default when the flag is given: "
+                        f"{HOVER_DEFAULT:g} m).  Plans with a pen that much "
+                        f"longer and grades with the real one; the json states "
+                        f"the measured tip height above the paper.")
+    w.add_argument("--allow-partial", action="store_true",
+                   help="write the certified subset instead of refusing when "
+                        "some strokes will not certify (and say so)")
     w.add_argument("--variant", default="alt", choices=sorted(VARIANTS),
                    help="alt (default, the deliverable) | concurrent | hover")
     w.add_argument("--arms", default="31,71")
@@ -846,8 +1694,33 @@ everything is written to out/day1/.  An uncertified line writes NOTHING.""")
     w.add_argument("--strokes", default=None,
                    help="stroke case file for --replan, e.g. "
                         "out/unknown_strokes.json")
-    w.add_argument("--name", default=None, help="--replan output stem")
+    w.add_argument("--name", default=None,
+                   help=f"file stem (--arm: default {WORD!r}, or "
+                        f"{WORD + '_hover'!r} with --hover; --replan: the "
+                        f"output stem)")
     w.set_defaults(func=cmd_word)
+
+    s = sub.add_parser(
+        "send", formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="deliver a pathway CSV to the operator box and print the one "
+             "command that runs it",
+        description=SEND_DOC)
+    s.add_argument("--arm", type=int, required=True,
+                   help="the arm this file is for (its DDS domain id)")
+    s.add_argument("--file", required=True, metavar="CSV",
+                   help="the pathway CSV, e.g. out/day1/unknown_31.csv")
+    s.add_argument("--host", default=None, metavar="USER@HOST",
+                   help=f"the operator box (default {OPERATOR['host']!r} — "
+                        f"fill it in at the top of this file)")
+    s.add_argument("--folder", default=None, metavar="NAME",
+                   help="subfolder under the operator's pathway store "
+                        "(default: day1_arm<N>)")
+    s.add_argument("--dry-run", action="store_true",
+                   help="print the scp and the run command, copy nothing")
+    s.add_argument("--live", action="store_true",
+                   help="RUN the draw command over ssh instead of printing it. "
+                        "Without this the arm never moves from this machine.")
+    s.set_defaults(func=cmd_send)
     return ap
 
 

@@ -125,6 +125,166 @@ def test_hover_line_flies_above_the_paper():
         f"a 30 mm hover should ride 30 mm off the paper; got {1000 * tip:.1f} mm"
 
 
+# --------------------------------------------------------------------------
+# THE SOLO WORD — `word --arm N`
+#
+# These are the acceptance tests for the rung between `line` and the two-arm
+# word, and they run the real planner at the real rig: thirteen Hershey strokes
+# certified one at a time, ordered by `sequence` over the transit cost, laid
+# down as one programme and graded by the independent checker.  They are slow
+# (tens of seconds each) and that is the point — the thing being pinned is that
+# the whole path works, not that a mock returns a dict.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("arm", [31, 71])
+def test_word_arm_certifies_and_writes_a_joint_csv(arm, tmp_path):
+    """The solo word for one arm: certified, a CSV with rows, q1..q7 on each."""
+    r = day1.plan_word(arm, name="w", out_dir=tmp_path, verbose=False)
+    s = r["summary"]
+    assert s["certified"] and s["gates"]["ok"]
+    assert s["gates"]["min_inter_arm_m"] > day1.coordination.PAIR_MARGIN
+    assert not s["gates"]["frame_failed"] and not s["gates"]["paper_failed"]
+    assert s["duration_s"] > 0.0
+    # every stroke of the word is in it, or the test is not about the word
+    assert s["strokes"]["planned"] == s["strokes"]["asked"] > 1
+    assert s["strokes"]["refused"] == 0
+    assert len(s["strokes"]["draw_order"]) == s["strokes"]["planned"]
+    assert sorted(s["strokes"]["draw_order"]) == list(
+        range(s["strokes"]["asked"]))
+
+    csv_path = tmp_path / f"w_{arm}.csv"
+    assert csv_path.exists(), "a certified word must write its CSV"
+    hdr, rows = _read_csv(csv_path)
+    assert hdr == day1.pathway.CSV_COLUMNS
+    assert len(rows) > 0
+    assert hdr[11:18] == ["q1", "q2", "q3", "q4", "q5", "q6", "q7"]
+    for row in rows:
+        assert all(c != "" for c in row[11:18])
+        assert len(row) == len(day1.pathway.CSV_COLUMNS)
+    assert any(row[2] == day1.pathway.KIND_DRAW for row in rows)
+    # more than one stroke really reached the file
+    assert len({row[0] for row in rows}) > 1
+
+    js = json.loads((tmp_path / f"w_{arm}.json").read_text())
+    assert js["placement"]["centre_x"] == pytest.approx(
+        js["base"]["translation_m"][0])
+    assert js["placement"]["baseline_y"] == pytest.approx(
+        js["placement"]["seam_y"] + day1.WORD_DY)
+    assert js["hover_m"] == 0.0
+
+
+def test_word_arm_reports_the_joint_speed_against_the_fr3_limits(tmp_path):
+    """The gate on the FILE: no joint may be asked for more than it has.
+
+    Every other gate in `day1.py` is about where the arm is.  This one is about
+    how fast the joint reference moves, which is what a stiff controller turns
+    into torque — and the CSV carries the PLANNER'S OWN q1..q7 per row, so the
+    number here is the one the robot will be handed.
+    """
+    r = day1.plan_word(31, name="w", out_dir=tmp_path, verbose=False)
+    sa = r["summary"]["joint_speed"]
+    assert sa["ok"]
+    assert sa["qd_max_rad_s"] == pytest.approx(
+        [float(v) for v in day1.frames.QD_MAX])
+    for key in ("at_csv_rows", "at_1khz"):
+        v = sa[key]
+        assert v["ok"] and 0.0 < v["worst_frac"] <= 1.0
+        assert len(v["peak_qd_rad_s"]) == 7 and len(v["frac_of_limit"]) == 7
+        assert len(v["peak_qdd_rad_s2"]) == 7
+    # the pacer aims at QD_FRAC of the limit, so a healthy programme sits
+    # there and not at the ceiling; a reading near 1.0 is a bug upstream
+    assert sa["at_csv_rows"]["worst_frac"] < 0.9
+    assert day1._speed_line(sa).startswith("  joint speed OK")
+
+
+def test_word_arm_refuses_a_word_it_cannot_reach(tmp_path):
+    """Off the far end of the paper: refused, and NOTHING written."""
+    with pytest.raises(day1.Refused) as e:
+        day1.plan_word(31, dy=1.60, name="bad", out_dir=tmp_path,
+                       verbose=False)
+    assert "stroke" in str(e.value)
+    assert not list(tmp_path.glob("*.csv"))
+    assert not list(tmp_path.glob("*.npz"))
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_word_arm_hover_flies_above_the_paper():
+    """`--hover` is graded with the REAL pen and reads ~30 mm of tip.
+
+    Same construction as `line --hover`: the plan gets a 30 mm longer pen and
+    the certificate does not, so the independent check — run with the real pen
+    at the real height — reports the tip that far off the paper.  Nothing is
+    written: `write=False`.
+    """
+    r = day1.plan_word(31, hover=0.030, write=False, verbose=False)
+    s = r["summary"]
+    tip = s["gates"]["min_paper_tip_m"]
+    assert tip == pytest.approx(0.030, abs=0.005), \
+        f"a 30 mm hover should ride 30 mm off the paper; got {1000 * tip:.1f} mm"
+    # ...and the json SAYS the measured height, which is what the runbook asks
+    # somebody to check with a ruler
+    assert s["hover"]["asked_m"] == pytest.approx(0.030)
+    assert s["hover"]["measured_tip_above_paper_m"] == pytest.approx(tip)
+
+
+def test_word_arm_argv_is_the_command_a_person_would_type(tmp_path):
+    """The GUI's whitelist: the panel's word control, as an argument list."""
+    from aris_sixarm.gui.worker import build_day1_argv
+    argv = build_day1_argv(dict(day1="word", arm=31, width=0.55, hover=0.03,
+                                rig="proposed", tool="lateral"), tmp_path)
+    assert argv[0] == "word"
+    assert argv[argv.index("--arm") + 1] == "31"
+    assert argv[argv.index("--width") + 1] == "0.55"
+    assert argv[argv.index("--hover") + 1] == "0.03"
+    assert argv[argv.index("--out") + 1] == str(tmp_path)
+    assert "--variant" not in argv          # a solo word has no variant
+
+    # no arm (or "both") is still the two-arm asset re-check, unchanged
+    both = build_day1_argv(dict(day1="word", variant="alt"), tmp_path)
+    assert both[:3] == ["word", "--variant", "alt"]
+    assert build_day1_argv(dict(day1="word", arm="both", variant="hover"),
+                           tmp_path)[:3] == ["word", "--variant", "hover"]
+    # ...and the whitelist is still a whitelist
+    with pytest.raises(ValueError):
+        build_day1_argv(dict(day1="word", arm=31, tilt=3), tmp_path)
+    with pytest.raises(ValueError):
+        build_day1_argv(dict(day1="word", arm=13), tmp_path)
+
+
+def test_send_refuses_a_file_that_is_not_a_pathway_csv(tmp_path):
+    """`send` is the interface to the arms and it checks what it is handing over."""
+    ap = day1.build_parser()
+    missing = tmp_path / "nope.csv"
+    with pytest.raises(day1.Refused):
+        day1.cmd_send(ap.parse_args(
+            ["send", "--arm", "31", "--file", str(missing), "--dry-run"]))
+    wrong = tmp_path / "wrong.csv"
+    wrong.write_text("x,y,z\n1,2,3\n")
+    with pytest.raises(day1.Refused) as e:
+        day1.cmd_send(ap.parse_args(
+            ["send", "--arm", "31", "--file", str(wrong), "--dry-run"]))
+    assert "pathway columns" in str(e.value)
+
+
+def test_send_dry_run_copies_nothing_and_prints_the_one_command(tmp_path,
+                                                                capsys):
+    """A dry run names the scp and the draw command and moves no arm."""
+    good = tmp_path / "unknown_31.csv"
+    good.write_text(",".join(day1.pathway.CSV_COLUMNS) + "\n"
+                    + ",".join(["0"] * len(day1.pathway.CSV_COLUMNS)) + "\n")
+    ap = day1.build_parser()
+    assert day1.cmd_send(ap.parse_args(
+        ["send", "--arm", "31", "--file", str(good), "--host",
+         "someone@10.0.0.1", "--dry-run"])) == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out and "nothing copied" in out
+    assert f"scp {good} someone@10.0.0.1:" in out
+    assert "ARM_ID=31" in out
+    assert day1.OPERATOR["supervisor"] in out
+    # the two things the briefing is emphatic about, said every time
+    assert "ladder gate" in out.lower()
+    assert "e-stop" in out.lower()
+
+
 @pytest.mark.skipif(not day1.VARIANTS["alt"]["npz"].exists(),
                     reason="the 2026-09-15 alternating asset is not in out/")
 def test_word_alt_recheck_passes_on_the_shipped_asset(tmp_path):
@@ -215,5 +375,15 @@ def test_help_is_readable_without_env_vars():
                        cwd=str(ROOT), capture_output=True, text=True, env=env,
                        timeout=300)
     assert r.returncode == 0
-    for want in ("line", "word", "--hover", "1.8153", "out/day1"):
+    for want in ("line", "word", "send", "--hover", "1.8153", "out/day1"):
         assert want in r.stdout
+    # the refusal a person will otherwise meet at the rig, said in the help
+    assert "SEAM LINE" in r.stdout
+
+    w = subprocess.run([sys.executable, str(ROOT / "scripts" / "day1.py"),
+                        "word", "--help"],
+                       cwd=str(ROOT), capture_output=True, text=True, env=env,
+                       timeout=300)
+    assert w.returncode == 0
+    for want in ("--arm", "--width", "--dy", "--allow-partial", "-0.10"):
+        assert want in w.stdout, want

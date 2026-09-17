@@ -404,6 +404,9 @@ DAY1_DEFAULTS = {
     "arm": 71, "from": "1.15,1.95", "to": "1.30,1.95",
     "name": "probe", "hover": False, "hover_m": 0.03,
     "variant": "alt", "rig": "proposed", "tool": "lateral",
+    # the SOLO word: "both" is the two-arm asset re-check (the `variant`
+    # control), 31 or 71 plans the word for that one arm here and now.
+    "word_arm": "both", "word_width": 0.55, "word_hover": False,
     # arm 31 REFUSES a line exactly on the seam (y = 1.8153): the go-home leg
     # does not clear the paper plane there.  Said in the form so it is read
     # before the refusal rather than after it.

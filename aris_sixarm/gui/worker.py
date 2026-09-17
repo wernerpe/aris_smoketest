@@ -317,10 +317,33 @@ def build_day1_argv(params, out_dir=None):
             argv += ["--hover", f"{hover:g}"]
         return argv
     if kind == "word":
-        known = {"variant", "arms"}
+        known = {"variant", "arms", "arm", "width", "height", "dy", "hover",
+                 "name", "allow_partial"}
         unknown = sorted(set(p) - known)
         if unknown:
             raise ValueError(f"unknown day1 word parameters: {unknown}")
+        # ONE CONTROL, TWO RUNS.  `arm` empty (or "both") is the two-arm asset
+        # re-check the panel has always had; `arm` set is the SOLO word, which
+        # PLANS — the same distinction `scripts/day1.py word` makes, expressed
+        # as the same argument list a person would type.
+        arm = p.get("arm")
+        if arm not in (None, "", "both"):
+            arm = int(arm)
+            if arm not in (31, 71):
+                raise ValueError(f"arm must be 31, 71 or 'both', got {arm!r}")
+            argv = ["word", "--arm", str(arm), "--out", out]
+            for key, flag in (("width", "--width"), ("height", "--height"),
+                              ("dy", "--dy")):
+                if p.get(key) not in (None, ""):
+                    argv += [flag, f"{float(p[key]):g}"]
+            if str(p.get("name") or "").strip():
+                argv += ["--name", str(p["name"]).strip()]
+            hover = float(p.get("hover") or 0.0)
+            if hover > 0:
+                argv += ["--hover", f"{hover:g}"]
+            if p.get("allow_partial"):
+                argv.append("--allow-partial")
+            return argv
         variant = str(p.get("variant") or "alt")
         if variant not in ("alt", "concurrent", "hover"):
             raise ValueError(f"unknown word variant {variant!r}")
@@ -338,18 +361,30 @@ def _day1_result(day1, params, out_dir):
     """
     kind = str(params.get("day1"))
     out_dir = Path(out_dir)
-    if kind == "line":
+    solo = kind == "word" and params.get("arm") not in (None, "", "both")
+    if kind == "line" or solo:
         arm = int(params["arm"])
-        name = str(params.get("name") or "line")
+        if solo:
+            hover = float(params.get("hover") or 0.0)
+            name = str(params.get("name") or "").strip() or (
+                f"{day1.WORD}_hover" if hover > 0 else day1.WORD)
+        else:
+            name = str(params.get("name") or "line")
         # The summary file names itself LAST (`plan_line` writes the json and
         # then adds its own path to the in-memory copy), so the path is this
         # one and not `files["summary"]`, which the file on disk does not have.
         sp = out_dir / f"{name}_{arm}.json"
         s = json.loads(sp.read_text())
         return dict(
-            cmd="line", ok=True, name=f"{name}_{arm}",
-            one_liner=day1._one_liner(name, arm, s["gates"],
-                                      s["duration_s"], True),
+            cmd=("word" if solo else "line"), ok=True, name=f"{name}_{arm}",
+            # `_word_one_liner` is `_one_liner` plus what it drew, and the
+            # speed line is the gate the CSV itself has to pass — both are
+            # `day1.py`'s own formatters, so the browser and a terminal print
+            # the same strings built the same way.
+            one_liner=((day1._word_one_liner(s, True) + "\n"
+                        + day1._speed_line(s["joint_speed"])) if solo
+                       else day1._one_liner(name, arm, s["gates"],
+                                            s["duration_s"], True)),
             gates=s["gates"], duration_s=s["duration_s"],
             csv=[s["files"]["csv"]], summary=str(sp),
             npz=s["files"]["npz"], program=s["files"]["program"],

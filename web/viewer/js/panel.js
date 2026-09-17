@@ -151,11 +151,39 @@ export class Day1 {
       if (v === d.variant) o.selected = true;
       this.variant.appendChild(o);
     }
-    this.wordBtn = F("button", {text: "Re-check word",
+    // THE WORD, AND IT IS NOW TWO RUNS BEHIND ONE CONTROL.  "both" is the
+    // two-arm asset re-check this panel has always had and plans nothing; 31
+    // or 71 is the SOLO word, which PLANS it here and now with the same
+    // certified planner the line uses.  `variant` only means anything for
+    // "both", and width / hover only for a solo arm -- the params builder
+    // sends whichever applies and `gui/worker.build_day1_argv` refuses the
+    // rest, so a stale field in the form cannot become a silent flag.
+    this.wordArm = F("select");
+    for (const v of ["both", ...(d.arms || [31, 71])]) {
+      const o = F("option", {value: String(v), text: String(v)});
+      if (String(v) === String(d.word_arm == null ? "both" : d.word_arm))
+        o.selected = true;
+      this.wordArm.appendChild(o);
+    }
+    this.wordWidth = F("input", {
+      type: "text",
+      value: String(d.word_width == null ? 0.55 : d.word_width)});
+    this.wordHover = F("input", {type: "checkbox"});
+    this.wordHover.checked = !!d.word_hover;
+    const hoverWrap = F("label", {class: "check"}, [this.wordHover]);
+    hoverWrap.appendChild(document.createTextNode(
+      " word 30 mm ABOVE the paper (solo arm; no ink, no contact)"));
+    this.wordBtn = F("button", {text: "Run word",
                                 onclick: () => this.onRun(this.wordParams())});
     body.appendChild(F("div", {class: "row"}, [
-      F("div", {}, [F("label", {text: "word variant"}), this.variant]),
+      F("div", {}, [F("label", {text: "word arm"}), this.wordArm]),
+      F("div", {}, [F("label", {text: "variant  (arm = both)"}),
+                    this.variant])]));
+    body.appendChild(F("div", {class: "row"}, [
+      F("div", {}, [F("label", {text: "word width  m  (solo arm)"}),
+                    this.wordWidth]),
       F("div", {}, [F("label", {text: " "}), this.wordBtn])]));
+    body.appendChild(hoverWrap);
 
     // THE HIGH-QUALITY VIEW, AND IT IS A SECOND WINDOW.  The three.js viewer
     // to the right is built from primitives — boxes and cylinders, no mesh
@@ -193,8 +221,18 @@ export class Day1 {
 
   wordParams() {
     const d = this.cfg || {};
-    return {day1: "word", rig: d.rig || "proposed", tool: d.tool || "lateral",
-            variant: String(this.variant.value)};
+    const p = {day1: "word", rig: d.rig || "proposed",
+               tool: d.tool || "lateral"};
+    const arm = String(this.wordArm.value);
+    if (arm === "both") {                 // the two-arm asset; plans nothing
+      p.variant = String(this.variant.value);
+      return p;
+    }
+    p.arm = Number(arm);                  // the SOLO word; plans it now
+    const w = Number(String(this.wordWidth.value).trim());
+    if (Number.isFinite(w) && w > 0) p.width = w;
+    if (this.wordHover.checked) p.hover = d.hover_m || 0.03;
+    return p;
   }
 
   setRunning(live) {
@@ -412,8 +450,9 @@ export class Panel {
 }
 
 function _day1Label(p) {
-  return p.day1 === "line" ? `line ${p.name || ""}_${p.arm}`
-                           : `word ${p.variant || "alt"}`;
+  if (p.day1 === "line") return `line ${p.name || ""}_${p.arm}`;
+  if (p.arm) return `word arm ${p.arm}${p.hover ? " hover" : ""}`;
+  return `word ${p.variant || "alt"}`;
 }
 
 export function esc(s) {

@@ -15,6 +15,12 @@ instance of `docs/HARDWARE_LADDER.md`: rung 0 (survey), rung 1 (touchdown),
 rung 2 (one arm one stroke), rung 4 (two arms) — rungs 3 and 5 are not in
 today's box.
 
+**Amended 2026-09-17.** The ladder now runs **hover word per arm → word
+per arm → two-arm word** (§4.2b, then §4.3): `scripts/day1.py word --arm N`
+plans and certifies the solo word on the spot, and `scripts/day1.py send`
+is the one command that hands the resulting CSV to the box that runs the
+arms (§5.3).
+
 ---
 
 ## 0. What the word is, and why it is where it is
@@ -532,6 +538,121 @@ force or the absence of a reflex; the collision profile in force.
 > this rung is where it gets measured. If the line is a scratch or a skip,
 > switch to stack B for the drawing rungs and keep D for the joint reference.
 
+### 4.2b Rung B+ — the SOLO word, one arm at a time
+
+**Added 2026-09-17, on Pete's ask: "write unknown under the two center arms …
+we'll just write first with one arm and then with the other. for the first we
+want to float over the paper and write just to double check."**
+
+This is the rung between one stroke and two arms, and it is the one that gets
+run today. It is `line` with thirteen strokes: the same certified single-arm
+planner per stroke, the same `writing.arm_program`, the same independent
+whole-timeline check with the other five arms frozen at their parks, the same
+three files. `scripts/day1.py` **plans it here and now** — unlike §4.3, which
+re-checks a file made the day before.
+
+```
+# arm 31: float first, then draw.  Then arm 71, the same two.
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/day1.py word --arm 31 --hover
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/day1.py word --arm 31
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/day1.py word --arm 71 --hover
+ARIS_RIG=proposed ARIS_TOOL=lateral python3 scripts/day1.py word --arm 71
+```
+
+The word is `scripts/text_strokes.py`'s single-stroke Hershey "unknown", sized
+to `--width` (0.55 m) and **centred on that arm's own J1 axis** — arm 31's at
+x = 0.5967, arm 71's at x = 1.2067 — with its baseline `--dy` off the seam
+line, default **−0.10 m**.
+
+> **The default `--dy` is not a taste.** Arm 31 refuses a line whose baseline
+> is exactly on the seam line y = 1.8153: the pen-up leg to or from its park
+> does not clear the paper plane there (`tests/test_day1.py` pins that
+> refusal). −0.10 m clears it for both arms; if a day's geometry moves and
+> −0.10 refuses, try `--dy -0.15` and `--dy -0.20`.
+
+**Measured 2026-09-17** (proposed rig, lateral tool, h = 0.970, seam bars on,
+all six arms in the scene, the other five frozen at their parks):
+
+| run | verdict | strokes | inter-arm | frame | self | paper chain / tip | duration | CSV rows | planning wall (cold / warm) |
+|---|---|---|---|---|---|---|---|---|---|
+| `--arm 31 --hover` | **PASS** | 13/13 | 151.0 mm | 52.7 | 29.2 | 54.9 / **+27.1** | 63.5 s | 2828 | 20.4 / 20.3 s |
+| `--arm 31` | **PASS** | 13/13 | 164.4 mm | 67.8 | 33.0 | 23.6 / −3.2 | 67.8 s | 2685 | 51.0 / 50.8 s |
+| `--arm 71 --hover` | **PASS** | 13/13 | 151.8 mm | 67.0 | 31.0 | 52.3 / **+28.9** | 85.5 s | 3801 | 33.8 / 33.6 s |
+| `--arm 71` | **PASS** | 13/13 | 138.1 mm | 67.1 | 31.9 | 23.0 / −2.3 | 67.2 s | 2975 | 24.1 / 24.1 s |
+
+Every gate has room against its own bar (inter-arm/frame/column 50 mm, self 20,
+paper chain 20, paper tip floor 10). The hover rows read **+27 to +29 mm of
+real tip clearance** — the hover is a 30 mm longer pen in the PLAN and the
+certificate is re-derived with the real one, so that number is the ruler's
+expected reading, not the asked-for 30.
+
+**Where the planning wall goes**, printed by every run (`wall
+plan_strokes … cost_matrix … solve … arm_program … scene_check … export`).
+Cold and warm are the same to within 1 %: every run is a fresh process and
+nothing is cached on disk, so there is no warm-up to have.
+
+| | strokes | cost matrix | solve | `arm_program` | `scene_check` | export | total |
+|---|---|---|---|---|---|---|---|
+| 31 hover | 2.4 | 0.3 | 0.1 | 4.7 | 12.7 | 0.1 | **20.2 s** |
+| 31 | 2.9 | 0.2 | 0.4 | 33.0 | 13.6 | 0.1 | **50.2 s** |
+| 71 hover | 2.3 | 0.3 | 0.1 | 12.5 | 18.2 | 0.1 | **33.5 s** |
+| 71 | 2.5 | 0.2 | 0.1 | 6.6 | 14.4 | 0.1 | **23.8 s** |
+
+The thirteen certified stroke plans are 2.5 s of it and the exact Held-Karp
+order is 0.1 s. **The cost is pen-up routing and the whole-timeline check**,
+which is why the sequencer's cost matrix is built WITHOUT the paper-routing
+screen by default: routing all 676 crossings up front costs ~100 s (410 of
+them dive) and buys a tour 3 s cheaper in transit. Instead the cheap matrix
+proposes an order, `writing.arm_program` refuses any leg it cannot fly and
+NAMES it, that one edge is marked infinite, and the solver is asked again —
+0.07 s a round. Arm 31 pen-down needs four such rounds and is the 50 s run;
+the other three need none. **No gate is anywhere in that trade**: every
+certificate is still `plan_stroke`'s per stroke, `arm_program`'s per leg and
+`scene_check`'s over the finished timeline. If the retries run out the routed
+matrix is built after all, which is the answer the sequencer would have given
+from the start.
+
+**What comes out**, exactly as `line` does, in `out/day1/`:
+`unknown_<arm>.{npz,csv,json}` for a pen-down run and
+`unknown_hover_<arm>.{npz,csv,json}` for a float. The CSV is the impedance
+pathway file of §5.1 with **q1..q7 on every row — the planner's own redundancy
+resolution for that waypoint**, which is the half of Pete's criterion the
+drawing itself does not test.
+
+**Refusal rule, and it is stronger than `line`'s.** A stroke the certified
+planner will not certify stops the whole run and **nothing is written** — a
+word with a letter missing is not the word. `--allow-partial` writes the
+certified subset instead and says so in the PASS line and in the json. An
+unflyable pen-up leg, a failed scene check, or a joint reference that exceeds
+the FR3's velocity limits are all likewise refusals with no CSV.
+
+**The joint-speed gate.** Every other gate in this file is about where the arm
+is; this one is about how fast the joint reference moves, which is what a stiff
+controller turns into torque. The PASS line reports the peak per-joint speed as
+a fraction of `frames.QD_MAX` (2.62 2.62 2.62 2.62 5.26 4.18 5.26 rad/s), both
+between CSV rows and at 1 kHz linear interpolation of the waypoints, and the
+json carries all seven numbers plus the peak accelerations. **All four runs
+read 30.0 % of the limit** — `writing.QD_FRAC` is 0.30 and the pacer hits it.
+Anything near 100 % is a bug upstream, not a tight day.
+
+**Log:** the tip height at three points for each hover pass (**28 ± 5 mm or
+stop**); the drawn word against the planned one; whether the pen-up legs
+between letters look like the file; the joint tracking error against the
+20 mrad watchdog.
+
+**Passes when** the word is legible, the ink is within 2 mm of plan, and no
+reflex, tracking fault or gate rejection happened.
+
+> **The word is CRAMPED at these defaults, and that is arithmetic, not a bug.**
+> At `--height 0.10` the natural width of "unknown" is 0.90 m, and `--width`
+> is 0.55 — so the tracking is **−58 mm per gap** and the letters are pushed
+> into each other. The run says so, loudly, every time. 0.55 m is what one
+> arm can reach; a legible word at that width wants `--height 0.061`
+> (x-height ≈ width ÷ 9). **Decide which you want before the run, not after
+> looking at the ink.**
+
+---
+
 ### 4.3 Rung C — the word, ALTERNATING
 
 **This is the run that satisfies Pete's criterion, and it is the safe one.**
@@ -799,6 +920,65 @@ powered attempt.
 
 ---
 
+### 5.3 Getting a CSV onto the arms — file in, one command out
+
+`scripts/day1.py send` is the whole interface between this repository and the
+running control stack. It **copies one file and prints one command**; it never
+moves an arm from this machine.
+
+```
+scripts/day1.py send --arm 31 --file out/day1/unknown_31.csv --dry-run
+scripts/day1.py send --arm 31 --file out/day1/unknown_31.csv
+```
+
+It refuses anything that is not a pathway CSV with this repo's columns, then:
+
+1. `ssh <operator> 'mkdir -p ~/RTff/pathway_persist/day1_arm<N>'`
+2. `scp <file> <operator>:~/RTff/pathway_persist/day1_arm<N>/`
+3. prints the **stack-health check** to run first, and then the one draw
+   command, which is the supervisor's own signature from
+   `briefings/CONTROL_STACK_line_to_joint_torques_2026-09-09.md` §8:
+
+```
+ARM_ID=31 bash ~/RTff/draw_rtff_supervised.sh \
+    ~/RTff/pathway_persist/day1_arm31/unknown_31.csv 1.0 2.5 5 fresh
+```
+
+The supervisor is what runs the ladder gate, drives MoveIt to the start,
+switches `fr3_arm_controller` → `cartesian_impedance_controller`, and calls
+`rtff_pathway_exec.py --csv <file>`. The arm is chosen by the **`ARM_ID`
+environment variable — the DDS domain, not a flag and not an IP.**
+
+**Host, user and paths live in ONE block at the top of `scripts/day1.py`**
+(`OPERATOR`), overridable by `--host` and by `$ARIS_OPERATOR`. `--folder`
+changes the subfolder. **`--live` is the only way `send` ever runs the draw
+command over ssh**, and the default is to print it so a person types it on the
+operator box with their hand near the e-stop.
+
+> **Three things the briefing is emphatic about and `send` prints every time.**
+> (a) The stack must be HEALTHY first — hardware active, three controllers,
+> `robot_mode 2`; **never heal on a user stop (mode 5) or guiding (mode 3)**.
+> (b) `fresh`, not `resume`: the keeper decides fresh-vs-resume from a progress
+> file, and a new CSV dropped next to an old checkpoint is picked up as a
+> resume of the old one. (c) **The ladder gate is SKIPPED for inverted arms,
+> and 31 and 71 are inverted** — nothing downstream will measure the paper
+> plane for them, so the `z_m` baked into the CSV is the plane they will draw
+> at. That is exactly why §4.2b's hover pass and a ruler come first.
+
+> **What the briefing does NOT say, and `send` therefore does not invent.** It
+> names `run_forever_arm13.sh` / `run_forever_arm17.sh` and one
+> `dispatch_arm17_*.sh`, and it names **no runner, no dispatch script and no
+> `pathway_persist` folder for arms 31 or 71** — only their control-box IPs
+> (192.168.50.12 / .14), their DDS domains and that they are inverted. So
+> `send` targets the supervisor directly, which is the one entry point with a
+> documented signature, and leaves the keeper loop alone. If a
+> `run_forever_arm31.sh` exists by then, **hold it first**
+> (`bash ~/RTff/aris_hold.sh hold 31`) or the keeper will start its own pass on
+> top of this one. There is also a **retired** box at 192.168.50.4 whose
+> `~/RTff` is a stale copy; never point `--host` at it.
+
+---
+
 ## 6. Every assumption in today's files, and what to do when it is wrong
 
 | # | assumption | where it lives | how you find out | what to do |
@@ -859,11 +1039,14 @@ powered attempt.
 4. Touchdowns on arm 31, or knowingly skip and accept §4.1 as the safety net.
 5. **Hover pass, per arm, then both.** Measure the tip height. **28 ± 5 mm or stop.**
 6. One stroke per arm on scrap, then on paper. 2 mm of plan.
-7. **The word, alternating** — `out/unknown_h0970_home_alt.npz`, 106 s,
+7. **The SOLO word, per arm** — `day1.py word --arm 31 --hover`, then
+   `--arm 31`, then the same two for 71. All four PASS as planned 2026-09-17.
+   `day1.py send --arm N --file out/day1/<name>_N.csv` puts it on the box.
+8. **The word, alternating** — `out/unknown_h0970_home_alt.npz`, 106 s,
    155.56 mm of clearance. **This is the deliverable.**
-8. The word, concurrent — only with **arm 31 started first and arm 71 at least
+9. The word, concurrent — only with **arm 31 started first and arm 71 at least
    2 s later, never earlier, never at 1 s.**
-9. One person on the e-stop, all day, doing nothing else.
+10. One person on the e-stop, all day, doing nothing else.
 
 **The three numbers to carry in your head:**
 
