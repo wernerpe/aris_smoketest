@@ -1,5 +1,10 @@
 # aris_sixarm
 
+**If you are an agent (or a person) reading this on the robot PC with no context:
+open `docs/ONSITE_AGENT.md` first.** It says what today's job is, the facts you
+must not get wrong, the install, every command in order, what to check before an
+arm moves, and what to report back.
+
 ## Robot PC quick start
 
 Clone → venv → verify → draw. Every step and every failure mode it has actually
