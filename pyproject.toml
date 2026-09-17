@@ -23,6 +23,8 @@ dev = ["pytest"]
 # run, and out of `dev` so `pip install -e '.[dev]'` on the robot PC is
 # unchanged.  three.js is VENDORED under web/viewer/vendor (see its
 # VENDOR.md) rather than fetched at run time, because the robot PC is offline.
+# Software-in-the-loop sim (aris_sixarm/sil): pydrake wheel, ~250 MB.
+sil = ["drake"]
 gui = [
     "fastapi",
     "uvicorn[standard]",
