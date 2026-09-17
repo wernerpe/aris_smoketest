@@ -82,6 +82,13 @@ FAIL writes **no CSV**. Never hand-edit a CSV.
 3. **The paper height is measured** and baked (`--paper-z`) for on-paper runs; for the floating run the baked plane is the nominal one and the 30 mm is the check.
 4. **The other arm is at its park** and nobody is under the arm.
 5. **Pete has the e-stop in hand.**
+6. **Ask Pete to confirm which way the fingers and the pen holder are mounted.**
+   This is still ambiguous: the holder can sit in the jaw either way round, and the
+   model's tool tip (86 mm to one side of the hand) depends on it. Use the GUI's
+   "Show current pose" (reads the arm's live joints from the operator PC and poses
+   the model with the tool drawn) and hold it next to the real hand: the pen must
+   jut out on the same side and lean the same way. If it does not, STOP and tell
+   Pete — every plan assumes the modelled side. Take a photo either way.
 
 ---
 
